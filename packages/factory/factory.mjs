@@ -1409,12 +1409,12 @@ export function demo() {
   g(R);
   d(R, { checks: 'skipped', additions: 58, deletions: 4, files: files51, rules: rules('acme/shop').policy });
   ev(R, 'approve', 'merged');
-  // Deploy state, as packages/ship's GitHub Deployments connector records it: a preview per PR head, production for a merge.
-  const dep = (run, env, state, status, sha, url, detail) => ev(run, 'ship', status, { connector: 'github-deployments', kind: 'web-deploy', env, state, url, sha, at: new Date(t).toISOString(), detail, creator: 'vercel[bot]' });
-  dep('acme/shop#51', 'preview', 'ready', 'passed', sha, 'https://shop-git-factory-issue-51-acme.vercel.app', 'Deployment has completed');
+  // Deploy state, as a packages/ship connector records it: a preview per PR head, production for a merge.
+  const dep = (run, env, state, status, sha, url, detail) => ev(run, 'ship', status, { connector: 'demo-host', kind: 'web-deploy', env, state, url, sha, at: new Date(t).toISOString(), detail, creator: 'deploy-bot' });
+  dep('acme/shop#51', 'preview', 'ready', 'passed', sha, 'https://shop-pr-95.preview.example', 'Deployment has completed');
   dep('acme/shop#51', 'production', 'ready', 'passed', '9a7c41d2e0b8', 'https://shop.acme.dev', 'Deployment has completed');
-  dep('acme/shop#45', 'preview', 'ready', 'passed', 'c0ffee12ab34', 'https://shop-git-factory-issue-45-acme.vercel.app', 'Deployment has completed');
-  dep('acme/shop#44', 'preview', 'error', 'failed', 'd15ea5e0b1a2', 'https://shop-git-factory-issue-44-acme.vercel.app', 'Build failed: Type error in lib/auth/github.ts');
+  dep('acme/shop#45', 'preview', 'ready', 'passed', 'c0ffee12ab34', 'https://shop-pr-92.preview.example', 'Deployment has completed');
+  dep('acme/shop#44', 'preview', 'error', 'failed', 'd15ea5e0b1a2', 'https://shop-pr-91.preview.example', 'Build failed: Type error in lib/auth/github.ts');
   demoTranscripts(read().filter((e) => e.sessionId === S.sessionId));
   return render();
 }
@@ -1807,7 +1807,7 @@ function rulesTest(cli) {
   record(P10, 'review', 'passed', { axis: 'security', findings: [] });
   const gated = JSON.parse(cli(['decide', P10], '', { STUB_CHECKS: '1' }));
   assert.equal(gated.action, 'merge');
-  assert.match(gated.reasons.join(), /preview ready: https:\/\/app-pr-10\.example\.app \(github-deployments\)/);
+  assert.match(gated.reasons.join(), /preview ready: https:\/\/deploy-10\.example\.app \([\w-]+\)/);
   assert.equal(derive(read())[P10].deploys[0].state, 'ready');
   record(P10, 'review', 'started', { axes: ['code', 'security'], sha: 'e'.repeat(40) }); // a new commit with no preview
   record(P10, 'review', 'passed', { axis: 'code', findings: [] });
@@ -1974,9 +1974,9 @@ function syncTest(cli) {
   assert.deepEqual(links['acme/app#12'].map((x) => [x.agent, x.id]), [['codex', 'cx-1']]);
   assert.equal(JSON.parse(cli(['decide', 'acme/app#11'], '', env)).action, 'escalate');
   // Ship: sync records each in-progress PR head's deploy state through record(); only PR 10's head has a preview.
-  assert.deepEqual(first.ship.recorded.map((x) => [x.run, x.env, x.state, x.url]), [['acme/app#10', 'preview', 'ready', 'https://app-pr-10.example.app']]);
+  assert.deepEqual(first.ship.recorded.map((x) => [x.run, x.env, x.state, x.url]), [['acme/app#10', 'preview', 'ready', 'https://deploy-10.example.app']]);
   assert.deepEqual(first.ship.errors, []);
-  assert.deepEqual(derive(read())['acme/app#10'].deploys.map((d) => [d.connector, d.sha]), [['github-deployments', '10'.padStart(40, '0')]]);
+  assert.deepEqual(derive(read())['acme/app#10'].deploys.map((d) => [d.env, d.sha]), [['preview', '10'.padStart(40, '0')]]);
   assert.equal(derive(read())['acme/app#10'].url, 'https://github.com/acme/app/pull/10');
   const failing = JSON.parse(cli(['sync', 'acme/app'], '', { ...env, STUB_DEPLOY_FAIL: '1' }))[0]; // a failed lookup never breaks sync
   assert.match(failing.ship.errors[0].error, /HTTP 502/);
@@ -2084,7 +2084,10 @@ function worktreeTest(cli) {
   cli(['event', R, 'build', 'passed', '-'], '{"pr":"https://github.com/acme/wt/pull/3"}', env2);
   const env3 = { ...env2, STUB_MERGE_SHA: sha };
   cli(['rules', 'set', 'acme/wt', 'ci', 'skip', '--reason', 'Actions billing'], '', env3);
-  assert.equal(JSON.parse(cli(['postmerge', R], '', env3)).state, 'skipped'); // a billing-red main must not trigger reverts
+  const skipped = JSON.parse(cli(['postmerge', R], '', env3));
+  assert.equal(skipped.state, 'skipped'); // a billing-red main must not trigger reverts
+  assert.deepEqual(skipped.deploys.map((d) => [d.env, d.state, d.sha, d.url]), [['production', 'ready', sha, 'https://deploy-11.example.app']]); // the merge commit's deploy, recorded
+  assert.deepEqual(derive(read())[R].deploys.map((d) => [d.env, d.sha]), [['production', sha]]);
   cli(['rules', 'set', 'acme/wt', 'ci', 'advisory', '--reason', 'Actions flaky'], '', env3);
   assert.deepEqual(JSON.parse(cli(['postmerge', R], '', env3)), { sha, state: 'fail', failed: ['https://github.com/acme/wt/actions/runs/1'], advisory: true }); // shown, never reverted on
   cli(['rules', 'unset', 'acme/wt', 'ci'], '', env3);

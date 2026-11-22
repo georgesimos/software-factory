@@ -3,10 +3,12 @@
 const api = (ctx, p) => JSON.parse(ctx.exec('gh', ['api', p]));
 
 // GitHub's status states -> web-deploy states. "inactive" is what GitHub sets on an older deployment once a newer one in the same
-// environment succeeds (Vercel shares one "Preview – <project>" environment across PRs), so it built fine and still serves.
+// environment succeeds. With only the latest status read, that can't be told from a manual deactivation, so it is not "ready":
+// the deploy.preview gate errs strict. shortcut: never seen in real data yet; read the status history if previews get stuck on it.
 function stateOf(s) {
   if (!s) return 'queued';
-  if (s.state === 'success' || s.state === 'inactive') return 'ready';
+  if (s.state === 'success') return 'ready';
+  if (s.state === 'inactive') return 'canceled';
   if (s.state === 'in_progress') return 'building';
   if (s.state === 'error' && /deleted/i.test(s.description || '')) return 'canceled'; // the host pruned it: not a build failure
   if (s.state === 'error' || s.state === 'failure') return 'error';
@@ -14,6 +16,7 @@ function stateOf(s) {
 }
 
 // Vercel names them "Preview – <project>" / "Production – <project>" and leaves production_environment false, so names decide too.
+// shortcut: two projects on one repo both map to "preview" and share one row (either can meet the gate); key on the raw name if that matters.
 const envOf = (d) => d.production_environment || /^production\b/i.test(d.environment) ? 'production'
   : /^preview\b/i.test(d.environment) ? 'preview' : String(d.environment || 'unknown').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 

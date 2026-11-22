@@ -175,6 +175,7 @@ Run `F gate RUN`. Its `next` decides where the run goes:
    - the diff is 300 lines or fewer (or under a lower `diffCap` rule);
    - no sensitive paths are touched;
    - the run is within the loop and budget caps;
+   - under `deploy.preview=required`, a preview of the reviewed commit is `ready`;
    - the PR head still equals the reviewed commit.
    
    If they hold, it marks the PR ready, squash-merges it and labels the issue.

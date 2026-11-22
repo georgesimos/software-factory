@@ -6,9 +6,9 @@ import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { load } from './connectors/index.mjs';
-import { normalizeRows, statusOf, isDone } from './contract.mjs';
+import { normalizeRows, statusOf } from './contract.mjs';
 
-const REPO = /^[\w.-]+\/[\w.-]+$/, SHA = /^[0-9a-f]{7,40}$/;
+const REPO = /^[\w.-]+\/[\w.-]+$/, SHA = /^[0-9a-f]{40}$/; // full shas: providers report them, and rows match exactly
 
 // What connectors get as ctx.exec. FACTORY_<CMD> swaps the binary (FACTORY_GH, as in factory.mjs) so tests can stub a provider CLI.
 export const exec = (cmd, args) => execFileSync(process.env[`FACTORY_${cmd.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`] || cmd, args,
@@ -38,16 +38,16 @@ export function lookup(connectors, project, sha, ctx = { exec }) {
   return { rows, errors };
 }
 
-// Records new states for [{run, repo, sha, path?}] through the given record(). Skips a commit whose recorded states are all final
-// (cached per sha), and a state already recorded for the same connector, env and commit.
-// shortcut: "all final" can hide a second provider that deploys the same commit later; drop the skip if that ever matters.
+// Records new states for [{run, repo, sha, path?}] through the given record(). Skips the lookup for a commit whose recorded states
+// are all ok (cached per sha; a failed one is looked at again, so a redeploy can fix it), and a state already recorded for the
+// same connector, env and commit. shortcut: "all ok" can hide a second provider that deploys the same commit later.
 export function track(pairs, { runs, record, connectors = current, exec: ex = exec }) {
   const out = { recorded: [], errors: [] }, memo = new Map(), ctx = { exec: ex, detected: new Map() };
   for (const { run, repo, sha, path } of pairs) {
     const r = runs[run];
     if (!r || !REPO.test(repo || '') || !SHA.test(sha || '')) continue;
     const mine = (r.deploys || []).filter((d) => d.sha === sha);
-    if (mine.length && mine.every((d) => isDone(d.kind, d.state))) continue;
+    if (mine.length && mine.every((d) => statusOf(d.kind, d.state) === 'passed')) continue;
     const key = `${repo}@${sha}`;
     if (!memo.has(key)) {
       memo.set(key, lookup(connectors, { repo, path }, sha, ctx));
@@ -66,7 +66,7 @@ export function track(pairs, { runs, record, connectors = current, exec: ex = ex
 const USAGE = `usage: ship.mjs <command>
   connectors                       registered connectors, their kind and tagged actions
   detect <owner/repo> [--path dir]  which connectors this project uses, and whether each one's CLI is logged in
-  status <owner/repo> [sha] [--path dir]  normalized state per connector and env (read only)`;
+  status <owner/repo> [sha] [--path dir]  normalized state per connector and env (read only); sha is the full 40-character commit`;
 
 export async function main(argv, opts = {}) {
   const args = [...argv], i = args.indexOf('--path'), path = i < 0 ? opts.path : args.splice(i, 2)[1];

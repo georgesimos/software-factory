@@ -9,19 +9,18 @@
 //
 // ctx.exec(cmd, args) runs a CLI and returns its stdout (execFileSync; FACTORY_<CMD> swaps the binary, as FACTORY_GH does in factory.mjs).
 
-// Normalized states per kind. ok/bad: what the factory treats as success or failure; done: final, so a commit in one is not polled again.
+// Normalized states per kind. ok/bad: what the factory treats as success or failure; the rest are in flight or neutral (canceled).
 export const KINDS = {
-  'web-deploy': { states: ['queued', 'building', 'ready', 'error', 'canceled', 'promoted'], ok: ['ready', 'promoted'], bad: ['error'], done: ['ready', 'promoted', 'error', 'canceled'] },
-  'mobile-build': { states: ['queued', 'building', 'finished', 'errored'], ok: ['finished'], bad: ['errored'], done: ['finished', 'errored'] },
-  store: { states: ['processing', 'testflight', 'in-review', 'rejected', 'approved', 'released'], ok: ['testflight', 'approved', 'released'], bad: ['rejected'], done: ['rejected', 'released'] },
-  database: { states: ['branch-created', 'migrated', 'migration-failed', 'deleted'], ok: ['branch-created', 'migrated'], bad: ['migration-failed'], done: ['migrated', 'migration-failed', 'deleted'] },
+  'web-deploy': { states: ['queued', 'building', 'ready', 'error', 'canceled', 'promoted'], ok: ['ready', 'promoted'], bad: ['error'] },
+  'mobile-build': { states: ['queued', 'building', 'finished', 'errored'], ok: ['finished'], bad: ['errored'] },
+  store: { states: ['processing', 'testflight', 'in-review', 'rejected', 'approved', 'released'], ok: ['testflight', 'approved', 'released'], bad: ['rejected'] },
+  database: { states: ['branch-created', 'migrated', 'migration-failed', 'deleted'], ok: ['branch-created', 'migrated'], bad: ['migration-failed'] },
 };
 export const TAGS = ['read', 'write', 'public'];
 const ID = /^[a-z][a-z0-9-]{0,30}$/;
 
 // The factory's event status for a state: passed | failed | started (anything not yet good or bad, canceled included).
 export const statusOf = (kind, state) => (KINDS[kind]?.ok.includes(state) ? 'passed' : KINDS[kind]?.bad.includes(state) ? 'failed' : 'started');
-export const isDone = (kind, state) => !!KINDS[kind]?.done.includes(state);
 
 export function validateConnector(c) {
   const bad = [];
