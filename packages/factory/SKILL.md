@@ -137,7 +137,7 @@ Then run `F risk RUN <files to touch…>`.
    Do not pass it your build notes.
    - Use model `sonnet` for the `ui`, `seo` and `docs` axes. Use the default model for `code`, `security` and `ux`.
 3. **Verify blocking findings.** Collect every high and medium finding. Send them all to one `sonnet` verifier subagent with the verifier brief in reviewers.md, or to `plan.verifier` when it isn't default. If the verifier's reply isn't the verifier JSON, dismiss nothing. For each finding the verifier rejects, add `"dismissed": "<its reason>"` to that finding. Dismissed findings stay visible but do not block.
-4. Record each axis with `F review RUN <axis> -`, passing the reviewer's reply on stdin, with only the verifier's `dismissed` marks added. `F` turns anything outside the contract into a **failed** review with a "reviewer output invalid" finding:
+4. Record each axis with `F review RUN <axis> --tokens <n> [--cost-usd <x>] -`, passing the reviewer's reply on stdin with only the verifier's `dismissed` marks added. The flags carry that reviewer's usage, which counts toward the budget cap even when the reply is invalid. `F` turns anything outside the contract into a **failed** review with a "reviewer output invalid" finding:
    - not a JSON object, or the wrong `axis`;
    - unknown fields;
    - a bad severity, route or verdict.
@@ -190,7 +190,7 @@ Finally, report the outcome with its links, and give the dashboard path, `~/.cla
 | `{"use":"skill","name":"x"}` | Invoke the Skill `x` in a fresh subagent, giving it the step's inputs and its output contract. |
 | `{"use":"brief","path":"…md"}` | Spawn a fresh subagent with that file as its brief, in place of the built-in one. |
 | `{"use":"provider","harness":"claude-code","name":"x"}` | If `x` is one of your Agent subagent types (such as `pr-review-toolkit:code-reviewer`), spawn that agent. Otherwise run the skill headless in WT: `(cd WT && claude -p "/x" --setting-sources user --allowedTools "Bash(git diff:*)" "Bash(git log:*)" Read Grep Glob --output-format json)`, which keeps it read-only and reports `total_cost_usd` for the payload's `costUsd`. |
-| `{"use":"provider","harness":"codex"}` | Run Codex headless in WT. Review and verifier steps use `-s read-only` and build uses `-s workspace-write`; never pass `--dangerously-bypass-approvals-and-sandbox`. Review: `codex exec -C WT -s read-only --output-schema ~/.claude/skills/software-factory/references/review.schema.json -o DIR/<axis>.json "<brief>"`. |
+| `{"use":"provider","harness":"codex"}` | Run Codex headless in WT. Review and verifier steps use `-s read-only` and build uses `-s workspace-write`; never pass `--dangerously-bypass-approvals-and-sandbox`. Review: `codex exec -C WT -s read-only --output-schema ~/.claude/skills/software-factory/references/review.schema.json -o DIR/<axis>.json "<brief>"`. With `"name":"review"`, run `codex review --base BASE` in WT and pass its prose through the adapter. Any other `name` is ignored. |
 
 - **Same contract as the default.**
   - intake still ends in one of the intake outcomes;

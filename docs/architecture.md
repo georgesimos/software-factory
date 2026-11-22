@@ -321,6 +321,8 @@ Each step can be run by the built-in brief, a user skill or brief, or a harness 
 - **What can't be configured.** There is no runner that turns an axis off. `code` and `security` are always selected, and extra axes only add. `gate`, `decide`, `merge`, the caps, `TRUSTED` and `SENSITIVE` don't read the config.
 - **Contract.** Every reviewer's reply goes through `F review`, which requires a JSON object for the requested axis that passes `validateReview`. Anything else (prose, another axis, unknown fields, a `failed` verdict with no blocking finding) is recorded as a failed review with a high "reviewer output invalid" finding, so it loops back and, at the cap, escalates. A prose provider such as `/code-review` goes through the adapter brief in `references/reviewers.md` first.
 - **User-local only.** There is no in-repo `.factory/skills.json`. Even read from the base branch, one merged PR could change the reviewers and the verifier for every later run. Config is a per-user choice, like `automerge`.
+- **Stamped only from the CLI.** `F event`, `F review` and `F gate` stamp the runner. In-process records such as `sync` imports never do, so a tracked human PR never shows a `codex` chip. The verifier's runner is stamped on every `gate` event while it is configured, even in an iteration with nothing to verify.
+- **Resolved per event.** The plan is read at each event, not frozen per run, so a config change mid-run applies from the next step.
 - **Not recorded.** `postmerge` runners leave no event of their own. They can only add a reason to `F revert`, which never merges.
 
 ---

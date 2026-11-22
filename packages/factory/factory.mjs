@@ -46,14 +46,14 @@ export function read() {
   }
 }
 
-export function record(run, stage, status, payload = {}, fallback) {
+export function record(run, stage, status, payload = {}, cli) { // cli: {fallback?} when the orchestrator reports a step; in-process records (sync, demo) get no runner
   if (!run) throw new Error('missing run id');
   if (!STAGES.includes(stage)) throw new Error(`unknown stage "${stage}" (${STAGES.join('|')})`);
   if (!STATUSES.includes(status)) throw new Error(`unknown status "${status}" (${STATUSES.join('|')})`);
   if (status === 'merged' && derive(read())[run]?.decision?.action !== 'merge') throw new Error('refusing "merged": the recorded decision is not merge');
   if (stage === 'review' && payload.axis !== undefined) validateReview(run, payload, status);
   const sessionId = process.env.CLAUDE_CODE_SESSION_ID; // set by Claude Code; lets the UI link back to the driving session
-  const ev = { ts: new Date().toISOString(), ...payload, ...(sessionId ? { harness: 'claude-code', sessionId, cwd: process.cwd() } : {}), ...runnerStamp(run, stage, payload.axis, fallback), run, stage, status };
+  const ev = { ts: new Date().toISOString(), ...payload, ...(sessionId ? { harness: 'claude-code', sessionId, cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback)), run, stage, status };
   fs.mkdirSync(DIR, { recursive: true });
   fs.appendFileSync(log(), JSON.stringify(ev) + '\n');
   if (TERMINAL.includes(status) || status === 'needs-info') { // a finished (or parked) run gives back its worktree
@@ -127,7 +127,7 @@ export function axesFor(files, extra = []) {
   if (files.some((f) => UI.test(f))) axes.push('ux', 'ui');
   if (files.some((f) => SEO.test(f))) axes.push('seo');
   if (files.some((f) => DOCS.test(f))) axes.push('docs');
-  for (const x of extra) if (files.some((f) => x.when.some((g) => path.matchesGlob(f, g)))) axes.push(x.axis); // user axes only add, never replace
+  for (const x of extra) if (files.some((f) => x.when.some((g) => path.matchesGlob(f, g)))) axes.push(x.axis); // user axes only add, never replace. shortcut: path.matchesGlob needs Node >= 22.5 (experimental before 24); swap in a small glob regex if older Node matters
   return axes;
 }
 
@@ -1049,11 +1049,12 @@ function skillsTest(cli) {
   assert.deepEqual(r.runners.spec, { use: 'skill', name: 'my-planner' });
   assert.deepEqual(r.runners.build, { use: 'default', fallback: { from: { use: 'provider', harness: 'codex' }, reason: 'codex not installed' } });
   assert.ok(!('runner' in r.events[0]));
+  assert.ok(!('runner' in record(R, 'build', 'passed'))); // in-process records (sync imports, demo) never claim a runner
   // Raw reviewer output: only the exact contract for the asked axis counts.
   assert.deepEqual(JSON.parse(cli(['axes', R, 'web/Button.tsx'])).axes, ['code', 'security', 'ux', 'ui', 'a11y']);
   const review = (axis, text) => JSON.parse(cli(['review', R, axis], text));
   assert.equal(review('code', '```json\n{"axis":"code","verdict":"passed","findings":[]}\n```').status, 'passed');
-  assert.equal(review('a11y', 'Looks accessible to me. Ship it!').status, 'failed');
+  assert.equal(JSON.parse(cli(['review', R, 'a11y', '--tokens', '1200'], 'Looks accessible to me. Ship it!')).status, 'failed');
   assert.match(review('ui', '{"axis":"security","verdict":"passed","findings":[]}').findings[0].issue, /reviewer output invalid: axis is "security"/);
   assert.equal(review('ux', '{"axis":"ux","verdict":"failed","findings":[]}').status, 'failed');
   assert.match(review('security', '{"axis":"security","verdict":"passed","findings":[],"approve":true}').findings[0].issue, /unknown fields: approve/);
@@ -1063,7 +1064,10 @@ function skillsTest(cli) {
   assert.equal(r.reviews[1].a11y.runner.use, 'brief');
   assert.equal(r.reviews[1].security.runner, undefined);
   assert.deepEqual(Object.values(r.reviews[1]).map((v) => v.verdict), ['passed', 'failed', 'failed', 'failed', 'failed']);
+  assert.equal(r.tokens, 1200); // usage survives an invalid reply
+  set('acme/kit', 'verifier', { use: 'provider', harness: 'claude-code', name: 'pr-review-toolkit:code-reviewer' });
   assert.equal(JSON.parse(cli(['gate', R])).next, 'build');
+  assert.equal(derive(read())[R].runners.gate.name, 'pr-review-toolkit:code-reviewer');
   // A hand-edited config is validated on every read, so it fails loudly instead of silently running defaults.
   fs.writeFileSync(path.join(DIR, 'skills.json'), '{"acme/kit":{"review.lint":{"use":"default"}}}');
   assert.throws(() => cli(['skills', 'acme/kit']), /unknown step "review.lint"/);
@@ -1206,11 +1210,16 @@ if (isMain) {
         if (owned[`${stage}:${status}`] || stage === 'gate') throw new Error(`"${stage} ${status}" is recorded by "${owned[`${stage}:${status}`] || 'gate'}", not by hand`);
         const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'cwd', 'runner'].filter((k) => k in p);
         if (typed.length) throw new Error(`these fields come from GitHub or git, not from a payload: ${typed.join(', ')}`);
-        record(run, stage, status, p, fallback); break;
+        record(run, stage, status, p, { fallback }); break;
       }
       case 'review': { // raw reviewer output on stdin, from any runner; invalid output is recorded as a failed review
         const { status, payload } = reviewFromText(run, rest[0], fs.readFileSync(0, 'utf8'));
-        record(run, 'review', status, payload, fallback);
+        for (const [flag, k] of [['--tokens', 'tokens'], ['--cost-usd', 'costUsd']]) { // the orchestrator's usage numbers, kept even when the reply is invalid
+          const i = rest.indexOf(flag), v = i < 0 ? undefined : Number(rest[i + 1]);
+          if (i >= 0 && !(v >= 0)) throw new Error(`${flag} needs a number`);
+          if (i >= 0) payload[k] = v;
+        }
+        record(run, 'review', status, payload, { fallback });
         out({ status, findings: payload.findings }); break;
       }
       case 'skills': { // skills <owner/repo> | skills set <owner/repo|default> <step> <json>
@@ -1241,7 +1250,7 @@ if (isMain) {
       case 'worktree': out(worktree(run, rest[0])); break;
       case 'deps': console.log(deps(run)); break;
       case 'gc': out(gc()); break;
-      case 'gate': { const { status, ...p } = gate(getRun(run)); record(run, 'gate', status, p, fallback); out({ status, ...p }); break; }
+      case 'gate': { const { status, ...p } = gate(getRun(run)); record(run, 'gate', status, p, { fallback }); out({ status, ...p }); break; }
       case 'intake': out(intake(run)); break;
       case 'sync': { // `sync` alone re-syncs every attached project
         const list = run ? [[run, rest[0]]] : Object.entries(projects()).map(([k, v]) => [k, v.path]);
@@ -1275,7 +1284,7 @@ if (isMain) {
   worktree <run> [clone path]            create/reuse the run's git worktree (prints its path)
   deps   <run>                            cheapest node_modules for the worktree
   axes   <run> [changed files...]         pick + record review axes (default: worktree diff since last review)
-  review <run> <axis> [--fallback why]    record a reviewer's raw output from stdin (invalid output = failed review)
+  review <run> <axis> [--tokens n] [--cost-usd x] [--fallback why]  record a reviewer's raw reply from stdin (invalid = failed review)
   skills <owner/repo>                     print who runs each step (default, skill, brief or provider)
   skills set <owner/repo|default> <step> <json>  configure one step (intake, spec, build, review.<axis>, verifier, postmerge, axes.extra)
   gc                                      remove worktrees of finished runs
