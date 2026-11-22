@@ -69,7 +69,8 @@ let server, browser, last;
     await wiz(page).locator('[data-ship="database"]').click();
     await wiz(page).locator('[data-k="ob-ship-save"]').click();
     await status(page).filter({ hasText: 'Saved: web, database for acme/app' }).waitFor();
-    assert.match(await wiz(page).innerText(), /connectors coming soon/);
+    assert.match(await wiz(page).locator('[data-ship="web"]').innerText(), /github-deployments/); // from packages/ship's registry
+    assert.match(await wiz(page).locator('[data-ship="mobile"]').innerText(), /no connector yet/);
     await shot(page, '1280-light-3-ship');
     await next(page);
     await wiz(page).locator('[data-k="ob-run:build"]').click();

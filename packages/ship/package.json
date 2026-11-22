@@ -1,0 +1,12 @@
+{
+  "name": "@software-factory/ship",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "Ship harness: deploy, build, store and database state through pluggable read-only connectors. Zero dependencies.",
+  "type": "module",
+  "bin": { "ship": "./ship.mjs" },
+  "scripts": {
+    "test": "node --test test/contract.test.mjs"
+  }
+}
