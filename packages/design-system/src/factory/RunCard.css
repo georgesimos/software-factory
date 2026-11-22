@@ -1,0 +1,31 @@
+.sf-run-card {
+  display: block; position: relative; width: 100%; padding: 11px var(--sf-space-3) var(--sf-space-2-5);
+  color: inherit; text-align: left; text-decoration: none; font: inherit; cursor: pointer;
+  transition: border-color var(--sf-motion-duration-fast);
+}
+.sf-run-card:hover { border-color: var(--sf-color-line-2); }
+.sf-run-card[aria-current="true"] { border-color: var(--sf-color-ink); box-shadow: inset 0 0 0 0.5px var(--sf-color-ink); }
+.sf-run-card[data-tracked] { background: transparent; }
+.sf-run-card[data-tracked] .sf-rc-title { color: var(--sf-color-ink-2); font-weight: var(--sf-weight-regular); }
+.sf-rc-top { display: flex; align-items: center; gap: 7px; font: var(--sf-text-xs) / 1 var(--sf-font-mono); color: var(--sf-color-ink-3); }
+.sf-rc-id { display: flex; min-width: 0; white-space: nowrap; }
+.sf-rc-repo { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.sf-rc-num { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.sf-rc-top time { margin-left: auto; flex: none; }
+.sf-rc-title {
+  margin: 7px 0 0; font: var(--sf-weight-medium) 13.5px / var(--sf-leading-snug) var(--sf-font-sans); letter-spacing: -0.005em; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.sf-run-card[data-done] .sf-rc-title { -webkit-line-clamp: 1; }
+.sf-rc-foot { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sf-space-1-5) var(--sf-space-2); margin-top: var(--sf-space-2-5); }
+.sf-rc-foot:empty { display: none; }
+.sf-iters { display: inline-flex; gap: 3px; align-items: center; }
+.sf-iters i { width: 6px; height: 6px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--sf-color-control); }
+.sf-iters i[data-on] { background: var(--sf-color-ink-2); box-shadow: none; }
+.sf-iters[data-capped] i[data-on] { background: var(--sf-color-warn); }
+.sf-axes { display: inline-flex; align-items: center; gap: var(--sf-space-1-5); font: var(--sf-text-2xs) var(--sf-font-mono); color: var(--sf-color-ink-3); }
+.sf-axes > span { display: inline-flex; gap: 2px; }
+.sf-axes i { width: 8px; height: 3px; border-radius: 1px; background: var(--sf-color-line-2); }
+.sf-axes i[data-v="ok"] { background: var(--sf-verdict-passed); }
+.sf-axes i[data-v="bad"] { background: var(--sf-verdict-failed); }
+.sf-loops { font: var(--sf-text-2xs) var(--sf-font-mono); color: var(--sf-color-warn); }

@@ -1,0 +1,19 @@
+.sf-table th.sf-review-axis { font: var(--sf-weight-regular) 12.5px var(--sf-font-mono); letter-spacing: 0; text-transform: none; color: var(--sf-color-ink-2); }
+.sf-verdict { font: var(--sf-weight-medium) var(--sf-text-sm) var(--sf-font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sf-verdict[data-v="passed"] { color: var(--sf-verdict-passed); }
+.sf-verdict[data-v="failed"] { color: var(--sf-verdict-failed); }
+.sf-verdict[data-v="pending"] { color: var(--sf-verdict-pending); }
+.sf-verdict[data-v="not-reviewed"] { color: var(--sf-color-line-2); }
+.sf-verdict-n { color: var(--sf-color-ink-3); }
+.sf-finds { margin: 18px 0 0; padding: 0; list-style: none; }
+.sf-find { display: grid; grid-template-columns: 12px minmax(0, 1fr); gap: 2px var(--sf-space-2); padding: var(--sf-space-2-5) 0; border-top: 1px dashed var(--sf-color-line); }
+.sf-find:first-child { border-top: 0; }
+.sf-sev { width: 7px; height: 7px; margin-top: 7px; border-radius: 1.5px; background: var(--sf-tone-idle); }
+.sf-sev[data-sev="high"] { background: var(--sf-tone-bad); }
+.sf-sev[data-sev="medium"] { background: var(--sf-tone-warn); }
+.sf-find-is { font-size: 13.5px; overflow-wrap: anywhere; min-width: 0; }
+.sf-find-meta { grid-column: 2; font: 11.5px var(--sf-font-mono); color: var(--sf-color-ink-3); overflow-wrap: anywhere; }
+.sf-find[data-dismissed] .sf-find-is { color: var(--sf-color-ink-3); }
+.sf-find[data-dismissed] .sf-sev { opacity: 0.5; }
+.sf-find-issue { cursor: help; border-radius: var(--sf-radius-xs); }
+.sf-find-issue s { text-decoration-color: var(--sf-verdict-dismissed); }
