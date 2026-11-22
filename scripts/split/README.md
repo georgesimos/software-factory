@@ -65,3 +65,11 @@ $M packages/core/src/sync.ts sessionsByBranch,SKIP_DIRS,DISCOVER_ROOTS,discover,
 $M packages/core/src/log.ts archiveFile,sessionsFile,readArchive
 $M packages/core/src/eval.ts evals
 ```
+
+**S8** (#44). `project.mjs` moves whole, by `git mv`, to `packages/core/src/project.ts`. Then add `// @ts-nocheck` and re-point its imports to the core modules (and `dashboard` to `../../factory/factory.mjs`). Its templates path becomes `path.join(HERE, '..', '..', 'factory', 'templates')`. `factory.mjs` and `derive.ts` import from `./project.ts`. `hooks`, `SHIP_FILE`, `SHIP_LIST` and `shipConnectors` stay for S10:
+
+```bash
+git mv packages/factory/project.mjs packages/core/src/project.ts
+$M packages/core/src/onboard.ts F_CMD,shq,onboardFile,SHIP_KINDS,readOnboard,setShip,onboardConfig,onboardState,onboardText
+$M packages/core/src/demo.ts demo,demoTranscripts
+```
