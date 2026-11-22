@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { derive } from './derive.ts';
 import { execFileSync } from 'node:child_process';
-import { gh, parseRun, same } from '../../factory/factory.mjs';
+import { same } from '../../factory/factory.mjs';
+import { gh, parseRun } from './github.ts';
 import { io, read, record, runDir, stateDir } from './log.ts';
 import { rules } from './rules.ts';
 

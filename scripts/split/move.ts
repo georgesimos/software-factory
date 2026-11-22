@@ -95,7 +95,7 @@ const add = (spec: string, local: string, name: string) => {
 for (const n of [...movedUse.read].sort()) {
   if (found.has(n)) continue;
   const imp = imports.get(n);
-  if (imp) add(rel(to, imp.spec), n, imp.name);
+  if (imp) { if (path.resolve(path.dirname(from), imp.spec) !== path.resolve(to)) add(rel(to, imp.spec), n, imp.name); } // already declared in <to>
   else if (topNames.has(n)) { add(relTo(from), n, n); needFromFrom.add(n); }
 }
 const importLines = [...bySpec].map(([spec, e]) => {
@@ -110,7 +110,12 @@ if (fs.existsSync(to)) {
   const lines = old.split('\n'), i = lines.findIndex((l) => !/^import .* from '.*';$/.test(l));
   prevImports = lines.slice(0, i); body = lines.slice(i).join('\n').replace(/^\n+/, '');
 }
-const mergedImports = mergeImports([...prevImports, ...importLines]);
+// Names now declared in <to> must not also be imported into it.
+const dropOwn = (l: string) => l.replace(/^import \{ (.*) \} from '(.*)';$/, (_m, names: string, spec: string) => {
+  const keep = names.split(', ').filter((n) => !found.has(n.split(' as ').pop()!));
+  return keep.length ? `import { ${keep.join(', ')} } from '${spec}';` : '';
+});
+const mergedImports = mergeImports([...prevImports.map(dropOwn).filter(Boolean), ...importLines]);
 const chunk = moving.map((st) => {
   const text = src.slice(startOf(st), endOf(st)).replace(/^\n+/, '');
   return exported(st) ? text : text.replace(/^((?:\s*\/\/.*\n|\s*\/\*[^]*?\*\/\n)*)(\s*)/, '$1$2export ');

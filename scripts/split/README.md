@@ -56,3 +56,12 @@ After the move, re-point the imports in `factory.mjs`, `project.mjs`, `test/proj
 ```bash
 $M packages/core/src/workspace.ts git,ls,projectsFile,projects,saveProject,wtFile,wtInfo,worktree,cleanup,gc,deps,localChecks
 ```
+
+**S7** (#43). `SHIP`, `loadShip` and `shipTrack` stay in `factory.mjs` because the command switch assigns `SHIP`; they move in S10:
+
+```bash
+$M packages/core/src/github.ts gh,parseRun,intake,intakeFixture,adapterCtx,openPRs,facts,merge,approval,postmerge,revert
+$M packages/core/src/sync.ts sessionsByBranch,SKIP_DIRS,DISCOVER_ROOTS,discover,sync
+$M packages/core/src/log.ts archiveFile,sessionsFile,readArchive
+$M packages/core/src/eval.ts evals
+```
