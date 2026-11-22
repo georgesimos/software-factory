@@ -81,6 +81,8 @@ importers:
 
   packages/factory: {}
 
+  packages/ship: {}
+
 packages:
 
   '@acemir/cssom@0.9.33':

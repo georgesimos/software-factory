@@ -131,6 +131,10 @@ Then run `F risk RUN <files to touch…>`.
      - **Still red after 2 fixes:** record `F event RUN build failed -` with `{"reasons":[…]}`, then go to Approve, which escalates.
    - **`advisory`:** run `gh pr checks <pr> -R OWNER/REPO` once and mention its state in the PR comment, but don't wait on it or fix for it. `F checks` from step 5 is what counts.
    - **`skip`:** don't run `gh pr checks` at all. `F checks` from step 5 is what counts. With no `checks.commands` rule, nothing stands in for CI, so the run will escalate: tell the user how to add one (see [Rules](#rules-ci-off-local-checks-and-guidance)).
+   - **Then the preview, following `policy["deploy.preview"]`:**
+     - **`required`:** poll `F ship status OWNER/REPO $(git -C WT rev-parse HEAD)` about every 30 seconds, for at most 15 minutes, until a row has `"env":"preview"` and `"state":"ready"`. On `"state":"error"`, fix it like red CI if the `detail` shows why, push and wait again; otherwise go on, and Approve will escalate. `F ship status` only reads: `F decide` and `F merge` look the preview up again and record it.
+     - **`advisory`:** run `F ship status` once and mention the preview URL or its state in the PR comment.
+     - **`off` or unset:** skip it.
 8. `F event RUN build passed -` with `{"pr":"<url>","branch":"factory/issue-N"}`. Include `pr` and `branch` on the first iteration only.
 
 ## 4. Review: parallel, independent, and only what changed
@@ -221,6 +225,7 @@ Rules live in `~/.claude/factory/skills.json` next to the runners: a `"default"`
 | `ci` | `required` (built-in) \| `advisory` \| `skip` | `advisory` reads CI but red doesn't block or revert; `skip` never reads it, in build or after the merge. Either way, CI is **not** treated as green: the merge needs `F checks` passing on the reviewed commit, or the run escalates. |
 | `checks.commands` | JSON array of commands | What `F checks` runs in the worktree. Setting it also adds a requirement when CI is required. |
 | `diffCap` | `1`–`300` | Lowers the auto-merge diff cap. |
+| `deploy.preview` | `off` (built-in) \| `advisory` \| `required` | `required`: the merge needs a `ready` preview of the reviewed commit, with an https URL, from any `web-deploy` connector in `packages/ship`; `advisory` only notes it in the decision. |
 
 Nothing else is configurable: trusted authors, sensitive paths, the `code` and `security` axes, the merge pinned to the reviewed commit, imported runs escalating, and the owned events and typed fields.
 

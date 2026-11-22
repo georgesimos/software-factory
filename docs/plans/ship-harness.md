@@ -1,6 +1,6 @@
 # Plan: the Ship harness (deploys, app stores, databases) and onboarding
 
-Status: proposal, 2026-11-22. Nothing here is built yet.
+Status: phase 0 built in `packages/ship` (2026-11-22); phases 1–5 are still a proposal.
 
 This changes an earlier decision. "No third-party integrations yet" was right while the core loop was being built. This plan adds integrations behind one adapter contract, read-only first, so the core loop stays safe.
 

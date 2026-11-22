@@ -3,12 +3,19 @@
 const args = process.argv.slice(2);
 const a = args.join(' ');
 const out = (x) => process.stdout.write(typeof x === 'string' ? x : JSON.stringify(x));
+const head = (n) => String(n).padStart(40, '0'); // a PR's head sha
 const pr = (number, headRefName, closes, title = `PR ${number}`) => ({
-  number, headRefName, authorAssociation: 'OWNER', url: `https://github.com/acme/app/pull/${number}`,
+  number, headRefName, headRefOid: head(number), authorAssociation: 'OWNER', url: `https://github.com/acme/app/pull/${number}`,
   title, author: { login: 'acme' }, closingIssuesReferences: { nodes: closes.map((n) => ({ number: n })) },
 });
 
 if (a === 'api user --jq .login') out('stub-user\n');
+else if (/^api repos\/[\w.-]+\/[\w.-]+\/deployments/.test(a)) { // GitHub Deployments, for the ship connector: one ready preview, on acme/app PR 10's head
+  if (process.env.STUB_DEPLOY_FAIL) { process.stderr.write('HTTP 502: Bad Gateway'); process.exit(1); }
+  if (a.includes('/statuses')) out([{ state: 'success', environment_url: 'https://app-pr-10.example.app', description: 'Deployment has completed', created_at: '2026-11-22T10:00:00Z' }]);
+  else if (a.endsWith('deployments?per_page=1')) out(a.startsWith('api repos/acme/app/') ? [{ id: 1 }] : []);
+  else out(a.includes(`sha=${head(10)}`) ? [{ id: 10, sha: head(10), environment: 'Preview – app', creator: { login: 'vercel[bot]' }, created_at: '2026-11-22T09:58:00Z' }] : []);
+}
 else if (args[0] === 'repo' && args[1] === 'view') out('main\n');
 else if (args[0] === 'pr' && args[1] === 'view' && a.includes('--json mergeCommit')) out({ mergeCommit: { oid: process.env.STUB_MERGE_SHA } });
 else if (args[0] === 'run' && args[1] === 'list') out([{ status: 'completed', conclusion: 'failure', name: 'ci', url: 'https://github.com/acme/wt/actions/runs/1' }]);

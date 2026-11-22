@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 let DIR = process.env.FACTORY_DIR || path.join(os.homedir(), '.claude', 'factory');
@@ -42,7 +42,7 @@ const USAGE_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite'];
 const TRUSTED = ['OWNER', 'MEMBER', 'COLLABORATOR'];
 const OUTCOMES = ['rejected', 'needs-info', 'merged', 'escalated', 'closed', 'awaiting-approval', 'split'];
 const TERMINAL = ['rejected', 'merged', 'escalated', 'closed', 'split']; // needs-info / awaiting-approval resume later
-const STAGES = ['intake', 'spec', 'build', 'review', 'gate', 'approve'];
+const STAGES = ['intake', 'spec', 'build', 'review', 'gate', 'approve', 'ship']; // ship: deploy observations, recorded only by packages/ship's track()
 const STATUSES = ['started', 'passed', 'failed', 'decided', 'reverted', ...OUTCOMES];
 const BLOCKING = ['high', 'medium'];
 const SENSITIVE = /(^|\/)(auth|login|session|oauth|payments?|billing|money|migrations?)(\/|\.|$)|^\.github\/workflows\/|(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|Gemfile(\.lock)?|go\.(mod|sum)|Cargo\.(toml|lock))$|(^|\/)\.env|(^|\/)\.(claude|codex)\//i; // .claude/.codex: a branch's own agent skills, hooks and settings
@@ -81,7 +81,7 @@ export function record(run, stage, status, payload = {}, cli) { // cli: {fallbac
   }
   payload = validateUsage(payload);
   const sessionId = process.env.CLAUDE_CODE_SESSION_ID; // set by Claude Code; lets the UI link back to the driving session
-  const ev = { ts: new Date().toISOString(), ...payload, ...(sessionId ? { harness: 'claude-code', sessionId, cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback)), run, stage, status };
+  const ev = { ts: new Date().toISOString(), ...payload, ...(sessionId && stage !== 'ship' ? { harness: 'claude-code', sessionId, cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback)), run, stage, status };
   fs.mkdirSync(DIR, { recursive: true });
   fs.appendFileSync(log(), JSON.stringify(ev) + '\n');
   if (TERMINAL.includes(status) || status === 'needs-info') { // a finished (or parked) run gives back its worktree
@@ -142,6 +142,11 @@ export function derive(events) {
   const runs = {};
   for (const e of events) {
     if (e.stage === 'rules') continue; // rule changes: an audit trail, not a run
+    if (e.stage === 'ship') { // deploy state, typed by a connector: the latest per connector and env. Never moves the run's stage, url, clock or outcome.
+      const r = runs[e.run];
+      if (r) (r.deploys ??= {})[`${e.connector}/${e.env}`] = { connector: e.connector, kind: e.kind, env: e.env, state: e.state, status: e.status, url: e.url, sha: e.sha, at: e.at, detail: e.detail, creator: e.creator, ts: e.ts };
+      continue;
+    }
     const r = (runs[e.run] ??= { id: e.run, iteration: 0, reviews: {}, loopbacks: [], events: [], outcome: 'in-progress' });
     r.events.push(e);
     Object.assign(r, { stage: e.stage, status: e.status, updated: e.ts });
@@ -176,6 +181,7 @@ export function derive(events) {
   for (const r of Object.values(runs)) {
     r.durationMs = Date.parse(r.updated) - Date.parse(r.started);
     if (r.burn) finishBurn(r.burn);
+    if (r.deploys) r.deploys = Object.values(r.deploys);
     for (const c of r.children || []) if (runs[c]) runs[c].parent = r.id;
   }
   return runs;
@@ -385,10 +391,17 @@ export function decide(r, f) {
   if (src.length && !(f.files || []).some((p) => TEST.test(p))) why.push(`source changed (${src.length} file(s)) with no test change`);
   if (!r.pr) why.push('no PR recorded');
   if (ciLine && local?.ok && why.length) why.push(ciLine); // context: this escalation happened under a CI rule
+  // Rule deploy.preview: a ready preview of the reviewed commit from any web-deploy connector (only the normalized fields count).
+  const pv = pol['deploy.preview']?.value || 'off', notes = [];
+  if (pv !== 'off') {
+    const sha = r.reviewedSha, hit = sha && (f.deploys ?? r.deploys ?? []).find((d) => d.kind === 'web-deploy' && d.env === 'preview' && d.state === 'ready' && d.sha === sha && /^https:\/\//.test(d.url || ''));
+    const line = hit ? `preview ready: ${hit.url} (${hit.connector})` : `no ready preview deploy for the reviewed commit ${String(sha || 'none').slice(0, 7)} (rule deploy.preview=${pv}, ${by(pol['deploy.preview'])})`;
+    (!hit && pv === 'required' ? why : notes).push(line); // advisory: shown, never blocking
+  }
   return why.length
-    ? { action: 'escalate', reasons: why }
-    : ciLine ? { action: 'merge', reasons: [`trusted author, all axes passed, tests changed, ${lines}-line diff, no sensitive paths`, ...(ci === 'required' ? ['CI green'] : []), ciLine] }
-    : { action: 'merge', reasons: [`trusted author, all axes passed, CI green, tests changed, ${lines}-line diff, no sensitive paths`] };
+    ? { action: 'escalate', reasons: [...why, ...notes] }
+    : ciLine ? { action: 'merge', reasons: [`trusted author, all axes passed, tests changed, ${lines}-line diff, no sensitive paths`, ...(ci === 'required' ? ['CI green'] : []), ciLine, ...notes] }
+    : { action: 'merge', reasons: [`trusted author, all axes passed, CI green, tests changed, ${lines}-line diff, no sensitive paths`, ...notes] };
 }
 
 // Before building: untrusted authors and sensitive planned files need a human to approve the spec.
@@ -612,6 +625,7 @@ const RULES = {
   ci: [(v) => ['required', 'advisory', 'skip'].includes(v), 'required|advisory|skip'],
   'checks.commands': [(v) => Array.isArray(v) && v.length > 0 && v.length <= 10 && v.every((c) => typeof c === 'string' && c.trim() && c.length <= 300 && !/[\r\n\0]/.test(c)), 'a JSON array of 1-10 one-line commands'],
   diffCap: [(v) => Number.isInteger(v) && v >= 1 && v <= MAX_DIFF, `an integer 1-${MAX_DIFF} (it can only lower the cap)`],
+  'deploy.preview': [(v) => ['required', 'advisory', 'off'].includes(v), 'required|advisory|off (off is the built-in; required adds a merge condition)'],
 };
 const RULE_FIELDS = ['value', 'reason', 'setBy', 'setAt', 'until'];
 const LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
@@ -865,7 +879,7 @@ export function deps(run) {
 
 export function openPRs(repo) {
   const [o, n] = repo.split('/');
-  const q = 'query($o:String!,$n:String!){repository(owner:$o,name:$n){defaultBranchRef{name} pullRequests(states:OPEN,first:100){nodes{number url title headRefName authorAssociation author{login} closingIssuesReferences(first:20){nodes{number}}}} done: pullRequests(states:[MERGED,CLOSED],last:100){nodes{headRefName}}}}';
+  const q = 'query($o:String!,$n:String!){repository(owner:$o,name:$n){defaultBranchRef{name} pullRequests(states:OPEN,first:100){nodes{number url title headRefName headRefOid authorAssociation author{login} closingIssuesReferences(first:20){nodes{number}}}} done: pullRequests(states:[MERGED,CLOSED],last:100){nodes{headRefName}}}}';
   const r = JSON.parse(gh('api', 'graphql', '-f', `query=${q}`, '-f', `o=${o}`, '-f', `n=${n}`)).data.repository;
   return { base: r.defaultBranchRef.name, prs: r.pullRequests.nodes, doneBranches: (r.done?.nodes || []).map((x) => x.headRefName) };
 }
@@ -946,6 +960,19 @@ export function discover(roots, maxDepth = 5) {
   }).sort((a, b) => (b.lastCommit || '').localeCompare(a.lastCommit || ''));
 }
 
+// packages/ship, when it sits next to the factory (the repo layout). Optional: without it F works, and deploy.preview=required escalates.
+let SHIP = null;
+async function loadShip() {
+  const file = path.join(HERE, '..', 'ship', 'ship.mjs');
+  if (!fs.existsSync(file)) return null;
+  try { const m = await import(pathToFileURL(file).href); await m.ready(); return m; } catch (e) { console.error(`factory: ship harness failed to load: ${e.message}`); return null; }
+}
+// Records deploy state through record(). A failed lookup is reported in the result, never thrown: it must not break sync or merge.
+function shipTrack(pairs) {
+  if (!SHIP || !pairs.length) return undefined;
+  try { return SHIP.track(pairs, { runs: derive(read()), record }); } catch (e) { return { recorded: [], errors: [{ error: e.message }] }; }
+}
+
 // Registers the repo and imports work already in flight: open PRs, plus recent agent sessions on unmerged branches.
 // Imported runs are tracked, never driven: decide() always escalates them.
 export function sync(repo, repoPath) {
@@ -1011,8 +1038,10 @@ export function sync(repo, repoPath) {
     if (r.branch && sessions[r.branch]) prev[r.id] = sessions[r.branch].sessions.sort((a, b) => b.last.localeCompare(a.last)).slice(0, 5);
   }
   fs.writeFileSync(links, JSON.stringify(prev, null, 2));
+  const head = new Map(prs.map((p) => [p.url, p.headRefOid])); // deploy state of each in-progress run's PR head (finished runs aren't polled)
+  const ship = shipTrack(Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') && r.outcome === 'in-progress' && head.get(r.pr)).map((r) => ({ run: r.id, repo, sha: head.get(r.pr), path: repoPath })));
   render();
-  return { repo, path: repoPath, added, attached, closed };
+  return { repo, path: repoPath, added, attached, closed, ...(ship && { ship }) };
 }
 
 // Reads CI + diff facts from GitHub so the merge decision never depends on typed-in numbers.
@@ -1021,7 +1050,12 @@ export function facts(r) {
   const association = gh('api', `repos/${repo}/issues/${n}`, '--jq', '.author_association').trim();
   const autoMerge = projects()[repo]?.autoMerge !== false;
   const policy = rules(repo).policy; // a broken config throws here, so decide/merge fail and the run escalates
-  if (!r.pr) return { association, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy };
+  const pv = policy['deploy.preview']?.value, dep = {};
+  if (pv && pv !== 'off') { // live, like CI: record the reviewed commit's deploy state now, then decide on what the log says
+    shipTrack([{ run: r.id, repo, sha: r.reviewedSha, path: projects()[repo]?.path }]);
+    dep.deploys = derive(read())[r.id]?.deploys || [];
+  }
+  if (!r.pr) return { association, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy, ...dep };
   const diff = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'additions,deletions,files'));
   let checks = 'skipped'; // ci=skip: GitHub CI isn't even read
   if (policy.ci?.value !== 'skip') try {
@@ -1031,7 +1065,7 @@ export function facts(r) {
     if (!/no checks reported/i.test(String(e.stderr))) throw e;
     checks = 'none';
   }
-  return { association, autoMerge, checks, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), rules: policy };
+  return { association, autoMerge, checks, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), rules: policy, ...dep };
 }
 
 // Stand-in for CI that F runs itself: the checks.commands rule (never repo or model text) in the run's worktree, on a clean commit.
@@ -1097,12 +1131,13 @@ export function postmerge(run) {
   const { repo } = parseRun(run);
   const sha = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'mergeCommit')).mergeCommit?.oid;
   if (!sha) return { state: 'not-merged' };
+  const ship = shipTrack([{ run, repo, sha, path: projects()[repo]?.path }]), deploys = ship?.recorded.length ? { deploys: ship.recorded } : {}; // production deploy of the merge commit, when a connector reports one
   const ci = rules(repo).policy.ci?.value;
-  if (ci === 'skip') return { sha, state: 'skipped', reason: 'rule ci=skip: CI on the base branch is not watched, so it never triggers a revert' };
+  if (ci === 'skip') return { sha, state: 'skipped', reason: 'rule ci=skip: CI on the base branch is not watched, so it never triggers a revert', ...deploys };
   const runs = JSON.parse(gh('run', 'list', '-R', repo, '--commit', sha, '--json', 'status,conclusion,name,url'));
   const failed = runs.filter((x) => ['failure', 'cancelled', 'timed_out'].includes(x.conclusion)).map((x) => x.url);
   const state = !runs.length ? 'none' : failed.length ? 'fail' : runs.some((x) => x.status !== 'completed') ? 'pending' : 'pass';
-  return { sha, state, failed, ...(ci === 'advisory' && { advisory: true }) }; // advisory: report red, don't revert on it
+  return { sha, state, failed, ...(ci === 'advisory' && { advisory: true }), ...deploys }; // advisory: report red, don't revert on it
 }
 
 // Opens (never merges) a revert PR for a merged run whose main CI went red.
@@ -1242,7 +1277,7 @@ export function demo() {
   let t = Date.parse('2026-11-20T09:00:00Z');
   const S = { harness: 'claude-code', sessionId: 'demo-session', cwd: '/work/shop' }, MEASURED = ['acme/shop#43', 'acme/shop#45'];
   const ev = (run, stage, status, p = {}) => {
-    const e = { ts: new Date((t += 97_000)).toISOString(), ...p, ...(MEASURED.includes(run) ? S : {}), run, stage, status };
+    const e = { ts: new Date((t += 97_000)).toISOString(), ...p, ...(MEASURED.includes(run) && stage !== 'ship' ? S : {}), run, stage, status };
     fs.mkdirSync(DIR, { recursive: true });
     fs.appendFileSync(log(), JSON.stringify(e) + '\n');
   };
@@ -1374,6 +1409,12 @@ export function demo() {
   g(R);
   d(R, { checks: 'skipped', additions: 58, deletions: 4, files: files51, rules: rules('acme/shop').policy });
   ev(R, 'approve', 'merged');
+  // Deploy state, as packages/ship's GitHub Deployments connector records it: a preview per PR head, production for a merge.
+  const dep = (run, env, state, status, sha, url, detail) => ev(run, 'ship', status, { connector: 'github-deployments', kind: 'web-deploy', env, state, url, sha, at: new Date(t).toISOString(), detail, creator: 'vercel[bot]' });
+  dep('acme/shop#51', 'preview', 'ready', 'passed', sha, 'https://shop-git-factory-issue-51-acme.vercel.app', 'Deployment has completed');
+  dep('acme/shop#51', 'production', 'ready', 'passed', '9a7c41d2e0b8', 'https://shop.acme.dev', 'Deployment has completed');
+  dep('acme/shop#45', 'preview', 'ready', 'passed', 'c0ffee12ab34', 'https://shop-git-factory-issue-45-acme.vercel.app', 'Deployment has completed');
+  dep('acme/shop#44', 'preview', 'error', 'failed', 'd15ea5e0b1a2', 'https://shop-git-factory-issue-44-acme.vercel.app', 'Build failed: Type error in lib/auth/github.ts');
   demoTranscripts(read().filter((e) => e.sessionId === S.sessionId));
   return render();
 }
@@ -1449,6 +1490,8 @@ function test() {
   assert.equal(runs['acme/shop#51'].decision.action, 'merge');
   assert.match(runs['acme/shop#51'].decision.reasons.join(' | '), /CI not required by rule ci=skip, set by acme on 2026-11-20: GitHub Actions billing is failing\. Local checks: pass \(pnpm test, pnpm lint\)/);
   assert.equal(runs['acme/shop'], undefined); // rule events are not runs
+  assert.deepEqual(runs['acme/shop#51'].deploys.map((d) => [d.env, d.state]), [['preview', 'ready'], ['production', 'ready']]); // latest per connector and env
+  assert.deepEqual([runs['acme/shop#44'].outcome, runs['acme/shop#44'].stage, runs['acme/shop#44'].url], ['escalated', 'approve', 'https://github.com/acme/shop/issues/44']); // deploys move nothing
   assert.deepEqual(rules('acme/shop').expired.map((x) => x.key), ['diffCap']);
   // Verifier-dismissed findings don't block; the cost cap stops looping.
   const dis = { iteration: 1, axes: { 1: ['code'] }, reviews: { 1: { code: { verdict: 'passed', findings: [{ severity: 'high', route: 'build', dismissed: 'not reachable' }] } } } };
@@ -1633,6 +1676,8 @@ function cliTest() {
   assert.throws(() => cli(['event', RUN, 'approve', 'merged']), /recorded by "merge"/);
   assert.throws(() => record(RUN, 'approve', 'merged'), /decision is not merge/); // and record() itself still refuses
   assert.throws(() => cli(['event', RUN, 'deploy', 'passed']), /unknown stage/);
+  assert.throws(() => cli(['event', RUN, 'ship', 'passed', '-'], '{"connector":"x","env":"preview","state":"ready"}'), /recorded by "ship"/);
+  for (const k of ['connector', 'kind', 'env', 'state', 'url', 'sha']) assert.throws(() => cli(['event', RUN, 'build', 'passed', '-'], JSON.stringify({ [k]: 'https://evil.example' })), new RegExp(`not from a payload: ${k}`));
   assert.equal(JSON.parse(cli(['merge', RUN], '', { STUB_CHECKS: '1' })).merged, true); // stub fails unless --match-head-commit abc123
   const st = JSON.parse(cli(['state', RUN]));
   assert.equal(st.outcome, 'merged');
@@ -1658,6 +1703,7 @@ function rulesTest(cli) {
     ['review.security', 'off', /unknown rule/], ['matchHeadCommit', 'off', /unknown rule/], ['imported', 'merge', /unknown rule/],
     ['ci', 'off', /required\|advisory\|skip/], ['diffCap', '400', /can only lower/], ['diffCap', '0', /can only lower/],
     ['checks.commands', '[]', /1-10/], ['checks.commands', '["a\\nb"]', /1-10/], ['guide.deploy', 'x', /unknown step "deploy"/],
+    ['deploy.preview', 'maybe', /required\|advisory\|off/], ['deploy.production', 'required', /unknown rule/],
   ]) assert.throws(() => set('acme/rr', k, v, '--reason', 'x'), re);
   assert.throws(() => set('acme/rr', 'ci', 'skip', '--reason', 'x', '--until', '2020-01-01'), /--until/);
   assert.throws(() => set('acme/rr', 'ci', 'skip', '--reason', 'x', '--until', '2026-13-40'), /--until/);
@@ -1710,6 +1756,19 @@ function rulesTest(cli) {
   assert.match(D(green, { rules: skip, files: ['lib/auth/x.ts', 'lib/auth/x.test.ts'] }).reasons.join(), /sensitive paths/);
   assert.match(D({ ...green, imported: true }, { rules: skip }).reasons.join(), /imported/);
   assert.match(D(green, { rules: { ...skip, diffCap: rule(50) }, additions: 60 }).reasons.join(), /max 50 by rule diffCap/);
+  // deploy.preview: required needs a ready https preview of the reviewed commit from any web-deploy connector; advisory only notes it.
+  const S1 = 's1', dp = (x) => ({ connector: 'any-host', kind: 'web-deploy', env: 'preview', state: 'ready', sha: S1, url: 'https://p.example', ...x });
+  const P = (v, deploys, r = ok) => D(r, { checks: 'pass', rules: { 'deploy.preview': rule(v) }, deploys });
+  assert.deepEqual(D(ok, { checks: 'pass' }), D(ok, { checks: 'pass', rules: { 'deploy.preview': rule('off') } })); // off = built-in
+  assert.equal(P('required', [dp()]).action, 'merge');
+  assert.match(P('required', [dp()]).reasons.join(), /preview ready: https:\/\/p\.example \(any-host\)/);
+  for (const bad of [[], [dp({ sha: 's0' })], [dp({ state: 'building' })], [dp({ env: 'neon-audit' })], [dp({ kind: 'database' })], [dp({ url: 'http://p.example' })]]) {
+    const x = P('required', bad);
+    assert.deepEqual([x.action, /no ready preview deploy for the reviewed commit s1 \(rule deploy.preview=required, set by acme/.test(x.reasons.join())], ['escalate', true]);
+  }
+  assert.equal(P('required', undefined, { ...ok, deploys: [dp()] }).action, 'merge'); // from the run's recorded deploys when facts carry none
+  assert.deepEqual([P('advisory', []).action, /no ready preview.*advisory/.test(P('advisory', []).reasons.join())], ['merge', true]);
+  assert.match(P('required', [dp()], { ...ok, association: 'NONE' }).reasons.join(), /not trusted/); // a ready preview never loosens a guard
   // End to end on acme/shop: the model's checks.json never stands in for CI; F's own check does, and merge still pins the reviewed commit.
   set('acme/shop', 'ci', 'skip', '--reason', 'Actions billing');
   set('acme/shop', 'checks.commands', '["pnpm test"]', '--reason', 'stands in for CI');
@@ -1738,6 +1797,24 @@ function rulesTest(cli) {
   assert.throws(() => cli(['rules', 'unset', 'acme/shop', 'ci']), /no rule "ci"/);
   assert.match(cli(['rules', 'unset', 'acme/rr', 'guide.build']), /"guide"/);
   assert.deepEqual(read().filter((e) => e.stage === 'rules' && e.status === 'unset' && e.run === 'acme/shop').map((e) => [e.run, e.key, e.reason]).slice(0, 1), [['acme/shop', 'ci', 'billing fixed']]);
+  // End to end: under deploy.preview=required, F decide asks the ship harness for the reviewed commit's deploys, records them, then decides.
+  set('acme/app', 'deploy.preview', 'required', '--reason', 'reviewers look at the running app');
+  const P10 = 'acme/app#60', head10 = '10'.padStart(40, '0');
+  record(P10, 'intake', 'started', { title: 't', association: 'OWNER' });
+  record(P10, 'build', 'passed', { pr: 'https://github.com/acme/app/pull/60' });
+  record(P10, 'review', 'started', { axes: ['code', 'security'], sha: head10 });
+  record(P10, 'review', 'passed', { axis: 'code', findings: [] });
+  record(P10, 'review', 'passed', { axis: 'security', findings: [] });
+  const gated = JSON.parse(cli(['decide', P10], '', { STUB_CHECKS: '1' }));
+  assert.equal(gated.action, 'merge');
+  assert.match(gated.reasons.join(), /preview ready: https:\/\/app-pr-10\.example\.app \(github-deployments\)/);
+  assert.equal(derive(read())[P10].deploys[0].state, 'ready');
+  record(P10, 'review', 'started', { axes: ['code', 'security'], sha: 'e'.repeat(40) }); // a new commit with no preview
+  record(P10, 'review', 'passed', { axis: 'code', findings: [] });
+  record(P10, 'review', 'passed', { axis: 'security', findings: [] });
+  assert.match(JSON.parse(cli(['decide', P10], '', { STUB_CHECKS: '1' })).reasons.join(), /no ready preview deploy for the reviewed commit eeeeeee/);
+  assert.match(JSON.parse(cli(['decide', P10], '', { STUB_CHECKS: '1', STUB_DEPLOY_FAIL: '1' })).action, /escalate/); // lookup down: escalate, never crash
+  cli(['rules', 'unset', 'acme/app', 'deploy.preview']);
   // A hand-edited rule without a reason fails loudly, and the dashboard says so instead of failing every event.
   fs.writeFileSync(path.join(DIR, 'skills.json'), '{"acme/rr":{"rules":{"ci":{"value":"skip","setBy":"me","setAt":"2026-01-01"}}}}');
   assert.throws(() => cli(['rules', 'acme/rr']), /needs a reason/);
@@ -1896,7 +1973,16 @@ function syncTest(cli) {
   assert.deepEqual(links['acme/app#10'].map((x) => [x.agent, x.id]), [['claude-code', 'a']]);
   assert.deepEqual(links['acme/app#12'].map((x) => [x.agent, x.id]), [['codex', 'cx-1']]);
   assert.equal(JSON.parse(cli(['decide', 'acme/app#11'], '', env)).action, 'escalate');
+  // Ship: sync records each in-progress PR head's deploy state through record(); only PR 10's head has a preview.
+  assert.deepEqual(first.ship.recorded.map((x) => [x.run, x.env, x.state, x.url]), [['acme/app#10', 'preview', 'ready', 'https://app-pr-10.example.app']]);
+  assert.deepEqual(first.ship.errors, []);
+  assert.deepEqual(derive(read())['acme/app#10'].deploys.map((d) => [d.connector, d.sha]), [['github-deployments', '10'.padStart(40, '0')]]);
+  assert.equal(derive(read())['acme/app#10'].url, 'https://github.com/acme/app/pull/10');
+  const failing = JSON.parse(cli(['sync', 'acme/app'], '', { ...env, STUB_DEPLOY_FAIL: '1' }))[0]; // a failed lookup never breaks sync
+  assert.match(failing.ship.errors[0].error, /HTTP 502/);
+  assert.deepEqual(failing.added, []);
   assert.deepEqual(JSON.parse(cli(['sync'], '', env))[0].added, []); // re-sync is idempotent and remembers the path
+  assert.equal(read().filter((e) => e.stage === 'ship').length, 1); // the same state for the same sha is recorded once
   const [later] = JSON.parse(cli(['sync', 'acme/app'], '', { ...env, STUB_CLOSED: '10', STUB_WIP_PR: '1' }));
   assert.deepEqual(later.closed, ['acme/app#10']);
   assert.deepEqual(later.attached, ['acme/app:dev/wip-9']); // session-only run picks up its new PR
@@ -2020,14 +2106,16 @@ if (isMain) {
   const json = (s) => (s === '-' ? JSON.parse(fs.readFileSync(0, 'utf8')) : s ? JSON.parse(s) : {});
   const out = (x) => console.log(JSON.stringify(x, null, 2));
   try {
+    if (['sync', 'postmerge', 'revert', 'decide', 'merge', 'ship'].includes(cmd)) SHIP = await loadShip();
     switch (cmd) {
       case 'event': {
         const [stage, status] = rest, p = json(rest[2]);
         const owned = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'approve:closed': 'sync' };
-        const owner = owned[`${stage}:${status}`] || { gate: 'gate', rules: 'rules' }[stage];
+        const owner = owned[`${stage}:${status}`] || { gate: 'gate', rules: 'rules', ship: 'ship' }[stage];
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
-        const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'cwd', 'runner', 'localChecks'].filter((k) => k in p);
-        if (typed.length) throw new Error(`these fields come from GitHub or git, not from a payload: ${typed.join(', ')}`);
+        const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'cwd', 'runner', 'localChecks',
+          'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // the last row: set by ship connectors only
+        if (typed.length) throw new Error(`these fields come from GitHub, git or a ship connector, not from a payload: ${typed.join(', ')}`);
         record(run, stage, status, p, { fallback }); break;
       }
       case 'review': { // raw reviewer output on stdin, from any runner; invalid output is recorded as a failed review
@@ -2059,7 +2147,7 @@ if (isMain) {
         if (run === 'set' && scope && key && value !== undefined) out(setRule(scope, key, value, { reason, until }));
         else if (run === 'unset' && scope && key) out(unsetRule(scope, key, { reason }));
         else if (run && run !== 'set' && run !== 'unset') out(rules(run));
-        else throw new Error('usage: rules <owner/repo|default> | rules set <owner/repo|default> <ci|checks.commands|diffCap|guide.<step>> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <owner/repo|default> <key> [--reason "…"]');
+        else throw new Error('usage: rules <owner/repo|default> | rules set <owner/repo|default> <ci|checks.commands|diffCap|deploy.preview|guide.<step>> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <owner/repo|default> <key> [--reason "…"]');
         break;
       }
       case 'checks': out(localChecks(run)); break;
@@ -2092,6 +2180,10 @@ if (isMain) {
         out(list.map(([k, p]) => sync(k, p))); break;
       }
       case 'projects': out(projects()); break;
+      case 'ship': { // thin alias: ship.mjs connectors | detect <owner/repo> | status <owner/repo> [sha]  (reads only)
+        if (!SHIP) throw new Error('the ship harness (packages/ship) is not installed next to the factory');
+        out(await SHIP.main([run, ...rest].filter(Boolean), { path: projects()[rest[0]]?.path })); break;
+      }
       case 'discover': out(discover([run, ...rest].filter(Boolean))); break;
       case 'decide': { const r = getRun(run); const f = r.imported ? {} : facts(r); const d = decide(r, f); record(run, 'approve', 'decided', { ...d, facts: f }); out({ ...d, facts: f }); break; }
       case 'merge': out(merge(run)); break;
@@ -2121,6 +2213,7 @@ if (isMain) {
   discover [roots...]                     find local GitHub clones for onboarding (default: ~/Development, ~/code, ...)
   sync   [owner/repo] [local clone path]  attach a project and import open PRs + agent sessions (no args: all)
   projects                                list attached projects
+  ship   connectors | detect <owner/repo> | status <owner/repo> [sha]   deploy state from packages/ship connectors (read only)
   intake <run>                            fetch issue, record intake start, print issue + trusted comments
   event  <run> <stage> <status> [json|-] [--fallback why]  record an event ("-" = JSON on stdin)
   worktree <run> [clone path]            create/reuse the run's git worktree (prints its path)
@@ -2133,7 +2226,7 @@ if (isMain) {
   skills catalog [owner/repo...]          every runner on this machine: built-in, Claude Code / Codex, global, project, your briefs
   ui     [port]                           serve the dashboard on 127.0.0.1 with a token, so the Skills sheet can save
   rules  <owner/repo>                     print the policy rules, warnings and per-step guidance that apply
-  rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, guide.<step> "text"
+  rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, deploy.preview required|advisory|off, guide.<step> "text"
   rules unset <owner/repo|default> <key> [--reason "…"]  remove one (back to the global rule, or the built-in)
   checks <run>                            run the checks.commands rule in the worktree on its HEAD commit (the CI stand-in)
   gc                                      remove worktrees of finished runs
