@@ -45,6 +45,8 @@ importers:
 
   packages/adapters: {}
 
+  packages/cli: {}
+
   packages/core:
     devDependencies:
       '@types/node':

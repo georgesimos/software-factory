@@ -33,7 +33,7 @@ software-factory/
 ├── packages/
 │   ├── factory/              @software-factory/factory: the skill. ~/.claude/skills/software-factory symlinks here
 │   │   ├── SKILL.md          orchestration: modes, ground rules, stages 0–7, attach, evals, scheduling
-│   │   ├── factory.mjs       the F CLI: event log, derive, gate/decide/merge, sync, worktrees, dashboard render, self-test
+│   │   ├── factory.mjs       the F entry (SKILL.md calls this path): re-exports core, runs packages/cli's main(), holds the self-test
 │   │   ├── (project.mjs moved to packages/core/src/project.ts in S8)
 │   │   ├── templates/        stack templates, data only: next-web.json, expo-mobile.json, _template.json, README.md
 │   │   ├── examples/
@@ -52,7 +52,8 @@ software-factory/
 │   │   └── package.json      private; `test` = env -u CLAUDE_CODE_SESSION_ID node factory.mjs test
 │   ├── core/                 @software-factory/core: the logic moving out of factory.mjs (docs/plans/split.md). Run by Node directly
 │   │   └── src/              constants, log (event log, record), derive, burn, gate (gate/decide/risk/metrics), skills, rules, review,
-│   │                         workspace, github, sync, eval, project, onboard, demo
+│   │                         workspace, github, sync, eval, project, onboard, demo, ship (packages/ship loading, dashboard hooks)
+│   ├── cli/                  @software-factory/cli: main(argv), the F command switch and usage text
 │   ├── server/               @software-factory/server: `F ui` (uiHandle, UI_ROUTES, ui) and the dashboard renderer (page, render, runsData)
 │   ├── adapters/             @software-factory/adapters: one file per provider, loaded by name
 │   │   ├── registry.mjs      loads one-file-per-provider folders (hosts/, trackers/)

@@ -88,3 +88,9 @@ $M packages/server/src/server.ts same,uiHandle,UI_ROUTES,ui,runRepos,render,runs
 - The CLI block `if (isMain) { … }` becomes `export async function main(argv) { … }` plus `if (isMain) await main(process.argv.slice(2));`, so `move.ts` can move it by name.
 
 `check.sh` now also compares the dashboard data `F render` embeds after the demo (hooks, runs, rules…), not only `F state`.
+
+**S10 move** (#46, part 2). Create `packages/cli/package.json` (no dependencies) and run `pnpm install`. `main.ts` imports `test` back from `factory.mjs` until S11; it is used at call time, so the cycle is safe. The one hand edit after the move: `headless-args --review` reads `references/review.schema.json` through `import.meta.dirname` instead of `HERE`:
+
+```bash
+$M packages/cli/src/main.ts main
+```
