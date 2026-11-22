@@ -24,3 +24,12 @@ $M packages/core/src/derive.ts validateUsage,cell,burnOf,addBurn,finishBurn,INVA
 ```
 
 `packages/core/package.json`, `tsconfig.json` and `src/index.ts` are written by hand.
+
+**S3** (#39):
+
+```bash
+$M packages/core/src/burn.ts projectsRoot,usageFile,SUB_AXIS,scanFile,measure,withMeasured
+$M packages/core/src/gate.ts axesFor,reviewAxes,gate,decide,risk,metrics
+```
+
+Each step also appends its new modules to `packages/core/src/index.ts`. To verify a step against the branch below it, run `scripts/split/check.sh <base-ref> packages/core/src`.

@@ -15,6 +15,10 @@ import { PROJECT_EVENTS, newProject, issuesCreate, projectStatus, loop, queue, s
 import { CAP, COST_CAP, DOCS, FINDING_KEYS, MAX_DIFF, MAX_ISSUES_PER_SESSION, OUTCOMES, PROJECT_BUDGET_USD, REVIEW_KEYS, SEO, SEVERITIES, SOURCE, STAGES, STATUSES, TERMINAL, TEST, TOKEN_CAP, TRUSTED, UI, USAGE_KEYS, VERIFIER_KEYS, blocking, costOf, isSensitive, sensitive } from '../core/src/constants.ts';
 import { archive, factoryDir, io, log, read, record, runDir, stateDir } from '../core/src/log.ts';
 import { INVALID, addBurn, allRuns, assertReviewOpen, budget, budgetWhy, burnOf, derive, finishBurn, getRun, validateReview, validateUsage } from '../core/src/derive.ts';
+import { SUB_AXIS, measure, usageFile, withMeasured } from '../core/src/burn.ts';
+import { axesFor, decide, gate, metrics, reviewAxes, risk } from '../core/src/gate.ts';
+export { axesFor, decide, gate, metrics, reviewAxes, risk };
+export { measure, withMeasured };
 export { allRuns, budget, derive, validateReview, validateUsage };
 export { archive, factoryDir, io, read, record, runDir };
 export { CAP, COST_CAP, MAX_DIFF, MAX_ISSUES_PER_SESSION, PROJECT_BUDGET_USD, TOKEN_CAP, costOf, isSensitive };
@@ -22,215 +26,6 @@ export { CAP, COST_CAP, MAX_DIFF, MAX_ISSUES_PER_SESSION, PROJECT_BUDGET_USD, TO
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // render() lives with the server after the split; code bound for core calls dashboard.render().
 export const dashboard = { render: () => render() };
-
-// ---------- measured burn: Claude Code transcripts of the sessions that recorded events ----------
-const projectsRoot = () => io.projects || path.join(os.homedir(), '.claude', 'projects');
-const usageFile = () => path.join(stateDir(), 'usage.json');
-const SUB_AXIS = /^\s*(code|security|ux|ui|seo|docs|[a-z][a-z0-9-]{0,30}(?=\s+review\b))\b/i; // built-ins, or any extra axis in "<axis> review RUN"
-
-// Only token counts, message ids, times and model ids are kept, never message text. Re-reads only bytes appended since last time.
-function scanFile(file, prev) {
-  let st;
-  try { st = fs.statSync(file); } catch { return prev; } // transcript gone: keep what was measured
-  if (prev && st.size === prev.size) return prev;
-  const from = prev && st.size > prev.offset ? prev.offset : 0;
-  const rows = from ? prev.rows : [];
-  const fd = fs.openSync(file, 'r');
-  const buf = Buffer.alloc(st.size - from);
-  fs.readSync(fd, buf, 0, buf.length, from);
-  fs.closeSync(fd);
-  const end = buf.lastIndexOf(10) + 1; // a half-written last line waits for the next scan
-  for (const line of buf.subarray(0, end).toString('utf8').split('\n')) {
-    if (!line.includes('"usage"') || !line.includes('"assistant"')) continue;
-    let d;
-    try { d = JSON.parse(line); } catch { continue; }
-    const m = d.type === 'assistant' ? d.message : null, u = m?.usage;
-    if (!u || typeof m.id !== 'string') continue;
-    const row = (id, model, x) => {
-      const w = x.cache_creation || {};
-      const w5 = w.ephemeral_5m_input_tokens ?? (x.cache_creation_input_tokens || 0), w1 = w.ephemeral_1h_input_tokens || 0;
-      const t = [x.input_tokens || 0, x.output_tokens || 0, x.cache_read_input_tokens || 0, w5, w1];
-      if (t.some((n) => n > 0)) rows.push([d.timestamp, id, String(model || '?').slice(0, 64), ...t, u.speed === 'fast' ? 1 : 0]);
-    };
-    row(m.id, m.model, u);
-    // Advisor-style calls bill another model inside the same message; top-level usage covers only the main model.
-    (Array.isArray(u.iterations) ? u.iterations : []).forEach((x, i) => { if (x?.type !== 'message' && x?.model) row(`${m.id}:${i}`, x.model, x); });
-  }
-  let axis = prev?.axis;
-  if (axis === undefined && /[\\/]subagents[\\/]/.test(file)) { // the Agent description names the axis (SKILL.md fixes the wording); only the label is kept
-    try {
-      const desc = String(JSON.parse(fs.readFileSync(file.replace(/\.jsonl$/, '.meta.json'), 'utf8')).description || '');
-      axis = /^\s*verif/i.test(desc) ? 'verifier' : SUB_AXIS.exec(desc)?.[1].toLowerCase() || 'other';
-    } catch { axis = 'other'; }
-  }
-  return { size: st.size, offset: from + end, rows, ...(axis ? { axis } : {}) };
-}
-
-// sessionId -> [{rows, axis, sub}] for every main and subagent transcript of the sessions that wrote events.
-export function measure(events) {
-  const ids = [...new Set(events.map((e) => e.sessionId).filter((s) => /^[\w-]+$/.test(s || '')))];
-  if (!ids.length) return {};
-  let cache = {};
-  try { cache = JSON.parse(fs.readFileSync(usageFile(), 'utf8')); } catch { /* first measure */ }
-  const files = (cache.files ||= {}), sessions = (cache.sessions ||= {});
-  const before = JSON.stringify(cache);
-  const root = projectsRoot(), out = {};
-  for (const sid of ids) {
-    const s = (sessions[sid] ||= { files: [] });
-    if (!s.main || !fs.existsSync(s.main)) { // transcripts sit under the folder of the session's start cwd, which can differ from the event's cwd
-      const d = ls(root).find((x) => fs.existsSync(path.join(root, x, `${sid}.jsonl`)));
-      if (d) s.main = path.join(root, d, `${sid}.jsonl`);
-    }
-    if (s.main) {
-      const subs = path.join(path.dirname(s.main), sid, 'subagents');
-      s.files = [...new Set([s.main, ...s.files, ...ls(subs).filter((f) => f.endsWith('.jsonl')).map((f) => path.join(subs, f))])];
-    }
-    out[sid] = s.files.map((f) => [f, (files[f] = scanFile(f, files[f]))]).filter(([, x]) => x).map(([f, x]) => ({ rows: x.rows, axis: x.axis, sub: f !== s.main }));
-  }
-  const text = JSON.stringify(cache);
-  if (text !== before) { fs.mkdirSync(stateDir(), { recursive: true }); fs.writeFileSync(usageFile(), text); }
-  return out;
-}
-
-// Gives each transcript message to one run and stage, from the session's factory events around it: after a "started"
-// event, that stage; otherwise the stage the next event closes. Messages before a session's first event are not factory
-// work; those after its last event wait for the next event to close their window. Each subagent transcript goes whole to the slot of its first message.
-// shortcut: anything else the session does between two factory events counts too; drive one run per session if that skews it.
-export function withMeasured(runs, events, by = measure(events)) {
-  if (!Object.keys(by).length) return runs;
-  const iter = {}, slots = {};
-  // Archived runs keep stubs of their session events so their windows still close; their messages are then dropped (not in runs).
-  const stubs = readArchive().flatMap((a) => (a.sessionEvents || []).map((e) => ({ ...e, run: a.id })));
-  for (const e of [...events, ...stubs]) {
-    if (e.stage === 'build' && e.status === 'started') iter[e.run] = (iter[e.run] || 0) + 1;
-    if (e.sessionId && by[e.sessionId]) (slots[e.sessionId] ||= []).push({ t: Date.parse(e.ts), run: e.run, stage: e.stage, status: e.status, iteration: iter[e.run] || 0 });
-  }
-  const slot = (list, t) => {
-    let lo = 0, hi = list.length;
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (list[mid].t <= t) lo = mid + 1; else hi = mid; }
-    const prev = list[lo - 1], next = list[lo];
-    return !prev || !next ? null : prev.status === 'started' ? prev : next;
-  };
-  const got = {};
-  for (const [sid, filesOf] of Object.entries(by)) {
-    const list = (slots[sid] || []).sort((a, b) => a.t - b.t), seen = new Set();
-    for (const f of filesOf) {
-      const first = f.sub && f.rows.length ? slot(list, Math.min(...f.rows.map((x) => Date.parse(x[0])))) : null;
-      for (const [ts, id, model, ...rest] of f.rows) {
-        if (seen.has(id)) continue; // streaming writes one line per content block, all with the same usage
-        seen.add(id);
-        const at = f.sub ? first : slot(list, Date.parse(ts));
-        if (!at || !runs[at.run] || runs[at.run].imported) continue; // the factory did not drive an imported run: sync's events only close windows
-        const t = rest.slice(0, 5);
-        addBurn((got[at.run] ||= burnOf()), { stage: at.stage, iteration: at.iteration, axis: f.sub ? f.axis : null }, t.reduce((s, n) => s + n, 0), costOf(model, t, rest[5]), t[2]);
-      }
-    }
-  }
-  for (const [id, b] of Object.entries(got)) {
-    const reported = runs[id].burn;
-    finishBurn(b);
-    runs[id].burn = { ...b, measured: true, byAxis: Object.keys(b.byAxis).length ? b.byAxis : reported?.byAxis || {}, reported: reported?.total || null };
-  }
-  return runs;
-}
-
-export function axesFor(files, extra = []) {
-  const axes = ['code', 'security'];
-  if (files.some((f) => UI.test(f))) axes.push('ux', 'ui');
-  if (files.some((f) => SEO.test(f))) axes.push('seo');
-  if (files.some((f) => DOCS.test(f))) axes.push('docs');
-  for (const x of extra) if (files.some((f) => x.when.some((g) => path.matchesGlob(f, g)))) axes.push(x.axis); // user axes only add, never replace. shortcut: path.matchesGlob needs Node >= 22.5 (experimental before 24); swap in a small glob regex if older Node matters
-  return axes;
-}
-
-// Loop-backs re-review only what the new commits touch, plus every axis that failed last time.
-export function reviewAxes(r, files, extra = []) {
-  const prev = Math.max(-1, ...Object.keys(r.axes || {}).map(Number).filter((i) => i < r.iteration));
-  const failed = prev < 0 ? [] : r.axes[prev].filter((a) => r.reviews[prev]?.[a]?.verdict !== 'passed');
-  return [...new Set([...axesFor(files, extra), ...failed])];
-}
-
-export function gate(r) {
-  const expected = r.axes?.[r.iteration];
-  if (!expected) throw new Error(`no review axes recorded for iteration ${r.iteration}; run "axes" first`);
-  const rev = r.reviews[r.iteration] || {};
-  const missing = expected.filter((a) => !rev[a]);
-  if (missing.length) throw new Error(`missing review verdicts: ${missing.join(', ')}`);
-  const failed = expected.filter((a) => rev[a].verdict !== 'passed');
-  if (!failed.length) return { status: 'passed', next: 'approve', reasons: [`all axes passed: ${expected.join(', ')}`] };
-  const findings = failed.flatMap((a) => rev[a].findings.filter(blocking));
-  const route = findings.some((f) => f.route === 'spec') ? 'spec' : 'build';
-  const reasons = failed.map((a) => `${a}: ${rev[a].findings.filter(blocking).length} blocking finding(s)`);
-  if (r.iteration >= CAP) return { status: 'failed', next: 'approve', reasons: [...reasons, `loop cap ${CAP} reached`] };
-  const b = budget(r);
-  if (b.over) return { status: 'failed', next: 'approve', reasons: [...reasons, `budget reached ${budgetWhy(b)}`] };
-  return { status: 'failed', next: route, reasons };
-}
-
-// Default is escalate: merge only when every condition holds.
-export function decide(r, f) {
-  if (r.imported) return { action: 'escalate', reasons: [`imported ${r.source || ''} run: the factory did not spec or build it`] };
-  const why = [];
-  const assoc = f.association ?? r.association; // facts() reads it live from GitHub
-  if (!TRUSTED.includes(assoc)) why.push(`author association "${assoc || 'unknown'}" is not trusted`);
-  if (r.originAssociation && !TRUSTED.includes(r.originAssociation)) why.push(`split from ${r.origin}, whose author "${r.originAssociation}" is not trusted`);
-  if (f.autoMerge === false) why.push('auto-merge is turned off for this project');
-  const expected = r.axes?.[r.iteration] || [];
-  const rev = r.reviews[r.iteration] || {};
-  const notPassed = expected.filter((a) => rev[a]?.verdict !== 'passed');
-  if (!expected.length) why.push('no reviews recorded');
-  if (notPassed.length) why.push(`axes not passed: ${notPassed.join(', ')}`);
-  // CI: required unless a rule says otherwise. Not required never means green: F's own local checks on the reviewed commit stand in, or the run escalates.
-  const pol = f.rules || {}, ci = pol.ci?.value || 'required', cmds = pol['checks.commands']?.value;
-  const by = (x) => `set by ${x.setBy} on ${String(x.setAt).slice(0, 10)}: ${x.reason}`;
-  if (ci === 'required' && f.checks !== 'pass') why.push(`CI checks are "${f.checks ?? 'unknown'}"`);
-  const ruleNote = ci === 'required' ? null : `CI not required by rule ci=${ci}, ${by(pol.ci)}${ci === 'advisory' ? ` (CI is "${f.checks ?? 'unknown'}")` : ''}`;
-  let local = null;
-  if (ci !== 'required' || cmds) {
-    const lc = r.localChecks, short = (s) => String(s || 'none').slice(0, 7);
-    const failing = (lc?.commands || []).filter((c) => c.exit !== 0).map((c) => c.cmd);
-    local = !cmds ? { ok: false, text: 'no checks.commands rule replaces CI, so nothing was checked' }
-      : !lc ? { ok: false, text: 'Local checks: not run ("F checks")' }
-      : lc.sha !== r.reviewedSha ? { ok: false, text: `Local checks: ran on ${short(lc.sha)}, not the reviewed commit ${short(r.reviewedSha)}` }
-      : JSON.stringify((lc.commands || []).map((c) => c.cmd)) !== JSON.stringify(cmds) ? { ok: false, text: 'Local checks: ran a different command list than the checks.commands rule now has' }
-      : lc.state !== 'pass' || failing.length ? { ok: false, text: `Local checks: fail (${failing.join(', ') || 'unknown'})` }
-      : { ok: true, text: `Local checks: pass (${cmds.join(', ')})` };
-  }
-  const ciLine = [ruleNote, local?.text].filter(Boolean).join('. ');
-  if (local && !local.ok) why.push(ciLine);
-  const lines = (f.additions || 0) + (f.deletions || 0), cap = Math.min(MAX_DIFF, pol.diffCap?.value ?? MAX_DIFF);
-  if (lines > cap) why.push(`diff is ${lines} lines (max ${cap}${cap < MAX_DIFF ? ` by rule diffCap, ${by(pol.diffCap)}` : ''})`);
-  const sens = (f.files || []).filter(sensitive);
-  if (sens.length) why.push(`touches sensitive paths: ${sens.join(', ')}`);
-  if (r.iteration > CAP) why.push(`iteration ${r.iteration} exceeds cap ${CAP}`);
-  const b = budget(r);
-  if (b.over) why.push(`run budget exceeded ${budgetWhy(b)}`);
-  const src = (f.files || []).filter((p) => SOURCE.test(p) && !TEST.test(p));
-  if (src.length && !(f.files || []).some((p) => TEST.test(p))) why.push(`source changed (${src.length} file(s)) with no test change`);
-  if (!r.pr) why.push('no PR recorded');
-  if (ciLine && local?.ok && why.length) why.push(ciLine); // context: this escalation happened under a CI rule
-  // Rule deploy.preview: a ready preview of the reviewed commit from any web-deploy connector (only the normalized fields count).
-  const pv = pol['deploy.preview']?.value || 'off', notes = [];
-  if (pv !== 'off') {
-    const sha = r.reviewedSha, hit = sha && (f.deploys ?? r.deploys ?? []).find((d) => d.kind === 'web-deploy' && d.env === 'preview' && d.state === 'ready' && d.sha === sha && /^https:\/\//.test(d.url || ''));
-    const line = hit ? `preview ready: ${hit.url} (${hit.connector})` : `no ready preview deploy for the reviewed commit ${String(sha || 'none').slice(0, 7)} (rule deploy.preview=${pv}, ${by(pol['deploy.preview'])})`;
-    (!hit && pv === 'required' ? why : notes).push(line); // advisory: shown, never blocking
-  }
-  return why.length
-    ? { action: 'escalate', reasons: [...why, ...notes] }
-    : ciLine ? { action: 'merge', reasons: [`trusted author, all axes passed, tests changed, ${lines}-line diff, no sensitive paths`, ...(ci === 'required' ? ['CI green'] : []), ciLine, ...notes] }
-    : { action: 'merge', reasons: [`trusted author, all axes passed, CI green, tests changed, ${lines}-line diff, no sensitive paths`, ...notes] };
-}
-
-// Before building: untrusted authors and sensitive planned files need a human to approve the spec.
-export function risk(r, plannedFiles) {
-  const reasons = [];
-  if (!TRUSTED.includes(r.association)) reasons.push(`author association "${r.association || 'unknown'}" is not trusted`);
-  if (r.originAssociation && !TRUSTED.includes(r.originAssociation)) reasons.push(`split from ${r.origin}, whose author is not trusted`);
-  const sens = plannedFiles.filter(sensitive);
-  if (sens.length) reasons.push(`plans to touch sensitive paths: ${sens.join(', ')}`);
-  return { risky: reasons.length > 0, reasons };
-}
 
 // Who does each step: the built-in brief, the user's own skill or brief, or a harness's tool.
 // User-local only (io.dir/skills.json): a repo, and so a PR, can never pick its own reviewers.
@@ -675,7 +470,7 @@ function intakeFixture(run, n) {
 
 const git = (...args) => execFileSync(io.git, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 export const adapterCtx = () => ({ gh, git }); // what host and tracker adapters get: the same stubbable gh and git
-const ls = (d) => { try { return fs.readdirSync(d); } catch { return []; } };
+export const ls = (d) => { try { return fs.readdirSync(d); } catch { return []; } };
 const projectsFile = () => path.join(stateDir(), 'projects.json');
 export const projects = () => { try { return JSON.parse(fs.readFileSync(projectsFile(), 'utf8')); } catch { return {}; } };
 const saveProject = (repo, p) => { fs.mkdirSync(stateDir(), { recursive: true }); fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...projects()[repo], path: p, synced: projects()[repo]?.synced } }, null, 2)); };
@@ -1043,30 +838,6 @@ export function evals(only) {
     results.push({ fixture: n, expect: fx.expect, got, ok: got === fx.expect });
   }
   return { score: `${results.filter((r) => r.ok).length}/${results.length}`, results };
-}
-
-export function metrics(runs) {
-  const count = (o) => runs.filter((r) => r.outcome === o).length;
-  const merged = count('merged'), escalated = count('escalated');
-  const built = runs.filter((r) => !r.imported && ['merged', 'escalated'].includes(r.outcome));
-  const cycles = built.map((r) => r.durationMs).sort((a, b) => a - b);
-  const reverts = runs.filter((r) => r.reverted).length;
-  const spent = (r) => r.burn?.total || { tokens: r.tokens || 0, costUsd: r.costUsd ?? null };
-  const costUsd = +runs.reduce((s, r) => s + (spent(r).costUsd || 0), 0).toFixed(2);
-  const tokens = runs.reduce((s, r) => s + spent(r).tokens, 0);
-  const byStage = {};
-  for (const r of runs) for (const [k, c] of Object.entries(r.burn?.byStage || {})) byStage[k] = (byStage[k] || 0) + c.tokens;
-  return {
-    runs: runs.length, inProgress: count('in-progress'), merged, escalated, rejected: count('rejected'), needsInfo: count('needs-info'),
-    closed: count('closed'), awaitingApproval: count('awaiting-approval'), split: count('split'),
-    mergeRate: merged + escalated ? +(merged / (merged + escalated)).toFixed(3) : null,
-    avgIterations: built.length ? +(built.reduce((s, r) => s + r.iteration, 0) / built.length).toFixed(2) : null,
-    medianCycleMs: cycles.length ? cycles[Math.floor(cycles.length / 2)] : null,
-    reverts, revertRate: merged ? +(reverts / merged).toFixed(3) : null,
-    costUsd, costPerMergeUsd: merged ? +(costUsd / merged).toFixed(2) : null,
-    tokens, tokensPerMerge: merged ? Math.round(tokens / merged) : null, measuredRuns: runs.filter((r) => r.burn?.measured).length,
-    stageShare: Object.fromEntries(Object.entries(byStage).map(([k, n]) => [k, tokens ? +(n / tokens).toFixed(3) : 0])),
-  };
 }
 
 const runRepos = () => [...new Set([...Object.keys(derive(read())), ...readArchive().map((a) => a.id)].map((id) => id.split(/[#:]/)[0]))];
