@@ -47,10 +47,13 @@ software-factory/
 │       ├── src/components/   generic primitives: Button, Card, Dialog, Table, Tabs, Toast, Tooltip…
 │       ├── src/factory/      factory-specific views: RunCard, StageTrack, ReviewMatrix, Timeline, OutcomePill…
 │       │   └── model.ts      TypeScript types for the JSON that derive() / metrics() / sync() emit
+│       ├── src/onboarding/   ProjectPicker (discover results) and IngestProgress (sync progress)
+│       ├── src/index.ts      package entry; styles.css / base.css / fonts.css are the CSS entry points
 │       ├── src/fonts/        Geist + Geist Mono (OFL)
+│       ├── test/             Vitest + Testing Library tests
 │       └── scripts/contrast.ts  WCAG AA contrast check over every token pair (`pnpm contrast`)
 └── apps/
-    └── playground/           component playground for the design system (`pnpm dev`)
+    └── playground/           (in progress, not yet committed) Vite playground for the design system (`pnpm dev`)
 ```
 
 **Monorepo tooling.** The repo uses pnpm workspaces. An Nx package-based setup has been decided but is not wired up yet: there is no `nx.json` and no Nx dependency. Root `pnpm test` runs the contrast check, then `pnpm -r test` across every package, which includes the factory self-test.
@@ -112,7 +115,7 @@ The log is an append-only JSONL file, and it is the source of truth. Everything 
 3. computes metrics overall and per project: merge rate, average iterations, median cycle time, revert rate, cost per merge;
 4. writes `~/.claude/factory/dashboard.html` with the data inlined as JSON.
 
-`<` is escaped as `<`, so issue titles cannot break out of the script tag; the self-test asserts this. The page filters by project and shows each run's stage track, review matrix, loop-backs and timeline. For each linked agent session it offers a **Copy resume** button, which copies `cd '<cwd>' && claude --resume <id>` for Claude Code or `codex resume <id>` for Codex. Ids that don't match `[\w.-]+` get no button.
+`<` is escaped as `<`, so issue titles cannot break out of the script tag; the self-test asserts this. The page filters by project, and each run's detail has Pipeline, Review, Decision, Loop-backs, Sessions and Timeline sections; a split parent also gets an Epic section listing its children. For each linked agent session it offers a **Copy resume** button, which copies `cd '<cwd>' && claude --resume <id>` for Claude Code or `codex resume <id>` for Codex. Ids that don't match `[\w.-]+` get no button.
 
 ### 2.5 The design system: `packages/design-system`
 
@@ -211,32 +214,33 @@ The CLI never rewrites the log, with one exception: `archive` rewrites it by wri
 
 ```mermaid
 flowchart TD
-  A([owner/repo#N]) --> S0[0. Setup: F gc, labels, F state → resume point]
-  S0 --> I[1. Intake: F intake<br/>issue + trusted comments only]
-  I -->|open PR already closes #N| STOP1([stop: in progress elsewhere])
-  I -->|reject| REJ([rejected · factory:rejected])
-  I -->|needs-info| NI([needs-info · numbered questions]) -.->|new comments, re-run| I
-  I -->|split| SPL([split · child issues 'Part of #N'])
-  I -->|pass| SP[2. Spec: DIR/spec.md<br/>F risk RUN files…]
-  SP -->|risky: untrusted author or sensitive paths| AW([awaiting-approval · factory:needs-approval])
-  AW -->|trusted '/factory approve'| B
-  AW -->|'/factory reject'| REJ
-  SP -->|not risky| B[3. Build in DIR/wt<br/>branch factory/issue-N<br/>F deps · tests · checks.json · push · draft PR]
-  B --> CI{CI green?<br/>gh pr checks --watch}
-  CI -->|red, ≤2 fixes| B
-  CI -->|still red| ESC
-  CI -->|green| AX[4. Review: F axes → axes + reviewed SHA]
-  AX --> R[parallel subagents per axis<br/>code · security · ux · ui · seo · docs]
-  R --> V[verifier: confirm or dismiss<br/>each high/medium finding]
-  V --> G{5. F gate}
-  G -->|blocking finding routed to spec,<br/>iteration < 3, within budget| SP
-  G -->|blocking findings routed to build,<br/>iteration < 3, within budget| B
-  G -->|all passed, or cap 3 / $5 / 3M tokens hit| M{6. F merge<br/>re-decide from live GitHub}
-  M -->|every condition holds| MG[gh pr merge --squash<br/>--match-head-commit reviewedSha]
-  M -->|any condition fails| ESC([escalated · factory:needs-human])
-  MG --> PM{7. F postmerge<br/>CI on merge commit, ≤20 min}
-  PM -->|pass| DONE([merged · factory:merged])
-  PM -->|fail| RV[F revert → revert PR<br/>factory:needs-human, never auto-merged]
+  A(["owner/repo issue N"]) --> S0["Stage 0 · Setup<br/>F gc, labels, F state → resume point"]
+  S0 --> I["Stage 1 · Intake<br/>F intake: issue + trusted comments only"]
+  I -->|"open PR already closes the issue"| STOP1(["stop: in progress elsewhere"])
+  I -->|"reject"| REJ(["rejected · factory:rejected"])
+  I -->|"needs-info"| NI(["needs-info · numbered questions"])
+  NI -.->|"new comments, re-run"| I
+  I -->|"split"| SPL(["split · child issues, each 'Part of' the parent"])
+  I -->|"pass"| SP["Stage 2 · Spec<br/>DIR/spec.md, then F risk"]
+  SP -->|"risky: untrusted author or sensitive paths"| AW(["awaiting-approval · factory:needs-approval"])
+  AW -->|"trusted /factory approve"| B
+  AW -->|"/factory reject"| REJ
+  SP -->|"not risky"| B["Stage 3 · Build in DIR/wt<br/>branch factory/issue-N<br/>F deps, tests, checks.json, push, draft PR"]
+  B --> CI{"CI green?<br/>gh pr checks --watch"}
+  CI -->|"red: fix, at most 2 times"| B
+  CI -->|"still red"| ESC
+  CI -->|"green"| AX["Stage 4 · Review<br/>F axes → axes + reviewed SHA"]
+  AX --> R["one subagent per axis, in parallel<br/>code · security · ux · ui · seo · docs"]
+  R --> V["verifier: keep or dismiss<br/>each high or medium finding"]
+  V --> G{"Stage 5 · F gate"}
+  G -->|"blocking finding routed to spec, under the caps"| SP
+  G -->|"blocking findings routed to build, under the caps"| B
+  G -->|"all passed, or a cap hit: 3 loops, $5, 3M tokens"| M{"Stage 6 · F merge<br/>re-decide from live GitHub"}
+  M -->|"every condition holds"| MG["gh pr merge --squash<br/>--match-head-commit reviewedSha"]
+  M -->|"any condition fails"| ESC(["escalated · factory:needs-human"])
+  MG --> PM{"Stage 7 · F postmerge<br/>CI on the merge commit, up to 20 min"}
+  PM -->|"pass"| DONE(["merged · factory:merged"])
+  PM -->|"fail"| RV["F revert → revert PR<br/>factory:needs-human, never auto-merged"]
 ```
 
 **Review axes** (`axesFor(files)`):
@@ -300,14 +304,14 @@ On a loop-back, `reviewAxes()` re-reviews only the axes the new commits touch, p
 
 ```mermaid
 flowchart LR
-  D[F discover<br/>scan ~/Development, ~/code, … ≤5 deep<br/>read .git/config → GitHub origins] --> P{pick repo + clone}
-  P --> S[F sync owner/repo clone-path]
-  S --> S1[register in projects.json]
-  S --> S2[import each open PR → run owner/repo#PR<br/>source = claude-code / codex / none by branch]
-  S --> S3[import recent agent sessions on unmerged<br/>local branches without a PR → run owner/repo:branch]
-  S --> S4[close runs whose PR or branch finished elsewhere]
-  S --> S5[write sessions.json links, ≤5 per run]
-  S1 & S2 & S3 & S4 & S5 --> DB[dashboard: per-project filter,<br/>Copy resume → claude --resume id / codex resume id]
+  D["F discover<br/>scan ~/Development, ~/code, … up to 5 deep<br/>read .git/config → GitHub origins"] --> P{"pick repo + clone"}
+  P --> S["F sync owner/repo clone-path"]
+  S --> S1["register in projects.json"]
+  S --> S2["import each open PR as a run<br/>source: claude-code / codex / none, by branch"]
+  S --> S3["import recent agent sessions on unmerged<br/>local branches without a PR, run id owner/repo:branch"]
+  S --> S4["close runs whose PR or branch finished elsewhere"]
+  S --> S5["write sessions.json links, up to 5 per run"]
+  S1 & S2 & S3 & S4 & S5 --> DB["dashboard: per-project filter<br/>Copy resume → claude --resume id / codex resume id"]
 ```
 
 1. **`F discover [roots…]`** walks the default roots (`~/Development`, `~/code`, `~/projects`, `~/src`, `~/repos`, `~/GitHub`…), skipping hidden folders, `node_modules`, `Library` and build output. It lists one entry per GitHub repo: the preferred clone (the attached one, else the most recently committed), the other clones, the last commit, the worktree count, and whether it is attached.
