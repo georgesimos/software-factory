@@ -8,3 +8,4 @@ dist
 # factory runtime state lives in ~/.claude/factory, never in the repo
 events.jsonl
 archive.jsonl
+apps/playground/screenshots/

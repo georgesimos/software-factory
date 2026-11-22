@@ -49,7 +49,7 @@ export function RunCard({ run: r, href, onSelect, selected, showRepo, cap = 3, n
       {!r.imported && iteration > 0 ? <IterDots n={iteration} cap={cap} capped={iteration >= cap && o !== 'merged'} /> : null}
       {!done && stageOf(r) === 'review' ? <AxesBar run={r} /> : null}
       {!done && r.loopbacks?.length ? <span className="sf-loops" title="Loop-backs">↺{r.loopbacks.length}</span> : null}
-      {r.imported ? <SourceChip source={r.source ?? 'none'} prefix="Tracked" /> : null}
+      {r.imported ? <SourceChip source={r.source ?? 'none'} title="Tracked: imported, not driven by the factory" /> : null}
       {r.children?.length ? <Badge quiet>{r.children.length} runs</Badge> : null}
       {r.archived ? <Badge quiet>Archived</Badge> : null}
     </>
