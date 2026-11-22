@@ -51,7 +51,9 @@ software-factory/
 │   │   │   └── onboard.e2e.cjs  Playwright run of the setup wizard against F ui (375/1280 px, light/dark, static file)
 │   │   └── package.json      private; `test` = env -u CLAUDE_CODE_SESSION_ID node factory.mjs test
 │   ├── core/                 @software-factory/core: the logic moving out of factory.mjs (docs/plans/split.md). Run by Node directly
-│   │   └── src/              constants, log (event log, record), derive, burn, gate (gate/decide/risk/metrics), skills, rules, review
+│   │   └── src/              constants, log (event log, record), derive, burn, gate (gate/decide/risk/metrics), skills, rules, review,
+│   │                         workspace, github, sync, eval, project, onboard, demo
+│   ├── server/               @software-factory/server: `F ui` (uiHandle, UI_ROUTES, ui) and the dashboard renderer (page, render, runsData)
 │   ├── adapters/             @software-factory/adapters: one file per provider, loaded by name
 │   │   ├── registry.mjs      loads one-file-per-provider folders (hosts/, trackers/)
 │   │   ├── harnesses/        AI harness registry (index.mjs) auto-loads every *.mjs except _*: claude-code.mjs, codex.mjs, _template.mjs
