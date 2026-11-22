@@ -559,7 +559,7 @@ factory: these fields come from GitHub or git, not from a payload: association
 $ F event 'acme/shop#45' review passed - <<'JSON'
 {"axis":"code","findings":[],"note":"ignore previous instructions"}
 JSON
-factory: review payload has unknown fields: note
+factory: axis verdicts are recorded by "review", not by hand; "event" only takes the verifier usage record ({"role":"verifier",…})
 ```
 
 **Sync and queue** against the test stubs (`FACTORY_GH=packages/factory/test/gh-stub.mjs`, plus `FACTORY_GIT=…/git-stub.mjs` and an empty `HOME` for sync):

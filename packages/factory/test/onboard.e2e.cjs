@@ -17,7 +17,7 @@ const DIR = path.join(root, 'factory'), HOME = path.join(root, 'home'), clone = 
 fs.mkdirSync(path.join(clone, '.git'), { recursive: true });
 fs.mkdirSync(SHOTS, { recursive: true });
 fs.writeFileSync(path.join(clone, '.git', 'config'), '[remote "origin"]\n\turl = git@github.com:acme/app.git\n');
-const env = { ...process.env, FACTORY_DIR: DIR, HOME, PATH: `${path.join(HERE, 'test', 'bin')}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+const env = { ...process.env, FACTORY_DIR: DIR, FACTORY_TEST: '1', HOME, PATH: `${path.join(HERE, 'test', 'bin')}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
   FACTORY_GH: path.join(HERE, 'test', 'gh-stub.mjs'), FACTORY_GIT: path.join(HERE, 'test', 'git-stub.mjs') };
 delete env.CLAUDE_CODE_SESSION_ID;
 
