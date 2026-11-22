@@ -33,3 +33,11 @@ $M packages/core/src/gate.ts axesFor,reviewAxes,gate,decide,risk,metrics
 ```
 
 Each step also appends its new modules to `packages/core/src/index.ts`. To verify a step against the branch below it, run `scripts/split/check.sh <base-ref> packages/core/src`.
+
+**S4** (#40):
+
+```bash
+$M packages/core/src/skills.ts BUILTIN_AXES,REQUIRED_AXES,STEP_KEYS,harnessIds,NAME,skillsFile,checkRunner,checkStep,checkSkills,readSkills,skills,writeSkills,setSkill,front,tilde,dirs,pluginItems,globalCatalog,scanGlobal,scanProject,catalog,skillsData
+$M packages/core/src/rules.ts setAutoMerge,RULES,RULE_FIELDS,LOGIN,isDay,dayOf,isGuideKey,checkRules,checkGuide,rules,whoami,audit,checkScope,setRule,unsetRule
+$M packages/core/src/review.ts MIN_SHARE_USD,headlessArgs,runnerStamp,reviewFromText
+```
