@@ -18,7 +18,9 @@
   --ok: #2c7a51; --bad: #bf3d2b; --warn: #a06604; --idle: #9a9a93;
   --sans: "Geist", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  --r: 6px; --hh: 57px; --gut: 32px; --panel: min(600px, 46vw);
+  --r: 6px; --hh: 57px; --gut: 32px;
+  /* --pw is the reader's dragged width (px); the clamp keeps a width saved on a big screen sane on a small one. */
+  --panel: clamp(420px, var(--pw, clamp(480px, 44vw, 760px)), calc(100vw - 340px));
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -67,6 +69,12 @@ button { font: inherit; color: inherit; }
   color: var(--ink-3); cursor: pointer; font: 13px/1 var(--sans); }
 .theme button:hover { color: var(--ink); }
 .theme button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--line-2); }
+.ptog { display: grid; place-items: center; flex: none; width: 32px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 8px;
+  background: none; color: var(--ink-3); cursor: pointer; }
+.ptog:hover { color: var(--ink); border-color: var(--line-2); }
+.ptog .pi { width: 15px; height: 12px; border: 1.5px solid currentColor; border-radius: 2.5px; }
+.ptog[aria-expanded="true"] { color: var(--ink); }
+.ptog[aria-expanded="true"] .pi { box-shadow: inset -5px 0 0 currentColor; }
 .updated { margin-left: auto; display: flex; align-items: center; gap: 8px; white-space: nowrap; font: 12px var(--mono); color: var(--ink-3); }
 
 /* Overview */
@@ -150,32 +158,47 @@ button { font: inherit; color: inherit; }
 .empty p { margin: 8px 0 0; color: var(--ink-2); }
 .empty code { white-space: nowrap; font: 12.5px var(--mono); padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
 
-/* Run detail */
+/* Run detail: a docked column beside the board on wide screens, a full view on narrow ones. */
 .detail { position: fixed; z-index: 20; top: var(--hh); right: 0; bottom: 0; width: var(--panel); overflow-y: auto; overscroll-behavior: contain;
-  background: var(--surface); border-left: 1px solid var(--line); box-shadow: -32px 0 64px -48px rgb(0 0 0 / .35); }
-.detail[hidden] { display: none; }
-.detail.enter { animation: enter .2s cubic-bezier(.2, .7, .2, 1); }
-@keyframes enter { from { opacity: 0; transform: translateX(12px); } }
-body.open .shell { margin-right: var(--panel); }
-.d-in { padding: 24px 32px 56px; }
-.d-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.d-bar .id { font: 12px var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
-.close { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; padding: 5px 6px 5px 10px; border: 1px solid var(--line);
-  border-radius: 6px; background: none; cursor: pointer; font: 12px var(--mono); color: var(--ink-2); }
-.close:hover { color: var(--ink); border-color: var(--line-2); }
-.close kbd { font: 10.5px var(--mono); padding: 1px 5px; border-radius: 3px; background: var(--sunken); color: var(--ink-3); }
-.d-title { margin: 18px 0 0; font: 500 24px/1.25 var(--sans); letter-spacing: -.02em; overflow-wrap: anywhere; }
+  background: var(--surface); border-left: 1px solid var(--line); font-size: 14.5px; container-type: inline-size;
+  --px: max(40px, calc(50cqi - 440px)); /* side padding that caps the reading column at 880px, even in focus mode */ }
+.detail.enter .d-in { animation: enter .2s cubic-bezier(.2, .7, .2, 1); }
+@keyframes enter { from { opacity: 0; transform: translateX(8px); } }
+.resizer { position: fixed; z-index: 25; top: var(--hh); bottom: 0; right: calc(var(--panel) - 5px); width: 10px; cursor: col-resize; touch-action: none; }
+.resizer::before { content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px; background: transparent; transition: background .12s; }
+.resizer:hover::before, .resizer:focus-visible::before, body.dragging .resizer::before { background: var(--accent); }
+.resizer:focus-visible { outline: none; }
+body.dragging { cursor: col-resize; user-select: none; }
+.d-in { padding: 0 var(--px) 80px; }
+.d-bar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 8px; min-height: 56px; margin: 0 calc(-1 * var(--px));
+  padding: 10px var(--px); background: color-mix(in srgb, var(--surface) 90%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+.d-bar .id { font: 12px var(--mono); color: var(--ink-3); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.d-bar .chip { flex: 0 1 auto; min-width: 0; }
+.d-acts { margin-left: auto; display: flex; gap: 6px; flex: none; }
+.act { display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px; border: 1px solid var(--line);
+  border-radius: 6px; background: none; cursor: pointer; font: 12px var(--mono); color: var(--ink-2); white-space: nowrap; }
+.act:hover { color: var(--ink); border-color: var(--line-2); }
+.act[aria-pressed="true"] { color: var(--ink); border-color: var(--ink-3); background: var(--sunken); }
+.act.close { padding-right: 6px; }
+.act kbd { font: 10.5px var(--mono); padding: 1px 5px; border-radius: 3px; background: var(--sunken); color: var(--ink-3); }
+.d-title { margin: 28px 0 0; font: 500 30px/1.2 var(--sans); letter-spacing: -.025em; overflow-wrap: anywhere; }
 .d-title:focus { outline: none; }
-.d-spec { margin: 10px 0 0; color: var(--ink-2); font-size: 14.5px; max-width: 60ch; }
-.d-meta { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 4px 14px; font: 12px var(--mono); color: var(--ink-3); }
+.d-spec { margin: 12px 0 0; color: var(--ink-2); font-size: 16px; line-height: 1.55; max-width: 68ch; }
+.d-empty { padding: 18vh 0 0; text-align: center; }
+.d-empty .mark { margin: 0 auto 22px; width: 18px; height: 18px; opacity: .8; }
+.d-empty h2 { margin: 0; font: 500 20px var(--sans); letter-spacing: -.015em; }
+.d-empty p { margin: 10px auto 0; max-width: 36ch; color: var(--ink-2); }
+.d-empty kbd { font: 11px var(--mono); padding: 1px 5px; border: 1px solid var(--line); border-radius: 3px; background: var(--sunken); color: var(--ink-2); }
+.d-meta { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 4px 14px; font: 12px var(--mono); color: var(--ink-3); }
 .d-meta span { overflow-wrap: anywhere; }
-.links { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px; }
+.links { margin-top: 20px; display: flex; flex-wrap: wrap; gap: 8px; }
 .links a { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px;
   font-size: 13px; text-decoration: none; color: var(--ink); }
 .links a:hover { border-color: var(--ink-3); }
 .links a::after { content: "↗"; color: var(--ink-3); font-size: 12px; }
-.sec { margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--line); }
-.sec > h3 { margin: 0 0 16px; }
+.sec { margin-top: 44px; padding-top: 24px; border-top: 1px solid var(--line); }
+.sec > h3 { margin: 0 0 20px; }
+.sec > h3.label { font: 600 16px/1.3 var(--sans); letter-spacing: -.01em; text-transform: none; color: var(--ink); }
 .muted { color: var(--ink-3); font-size: 13px; margin: 0; }
 
 .track { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); }
@@ -273,19 +296,36 @@ a.kid:hover { border-color: var(--line-2); }
 .tl .txt { font-size: 13px; color: var(--ink-2); overflow-wrap: anywhere; }
 .tl ul { margin: 2px 0 0; padding-left: 16px; font-size: 13px; color: var(--ink-2); }
 
-body.open .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-body.open .metric:nth-child(3n + 1) { padding-left: 0; }
-body.open .metric:last-child:nth-child(3n + 2) { grid-column: span 2; }
+@media (min-width: 1100px) {
+  body.panel .shell { margin-right: var(--panel); }
+  body.focus { --panel: calc(100vw - 340px); }
+  body:not(.panel) .detail, body:not(.panel) .resizer { display: none; }
+  /* The board area narrows as the panel widens, so the metrics follow its width, not the viewport's. */
+  .shell { container-type: inline-size; }
+  @container (max-width: 820px) {
+    .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .metric:nth-child(3n + 1) { padding-left: 0; }
+    .metric:last-child:nth-child(3n + 2) { grid-column: span 2; }
+  }
+  @container (max-width: 440px) {
+    .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .metric, .metric + .metric { padding: 14px 12px 16px 0; }
+    .metric:nth-child(even) { padding-left: 14px; }
+    .metric:last-child:nth-child(odd) { grid-column: 1 / -1; }
+    .metric .v { font-size: 30px; margin-top: 12px; }
+  }
+}
 @media (max-width: 1100px) {
   :root { --gut: 20px; }
   .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .metric:nth-child(3n + 1) { padding-left: 0; }
   .metric:last-child:nth-child(3n + 2) { grid-column: span 2; }
 }
-@media (max-width: 960px) {
+@media (max-width: 1099px) {
   body.open .shell { display: none; }
-  .detail { position: static; width: auto; border-left: 0; box-shadow: none; overflow: visible; background: var(--bg); }
-  .d-in { padding: 20px var(--gut) 56px; }
+  body:not(.open) .detail, .resizer, .ptog, .act.focus { display: none; }
+  .detail { position: static; width: auto; border-left: 0; overflow: visible; overflow-x: clip; background: var(--bg); --px: var(--gut); } /* clip: the enter slide must not scroll the page */
+  .d-bar { top: var(--hh); background: color-mix(in srgb, var(--bg) 90%, transparent); }
 }
 @media (max-width: 640px) {
   :root { --gut: 16px; }
@@ -302,7 +342,8 @@ body.open .metric:last-child:nth-child(3n + 2) { grid-column: span 2; }
   .board, .board.shut { grid-template-columns: repeat(7, 78vw); }
   .board.shut { grid-template-columns: repeat(6, 78vw) 52px; }
   .col:first-child { padding-left: 0; }
-  .d-title { font-size: 21px; }
+  .d-bar { position: static; }
+  .d-title { margin-top: 20px; font-size: 23px; }
   .tl li { grid-template-columns: 50px 14px 1fr; }
   .tl time { white-space: normal; line-height: 1.35; padding-top: 3px; }
 }
@@ -317,9 +358,11 @@ body.open .metric:last-child:nth-child(3n + 2) { grid-column: span 2; }
   <nav class="seg" id="projects" aria-label="Project"></nav>
   <div class="updated" id="updated"></div>
   <div class="theme" id="theme" role="group" aria-label="Theme"></div>
+  <button class="ptog" id="ptog" data-k="ptog" aria-controls="detail"><span class="pi" aria-hidden="true"></span></button>
 </header>
 <main class="shell" id="shell"></main>
-<aside class="detail" id="detail" aria-labelledby="d-title" hidden></aside>
+<div class="resizer" id="resizer" role="separator" tabindex="0" data-k="resize" aria-orientation="vertical" aria-controls="detail" aria-label="Resize run panel"></div>
+<aside class="detail" id="detail" aria-labelledby="d-title"></aside>
 <script type="application/json" id="data">__FACTORY_DATA__</script>
 <script>
 const DATA = (() => { try { return JSON.parse(document.getElementById('data').textContent) || {}; } catch { return {}; } })();
@@ -639,8 +682,10 @@ function timeline(r) {
 
 function detail(r) {
   const repo = repoOf(r.id);
-  const close = el('button', { class: 'close', 'data-k': 'close', 'aria-label': 'Close run details' }, 'Close', el('kbd', { 'aria-hidden': 'true' }, 'Esc'));
+  const close = el('button', { class: 'act close', 'data-k': 'close', 'aria-label': 'Close run details' }, 'Close', el('kbd', { 'aria-hidden': 'true' }, 'Esc'));
   close.onclick = closeRun;
+  const focus = el('button', { class: 'act focus', 'data-k': 'focus', 'aria-pressed': String(store('factory.panelFocus') === '1'), title: 'Widen the panel to most of the screen' }, 'Focus');
+  focus.onclick = () => { store('factory.panelFocus', store('factory.panelFocus') === '1' ? '0' : '1'); render(); restoreFocus('focus'); };
   const issueLinks = /^[\w.-]+\/[\w.-]+$/.test(repo) ? r.issues.filter((n) => Number.isInteger(n) && n > 0).map((n) => link(`https://github.com/${repo}/issues/${n}`, `Closes #${n}`)) : [];
   const links = [r.imported ? null : link(r.url, 'Issue'), link(r.pr, 'Pull request'), issueLinks].flat().filter(Boolean);
   links.forEach((a, i) => a.setAttribute('data-k', 'link:' + i));
@@ -648,7 +693,7 @@ function detail(r) {
     el('div', { class: 'd-bar' }, el('span', { class: 'id' }, r.id),
       chip(r.reverted ? 'Reverted' : LABEL[r.outcome], r.reverted ? 'bad' : TONE[r.outcome]),
       r.imported ? chip('Tracked' + (r.source ? ' · ' + (SRC[r.source] || r.source) : ''), 'quiet') : null,
-      r.archived ? chip('Archived', 'quiet') : null, close),
+      r.archived ? chip('Archived', 'quiet') : null, el('div', { class: 'd-acts' }, focus, close)),
     el('h2', { class: 'd-title', id: 'd-title', tabindex: '-1' }, r.title || r.branch || r.id),
     r.spec ? el('p', { class: 'd-spec' }, r.spec) : null,
     el('div', { class: 'd-meta' },
@@ -664,6 +709,10 @@ function detail(r) {
     sessions(r),
     timeline(r));
 }
+
+const emptyDetail = () => el('div', { class: 'd-in' }, el('div', { class: 'd-bar' }, el('span', { class: 'id' }, 'Run details')),
+  el('div', { class: 'd-empty' }, el('div', { class: 'mark', 'aria-hidden': 'true' }), el('h2', { id: 'd-title' }, 'Select a run'),
+    el('p', {}, 'Pick a card on the board to see its pipeline, review and timeline. Press ', el('kbd', {}, ']'), ' to hide this panel.')));
 
 // ---------- shell ----------
 const projects = [...new Set([...arr(DATA.projects).map(String), ...RUNS.map((r) => repoOf(r.id))])];
@@ -710,12 +759,72 @@ function render() {
   const inProg = runs.filter((r) => r.outcome === 'in-progress').length;
   document.title = (inProg ? `(${inProg}) ` : '') + (sel ? (sel.title || sel.id) + ' · ' : '') + 'Software Factory';
 
-  const d = document.getElementById('detail');
+  // open: a run is selected (narrow screens show it full view). panel: the docked column is shown on wide screens.
+  const d = document.getElementById('detail'), collapsed = store('factory.panelCollapsed') === '1', shown = !collapsed && (!!sel || runs.length > 0);
   document.body.classList.toggle('open', !!sel);
-  d.hidden = !sel;
+  document.body.classList.toggle('panel', shown);
+  document.body.classList.toggle('focus', shown && !!sel && store('factory.panelFocus') === '1');
+  const tog = document.getElementById('ptog');
+  tog.hidden = !sel && !runs.length;
+  tog.setAttribute('aria-expanded', String(shown));
+  tog.setAttribute('aria-label', shown ? 'Hide run panel' : 'Show run panel');
+  tog.title = (shown ? 'Hide' : 'Show') + ' run panel (])';
   d.classList.remove('enter');
-  d.replaceChildren(...(sel ? [detail(sel)] : []));
+  d.replaceChildren(sel ? detail(sel) : emptyDetail());
+  syncSep();
 }
+
+// Panel width: drag the separator or use its arrow keys. The CSS clamp has the final say, so read the width back from layout.
+const MIN_W = 420, BOARD_MIN = 340;
+const sep = document.getElementById('resizer');
+function syncSep() {
+  sep.setAttribute('aria-valuemin', MIN_W);
+  sep.setAttribute('aria-valuemax', Math.max(MIN_W, document.documentElement.clientWidth - BOARD_MIN));
+  sep.setAttribute('aria-valuenow', Math.round(document.getElementById('detail').getBoundingClientRect().width));
+}
+function setWidth(w) {
+  w = Math.round(Math.max(MIN_W, Math.min(w, document.documentElement.clientWidth - BOARD_MIN)));
+  document.documentElement.style.setProperty('--pw', w + 'px');
+  store('factory.panelW', String(w));
+  if (document.body.classList.contains('focus')) { // a manual width ends focus mode
+    store('factory.panelFocus', '0');
+    document.body.classList.remove('focus');
+    document.querySelector('[data-k="focus"]')?.setAttribute('aria-pressed', 'false');
+  }
+  syncSep();
+}
+const savedW = Number(store('factory.panelW'));
+if (savedW > 0) document.documentElement.style.setProperty('--pw', savedW + 'px');
+sep.addEventListener('pointerdown', (e) => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  sep.setPointerCapture(e.pointerId);
+  sep.focus({ preventScroll: true });
+  document.body.classList.add('dragging');
+  sep.onpointermove = (ev) => setWidth(document.documentElement.clientWidth - ev.clientX);
+  sep.onpointerup = sep.onpointercancel = () => { sep.onpointermove = null; document.body.classList.remove('dragging'); };
+});
+sep.addEventListener('keydown', (e) => {
+  const step = e.shiftKey ? 80 : 20, cur = document.getElementById('detail').getBoundingClientRect().width;
+  if (e.key === 'ArrowLeft') setWidth(cur + step);
+  else if (e.key === 'ArrowRight') setWidth(cur - step);
+  else return;
+  e.preventDefault();
+});
+window.addEventListener('resize', syncSep);
+
+function setCollapsed(c) {
+  const inside = document.getElementById('detail').contains(document.activeElement) || document.activeElement === sep;
+  store('factory.panelCollapsed', c ? '1' : '0');
+  render();
+  if (c && inside) restoreFocus('ptog');
+}
+document.getElementById('ptog').onclick = () => setCollapsed(document.body.classList.contains('panel'));
+// Re-clicking the selected card fires no hashchange, so un-collapse here too.
+document.getElementById('shell').addEventListener('click', (e) => {
+  const c = e.target.closest('.card');
+  if (c && store('factory.panelCollapsed') === '1' && c.hash === location.hash) { store('factory.panelCollapsed', '0'); render(); restoreFocus('run:' + selectedId()); }
+});
 
 function renderTheme() {
   let cur = '';
@@ -733,12 +842,17 @@ function renderTheme() {
 }
 
 window.addEventListener('hashchange', () => {
+  if (BYID.has(selectedId())) store('factory.panelCollapsed', '0'); // choosing a run always opens the panel
   render();
   const d = document.getElementById('detail');
-  if (!d.hidden) { d.classList.add('enter'); d.scrollTop = 0; if (matchMedia('(max-width: 960px)').matches) window.scrollTo(0, 0); document.getElementById('d-title').focus({ preventScroll: true }); document.querySelector('.card[aria-current]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+  if (document.body.classList.contains('open')) { d.classList.add('enter'); d.scrollTop = 0; if (matchMedia('(max-width: 1099px)').matches) window.scrollTo(0, 0); document.getElementById('d-title').focus({ preventScroll: true }); document.querySelector('.card[aria-current]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
 });
 window.addEventListener('popstate', render);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !document.getElementById('detail').hidden) { e.preventDefault(); closeRun(); } });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && document.body.classList.contains('open')) { e.preventDefault(); closeRun(); }
+  else if (e.key === ']' && !e.metaKey && !e.ctrlKey && !e.altKey && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)
+    && matchMedia('(min-width: 1100px)').matches && !document.getElementById('ptog').hidden) { e.preventDefault(); setCollapsed(document.body.classList.contains('panel')); }
+});
 
 // file:// can't fetch, so the factory rewrites this file on every event and the page reloads to pick it up.
 // Keep scroll and keyboard focus across that reload so it is invisible to the reader.
