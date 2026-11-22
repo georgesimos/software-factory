@@ -84,8 +84,9 @@ let server, browser, last;
     await wiz(page).locator('select[aria-label="CI"]').selectOption('skip');
     await wiz(page).locator('textarea[aria-label^="Local check"]').fill('pnpm test\npnpm lint');
     await wiz(page).locator('.ob-check input').uncheck();
-    await next(page);
-    assert.match(await status(page).innerText(), /Unsaved rule changes/); // Next doesn't drop typed rules silently
+    await wiz(page).locator('[data-k="ob-step:start"]').click();
+    assert.match(await status(page).innerText(), /Unsaved rule changes/); // leaving by the rail doesn't drop typed rules silently
+    await wiz(page).locator('.ob-rail li:nth-child(5) button[aria-current="step"]').waitFor();
     await wiz(page).locator('[data-k="ob-rules-save"]').click();
     assert.match(await status(page).innerText(), /A reason is required/);
     assert.ok(!fs.readFileSync(path.join(DIR, 'skills.json'), 'utf8').includes('"rules"'), 'nothing saved without a reason');

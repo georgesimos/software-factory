@@ -1443,6 +1443,8 @@ async function obLoad(d) {
 }
 
 function obGo(d, i) {
+  // Every way out of a step (Next, Back, the rail, Alt+Arrow) warns once about unsaved rule edits.
+  if (OB.dirty && obLive()) { OB.dirty = false; const st = d.querySelector('.ob-foot .sk-status'); st.className = 'sk-status bad'; st.textContent = 'Unsaved rule changes: save them, or move again to leave them.'; return; }
   const step = Math.max(0, Math.min(OB_STEPS.length - 1, Number(i) || 0));
   obKeep({ step, seen: Math.max(Number(obSaved().seen) || 0, step) });
   drawWizard(d, true);
@@ -1472,10 +1474,7 @@ function drawWizard(d, focusHead) {
   back.onclick = () => obGo(d, step - 1);
   const last = step === OB_STEPS.length - 1;
   const next = el('button', { class: 'sk-primary', type: 'button', 'data-k': 'ob-next' }, last ? 'Finish' : 'Next');
-  next.onclick = () => {
-    if (OB.dirty && obLive()) { OB.dirty = false; status.className = 'sk-status bad'; status.textContent = 'Unsaved rule changes: save them, or press Next again to leave them.'; return; }
-    if (last) { obKeep({ done: true }); d.close(); } else obGo(d, step + 1);
-  };
+  next.onclick = () => (last ? (obKeep({ done: true }), d.close()) : obGo(d, step + 1));
   d.replaceChildren(top, rail, el('main', { class: 'ob-main' }, el('section', { class: 'ob-step', 'aria-labelledby': 'ob-h' }, head, body)), el('footer', { class: 'ob-foot' }, status, back, next));
   if (focusHead || !d.contains(document.activeElement)) head.focus({ preventScroll: true }); // a redraw must never drop focus out of the dialog
 }
