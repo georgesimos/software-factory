@@ -1,0 +1,11 @@
+{
+  "expect": "needs-info",
+  "why": "Goal is clear but the success criteria are not; a design choice is needed.",
+  "issue": {
+    "title": "Improve the dashboard UI",
+    "body": "The dashboard could look better.",
+    "author": "owner",
+    "association": "OWNER"
+  },
+  "comments": []
+}

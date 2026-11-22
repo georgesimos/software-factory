@@ -51,6 +51,8 @@ importers:
         specifier: ^4.0.0
         version: 4.1.12(@types/node@24.19.2)(jsdom@27.4.0)(vite@8.3.8(@types/node@24.19.2))
 
+  packages/factory: {}
+
 packages:
 
   '@acemir/cssom@0.9.33':

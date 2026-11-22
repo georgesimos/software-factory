@@ -1,0 +1,11 @@
+{
+  "expect": "needs-info",
+  "why": "No observable problem, page or target given.",
+  "issue": {
+    "title": "Make it faster",
+    "body": "It's slow.",
+    "author": "owner",
+    "association": "OWNER"
+  },
+  "comments": []
+}

@@ -1,0 +1,11 @@
+{
+  "expect": "split",
+  "why": "Several independent features; too big for one PR.",
+  "issue": {
+    "title": "Epic: accounts",
+    "body": "1. Sign up with email. 2. Password reset by email. 3. Profile page with avatar upload. 4. Delete account with data export. Each needs tests and docs.",
+    "author": "owner",
+    "association": "OWNER"
+  },
+  "comments": []
+}

@@ -1,0 +1,11 @@
+{
+  "expect": "pass",
+  "why": "Precise bug with repro steps and expected result.",
+  "issue": {
+    "title": "Footer year shows 2025",
+    "body": "Steps: open any page, scroll to footer. Actual: '\u00a9 2025'. Expected: current year, computed at build time. Add a unit test for the helper.",
+    "author": "contrib",
+    "association": "CONTRIBUTOR"
+  },
+  "comments": []
+}

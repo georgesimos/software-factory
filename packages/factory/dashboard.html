@@ -1,0 +1,765 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Software Factory</title>
+<script>try { var t = localStorage.getItem('factory.theme'); if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t); } catch (e) {}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #fafaf9; --surface: #ffffff; --sunken: #f4f4f2;
+  --ink: #111110; --ink-2: #57574f; --ink-3: #707069;
+  --line: #e8e8e4; --line-2: #d5d5cf;
+  --accent: #3550dc;
+  --ok: #2c7a51; --bad: #bf3d2b; --warn: #a06604; --idle: #9a9a93;
+  --sans: "Geist", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --r: 6px; --hh: 57px; --gut: 32px; --panel: min(600px, 46vw);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0b0b0c; --surface: #121214; --sunken: #0f0f11;
+    --ink: #ededeb; --ink-2: #a5a59f; --ink-3: #82827c;
+    --line: #222225; --line-2: #333337;
+    --accent: #8c9dff;
+    --ok: #6cbf8f; --bad: #ec8b79; --warn: #d9ad5e; --idle: #67675f;
+  }
+}
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0b0b0c; --surface: #121214; --sunken: #0f0f11;
+    --ink: #ededeb; --ink-2: #a5a59f; --ink-3: #82827c;
+    --line: #222225; --line-2: #333337;
+    --accent: #8c9dff;
+    --ok: #6cbf8f; --bad: #ec8b79; --warn: #d9ad5e; --idle: #67675f;
+}
+:root[data-theme="light"] { color-scheme: light; }
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 400 14px/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased; font-feature-settings: "ss01", "cv11"; }
+a { color: inherit; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.mono, .label { font-family: var(--mono); }
+.label { font-size: 11px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Header */
+.top { position: sticky; top: 0; z-index: 30; height: var(--hh); display: flex; align-items: center; gap: 24px;
+  padding: 0 var(--gut); background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line); }
+.brand { display: flex; align-items: center; gap: 10px; margin: 0; font: 600 14px/1 var(--sans); letter-spacing: -.01em; white-space: nowrap; }
+.mark { width: 14px; height: 14px; flex: none;
+  background: conic-gradient(var(--accent) 0 25%, transparent 0 50%, var(--ink) 0 75%, transparent 0); }
+.seg { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.seg::-webkit-scrollbar { display: none; }
+.seg button { flex: none; border: 0; background: none; padding: 5px 10px; border-radius: 6px; font-size: 13px; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.seg button:hover { color: var(--ink); }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--line-2); }
+.seg .own { color: var(--ink-3); }
+.theme { display: flex; flex: none; padding: 2px; gap: 2px; border: 1px solid var(--line); border-radius: 8px; }
+.theme button { display: grid; place-items: center; width: 26px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: none;
+  color: var(--ink-3); cursor: pointer; font: 13px/1 var(--sans); }
+.theme button:hover { color: var(--ink); }
+.theme button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--line-2); }
+.updated { margin-left: auto; display: flex; align-items: center; gap: 8px; white-space: nowrap; font: 12px var(--mono); color: var(--ink-3); }
+
+/* Overview */
+.shell { padding: 36px var(--gut) 64px; }
+.metrics { display: grid; grid-template-columns: repeat(var(--n, 6), minmax(0, 1fr)); gap: 1px; background: var(--line);
+  border-block: 1px solid var(--line); }
+.metric { background: var(--bg); padding: 18px 24px 22px 0; min-width: 0; }
+.metric + .metric { padding-left: 24px; }
+.metric .v { margin-top: 16px; font: 400 clamp(30px, 3.4vw, 44px)/1 var(--sans); letter-spacing: -.035em;
+  font-variant-numeric: tabular-nums; white-space: nowrap; }
+.metric .v small { font-size: .46em; letter-spacing: 0; color: var(--ink-3); margin-left: 3px; }
+.metric .v small.pre { margin: 0 2px 0 0; }
+.metric .v.none { color: var(--ink-3); }
+.metric .s { margin-top: 10px; font: 12px var(--mono); color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.board-wrap { margin-top: 40px; overflow-x: auto; scroll-snap-type: x proximity; scrollbar-width: thin; }
+.board { display: grid; grid-template-columns: repeat(7, minmax(184px, 1fr)); min-width: min-content; }
+.board.shut { grid-template-columns: repeat(6, minmax(184px, 1fr)) 52px; }
+.col { min-width: 0; padding: 0 12px 8px; border-left: 1px solid var(--line); scroll-snap-align: start; }
+.col:first-child { border-left: 0; padding-left: 0; }
+.col:last-child { padding-right: 0; }
+.col-h { display: flex; align-items: center; gap: 8px; height: 40px; }
+.col-h h2 { margin: 0; }
+.col-h .n { color: var(--ink-3); font: 11px var(--mono); font-variant-numeric: tabular-nums; }
+.col-h .idx { color: var(--line-2); font: 11px var(--mono); }
+.col-h .count { margin-left: auto; font: 12px var(--mono); color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.cards { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.done .c-title { -webkit-line-clamp: 1; }
+.done .c-foot { margin-top: 8px; }
+.col .empty-col { height: 64px; border: 1px dashed var(--line); border-radius: var(--r); }
+.more { padding: 10px 2px; font: 11px var(--mono); color: var(--ink-3); }
+.toggle { display: inline-flex; align-items: center; gap: 8px; border: 0; background: none; padding: 0; cursor: pointer; height: 40px; }
+.toggle .chev { display: inline-block; width: 7px; height: 7px; border-right: 1.5px solid var(--ink-3); border-bottom: 1.5px solid var(--ink-3);
+  transform: rotate(45deg) translate(-2px, -2px); transition: transform .15s; }
+.toggle[aria-expanded="false"] .chev { transform: rotate(-45deg); }
+.board.shut .col.done { padding-right: 0; }
+.board.shut .col.done .col-h { flex-direction: column; height: auto; padding-top: 12px; gap: 10px; }
+.board.shut .col.done .toggle { flex-direction: column; height: auto; }
+.board.shut .col.done .toggle .label { writing-mode: vertical-rl; }
+
+.card { display: block; position: relative; padding: 11px 12px 10px; background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r); text-decoration: none; transition: border-color .12s; }
+.card:hover { border-color: var(--line-2); }
+.card[aria-current="true"] { border-color: var(--ink); box-shadow: inset 0 0 0 .5px var(--ink); }
+.card.tracked { background: transparent; }
+.card.tracked .c-title { color: var(--ink-2); font-weight: 400; }
+.c-top { display: flex; align-items: center; gap: 7px; font: 11px/1 var(--mono); color: var(--ink-3); }
+.c-id { display: flex; min-width: 0; white-space: nowrap; }
+.c-repo { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.c-num { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.c-top time { margin-left: auto; flex: none; }
+.c-title { margin: 7px 0 0; font: 500 13.5px/1.38 var(--sans); letter-spacing: -.005em; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.c-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; margin-top: 10px; }
+.c-foot:empty { display: none; }
+
+.dot { width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--idle); }
+.dot.run { background: var(--accent); } .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.warn { background: var(--warn); }
+.dot.live { animation: live 2s ease-in-out infinite; }
+@keyframes live { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent); } }
+.chip { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 3px 6px; border: 1px solid var(--line);
+  border-radius: 4px; font: 500 10.5px/1.1 var(--mono); letter-spacing: .03em; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 32%, transparent); }
+.chip.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 32%, transparent); }
+.chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 34%, transparent); }
+.chip.run { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 32%, transparent); }
+.chip.quiet { color: var(--ink-3); border-style: dashed; }
+.iters { display: inline-flex; gap: 3px; align-items: center; }
+.iters i { width: 6px; height: 6px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--line-2); }
+.iters i.on { background: var(--ink-2); box-shadow: none; }
+.iters.capped i.on { background: var(--warn); }
+.axes { display: inline-flex; align-items: center; gap: 6px; font: 10.5px var(--mono); color: var(--ink-3); }
+.axes span { display: inline-flex; gap: 2px; }
+.axes i { width: 8px; height: 3px; border-radius: 1px; background: var(--line-2); }
+.axes i.ok { background: var(--ok); } .axes i.bad { background: var(--bad); }
+.loops { font: 10.5px var(--mono); color: var(--warn); }
+
+.empty { margin-top: 40px; padding: 72px 24px; text-align: center; border: 1px dashed var(--line-2); border-radius: 10px; }
+.empty .mark { margin: 0 auto 20px; width: 18px; height: 18px; }
+.empty h2 { margin: 0; font: 500 18px var(--sans); letter-spacing: -.01em; }
+.empty p { margin: 8px 0 0; color: var(--ink-2); }
+.empty code { white-space: nowrap; font: 12.5px var(--mono); padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
+
+/* Run detail */
+.detail { position: fixed; z-index: 20; top: var(--hh); right: 0; bottom: 0; width: var(--panel); overflow-y: auto; overscroll-behavior: contain;
+  background: var(--surface); border-left: 1px solid var(--line); box-shadow: -32px 0 64px -48px rgb(0 0 0 / .35); }
+.detail[hidden] { display: none; }
+.detail.enter { animation: enter .2s cubic-bezier(.2, .7, .2, 1); }
+@keyframes enter { from { opacity: 0; transform: translateX(12px); } }
+body.open .shell { margin-right: var(--panel); }
+.d-in { padding: 24px 32px 56px; }
+.d-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.d-bar .id { font: 12px var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
+.close { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; padding: 5px 6px 5px 10px; border: 1px solid var(--line);
+  border-radius: 6px; background: none; cursor: pointer; font: 12px var(--mono); color: var(--ink-2); }
+.close:hover { color: var(--ink); border-color: var(--line-2); }
+.close kbd { font: 10.5px var(--mono); padding: 1px 5px; border-radius: 3px; background: var(--sunken); color: var(--ink-3); }
+.d-title { margin: 18px 0 0; font: 500 24px/1.25 var(--sans); letter-spacing: -.02em; overflow-wrap: anywhere; }
+.d-title:focus { outline: none; }
+.d-spec { margin: 10px 0 0; color: var(--ink-2); font-size: 14.5px; max-width: 60ch; }
+.d-meta { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 4px 14px; font: 12px var(--mono); color: var(--ink-3); }
+.d-meta span { overflow-wrap: anywhere; }
+.links { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px; }
+.links a { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px;
+  font-size: 13px; text-decoration: none; color: var(--ink); }
+.links a:hover { border-color: var(--ink-3); }
+.links a::after { content: "↗"; color: var(--ink-3); font-size: 12px; }
+.sec { margin-top: 28px; padding-top: 18px; border-top: 1px solid var(--line); }
+.sec > h3 { margin: 0 0 16px; }
+.muted { color: var(--ink-3); font-size: 13px; margin: 0; }
+
+.track { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.st { position: relative; text-align: center; padding: 0 2px; }
+.st:not(:first-child)::before { content: ""; position: absolute; top: 6px; left: -50%; right: 50%; height: 1px; background: var(--line-2); }
+.st.done + .st::before { background: var(--ink-3); }
+.st .n { position: relative; z-index: 1; display: block; width: 13px; height: 13px; margin: 0 auto; border-radius: 50%;
+  background: var(--surface); box-shadow: inset 0 0 0 1px var(--line-2); }
+.st.done .n { background: var(--ok); box-shadow: none; }
+.st.bad .n { background: var(--bad); box-shadow: none; }
+.st.warn .n { background: var(--warn); box-shadow: none; }
+.st.idle .n { background: var(--idle); box-shadow: none; }
+.st.active .n { box-shadow: inset 0 0 0 2px var(--accent); }
+.st.active .n::after { content: ""; position: absolute; inset: 4px; border-radius: 50%; background: var(--accent); }
+.st.skip .n { box-shadow: none; border: 1px dashed var(--line-2); }
+.st.cur .n { outline: 4px solid color-mix(in srgb, var(--accent) 14%, transparent); }
+.st.cur.done .n, .st.cur.idle .n { outline-color: color-mix(in srgb, var(--ok) 14%, transparent); }
+.st.cur.bad .n { outline-color: color-mix(in srgb, var(--bad) 14%, transparent); }
+.st.cur.warn .n { outline-color: color-mix(in srgb, var(--warn) 16%, transparent); }
+.st.stale { opacity: .45; }
+.st .nm { margin-top: 10px; font: 500 10.5px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+.st.cur .nm { color: var(--ink); }
+.st .sb { margin-top: 2px; font: 11px/1.3 var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
+.arcs { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); margin-top: 6px; }
+.arc { grid-row: 1; position: relative; height: var(--h); margin-inline: calc(50% / var(--span)); margin-bottom: 22px;
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent); border-top: 0; border-radius: 0 0 9px 9px; }
+.arc::before { content: ""; position: absolute; left: -4.5px; top: -5px; border: 4px solid transparent; border-top: 0; border-bottom: 6px solid var(--warn); }
+.arc span { position: absolute; top: calc(100% + 4px); left: 0; white-space: nowrap; font: 11px var(--mono); color: var(--warn); }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { padding: 8px 10px 8px 0; border-bottom: 1px solid var(--line); text-align: left; }
+th { font: 500 10.5px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); }
+td:first-child { font: 12.5px var(--mono); color: var(--ink-2); }
+td.v { font: 500 12px var(--mono); font-variant-numeric: tabular-nums; }
+td.v.passed { color: var(--ok); } td.v.failed { color: var(--bad); } td.v.wait { color: var(--accent); } td.v.na { color: var(--line-2); }
+.finds { margin: 18px 0 0; padding: 0; list-style: none; }
+.find { position: relative; display: grid; grid-template-columns: 12px 1fr; gap: 2px 8px; padding: 10px 0; border-top: 1px dashed var(--line); }
+.find:first-child { border-top: 0; }
+.find .sev { width: 7px; height: 7px; margin-top: 7px; border-radius: 1.5px; background: var(--idle); }
+.find .sev.high { background: var(--bad); } .find .sev.medium { background: var(--warn); }
+.find .is { font-size: 13.5px; overflow-wrap: anywhere; }
+.find .fm { grid-column: 2; font: 11.5px var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
+.find.dis .is { text-decoration: line-through; text-decoration-color: var(--ink-3); color: var(--ink-3); }
+.find.dis { cursor: help; }
+.find.dis:focus-visible { outline-offset: 0; border-radius: 4px; }
+.tip { position: absolute; z-index: 2; left: 20px; top: calc(100% - 4px); max-width: min(420px, calc(100% - 20px)); padding: 8px 10px;
+  border-radius: 6px; background: var(--ink); color: var(--bg); font: 12px/1.45 var(--sans); box-shadow: 0 8px 24px -8px rgb(0 0 0 / .3);
+  opacity: 0; visibility: hidden; transform: translateY(-2px); transition: opacity .12s, transform .12s, visibility .12s; pointer-events: none; }
+.find.dis:hover .tip, .find.dis:focus-visible .tip { opacity: 1; visibility: visible; transform: none; }
+
+.verdict { display: flex; align-items: center; gap: 10px; font: 500 19px/1.3 var(--sans); letter-spacing: -.015em; }
+.verdict .dot { width: 8px; height: 8px; }
+.reasons { margin: 12px 0 0; padding: 0; list-style: none; color: var(--ink-2); font-size: 13.5px; }
+.reasons li { position: relative; padding: 3px 0 3px 16px; overflow-wrap: anywhere; }
+.reasons li::before { content: ""; position: absolute; left: 2px; top: 13px; width: 7px; height: 1px; background: var(--ink-3); }
+.callout { margin-top: 14px; padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--bad) 30%, transparent); border-radius: 8px; font-size: 13.5px; }
+.callout b { color: var(--bad); font-weight: 500; }
+.callout a { margin-left: 6px; color: var(--ink); }
+
+.facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 0 20px; }
+.fact { padding: 12px 0 14px; border-top: 1px solid var(--line); }
+.fact .v { margin-top: 8px; font: 400 22px/1 var(--sans); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.fact .s { margin-top: 6px; font: 11px var(--mono); color: var(--ink-3); }
+.bar { margin-top: 8px; height: 2px; background: var(--line); border-radius: 1px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--ink-2); }
+.bar.over i { background: var(--bad); }
+
+.kids { display: grid; gap: 6px; }
+.kid { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; text-decoration: none; font-size: 13px; }
+a.kid:hover { border-color: var(--line-2); }
+.kid .mono { font-size: 11.5px; color: var(--ink-3); flex: none; }
+.kid .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kid .chip { margin-left: auto; flex: none; }
+
+.sess { margin: 0; padding: 0; list-style: none; }
+.ses { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 4px 10px; padding: 10px 0; border-top: 1px dashed var(--line); }
+.ses:first-child { border-top: 0; padding-top: 0; }
+.ses .who { font: 12px var(--mono); color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ses .who b { font-weight: 500; color: var(--ink); }
+.ses code { grid-column: 1 / -1; font: 11.5px var(--mono); color: var(--ink-3); overflow-wrap: anywhere; user-select: all; }
+.copy { padding: 4px 9px; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; font: 11.5px var(--mono); color: var(--ink-2); white-space: nowrap; }
+.copy:hover { color: var(--ink); border-color: var(--line-2); }
+.copy.done { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+.tl { margin: 0; padding: 0; list-style: none; }
+.tl li { display: grid; grid-template-columns: 92px 14px 1fr; gap: 0 8px; }
+.tl time { font: 11.5px/20px var(--mono); color: var(--ink-3); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.tl .rail { position: relative; }
+.tl .rail::before { content: ""; position: absolute; left: 6px; top: 0; bottom: 0; width: 1px; background: var(--line); }
+.tl li:first-child .rail::before { top: 8px; }
+.tl li:last-child .rail::before { bottom: auto; height: 8px; }
+.tl .rail .dot { position: absolute; left: 3.5px; top: 7px; box-shadow: 0 0 0 3px var(--surface); }
+.tl .body { padding-bottom: 12px; min-width: 0; }
+.tl .what { font: 12px/20px var(--mono); color: var(--ink-2); overflow-wrap: anywhere; }
+.tl .what b { font-weight: 500; color: var(--ink); }
+.tl .txt { font-size: 13px; color: var(--ink-2); overflow-wrap: anywhere; }
+.tl ul { margin: 2px 0 0; padding-left: 16px; font-size: 13px; color: var(--ink-2); }
+
+body.open .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+body.open .metric:nth-child(3n + 1) { padding-left: 0; }
+body.open .metric:last-child:nth-child(3n + 2) { grid-column: span 2; }
+@media (max-width: 1100px) {
+  :root { --gut: 20px; }
+  .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .metric:nth-child(3n + 1) { padding-left: 0; }
+  .metric:last-child:nth-child(3n + 2) { grid-column: span 2; }
+}
+@media (max-width: 960px) {
+  body.open .shell { display: none; }
+  .detail { position: static; width: auto; border-left: 0; box-shadow: none; overflow: visible; background: var(--bg); }
+  .d-in { padding: 20px var(--gut) 56px; }
+}
+@media (max-width: 640px) {
+  :root { --gut: 16px; }
+  .top { flex-wrap: wrap; height: auto; gap: 10px 12px; padding-block: 12px; }
+  .seg { order: 3; flex: 1 0 100%; }
+  .shell { padding-top: 24px; }
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .metric, .metric + .metric { padding: 14px 12px 16px 0; }
+  .metric:nth-child(even) { padding-left: 14px; }
+  .metric:last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .metric .v { font-size: 30px; margin-top: 12px; }
+  .board, .board.shut { grid-template-columns: repeat(7, 78vw); }
+  .board.shut { grid-template-columns: repeat(6, 78vw) 52px; }
+  .col:first-child { padding-left: 0; }
+  .d-title { font-size: 21px; }
+  .tl li { grid-template-columns: 50px 14px 1fr; }
+  .tl time { white-space: normal; line-height: 1.35; padding-top: 3px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1 class="brand"><span class="mark" aria-hidden="true"></span>Software Factory</h1>
+  <nav class="seg" id="projects" aria-label="Project"></nav>
+  <div class="updated" id="updated"></div>
+  <div class="theme" id="theme" role="group" aria-label="Theme"></div>
+</header>
+<main class="shell" id="shell"></main>
+<aside class="detail" id="detail" aria-labelledby="d-title" hidden></aside>
+<script type="application/json" id="data">__FACTORY_DATA__</script>
+<script>
+const DATA = (() => { try { return JSON.parse(document.getElementById('data').textContent) || {}; } catch { return {}; } })();
+const STAGES = ['intake', 'spec', 'build', 'review', 'gate', 'approve'];
+const TERMINAL = ['merged', 'escalated', 'rejected', 'closed', 'split']; // needs-info / awaiting-approval resume in their stage
+const TONE = { 'in-progress': 'run', merged: 'ok', escalated: 'warn', 'needs-info': 'warn', 'awaiting-approval': 'warn', rejected: 'bad', closed: 'idle', split: 'idle' };
+const LABEL = { 'in-progress': 'In progress', merged: 'Merged', escalated: 'Escalated', 'needs-info': 'Needs info', 'awaiting-approval': 'Awaiting approval', rejected: 'Rejected', closed: 'Closed', split: 'Split' };
+const SRC = { 'claude-code': 'Claude Code', codex: 'Codex', 'claude-code+codex': 'Claude Code + Codex', none: 'No session', human: 'Human' };
+const CAP = DATA.cap || 3;
+const DONE_MAX = 20;
+
+const num = (x) => typeof x === 'number' && isFinite(x);
+const arr = (x) => (Array.isArray(x) ? x : []);
+const obj = (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x : {});
+const repoOf = (id) => String(id).split(/[#:]/)[0];
+const shortId = (id) => String(id).replace(/^[^/#:]*\//, '');
+const keep = (s, k, v) => { try { return v === undefined ? s.getItem(k) : s.setItem(k, v); } catch { return null; } };
+const store = (k, v) => keep(window.localStorage, k, v);
+const session = (k, v) => keep(window.sessionStorage, k, v);
+const el = (tag, attrs = {}, ...kids) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) if (v != null && v !== false) k === 'class' ? (n.className = v) : n.setAttribute(k, v);
+  for (const k of kids.flat(Infinity)) if (k != null && k !== false) n.append(k instanceof Node ? k : String(k));
+  return n;
+};
+const link = (url, text, cls) => (/^https:\/\//.test(url || '') ? el('a', { href: url, target: '_blank', rel: 'noopener noreferrer', class: cls }, text) : null);
+const runHref = (id) => '#' + encodeURIComponent(id);
+const chip = (text, tone) => el('span', { class: 'chip' + (tone ? ' ' + tone : '') }, text);
+const dot = (tone, live) => el('span', { class: 'dot ' + tone + (live ? ' live' : ''), 'aria-hidden': 'true' });
+
+const ago = (ts) => {
+  const t = Date.parse(ts);
+  if (isNaN(t)) return '';
+  const m = Math.max(0, Math.round((Date.now() - t) / 60000));
+  return m < 1 ? 'just now' : m < 60 ? m + 'm ago' : m < 1440 ? Math.round(m / 60) + 'h ago' : Math.round(m / 1440) + 'd ago';
+};
+const clock = (ts) => {
+  const d = new Date(ts);
+  if (isNaN(d)) return '';
+  const today = d.toDateString() === new Date().toDateString();
+  return d.toLocaleString([], today ? { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' } : { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+};
+const dur = (x) => !num(x) || x < 0 ? null : x < 3600e3 ? [String(Math.max(1, Math.round(x / 60e3))), 'm'] : x < 864e5 ? [(x / 3600e3).toFixed(1), 'h'] : [(x / 864e5).toFixed(1), 'd'];
+const pct = (x) => (num(x) ? [String(Math.round(x * 100)), '%'] : null);
+const money = (x) => (num(x) ? '$' + (x >= 1000 ? Math.round(x).toLocaleString() : x.toFixed(2)) : null);
+const tokens = (x) => (!num(x) ? null : x >= 1e6 ? (x / 1e6).toFixed(1) + 'M' : x >= 1e3 ? Math.round(x / 1e3) + 'k' : String(x));
+
+// Every field but id may be missing: normalise once so render code can trust shapes.
+const norm = (r) => {
+  const reviews = {};
+  for (const [i, axes] of Object.entries(obj(r.reviews))) {
+    reviews[i] = {};
+    for (const [a, v] of Object.entries(obj(axes))) reviews[i][a] = { verdict: obj(v).verdict, findings: arr(obj(v).findings).map(obj) };
+  }
+  const axes = {};
+  for (const [i, list] of Object.entries(obj(r.axes))) axes[i] = arr(list);
+  return { ...r, id: String(r.id), events: arr(r.events).map(obj), reviews, axes, loopbacks: arr(r.loopbacks).map(obj),
+    issues: arr(r.issues), children: arr(r.children),
+    sessions: arr(r.sessions).map(obj).filter((x) => x.id != null).sort((a, b) => (Date.parse(b.last) || 0) - (Date.parse(a.last) || 0)), iteration: num(r.iteration) ? r.iteration : 0,
+    outcome: TONE[r.outcome] ? r.outcome : 'in-progress', stage: STAGES.includes(r.stage) ? r.stage : 'intake',
+    decision: r.decision ? { ...obj(r.decision), reasons: arr(obj(r.decision).reasons) } : null };
+};
+const RUNS = arr(DATA.runs).filter((r) => r && r.id != null).map(norm);
+const BYID = new Map(RUNS.map((r) => [r.id, r]));
+const isDone = (r) => TERMINAL.includes(r.outcome) || !!r.archived;
+const blocking = (f) => ['high', 'medium'].includes(f.severity) && !f.dismissed;
+const failed = (v) => v.verdict !== 'passed' && !(v.findings.length && !v.findings.some(blocking)); // dismissed findings never block
+
+function stageState(r, s) {
+  const i = STAGES.indexOf(s), at = STAGES.indexOf(r.stage);
+  const evs = r.events.filter((e) => e.stage === s);
+  if (!evs.length) return i < at ? ['skip', r.archived ? '' : 'skipped'] : ['', ''];
+  const last = evs[evs.length - 1];
+  const map = { started: 'active', passed: 'done', decided: 'active', merged: 'done', escalated: 'warn', 'needs-info': 'warn',
+    'awaiting-approval': 'warn', rejected: 'bad', failed: 'bad', split: 'done', closed: 'idle', reverted: 'bad' };
+  if (s === 'review') {
+    const rev = r.reviews[r.iteration] || {}, axes = r.axes[r.iteration] || [];
+    if (axes.length) {
+      const done = axes.filter((a) => rev[a]).length, fails = axes.filter((a) => rev[a] && failed(rev[a])).length;
+      if (done < axes.length) return ['active', `${done}/${axes.length} axes`];
+      return fails ? ['bad', `${fails} failed`] : ['done', `${axes.length} passed`];
+    }
+  }
+  if (s === 'gate' && last.status === 'failed') return [last.next === 'approve' ? 'warn' : 'bad', '→ ' + (last.next || '?')];
+  if (s === 'approve' && r.reverted) return ['bad', 'reverted'];
+  return [map[last.status] || '', last.status || ''];
+}
+
+function reviewProgress(r) {
+  const axes = r.axes[r.iteration] || [], rev = r.reviews[r.iteration] || {};
+  if (!axes.length) return null;
+  const done = axes.filter((a) => rev[a]).length;
+  return el('span', { class: 'axes', title: 'Review axes for iteration ' + r.iteration },
+    el('span', { 'aria-hidden': 'true' }, axes.map((a) => el('i', { class: !rev[a] ? '' : failed(rev[a]) ? 'bad' : 'ok' }))),
+    done < axes.length ? `${axes.length - done} pending` : `${done}/${axes.length}`);
+}
+
+const iterDots = (r) => el('span', { class: 'iters' + (r.iteration >= CAP && r.outcome !== 'merged' ? ' capped' : ''),
+  role: 'img', 'aria-label': `Iteration ${r.iteration} of ${CAP}` },
+  Array.from({ length: Math.max(CAP, r.iteration) }, (_, i) => el('i', { class: i < r.iteration ? 'on' : '' })));
+
+function card(r, selected) {
+  const done = isDone(r), [state] = stageState(r, r.stage);
+  const tone = r.reverted ? 'bad' : done || r.outcome !== 'in-progress' ? TONE[r.outcome] : state === 'bad' ? 'bad' : 'run';
+  const foot = [];
+  if (done) foot.push(r.reverted ? chip('Reverted', 'bad') : chip(LABEL[r.outcome], TONE[r.outcome]));
+  else if (r.outcome !== 'in-progress') foot.push(chip(LABEL[r.outcome], 'warn'));
+  if (!r.imported && r.iteration > 0) foot.push(iterDots(r));
+  if (!done && r.stage === 'review') foot.push(reviewProgress(r));
+  if (!done && r.loopbacks.length) foot.push(el('span', { class: 'loops', title: 'Loop-backs' }, '↺' + r.loopbacks.length));
+  if (r.imported) foot.push(chip('Tracked' + (r.source ? ' · ' + (SRC[r.source] || r.source) : ''), 'quiet'));
+  if (r.children.length) foot.push(chip(`${r.children.length} runs`, 'quiet'));
+  if (r.sessions.length) foot.push(chip(`${r.sessions.length} session${r.sessions.length > 1 ? 's' : ''}`, 'quiet'));
+  if (r.archived) foot.push(chip('Archived', 'quiet'));
+  return el('a', { class: 'card' + (r.imported ? ' tracked' : ''), href: runHref(r.id), 'data-k': 'run:' + r.id, 'aria-current': r.id === selected ? 'true' : null },
+    el('div', { class: 'c-top' }, dot(tone, tone === 'run' && state === 'active'), el('span', { class: 'c-id', title: r.id }, project ? '' : el('span', { class: 'c-repo' }, shortId(repoOf(r.id))), el('span', { class: 'c-num' }, r.id.slice(repoOf(r.id).length))),
+      r.updated ? el('time', { datetime: r.updated, title: clock(r.updated) }, ago(r.updated)) : null),
+    el('div', { class: 'c-title' }, r.title || r.branch || shortId(r.id)),
+    el('div', { class: 'c-foot' }, foot));
+}
+
+function metricsStrip(runs, project) {
+  const all = obj(DATA.metrics);
+  const M = obj(project ? obj(all.byProject)[project] : all.all);
+  const n = (k) => (num(M[k]) ? M[k] : null);
+  const inProgress = n('inProgress') ?? runs.filter((r) => r.outcome === 'in-progress').length;
+  const items = [
+    ['In progress', [String(inProgress)], n('awaitingApproval') ? `${M.awaitingApproval} awaiting approval` : `${runs.length} runs total`],
+    ['Merge rate', pct(n('mergeRate')), n('merged') != null ? `${M.merged} merged · ${M.escalated || 0} escalated` : 'merged ÷ decided'],
+    ['Avg iterations', num(M.avgIterations) ? [M.avgIterations.toFixed(1)] : null, `cap ${CAP}`],
+    ['Median cycle', dur(n('medianCycleMs')), 'first event → decision'],
+    ['Revert rate', pct(n('revertRate')), n('reverts') != null ? `${M.reverts} reverted` : 'of merged runs'],
+  ];
+  if (n('costUsd') > 0) items.push(['Spend', ['$', M.costUsd >= 1000 ? Math.round(M.costUsd).toLocaleString() : M.costUsd.toFixed(2)],
+    n('costPerMergeUsd') != null ? `${money(M.costPerMergeUsd)} per merge` : num(DATA.costCap) ? `cap ${money(DATA.costCap)} / run` : '']);
+  const s = el('section', { class: 'metrics', 'aria-label': 'Metrics' }, items.map(([k, v, sub]) => el('div', { class: 'metric' },
+    el('div', { class: 'label' }, k),
+    el('div', { class: 'v' + (v ? '' : ' none') }, !v ? '—' : k === 'Spend' ? [el('small', { class: 'pre' }, v[0]), v[1]] : [v[0], v[1] ? el('small', {}, v[1]) : null]),
+    el('div', { class: 's' }, sub))));
+  s.style.setProperty('--n', items.length);
+  return s;
+}
+
+function board(runs, selected) {
+  const open = store('factory.doneOpen') !== '0';
+  const col = (key, name, idx, list) => el('section', { class: 'col' + (key === 'done' ? ' done' : ''), 'aria-label': `${name}, ${list.length} runs` },
+    el('div', { class: 'col-h' }, idx ? el('span', { class: 'idx' }, idx) : null, el('h2', { class: 'label' }, name),
+      el('span', { class: 'count' }, list.length)),
+    el('div', { class: 'cards' }, list.length ? list.map((r) => card(r, selected)) : el('div', { class: 'empty-col', 'aria-hidden': 'true' })));
+  const cols = STAGES.map((s, i) => col(s, s[0].toUpperCase() + s.slice(1), '0' + (i + 1), runs.filter((r) => !isDone(r) && r.stage === s)));
+  const done = runs.filter(isDone);
+  const toggle = el('button', { class: 'toggle label', 'aria-expanded': String(open), 'aria-controls': open ? 'done-cards' : null, 'data-k': 'toggle:done' },
+    el('span', { class: 'chev', 'aria-hidden': 'true' }), el('span', { class: 'label' }, 'Done'));
+  toggle.onclick = () => { store('factory.doneOpen', open ? '0' : '1'); render(); restoreFocus('toggle:done'); };
+  const doneCol = el('section', { class: 'col done', 'aria-label': `Done, ${done.length} runs` },
+    el('div', { class: 'col-h' }, el('h2', { class: 'label', style: 'margin:0' }, toggle), el('span', { class: 'count' }, done.length)),
+    open ? el('div', { class: 'cards', id: 'done-cards' }, done.length ? done.slice(0, DONE_MAX).map((r) => card(r, selected)) : el('div', { class: 'empty-col', 'aria-hidden': 'true' }),
+      done.length > DONE_MAX ? el('div', { class: 'more' }, `Showing latest ${DONE_MAX} of ${done.length}`) : null) : null);
+  return el('div', { class: 'board-wrap', id: 'board-wrap' }, el('div', { class: 'board' + (open ? '' : ' shut') }, cols, doneCol));
+}
+
+// ---------- detail ----------
+const section = (title, ...kids) => el('section', { class: 'sec' }, el('h3', { class: 'label' }, title), kids);
+
+function track(r) {
+  const cur = STAGES.indexOf(r.stage), live = !isDone(r);
+  const t = el('ol', { class: 'track', style: 'list-style:none;margin:0;padding:0' }, STAGES.map((s, i) => {
+    const [cls, sub] = stageState(r, s);
+    return el('li', { class: ['st', cls, i === cur ? 'cur' : '', live && i > cur && cls ? 'stale' : ''].join(' '), 'aria-current': i === cur ? 'step' : null },
+      el('span', { class: 'n', 'aria-hidden': 'true' }), el('div', { class: 'nm' }, s), el('div', { class: 'sb' }, sub || ' '),
+      el('span', { class: 'sr' }, cls ? `: ${cls === 'active' ? 'in progress' : cls === 'skip' ? 'skipped' : cls}` : ': not reached'));
+  }));
+  const routes = {};
+  for (const l of r.loopbacks) if (['spec', 'build'].includes(l.route)) (routes[l.route] ??= []).push(l);
+  const order = ['build', 'spec'].filter((k) => routes[k]);
+  if (!order.length) return t;
+  const gate = STAGES.indexOf('gate');
+  const arcs = el('div', { class: 'arcs' }, order.map((k, row) => {
+    const from = STAGES.indexOf(k), span = gate - from + 1, ls = routes[k];
+    const a = el('div', { class: 'arc', title: ls.map((l) => `iter ${l.iteration ?? '?'}: ${arr(l.reasons).join('; ')}`).join('\n') },
+      el('span', {}, `↺ ${k} · iter ${ls.map((l) => l.iteration ?? '?').join(', ')}`));
+    a.style.gridColumn = `${from + 1} / ${gate + 2}`;
+    a.style.setProperty('--span', span);
+    a.style.setProperty('--h', 12 + row * 30 + 'px');
+    return a;
+  }));
+  return [t, arcs];
+}
+
+function matrix(r) {
+  const iters = Object.keys(r.axes).concat(Object.keys(r.reviews)).filter((v, i, a) => a.indexOf(v) === i).sort((a, b) => a - b);
+  if (!iters.length) return el('p', { class: 'muted' }, r.imported ? 'Tracked run: the factory does not review it.' : 'No reviews yet.');
+  const axes = [...new Set(iters.flatMap((i) => [...(r.axes[i] || []), ...Object.keys(r.reviews[i] || {})]))];
+  const table = el('table', {}, el('thead', {}, el('tr', {}, el('th', { scope: 'col' }, 'Axis'), iters.map((i) => el('th', { scope: 'col' }, 'Iter ' + i)))),
+    el('tbody', {}, axes.map((a) => el('tr', {}, el('td', {}, a), iters.map((i) => {
+      const v = (r.reviews[i] || {})[a];
+      if (!v) return (r.axes[i] || []).includes(a) ? el('td', { class: 'v wait' }, '… pending') : el('td', { class: 'v na', 'aria-label': 'not reviewed' }, '·');
+      if (!failed(v)) return el('td', { class: 'v passed' }, '✓ pass', v.findings.length ? el('span', { style: 'color:var(--ink-3)' }, ` · ${v.findings.length}`) : null);
+      return el('td', { class: 'v failed' }, `✕ ${v.findings.filter(blocking).length || 'fail'}`);
+    })))));
+  const finds = iters.slice().reverse().flatMap((i) => Object.entries(r.reviews[i] || {}).flatMap(([axis, v]) => v.findings.map((f, j) => {
+    const dis = f.dismissed != null && f.dismissed !== false;
+    const tipId = `tip-${i}-${axis}-${j}`.replace(/[^\w-]/g, '_');
+    const where = f.file ? f.file + (f.line != null ? ':' + f.line : '') : null;
+    return el('li', { class: 'find' + (dis ? ' dis' : ''), tabindex: dis ? '0' : null, 'aria-describedby': dis ? tipId : null, 'data-k': dis ? 'find:' + tipId : null },
+      el('span', { class: ['sev', f.severity].join(' '), title: f.severity || 'severity unknown' }),
+      el('div', { class: 'is' }, f.issue || '(no description)'),
+      el('div', { class: 'fm' }, [axis, 'iter ' + i, f.severity, where, '→ ' + (f.route || 'build'), dis ? 'dismissed' : null].filter(Boolean).join(' · ')),
+      dis ? el('span', { class: 'tip', role: 'tooltip', id: tipId }, 'Dismissed: ' + (typeof f.dismissed === 'string' && f.dismissed ? f.dismissed : 'no reason given')) : null);
+  })));
+  return [table, finds.length ? el('ul', { class: 'finds', 'aria-label': 'Findings' }, finds) : null];
+}
+
+function decision(r) {
+  const lastWith = (pred) => r.events.filter(pred).pop() || {};
+  const intake = lastWith((e) => e.stage === 'intake');
+  const list = (xs) => (arr(xs).length ? el('ul', { class: 'reasons' }, arr(xs).map((x) => el('li', {}, x))) : null);
+  const head = (tone, text) => el('div', { class: 'verdict' }, dot(tone), text);
+  let body;
+  if (r.outcome === 'rejected') body = [head('bad', 'Rejected at intake'), list(intake.reason ? [intake.reason] : intake.reasons)];
+  else if (r.outcome === 'needs-info') body = [head('warn', 'Waiting on the reporter'), list(intake.questions)];
+  else if (r.outcome === 'closed') body = [head('idle', 'Closed outside the factory'), list(lastWith((e) => e.status === 'closed').reasons)];
+  else if (r.outcome === 'split') body = [head('idle', `Split into ${r.children.length || 'several'} runs`), list(lastWith((e) => e.status === 'split').reasons)];
+  else if (r.outcome === 'awaiting-approval') body = [head('warn', 'Spec awaiting human approval'), list(lastWith((e) => e.status === 'awaiting-approval').reasons)];
+  else if (r.decision) body = [head(r.outcome === 'merged' ? 'ok' : r.decision.action === 'merge' ? 'run' : 'warn',
+    r.outcome === 'merged' ? 'Merged' : r.outcome === 'escalated' ? 'Escalated to a human' : r.decision.action === 'merge' ? 'Merging' : 'Escalating'), list(r.decision.reasons)];
+  else if (r.imported) body = [head('idle', 'Tracked, not driven'), el('p', { class: 'muted', style: 'margin-top:10px' },
+    `Imported${r.source ? ' from ' + (SRC[r.source] || r.source) : ''}. The factory will not build or merge it.`)];
+  else body = el('p', { class: 'muted' }, 'No decision yet.');
+  const rev = r.reverted ? el('div', { class: 'callout' }, el('b', {}, 'Reverted'), obj(r.reverted).reason ? ' · ' + r.reverted.reason : '', link(obj(r.reverted).pr, 'Revert PR')) : null;
+  return section('Decision', body, rev);
+}
+
+function facts(r) {
+  const items = [['Iterations', `${r.iteration} / ${CAP}`, r.loopbacks.length ? `${r.loopbacks.length} loop-back${r.loopbacks.length > 1 ? 's' : ''}` : 'no loop-backs']];
+  if (num(r.costUsd)) {
+    const capped = num(DATA.costCap) && DATA.costCap > 0;
+    const b = capped ? el('div', { class: 'bar' + (r.costUsd > DATA.costCap ? ' over' : ''), 'aria-hidden': 'true' }, el('i')) : null;
+    if (b) b.firstChild.style.width = Math.min(100, (r.costUsd / DATA.costCap) * 100) + '%';
+    items.push(['Cost', money(r.costUsd), capped ? `of ${money(DATA.costCap)} cap` : '', b]);
+  }
+  if (num(r.tokens)) items.push(['Tokens', tokens(r.tokens), '']);
+  const d = dur(num(r.durationMs) ? r.durationMs : Date.parse(r.updated) - Date.parse(r.started));
+  if (d) items.push(['Duration', d.join(''), r.started ? 'since ' + clock(r.started) : '']);
+  return el('div', { class: 'facts' }, items.map(([k, v, s, extra]) => el('div', { class: 'fact' }, el('div', { class: 'label' }, k), el('div', { class: 'v' }, v), extra, s ? el('div', { class: 's' }, s) : null)));
+}
+
+function family(r) {
+  const row = (id) => {
+    const c = BYID.get(id);
+    const kids = [el('span', { class: 'mono' }, shortId(id)), el('span', { class: 't' }, c ? c.title || '' : 'not tracked'), c ? chip(c.reverted ? 'Reverted' : LABEL[c.outcome], c.reverted ? 'bad' : TONE[c.outcome]) : null];
+    return c ? el('a', { class: 'kid', href: runHref(id) }, kids) : el('div', { class: 'kid' }, kids);
+  };
+  const parts = [];
+  if (r.parent) parts.push(el('div', { class: 'label', style: 'margin-bottom:8px' }, 'Part of'), el('div', { class: 'kids' }, row(String(r.parent))));
+  if (r.children.length) parts.push(el('div', { class: 'label', style: `margin:${r.parent ? 16 : 0}px 0 8px` }, 'Split into'), el('div', { class: 'kids' }, r.children.map((c) => row(String(c)))));
+  return parts.length ? section('Epic', parts) : null;
+}
+
+// Shell-quote for a POSIX shell: single quotes, so $, `, \ and ! stay literal.
+const shq = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
+const AGENT = { 'claude-code': 'Claude Code', codex: 'Codex' };
+function resumeCmd(s) {
+  const id = String(s.id);
+  if (!/^[\w.-]+$/.test(id)) return null; // never paste an odd id into a shell command
+  if (s.agent === 'codex') return `codex resume ${id}`;
+  if (s.agent === 'claude-code') return (s.cwd ? `cd ${shq(s.cwd)} && ` : '') + `claude --resume ${id}`;
+  return null;
+}
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch {}
+  const t = el('textarea', { readonly: '', style: 'position:fixed;opacity:0' });
+  t.value = text; document.body.append(t); t.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch {}
+  t.remove();
+  return ok;
+}
+function sessions(r) {
+  if (!r.sessions.length) return null;
+  return section('Sessions', el('ul', { class: 'sess' }, r.sessions.map((s) => {
+    const cmd = resumeCmd(s);
+    const base = s.cwd ? String(s.cwd).replace(/[\\/]+$/, '').split(/[\\/]/).pop() : '';
+    let btn = null;
+    if (cmd) {
+      btn = el('button', { class: 'copy', 'data-k': 'copy:' + s.id, 'aria-label': 'Copy resume command for session ' + String(s.id).slice(0, 8) }, 'Copy resume');
+      btn.onclick = async () => {
+        const ok = await copyText(cmd);
+        btn.textContent = ok ? 'Copied' : 'Select below';
+        btn.classList.toggle('done', ok);
+        setTimeout(() => { btn.textContent = 'Copy resume'; btn.classList.remove('done'); }, 1600);
+      };
+    }
+    return el('li', { class: 'ses' },
+      chip(AGENT[s.agent] || String(s.agent || 'agent'), s.agent === 'codex' ? '' : 'run'),
+      el('span', { class: 'who', title: String(s.id) + (s.cwd ? ' · ' + s.cwd : '') },
+        el('b', {}, String(s.id).slice(0, 8)), s.last ? ' · ' + ago(s.last) : '', base ? ' · ' + base : ''),
+      btn || el('span'),
+      cmd ? el('code', {}, cmd) : null);
+  })));
+}
+
+function timeline(r) {
+  if (!r.events.length) return section('Timeline', el('p', { class: 'muted' }, 'No events recorded.'));
+  const tone = (s) => ({ started: 'run', passed: 'ok', merged: 'ok', failed: 'bad', rejected: 'bad', reverted: 'bad', escalated: 'warn', 'needs-info': 'warn', 'awaiting-approval': 'warn' })[s] || 'idle';
+  return section('Timeline', el('ol', { class: 'tl' }, r.events.slice().reverse().map((e) => el('li', {},
+    el('time', { datetime: e.ts || null }, clock(e.ts)),
+    el('span', { class: 'rail' }, dot(tone(e.status))),
+    el('div', { class: 'body' },
+      el('div', { class: 'what' }, el('b', {}, e.stage || '?'), ' · ', e.status || '?', e.axis ? ' · ' + e.axis : '', e.next ? ' → ' + e.next : '',
+        num(e.costUsd) ? ' · ' + money(e.costUsd) : '', num(e.tokens) ? ' · ' + tokens(e.tokens) + ' tok' : ''),
+      e.summary || e.reason || e.spec ? el('div', { class: 'txt' }, e.summary || e.reason || e.spec) : null,
+      arr(e.reasons).length ? el('div', { class: 'txt' }, arr(e.reasons).join(' · ')) : null,
+      arr(e.questions).length ? el('ul', {}, arr(e.questions).map((q) => el('li', {}, q))) : null)))),
+    r.archived ? el('p', { class: 'muted', style: 'margin-top:4px' }, 'Older events were archived.') : null);
+}
+
+function detail(r) {
+  const repo = repoOf(r.id);
+  const close = el('button', { class: 'close', 'data-k': 'close', 'aria-label': 'Close run details' }, 'Close', el('kbd', { 'aria-hidden': 'true' }, 'Esc'));
+  close.onclick = closeRun;
+  const issueLinks = /^[\w.-]+\/[\w.-]+$/.test(repo) ? r.issues.filter((n) => Number.isInteger(n) && n > 0).map((n) => link(`https://github.com/${repo}/issues/${n}`, `Closes #${n}`)) : [];
+  const links = [r.imported ? null : link(r.url, 'Issue'), link(r.pr, 'Pull request'), issueLinks].flat().filter(Boolean);
+  links.forEach((a, i) => a.setAttribute('data-k', 'link:' + i));
+  return el('div', { class: 'd-in' },
+    el('div', { class: 'd-bar' }, el('span', { class: 'id' }, r.id),
+      chip(r.reverted ? 'Reverted' : LABEL[r.outcome], r.reverted ? 'bad' : TONE[r.outcome]),
+      r.imported ? chip('Tracked' + (r.source ? ' · ' + (SRC[r.source] || r.source) : ''), 'quiet') : null,
+      r.archived ? chip('Archived', 'quiet') : null, close),
+    el('h2', { class: 'd-title', id: 'd-title', tabindex: '-1' }, r.title || r.branch || r.id),
+    r.spec ? el('p', { class: 'd-spec' }, r.spec) : null,
+    el('div', { class: 'd-meta' },
+      r.author ? el('span', {}, r.author + (r.association ? ` · ${String(r.association).toLowerCase()}` : '')) : null,
+      r.branch ? el('span', {}, '⎇ ' + r.branch) : null,
+      r.updated ? el('span', {}, 'updated ' + ago(r.updated)) : null),
+    links.length ? el('div', { class: 'links' }, links) : null,
+    section('Pipeline', track(r)),
+    section('Review', matrix(r)),
+    decision(r),
+    section('Run', facts(r)),
+    family(r),
+    sessions(r),
+    timeline(r));
+}
+
+// ---------- shell ----------
+const projects = [...new Set([...arr(DATA.projects).map(String), ...RUNS.map((r) => repoOf(r.id))])];
+let project = store('factory.project') || '';
+if (!projects.includes(project)) project = '';
+
+function selectedId() {
+  try { return decodeURIComponent(location.hash.slice(1)); } catch { return ''; }
+}
+function closeRun() {
+  const id = selectedId();
+  history.pushState(null, '', location.pathname + location.search);
+  render();
+  restoreFocus('run:' + id);
+}
+function restoreFocus(k) {
+  const n = k && [...document.querySelectorAll('[data-k]')].find((x) => x.dataset.k === k);
+  if (n) n.focus({ preventScroll: false });
+}
+
+function render() {
+  const runs = RUNS.filter((r) => !project || repoOf(r.id) === project);
+  const sel = BYID.get(selectedId()) || null;
+
+  document.getElementById('projects').replaceChildren(...['', ...projects].map((p) => {
+    const [own, name] = p ? [p.split('/')[0] + '/', p.split('/').slice(1).join('/')] : ['', 'All'];
+    const b = el('button', { 'aria-pressed': String(p === project), 'data-k': 'proj:' + p, title: p || 'All projects' }, own ? el('span', { class: 'own' }, own) : null, name);
+    b.onclick = () => { project = p; store('factory.project', p); if (selectedId()) history.replaceState(null, '', location.pathname + location.search); render(); restoreFocus('proj:' + p); };
+    return b;
+  }));
+  const fresh = Date.now() - Date.parse(DATA.generated) < 5 * 60e3;
+  document.getElementById('updated').replaceChildren(...(DATA.generated ? [dot(fresh ? 'ok' : 'idle'), el('time', { datetime: DATA.generated, title: clock(DATA.generated) }, 'Updated ' + ago(DATA.generated))] : []));
+
+  const shell = document.getElementById('shell');
+  const scrollX = document.getElementById('board-wrap')?.scrollLeft || 0; // keep the board where the reader left it
+  if (!runs.length) {
+    shell.replaceChildren(el('div', { class: 'empty' }, el('div', { class: 'mark', 'aria-hidden': 'true' }),
+      el('h2', {}, project ? `No runs for ${project}` : 'No runs yet'),
+      el('p', {}, 'Start one with ', el('code', {}, '/software-factory <issue>'), ' or attach a repo to import work in flight.')));
+  } else {
+    shell.replaceChildren(el('h2', { class: 'sr' }, 'Overview'), metricsStrip(runs, project), board(runs, sel && sel.id));
+    document.getElementById('board-wrap').scrollLeft = scrollX;
+  }
+  const inProg = runs.filter((r) => r.outcome === 'in-progress').length;
+  document.title = (inProg ? `(${inProg}) ` : '') + (sel ? (sel.title || sel.id) + ' · ' : '') + 'Software Factory';
+
+  const d = document.getElementById('detail');
+  document.body.classList.toggle('open', !!sel);
+  d.hidden = !sel;
+  d.classList.remove('enter');
+  d.replaceChildren(...(sel ? [detail(sel)] : []));
+}
+
+function renderTheme() {
+  let cur = '';
+  try { cur = localStorage.getItem('factory.theme') || ''; } catch {}
+  if (!['light', 'dark'].includes(cur)) cur = 'system';
+  document.getElementById('theme').replaceChildren(...[['system', '◐', 'System theme'], ['light', '☀', 'Light theme'], ['dark', '☾', 'Dark theme']].map(([v, glyph, label]) => {
+    const b = el('button', { 'aria-pressed': String(v === cur), 'aria-label': label, title: label, 'data-k': 'theme:' + v }, el('span', { 'aria-hidden': 'true' }, glyph));
+    b.onclick = () => {
+      if (v === 'system') { try { localStorage.removeItem('factory.theme'); } catch {} document.documentElement.removeAttribute('data-theme'); }
+      else { store('factory.theme', v); document.documentElement.setAttribute('data-theme', v); }
+      renderTheme(); restoreFocus('theme:' + v);
+    };
+    return b;
+  }));
+}
+
+window.addEventListener('hashchange', () => {
+  render();
+  const d = document.getElementById('detail');
+  if (!d.hidden) { d.classList.add('enter'); d.scrollTop = 0; if (matchMedia('(max-width: 960px)').matches) window.scrollTo(0, 0); document.getElementById('d-title').focus({ preventScroll: true }); document.querySelector('.card[aria-current]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+});
+window.addEventListener('popstate', render);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !document.getElementById('detail').hidden) { e.preventDefault(); closeRun(); } });
+
+// file:// can't fetch, so the factory rewrites this file on every event and the page reloads to pick it up.
+// Keep scroll and keyboard focus across that reload so it is invisible to the reader.
+history.scrollRestoration = 'manual';
+renderTheme();
+render();
+try {
+  const s = JSON.parse(session('factory.view') || 'null');
+  if (s) {
+    const wrap = document.getElementById('board-wrap');
+    if (wrap) wrap.scrollLeft = s.x || 0;
+    document.getElementById('detail').scrollTop = s.d || 0;
+    window.scrollTo(0, s.y || 0);
+    const n = s.k && [...document.querySelectorAll('[data-k]')].find((x) => x.dataset.k === s.k);
+    if (n) n.focus({ preventScroll: true });
+  }
+} catch {}
+window.addEventListener('pagehide', () => {
+  const wrap = document.getElementById('board-wrap');
+  session('factory.view', JSON.stringify({ x: wrap ? wrap.scrollLeft : 0, y: window.scrollY, d: document.getElementById('detail').scrollTop,
+    k: document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.k : null }));
+});
+setTimeout(() => location.reload(), 10000);
+</script>
+</body>
+</html>

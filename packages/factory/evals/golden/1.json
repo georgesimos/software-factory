@@ -1,0 +1,11 @@
+{
+  "expect": "pass",
+  "why": "Clear, small, testable feature from the owner.",
+  "issue": {
+    "title": "Add a 'Copy link' button to each article",
+    "body": "On article pages, add a button next to the title that copies the canonical URL to the clipboard and shows 'Copied' for 2 seconds. Must be keyboard accessible. Add a test.",
+    "author": "owner",
+    "association": "OWNER"
+  },
+  "comments": []
+}
