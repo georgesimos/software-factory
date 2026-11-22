@@ -157,12 +157,25 @@ The same steps are available as a CLI (`F onboard`). The UI writes only through 
 
 Phases 0 and 1 are the best value. They need no or one credential, and they turn the ux/ui reviews from "read the diff" into "look at the running app".
 
-## 8. Open questions for the user
+## 8. Decisions (agreed 2026-11-22)
 
-1. Ship CLI as `S` (`ship.mjs`), or `F ship ...` subcommands? The proposal is a separate package with `F ship` as a thin alias.
-2. For Euporia: is production on Vercel promoted from `main` automatically, or only through `deploy-prod.yml` with tags? This decides what "production watch" means.
-3. Mobile: Expo only, or bare iOS/Xcode projects too? Bare projects would need an Xcode Cloud or fastlane connector.
-4. Is the macOS Keychain acceptable for the one or two keys that have no CLI login (the ASC `.p8` key)?
+1. Ship is a separate package (`packages/ship`, CLI `ship.mjs`), with `F ship ...` as a thin alias.
+2. For Euporia, production watch follows whatever actually deploys production. Check this in phase 1: Vercel from `main`, or `deploy-prod.yml` with tags.
+3. Mobile is Expo/EAS only for now. A bare Xcode project would be one more connector later.
+4. The macOS Keychain is acceptable for keys that have no CLI login, such as the ASC `.p8` key.
+5. **Start minimal, and make every feature pluggable.** Each provider family has a registry that auto-loads one file per provider, a `_template.mjs`, a recipe doc and a shared contract test that runs against every provider. The core never names a specific provider. The families:
+   - Ship connectors;
+   - AI harnesses (Claude Code, Codex, ...);
+   - repo hosts (GitHub, ...);
+   - trackers (GitHub Issues, then Jira or Linear);
+   - stack templates, which are data files.
+
+   Every family's tests add a fake extra provider as one file, to prove that no core change is needed.
+
+First three pieces of work, all minimal and all built on PR #4:
+- Ship phase 0: the connector registry plus GitHub Deployments, and the `deploy.preview` rule;
+- the onboarding wizard with pluggable harness adapters;
+- idea-to-app, with pluggable repo-host and tracker adapters, stack templates, and a `--dry-run` example.
 
 ## 9. To verify during implementation
 
