@@ -16,11 +16,12 @@ stamp, the sensitive paths, `F onboard` and the setup wizard all read it, so not
    | `detect()` | yes | `{installed, version}` (e.g. from `<bin> --version`) |
    | `login()` | yes | `{ok, hint}`; when `!ok`, `hint` is the login command |
    | `headless()` | no | `{cmd, args, note}`: how the orchestrator runs it unattended (display only) |
-   | `headlessArgs(opts)` | no | the host harness only: pinned unattended flags `F headless-args` prints (`{schema, budget, write}`) |
+   | `headlessArgs(opts)` | no | the host harness only: pinned unattended flags `F headless-args` prints (`{schema, budget, write, model, effort, fallback}`) |
 | `providerTools()` | no | `[{name, desc, tool?}]` for the runner picker. The core builds the runner, so a harness can only offer itself. Return `[]` when not installed |
    | `sessions(repoPath, remoteUrl)` | no | `[{branch, id, cwd, last}]` from its local logs, so `F sync` imports work in flight. Branch names and times only, never prompt text |
    | `notes()` | no | `[{label, ok: true/false/null, hint}]`: extra setup checks for the wizard (Claude Code's `claude-cli://` handler) |
-   | `models()` | no | reserved for per-step model selection, not read yet: `[{id, alias?, label}]`, the models and aliases a runner on this harness can pick |
+   | `models()` | no | `[{id, alias, label, minVersion?}]`: the aliases a runner on this harness may set as `model` and `fallback` (`F skills set` refuses others). A CLI older than `minVersion` falls down the step's `fallback` chain. Without it, runners on this harness can't set a model |
+   | `efforts` | no | the `effort` levels its runners may set, e.g. `["low", "medium", "high"]` |
 | `current()` | no | the session id when `F` runs inside this harness (from its env), stamped on events |
    | `configDirs` | no | repo folders with its config (e.g. `[".gemini"]`). A PR that touches them never auto-merges |
    | `host` | no | `true` only for the harness that runs the factory skill itself: plugin agents next to its skills run on it |

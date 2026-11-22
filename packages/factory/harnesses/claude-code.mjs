@@ -17,18 +17,28 @@ const TOOLS = [
   { name: 'security-review', tool: 'security-review', desc: 'Claude Code built-in /security-review: security review of the pending changes on the branch. Replies in prose.' },
 ];
 
+// Aliases only: the Agent tool's `model` takes an alias, not an id. minVersion: older CLIs don't know the model.
+const MODELS = [
+  { id: 'claude-fable-5-2', alias: 'fable', label: 'Fable 5.2', minVersion: '2.1.321' },
+  { id: 'claude-opus-5-5', alias: 'opus', label: 'Opus 5.5' },
+  { id: 'claude-sonnet-5-5', alias: 'sonnet', label: 'Sonnet 5.5' },
+  { id: 'claude-haiku-5-5', alias: 'haiku', label: 'Haiku 5.5' },
+];
+
 // Pinned flags for a `claude -p` provider runner, so its behaviour never rides on -p's defaults.
 // Never --bare: it would skip the `/x` skill being run and needs ANTHROPIC_API_KEY. Repo hooks and .mcp.json are cut by
 // --setting-sources user and --strict-mcp-config instead. Read-only unless `write` (build): manual mode with prompts
 // none denies anything outside the allowlist, where auto mode's classifier could approve other Bash. A schema adds the
-// structured-output contract (reviews). Budget: unknown -> no flag, spent -> refuse.
-function headlessArgs({ schema, budget, write = false } = {}) {
+// structured-output contract (reviews); model, effort and fallback come from the step's runner. Budget: unknown -> no flag, spent -> refuse.
+function headlessArgs({ schema, budget, write = false, model, effort, fallback } = {}) {
   const usd = budget == null ? null : Math.floor(Number(budget) * 100 + 1e-9) / 100; // whole cents, rounded down (1e-9: 0.29 * 100 is 28.999…)
   if (usd != null && !(usd > 0)) throw new Error(`no run budget left (${budget}); escalate instead of running`); // 0, negative and NaN alike
   return [
     '--output-format', 'json', '--setting-sources', 'user', '--strict-mcp-config',
     '--permission-mode', write ? 'auto' : 'manual', '--permission-prompts', 'none',
     ...(usd != null ? ['--max-budget-usd', String(usd)] : []),
+    ...(model ? ['--model', model] : []), ...(effort ? ['--effort', effort] : []),
+    ...(fallback?.length ? ['--fallback-model', fallback.join(',')] : []),
     ...(schema ? ['--json-schema', typeof schema === 'string' ? schema : JSON.stringify(schema)] : []),
     ...(write ? [] : ['--allowedTools', 'Bash(git diff:*)', 'Bash(git log:*)', 'Read', 'Grep', 'Glob']), // variadic: keep last
   ];
@@ -51,6 +61,8 @@ export default {
     const ok = r.code === 0 && s.loggedIn !== false;
     return { ok, hint: ok ? s.authMethod || 'signed in' : 'claude auth login' };
   },
+  models: () => MODELS,
+  efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   headlessArgs, // F headless-args prints these; F names no harness
   headless: () => ({ cmd: 'claude', args: ['-p', '<prompt>', ...headlessArgs()], note: 'Read-only default; F headless-args <run> --write switches to auto mode for build, --review adds the review schema.' }),
   providerTools: () => TOOLS,

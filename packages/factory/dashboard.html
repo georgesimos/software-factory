@@ -419,6 +419,9 @@ dialog.sk-pick[open] { display: flex; flex-direction: column; }
 .sk-from { font-size: 12px; color: var(--ink-3); }
 .sk-from.here { color: var(--accent); }
 .sk-act { text-align: right; white-space: nowrap; }
+.sk-model { width: 1%; white-space: nowrap; }
+.sk-model .sk-input { width: auto; padding: 4px 8px; font-size: 12.5px; }
+.sk-model .sk-from { display: block; margin-top: 4px; }
 .sk-act button + button { margin-left: 6px; }
 .sk-axes { margin-top: 28px; }
 .sk-axes h3 { margin: 0 0 4px; font: 600 14px var(--sans); }
@@ -460,6 +463,7 @@ dialog.sk-pick[open] { display: flex; flex-direction: column; }
   .sk-table tr.sk-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
   .sk-table tr.sk-row > * { padding: 0; border: 0; }
   .sk-table tr.sk-row > .sk-runcell { grid-column: 1 / -1; grid-row: 2; }
+  .sk-table tr.sk-row > .sk-model { grid-column: 1 / -1; grid-row: 3; white-space: normal; }
   .skills-btn { padding: 5px 8px; }
 }
 /* idea-to-app project view: one panel per project from `F new`, above the metrics */
@@ -599,14 +603,17 @@ const link = (url, text, cls) => (/^https:\/\//.test(url || '') ? el('a', { href
 const runHref = (id) => '#' + encodeURIComponent(id);
 const chip = (text, tone) => el('span', { class: 'chip' + (tone ? ' ' + tone : '') }, text);
 // Who did a step, when it wasn't the built-in brief. Text and title only; `short` drops the kind for the narrow pipeline track.
+// `fallback` is either the runner downgrade ({from, reason}) or the model's fallback chain (an array); `model` is the configured one.
 const runnerChip = (x, short, what = 'Run by') => {
   x = obj(x);
-  const fb = obj(x.fallback), from = obj(fb.from), last = (n) => String(n).split(':').pop();
+  const down = !!x.fallback && !Array.isArray(x.fallback), fb = down ? obj(x.fallback) : {}, from = obj(fb.from), last = (n) => String(n).split(':').pop();
   const name = (y) => y.use === 'skill' ? 'skill: ' + y.name : y.use === 'brief' ? 'brief: ' + String(y.path || '').split('/').pop() : y.use === 'provider' ? [y.harness, y.name].filter(Boolean).join(': ') : null;
-  const full = x.fallback ? 'default · fallback' : name(x);
-  if (!full) return null;
-  const text = !short || x.fallback ? full : x.use === 'brief' ? full.slice(7) : last(x.name || x.harness);
-  return el('span', { class: 'chip rn', title: x.fallback ? `Configured ${name(from) || 'runner'} was unavailable: ${fb.reason || 'no reason given'}` : what + ' ' + full }, text);
+  const base = down ? 'default · fallback' : name(x), model = typeof x.model === 'string' ? x.model : '';
+  if (!base && !model) return null;
+  const who = !base ? '' : !short || down ? base : x.use === 'brief' ? base.slice(7) : last(x.name || x.harness);
+  const text = [who, model + (model && !short && x.effort ? ' · ' + x.effort : '')].filter(Boolean).join(' · ');
+  const on = model ? ` on ${model}${x.effort ? ` (${x.effort} effort)` : ''}${Array.isArray(x.fallback) ? ', fallback ' + x.fallback.join(' → ') : ''}` : '';
+  return el('span', { class: 'chip rn', title: down ? `Configured ${name(from) || 'runner'} was unavailable: ${fb.reason || 'no reason given'}` : `${what} ${base || 'the built-in brief'}${on}` }, text);
 };
 const dot = (tone, live) => el('span', { class: 'dot ' + tone + (live ? ' live' : ''), 'aria-hidden': 'true' });
 
@@ -1332,12 +1339,29 @@ function fillSkills(d, msg) {
         el('span', { class: 'sk-name' + (isDef ? ' def' : '') }, runnerName(r, scope)),
         isDef ? null : chip(kindOf(r, scope)),
         el('span', { class: 'sk-from' + (here ? ' here' : '') }, here ? (scope === 'default' ? 'set globally' : 'set for this project') : inherited ? 'from global' : 'built-in'))),
+      modelCell(step, r, label),
       el('td', { class: 'sk-act' }, change, reset));
+  };
+  // Model per Claude-run step (the resolved plan has one): pick an alias, or the default to drop this scope's override.
+  const modelCell = (step, r, label) => {
+    if (!r.model) return el('td', { class: 'sk-model' });
+    const own = obj(mine[step] || (scope === 'default' ? null : glob[step]) || { use: 'default' }), set = typeof own.model === 'string' ? own.model : '';
+    const sel = el('select', { class: 'sk-input', 'data-k': 'sk-model:' + step, 'aria-label': 'Model for ' + label },
+      el('option', { value: '' }, set ? 'Default' : 'Default (' + r.model + ')'),
+      arr(S.models).map((m) => el('option', { value: m, selected: m === set ? '' : null }, m)));
+    sel.onchange = () => {
+      const { model: _m, ...base } = own, v = sel.value;
+      if (Array.isArray(base.fallback)) { base.fallback = base.fallback.filter((m) => m !== v); if (!base.fallback.length) delete base.fallback; }
+      const next = v ? { ...base, model: v } : base;
+      act(step, Object.keys(next).length === 1 && next.use === 'default' ? null : next, 'sk-model:' + step);
+    };
+    const why = set ? (step in mine ? 'set here' : 'from global') : 'preset ' + (S.preset || '');
+    return el('td', { class: 'sk-model' }, sel, el('span', { class: 'sk-from' }, [r.effort, Array.isArray(r.fallback) && '↓ ' + r.fallback.join(', '), why].filter(Boolean).join(' · ')));
   };
   const steps = arr(S.steps);
   const groups = [['Pipeline', steps.filter((k) => ['intake', 'spec', 'build'].includes(k))], ['Review axes', steps.filter((k) => k.startsWith('review.'))], ['After review', steps.filter((k) => ['verifier', 'postmerge'].includes(k))]];
   const table = el('table', { class: 'sk-table' }, el('caption', { class: 'sr' }, 'Runner per step for ' + (scope === 'default' ? 'all projects' : scope)),
-    groups.map(([g, ks]) => el('tbody', {}, el('tr', { class: 'sk-group' }, el('th', { colspan: '3', scope: 'colgroup' }, g)), ks.map(row))));
+    groups.map(([g, ks]) => el('tbody', {}, el('tr', { class: 'sk-group' }, el('th', { colspan: '4', scope: 'colgroup' }, g)), ks.map(row))));
 
   // Extra axes: a scope's list is saved whole. Under a project, global axes show read-only.
   const own = arr(mine['axes.extra']).map(obj), fromGlobal = scope === 'default' ? [] : arr(glob['axes.extra']).map(obj).filter((x) => !own.some((y) => y.axis === x.axis));
