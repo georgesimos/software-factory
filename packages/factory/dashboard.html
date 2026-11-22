@@ -589,6 +589,7 @@ const shortId = (id) => String(id).replace(/^[^/#:]*\//, '');
 const keep = (s, k, v) => { try { return v === undefined ? s.getItem(k) : s.setItem(k, v); } catch { return null; } };
 const store = (k, v) => keep(window.localStorage, k, v);
 const session = (k, v) => keep(window.sessionStorage, k, v);
+const panelCollapsed = () => (store('factory.panelCollapsed') ?? '1') === '1'; // closed until a run is chosen or the toggle opens it
 const el = (tag, attrs = {}, ...kids) => {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) if (v != null && v !== false) k === 'class' ? (n.className = v) : n.setAttribute(k, v);
@@ -1130,7 +1131,7 @@ function render() {
   document.title = (inProg ? `(${inProg}) ` : '') + (sel ? (sel.title || sel.id) + ' · ' : '') + 'Software Factory';
 
   // open: a run is selected (narrow screens show it full view). panel: the docked column is shown on wide screens.
-  const d = document.getElementById('detail'), collapsed = store('factory.panelCollapsed') === '1', shown = !collapsed && (!!sel || runs.length > 0);
+  const d = document.getElementById('detail'), collapsed = panelCollapsed(), shown = !collapsed && (!!sel || runs.length > 0);
   document.body.classList.toggle('open', !!sel);
   document.body.classList.toggle('panel', shown);
   document.body.classList.toggle('focus', shown && !!sel && store('factory.panelFocus') === '1');
@@ -1199,7 +1200,7 @@ document.getElementById('ptog').onclick = () => setCollapsed(document.body.class
 // Re-clicking the selected card fires no hashchange, so un-collapse here too.
 document.getElementById('shell').addEventListener('click', (e) => {
   const c = e.target.closest('.card');
-  if (c && store('factory.panelCollapsed') === '1' && c.hash === location.hash) { store('factory.panelCollapsed', '0'); render(); restoreFocus('run:' + selectedId()); }
+  if (c && panelCollapsed() && c.hash === location.hash) { store('factory.panelCollapsed', '0'); render(); restoreFocus('run:' + selectedId()); }
 });
 
 function renderTheme() {
