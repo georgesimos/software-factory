@@ -151,6 +151,13 @@ export async function projectTest({ uiHandle, read, project: { validateIssues, v
   planInto('acme/taken');
   assert.throws(() => cli(['new', IDEA, '--name', 'acme/taken', '--stack', 'mini', '--yes', '--path', path.join(root, 'work', 'taken')]), /already exists on github and this project did not create it/);
   assert.equal(events('acme/taken').filter((e) => e.stage === 'repo').length, 0);
+  // an init tool that commits on its own, then a later init step fails: nothing is pushed, and a re-run refuses the half-made folder
+  put(path.join(tpl, 'half.json'), JSON.stringify({ ...mini, id: 'half', init: [['git', 'init', '-q', '-b', 'main'], ['git', 'commit', '-q', '--allow-empty', '-m', 'Initial commit from the init tool'], ['node', '-e', 'process.exit(1)']] }));
+  planInto('acme/half');
+  const half = path.join(root, 'work', 'half');
+  assert.throws(() => cli(['new', IDEA, '--name', 'acme/half', '--stack', 'half', '--yes', '--path', half]), /process\.exit\(1\) failed \(exit 1\)/);
+  assert.throws(() => git(root, '--git-dir', stubState().repos['acme/half'].bare, 'rev-parse', '--verify', 'main')); // nothing pushed
+  assert.throws(() => cli(['new', IDEA, '--name', 'acme/half', '--stack', 'half', '--yes', '--path', half]), /exists and is not empty/);
   // ---- owned events ----
   for (const [stage, status, owner] of [['repo', 'created', 'new'], ['issues', 'created', 'issues create'], ['loop', 'running', 'loop'], ['loop', 'stopped', 'loop'], ['idea', 'started', 'new'], ['plan', 'passed', 'new']])
     assert.throws(() => run(['event', 'acme/budget:project', stage, status]), new RegExp(`recorded by "${owner}"`));
@@ -206,6 +213,14 @@ export async function projectTest({ uiHandle, read, project: { validateIssues, v
   const html = fs.readFileSync(path.join(dir, 'dashboard.html'), 'utf8');
   assert.equal(html.split('__FACTORY_DATA__').length, 1);
   assert.match(html, /"ideas":\{"acme\/budget":\{"run":"acme\/budget:project"/);
+  // a merged run reverted after merge stops the loop once, and keeps blocking its dependents
+  run(['rules', 'unset', 'acme/budget', 'project.maxIssuesPerSession']);
+  assert.equal(cli(['loop', 'acme/budget']).next, 'acme/budget#5');
+  merged('acme/budget#5');
+  append('acme/budget#5', 'approve', 'reverted', { pr: 'https://github.com/acme/budget/pull/99', reason: 'main CI red' });
+  assert.match(cli(['loop', 'acme/budget']).reason, /^acme\/budget#5 was reverted after merge \(main CI red\)/);
+  assert.equal(cli(['loop', 'acme/budget']).next, 'acme/budget#8'); // continue: #6 and #7 depend on #5 and stay blocked
+  assert.deepEqual(cli(['queue', 'acme/budget']).blocked.filter((x) => x.waitingOn.includes('acme/budget#5')).map((x) => x.run), ['acme/budget#6', 'acme/budget#7']);
   // ---- a fake host and tracker, one file each in a registry dir, end to end: no core change ----
   const fk = { FACTORY_HOSTS: path.join(reg, 'hosts'), FACTORY_TRACKERS: path.join(reg, 'trackers') };
   assert.equal(cli(['new', IDEA, '--name', 'acme/fk', '--stack', 'mini', '--host', 'fake', '--tracker', 'fake', '--dry-run'], fk).status, 'needs-plan');

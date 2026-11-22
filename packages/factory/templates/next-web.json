@@ -2,7 +2,7 @@
   "id": "next-web",
   "name": "Next.js web app",
   "description": "Next.js (App Router, TypeScript, ESLint) with pnpm, Vitest + Testing Library, and a CI workflow running the same checks.",
-  "notes": "Init flags are written from memory and were not executed when this template was added (2026-11-22). Run a real `F new` once and fix them if create-next-app has changed.",
+  "notes": "Init flags were run once for real on 2026-11-22 (create-next-app@15): pnpm lint, typecheck, test and build passed on the result.",
   "init": [
     [
       "npx",

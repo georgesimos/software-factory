@@ -15,7 +15,7 @@ description: Attach a GitHub repo to a software factory (importing open PRs and 
 | `next owner/repo` | Take the first issue from `F queue owner/repo` `.ready` and build it. This is meant for a scheduled routine. |
 | `triage owner/repo` | Run intake only on the first 5 entries of `F queue owner/repo` `.untriaged`. |
 | `new: <idea>` | Start an app from an idea: plan, repo, issue batch, then build issue by issue. See [New project from an idea](#new-project-from-an-idea). |
-| `new owner/repo` | The idea was recorded from the dashboard. Read it with `F project owner/repo` `.idea`, then start at I0 with `--name owner/repo`. |
+| `new owner/repo` | The idea was recorded through `F ui`'s `POST /idea` endpoint (there is no dashboard form for it yet). Read it with `F project owner/repo` `.idea`, then start at I0 with `--name owner/repo`. |
 | `continue owner/repo` | Resume an idea project: `F project owner/repo`, then I4. |
 | `sweep owner/repo dead-code\|coverage` | Find up to 3 small, safe candidates and open one issue each, **unlabelled**, with a body that starts "Opened by the software factory sweep". Then stop. A human adds `factory:ready` to the ones worth doing. |
 
@@ -325,6 +325,7 @@ Claude writes the plan and the issues; `F` validates them, executes them and rec
 **I2. Checkpoint 1: the repo.** Show the user the vision, milestones, the issue order, the stack's checks, the repo name and its visibility (private unless they say public), plus `wouldRun` from the dry-run. Get one yes. Then run `F new "<idea>" --name owner/repo --stack <id> --yes --path <empty folder>`.
 - It checks the host login first. **If it says the host is not logged in, stop and tell the user to log in themselves** (`gh auth login`). Never create or log into an account.
 - It refuses a repo that already exists and that this project did not create. A re-run after a failure resumes and never creates a second repo.
+- If an init command fails, nothing is pushed; `scaffold.log` in the project folder has the output. Fix the cause, then re-run with a new empty `--path`.
 - It runs the template's init commands, writes the scaffold and `PLAN.md`, commits, pushes `main` once, and sets the project's `checks.commands` rule from the template.
 
 **I3. Checkpoint 2: the issue batch.** Run `F issues create owner/repo "$(F dir owner/repo:project)/issues.json"` (no `--yes`): it prints the batch in dependency order with `willEscalate`. Show it to the user and get one yes for the whole batch. Then run it again with `--yes`. It is idempotent by key, so a re-run after a crash creates only what is missing.
@@ -335,7 +336,7 @@ Claude writes the plan and the issues; `F` validates them, executes them and rec
    - `"state":"running"` gives `next` (an `owner/repo#N` run id) and `goal`. Build it with stages 0–7 above, unchanged, with `RUN=next`. In Build, suggest the user set `/goal "<goal>"` for this issue (in a headless build runner, start its prompt with it); `F gate` and `F decide` still decide.
    - `"resume":true` means that issue was picked and is not finished: continue it from `F state`.
    - `"state":"stopped"` gives the `reason`: go to I5.
-3. When the run ends (merged or escalated), run `F loop` again. It stops on the first run a human must resolve, when the project burn reaches `project.budgetUsd` (default and maximum $50), after `project.maxIssuesPerSession` issues (default and maximum 10), or when nothing is ready. Users can only lower these limits with `F rules set`.
+3. When the run ends (merged or escalated), run `F loop` again. It stops on the first run a human must resolve, once after a merged issue is reverted (its dependents then stay blocked), when the project burn reaches `project.budgetUsd` (default and maximum $50), after `project.maxIssuesPerSession` issues (default and maximum 10), or when nothing is ready. Users can only lower these limits with `F rules set`.
 
 **I5. Report** the stop reason, milestone progress, the next issue and the burn from `F project owner/repo`, and the dashboard. `factory continue owner/repo` resumes: `F project owner/repo`, tell the user anything a human must resolve first, then I4 step 2.
 

@@ -157,7 +157,9 @@ const sh = (argv, cwd, log) => {
   catch (e) { throw new Error(`${argv.join(' ')} failed (exit ${e.status ?? e.signal}); see ${log}:\n${fs.readFileSync(log, 'utf8').split('\n').slice(-20).join('\n')}`); }
   finally { fs.closeSync(fd); }
 };
-const committed = (git, dir) => { try { git('-C', dir, 'rev-parse', '--verify', 'HEAD'); return true; } catch { return false; } };
+// Done only when F's own commit (the one that adds PLAN.md) is there: init tools such as create-next-app commit on their own,
+// so a HEAD alone would let a re-run push a half-made scaffold.
+const scaffolded = (git, dir) => { try { git('-C', dir, 'cat-file', '-e', 'HEAD:PLAN.md'); return true; } catch { return false; } };
 
 // `F new`: a re-runnable state machine. Each call does the next step it can and says what it needs:
 // needs-plan -> (dry-run) -> needs-confirmation -> created. Nothing remote happens under --dry-run or without --yes.
@@ -209,14 +211,14 @@ export async function newProject({ idea, name, stack = 'next-web', dryRun = fals
     return { ...preview, status: 'dry-run', out: o, next: 'Nothing was created. Without --dry-run: confirm name and visibility with the user, then add --yes.' };
   }
   if (!yes) return { ...preview, status: 'needs-confirmation', next: `Checkpoint: show the user the plan, "${repo}" (${visibility}) and the stack, and get one yes. Then run again with --yes.` };
-  const ok = (d) => !fs.existsSync(d) || !fs.readdirSync(d).length || committed(ctx.git, d);
+  const ok = (d) => !fs.existsSync(d) || !fs.readdirSync(d).length || scaffolded(ctx.git, d);
   if (!ok(dest)) throw new Error(`${dest} exists and is not empty; pass --path <empty folder>`);
   if (!p.remote) {
     const r = host.createRepo(ctx, { repo, visibility, description: p.idea });
     if (!r.created) throw new Error(`${repo} already exists on ${hostId} and this project did not create it; pick another --name`);
     emit(repo, 'repo', 'created', { url: r.url, host: hostId, visibility, path: dest });
   }
-  if (!committed(ctx.git, dest)) {
+  if (!scaffolded(ctx.git, dest)) {
     fs.mkdirSync(dest, { recursive: true });
     const log = path.join(dir, 'scaffold.log');
     for (const argv of t.init) sh(argv, dest, log);
@@ -264,12 +266,13 @@ export async function issuesCreate(repo, file, { yes = false } = {}) {
 
 // ---------- queue: dependency-aware, from the tracker ----------
 // An issue is ready when it is labelled factory:ready, not yet in the log, and every dependency is merged by the factory
-// or no longer open (a human merged or closed it). shortcut: a closed dependency counts as done even if it was closed unbuilt.
+// or no longer open (a human merged or closed it), and was not reverted after merge (it then blocks its dependents).
+// shortcut: a closed dependency counts as done even if it was closed unbuilt.
 async function scan(repo) {
   const trackerId = projectState(repo)?.tracker || 'github-issues', t = (await trackers.load())[trackerId];
   if (!t) throw new Error(`unknown tracker "${trackerId}"`);
   const open = t.listOpen(adapterCtx(), { repo }), runs = allRuns(), ids = new Set(open.map((i) => i.id));
-  const done = (id) => runs[`${repo}#${id}`]?.outcome === 'merged' || !ids.has(id);
+  const done = (id) => { const r = runs[`${repo}#${id}`]; return !r?.reverted && (r?.outcome === 'merged' || !ids.has(id)); };
   const fresh = (i) => !runs[`${repo}#${i.id}`];
   const item = (i) => ({ run: `${repo}#${i.id}`, title: i.title, ...(i.key && { key: i.key }) });
   const waits = (i) => t.dependencies(i).filter((d) => !done(d));
@@ -344,6 +347,7 @@ export async function loop(repo) {
   const q = await scan(repo), open = new Set(q.open);
   const idOf = (run) => run.slice(repo.length + 1);
   if (last && runs[last] && runs[last].outcome !== 'merged' && open.has(idOf(last))) return stop(`${last} is ${runs[last].outcome}: a human needs to resolve it (merge or close the issue), then continue`);
+  if (p.loop.state === 'running' && runs[last]?.reverted) return stop(`${last} was reverted after merge (${runs[last].reverted.reason || 'see the revert PR'}); its dependents stay blocked. Continue to build the rest`);
   const burn = projectBurn(p, runs);
   if (burn.usd >= lim.budgetUsd) return stop(`project budget reached: $${burn.usd} of $${lim.budgetUsd} (project.budgetUsd)`);
   if (p.loop.state === 'running' && p.loop.picked >= lim.maxIssuesPerSession) return stop(`${p.loop.picked} issue(s) this session (project.maxIssuesPerSession ${lim.maxIssuesPerSession})`);
