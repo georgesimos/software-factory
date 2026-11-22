@@ -34,13 +34,17 @@ software-factory/
 │   ├── factory/              @software-factory/factory: the skill. ~/.claude/skills/software-factory symlinks here
 │   │   ├── SKILL.md          orchestration: modes, ground rules, stages 0–7, attach, evals, scheduling
 │   │   ├── factory.mjs       the F CLI: event log, derive, gate/decide/merge, sync, worktrees, dashboard render, self-test
-│   │   ├── dashboard.html    static dashboard template; F render injects the run data at __FACTORY_DATA__
+│   │   ├── dashboard.html    static dashboard template; F render injects the run data at __FACTORY_DATA__ (also the setup wizard)
+│   │   ├── harnesses/        AI harness registry (index.mjs) auto-loads every *.mjs except _*: claude-code.mjs, codex.mjs, _template.mjs
+│   │   ├── HARNESSES.md      add a harness in 4 steps
 │   │   ├── references/
 │   │   │   └── reviewers.md  per-axis reviewer briefs (code, security, ux, ui, seo, docs) and the verifier brief
 │   │   ├── evals/golden/     1.json … 8.json: intake fixtures with the expected outcome (pass / needs-info / reject / split)
 │   │   ├── test/
 │   │   │   ├── gh-stub.mjs   fake `gh` used by the self-test (FACTORY_GH)
-│   │   │   └── git-stub.mjs  fake `git branch --no-merged` used by the sync test (FACTORY_GIT)
+│   │   │   ├── git-stub.mjs  fake `git branch --no-merged` used by the sync test (FACTORY_GIT)
+│   │   │   ├── bin/          fake `claude` and `codex` for the harness contract test (one stub per harness)
+│   │   │   └── onboard.e2e.cjs  Playwright run of the setup wizard against F ui (375/1280 px, light/dark, static file)
 │   │   └── package.json      private; `test` = env -u CLAUDE_CODE_SESSION_ID node factory.mjs test
 │   ├── ship/                 @software-factory/ship: the ship harness (phase 0, read only). See docs/plans/ship-harness.md
 │   │   ├── ship.mjs          CLI (`F ship` is an alias): connectors | detect <repo> | status <repo> [sha]; track() records through F's record()
@@ -379,6 +383,10 @@ Each step can be run by the built-in brief, a user skill or brief, or a harness 
 
 ## 6. Onboarding flow
 
+**The setup wizard.** `F ui` opens a full-screen stepper on the dashboard (by itself when no project is attached, otherwise from **Set up**): Local AI → Repo → What you ship → Workflow → Rules → Review and start. Its state comes from `POST /onboard`, and every write goes through `/onboard/{sync,ship,rule,automerge}` or `/skills`, with the same token, Host, Origin and content-type checks and the same validated functions as the CLI (`sync`, `setShip`, `setRule`/`unsetRule`, `setAutoMerge`, `setSkill`). Its position is kept in localStorage, so it resumes. Opened as a static file, it is read-only and shows the command for each step. `F onboard` prints the same steps in the terminal; `F onboard ship <scope> web,mobile,database` stores the ship choice in `onboard.json`.
+
+**AI harnesses are pluggable.** The core never names a harness for behaviour: runner validation, the catalog's provider tools, session import, the event's `harness`/`sessionId` stamp and extra sensitive config folders all come from `harnesses/*.mjs` (contract and recipe: `packages/factory/HARNESSES.md`). The wizard's ship step lists `packages/ship`'s connectors from its own registry; "Create from an idea" turns on once `F new` exists.
+
 ```mermaid
 flowchart LR
   D["F discover<br/>scan ~/Development, ~/code, … up to 5 deep<br/>read .git/config → GitHub origins"] --> P{"pick repo + clone"}
@@ -393,7 +401,7 @@ flowchart LR
 
 1. **`F discover [roots…]`** walks the default roots (`~/Development`, `~/code`, `~/projects`, `~/src`, `~/repos`, `~/GitHub`…), skipping hidden folders, `node_modules`, `Library` and build output. It lists one entry per GitHub repo: the preferred clone (the attached one, else the most recently committed), the other clones, the last commit, the worktree count, and whether it is attached.
 2. **`F sync owner/repo <clone>`** attaches the repo and imports work already in flight:
-   - **Agent sessions are matched by branch.** Claude Code sessions come from `~/.claude/projects/<encoded clone path>*/*.jsonl` (`gitBranch`). Codex sessions come from `~/.codex/sessions/**.jsonl` (first-line `session_meta.git`).
+   - **Agent sessions are matched by branch,** through each harness adapter's `sessions()` (`harnesses/*.mjs`). Claude Code's come from `~/.claude/projects/<encoded clone path>*/*.jsonl` (`gitBranch`); Codex's from `~/.codex/sessions/**.jsonl` (first-line `session_meta.git`).
    - **Open PRs** become runs with `intake started/passed` (imported), then `build started/passed` with the PR and branch.
    - **Session-only branches** are imported if they are unmerged, local, have no PR, have been active in the last 14 days, and are not `factory/*`. When such a branch later gets a PR, the PR is attached to the same run.
    - **Runs finished elsewhere** are recorded as `approve closed`: a PR merged or closed outside the factory, or a session branch that was merged or deleted.
