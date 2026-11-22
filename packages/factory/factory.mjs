@@ -157,6 +157,13 @@ export function derive(events) {
       if (r) (r.deploys ??= {})[`${e.connector}/${e.env}`] = { connector: e.connector, kind: e.kind, env: e.env, state: e.state, status: e.status, url: e.url, sha: e.sha, at: e.at, detail: e.detail, creator: e.creator, ts: e.ts };
       continue;
     }
+    if (e.stage === 'note') { // the user's one-shot instruction for a step ("F note" / "F notes"): on the timeline, never moves the run's stage, clock or outcome
+      const r = runs[e.run];
+      if (r) r.events.push(e);
+      if (r && e.status === 'pending') (r.notes ??= []).push({ id: e.id, step: e.step, text: e.text, by: e.by, ts: e.ts, state: 'pending' });
+      if (r && e.status === 'applied') for (const n of r.notes || []) if (e.notes?.includes(n.id) && n.state === 'pending') Object.assign(n, { state: 'applied', appliedTo: n.step === 'next' ? e.steps : [n.step], appliedAt: e.ts });
+      continue;
+    }
     const r = (runs[e.run] ??= { id: e.run, iteration: 0, reviews: {}, loopbacks: [], events: [], outcome: 'in-progress' });
     r.events.push(e);
     Object.assign(r, { stage: e.stage, status: e.status, updated: e.ts });
@@ -765,6 +772,42 @@ export function unsetRule(scope, key, { reason } = {}) {
   writeSkills(cfg);
   audit(scope, 'unset', { key, ...(reason && { reason }), setBy });
   return rules(scope);
+}
+
+// Notes: a one-shot, run-scoped instruction from the user for one step (or "next": whichever steps start next).
+// Same limits as guidance, and only ever from the user's own chat message or the F ui box. Recorded like rule
+// changes, outside record(): no stage/status of the run, no session, so burn and the gate never see them.
+const NOTE_MAX = 1000;
+const noteStep = (s, at) => { if (s === '*' || !isGuideKey(s)) throw new Error(`${at}: "${s}" is not one step (${STEP_KEYS.join('|')}|review.<extra axis>)`); };
+function appendNote(run, status, e) {
+  fs.mkdirSync(DIR, { recursive: true });
+  fs.appendFileSync(log(), JSON.stringify({ ts: new Date().toISOString(), ...e, run, stage: 'note', status }) + '\n');
+  render();
+}
+
+export function note(run, step, text) {
+  if (step !== 'next') noteStep(step, 'note');
+  text = String(text ?? '').trim();
+  if (!text || text.length > NOTE_MAX) throw new Error(`note text must be 1-${NOTE_MAX} characters`);
+  const r = derive(read())[run];
+  if (!r) throw new Error(`no run ${run}`);
+  if (r.imported) throw new Error(`${run} is imported: the factory doesn't build it, so no step would read the note`);
+  if (TERMINAL.includes(r.outcome)) throw new Error(`${run} is ${r.outcome}: notes steer a running issue`);
+  const e = { id: `n${(r.notes?.length || 0) + 1}`, step, text, by: whoami() };
+  appendNote(run, 'pending', e);
+  return e;
+}
+
+// Hands each pending note to the steps starting now, once. A note for a step that already ran waits for a loop-back to it.
+export function takeNotes(run, steps) {
+  if (!steps.length) throw new Error('usage: notes <run> <step…> (every step starting now, e.g. all review axes in one call)');
+  for (const s of steps) noteStep(s, 'notes');
+  const r = derive(read())[run];
+  if (!r) throw new Error(`no run ${run}`);
+  const due = (r.notes || []).filter((n) => n.state === 'pending' && (n.step === 'next' || steps.includes(n.step)));
+  if (!due.length) return {};
+  appendNote(run, 'applied', { notes: due.map((n) => n.id), steps });
+  return Object.fromEntries(steps.map((s) => [s, due.filter((n) => n.step === 'next' || n.step === s).map((n) => n.text)]).filter(([, t]) => t.length));
 }
 
 // Pinned unattended flags come from the harness that runs the skill (claude-code.mjs: `claude -p`), so F names no harness.
@@ -1840,6 +1883,7 @@ function cliTest() {
   harnessTest(cli);
   onboardTest(cli);
   rulesTest(cli);
+  noteTest(cli);
   skillsTest(cli); // last: it ends by corrupting skills.json
 }
 
@@ -2108,6 +2152,45 @@ function rulesTest(cli) {
 }
 
 // Per-step runners: config resolution and validation, extra axes, F-stamped runner, invalid output = failed review.
+function noteTest(cli) {
+  const R = 'acme/note#1', note = (step, text) => JSON.parse(cli(['note', R, step, '-'], text)), take = (...s) => JSON.parse(cli(['notes', R, ...s]));
+  const strip = ({ events, notes, ...x }) => x, same = () => assert.deepEqual(strip(derive(read())[R]), strip(derive(read().filter((e) => e.stage !== 'note'))[R]));
+  assert.throws(() => note('build', 'x'), /no run acme\/note#1/);
+  cli(['event', R, 'intake', 'passed']);
+  cli(['event', R, 'spec', 'awaiting-approval', '-'], '{"spec":"s","reasons":["sensitive"]}');
+  const n = note('build', '  use the existing helper\n');
+  assert.deepEqual([n.id, n.step, n.text, n.by], ['n1', 'build', 'use the existing helper', 'stub-user']); // who is gh's login, never typed
+  assert.deepEqual([derive(read())[R].outcome, derive(read())[R].stage], ['awaiting-approval', 'spec']); // a note never un-parks a run
+  same();
+  for (const [s, t, re] of [['*', 'x', /not one step/], ['deploy', 'x', /not one step/], ['review.Bad', 'x', /not one step/], ['build,spec', 'x', /not one step/],
+    ['build', '  \n', /1-1000/], ['build', 'x'.repeat(1001), /1-1000/]]) assert.throws(() => note(s, t), re);
+  assert.throws(() => cli(['note', R, 'build'], 'x'), /usage: note/);
+  assert.throws(() => take(), /usage: notes/);
+  assert.throws(() => take('next'), /not one step/);
+  assert.throws(() => cli(['event', R, 'note', 'pending', '-'], '{"step":"build","text":"x"}'), /recorded by "note"/);
+  assert.throws(() => cli(['event', R, 'note', 'applied']), /recorded by "note"/);
+  cli(['event', R, 'spec', 'passed', '-'], '{"approvedBy":"o"}');
+  cli(['event', R, 'build', 'started']);
+  note('spec', 'tighter criteria');
+  note('next', 'keep it small');
+  assert.deepEqual(take('build'), { build: ['use the existing helper', 'keep it small'] }); // its own notes plus "next"; spec's waits
+  assert.deepEqual(take('build'), {}); // handed out once
+  note('next', 'check the docs');
+  assert.deepEqual(take('review.code', 'review.security'), { 'review.code': ['check the docs'], 'review.security': ['check the docs'] }); // "next": every step starting together
+  assert.deepEqual(take('spec'), { spec: ['tighter criteria'] }); // a finished step's note: only when a gate loops back to it
+  assert.deepEqual(take('spec'), {});
+  const r = derive(read())[R];
+  assert.deepEqual(r.notes.map((x) => [x.id, x.step, x.state, x.appliedTo]), [['n1', 'build', 'applied', ['build']], ['n2', 'spec', 'applied', ['spec']],
+    ['n3', 'next', 'applied', ['build']], ['n4', 'next', 'applied', ['review.code', 'review.security']]]);
+  assert.deepEqual(r.events.filter((e) => e.stage === 'note').map((e) => e.status), ['pending', 'pending', 'pending', 'applied', 'pending', 'applied', 'applied']); // the timeline rows
+  assert.equal(r.stage, 'build');
+  same(); // stage, clock, burn, reviews: identical without the notes, so gate and decide can't see them
+  record('acme/note#2', 'intake', 'started', { imported: true });
+  assert.throws(() => cli(['note', 'acme/note#2', 'build', '-'], 'x'), /imported/);
+  cli(['event', R, 'approve', 'escalated']);
+  assert.throws(() => note('build', 'x'), /is escalated/);
+}
+
 function skillsTest(cli) {
   const R = 'acme/kit#1';
   const set = (scope, key, v) => cli(['skills', 'set', scope, key, JSON.stringify(v)]);
@@ -2401,6 +2484,7 @@ if (isMain) {
         const owned = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'approve:closed': 'sync' };
         const owner = owned[`${stage}:${status}`] || { gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop', ship: 'ship' }[stage];
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
+        if (stage === 'note') throw new Error('"note" is recorded by "note" and "notes", not by hand');
         const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'cwd', 'runner', 'localChecks',
           'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // the last row: set by ship connectors only
         if (typed.length) throw new Error(`these fields come from GitHub, git or a ship connector, not from a payload: ${typed.join(', ')}`);
@@ -2439,6 +2523,11 @@ if (isMain) {
         break;
       }
       case 'checks': out(localChecks(run)); break;
+      case 'note': { // note <run> <step|next> - : the user's note on stdin (quoted heredoc); only from the user's own chat or the F ui box
+        if (!rest[0] || rest[1] !== '-') throw new Error('usage: note <run> <step|next> -   (the note text on stdin)');
+        out(note(run, rest[0], fs.readFileSync(0, 'utf8'))); break;
+      }
+      case 'notes': out(takeNotes(run, rest)); break; // notes <run> <step…>: pending notes for the steps starting now, handed out once
       case 'automerge': { // per-project switch; decide() escalates everything when off
         if (!['on', 'off'].includes(rest[0])) throw new Error('usage: automerge <owner/repo> on|off');
         out(setAutoMerge(run, rest[0] === 'on')); break;
