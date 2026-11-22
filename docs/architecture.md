@@ -115,7 +115,7 @@ The log is an append-only JSONL file, and it is the source of truth. Everything 
 3. computes metrics overall and per project: merge rate, average iterations, median cycle time, revert rate, cost per merge;
 4. writes `~/.claude/factory/dashboard.html` with the data inlined as JSON.
 
-`<` is escaped as `<`, so issue titles cannot break out of the script tag; the self-test asserts this. The page filters by project, and each run's detail has Pipeline, Review, Decision, Loop-backs, Sessions and Timeline sections; a split parent also gets an Epic section listing its children. For each linked agent session it offers a **Copy resume** button, which copies `cd '<cwd>' && claude --resume <id>` for Claude Code or `codex resume <id>` for Codex. Ids that don't match `[\w.-]+` get no button.
+Every `<` in that JSON is written as the escape sequence backslash-u-003c, so issue titles cannot break out of the script tag; the self-test asserts this. The page filters by project, and each run's detail has Pipeline, Review, Decision, Loop-backs, Sessions and Timeline sections; a split parent also gets an Epic section listing its children. For each linked agent session it offers a **Copy resume** button, which copies `cd '<cwd>' && claude --resume <id>` for Claude Code or `codex resume <id>` for Codex. The working directory is single-quoted for the shell. Ids that don't match `[\w.-]+` get no button. Each run card shows an "N sessions" chip when sessions are linked. A theme switch offers System, Light and Dark; the choice is stored in `localStorage` under `factory.theme` and applied by an inline script before first paint, so there is no flash of the wrong theme.
 
 ### 2.5 The design system: `packages/design-system`
 
