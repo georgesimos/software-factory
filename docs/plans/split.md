@@ -173,9 +173,33 @@ Each Node package gets `"engines": { "node": ">=24.12" }`, matching the minimum 
 
 ## 5. Issues
 
-| Step | Issue | Ready now |
-|---|---|---|
-| S1 | _filled in after creation_ | |
+Only issues that depend on nothing carry `factory:ready`. Each issue's `Depends on #…` line is what `F queue` reads, so labelling a blocked one early still keeps it in `blocked`.
+
+| Step | Issue | Ready now | Note |
+|---|---|---|---|
+| S1 | #37 |  | waits for #13 #14 #15 #16 #20 #23 (PRs #28–#33) |
+| S2 | #38 |  |  |
+| S3 | #39 |  |  |
+| S4 | #40 |  |  |
+| S5 | #41 |  |  |
+| S6 | #42 |  |  |
+| S7 | #43 |  |  |
+| S8 | #44 |  |  |
+| S9 | #45 |  | also #23 |
+| S10 | #46 |  |  |
+| S11 | #47 |  |  |
+| X0 | #48 | yes |  |
+| X1 | #49 |  |  |
+| X2 | #50 |  |  |
+| X3 | #51 |  |  |
+| T1 | #52 |  |  |
+| W1 | #53 | yes |  |
+| W2 | #54 |  |  |
+| W3 | #55 |  | also #18 |
+| D1 | #56 |  |  |
+| H1 | #57 |  | also #25, #26 |
+| D2 | #58 |  |  |
+| H2 | #59 |  |  |
 
 ## 6. Open questions for the owner
 
