@@ -29,4 +29,4 @@ Then say "factory owner/repo#123" in Claude Code. See [docs/architecture.md](doc
 
 ## License
 
-TBD. MIT or Apache-2.0 are suggested before the repo goes public.
+[Apache-2.0](LICENSE).

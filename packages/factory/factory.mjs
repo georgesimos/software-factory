@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -43,7 +45,7 @@ const TERMINAL = ['rejected', 'merged', 'escalated', 'closed', 'split']; // need
 const STAGES = ['intake', 'spec', 'build', 'review', 'gate', 'approve'];
 const STATUSES = ['started', 'passed', 'failed', 'decided', 'reverted', ...OUTCOMES];
 const BLOCKING = ['high', 'medium'];
-const SENSITIVE = /(^|\/)(auth|login|session|oauth|payments?|billing|money|migrations?)(\/|\.|$)|^\.github\/workflows\/|(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|Gemfile(\.lock)?|go\.(mod|sum)|Cargo\.(toml|lock))$|(^|\/)\.env/i;
+const SENSITIVE = /(^|\/)(auth|login|session|oauth|payments?|billing|money|migrations?)(\/|\.|$)|^\.github\/workflows\/|(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|Gemfile(\.lock)?|go\.(mod|sum)|Cargo\.(toml|lock))$|(^|\/)\.env|(^|\/)\.(claude|codex)\//i; // .claude/.codex: a branch's own agent skills, hooks and settings
 const UI = /\.(tsx|jsx|vue|svelte|astro|html|css|scss|sass|less)$/i;
 const SEO = /(^|\/)(page|layout|head|metadata|sitemap|robots|opengraph-image)\.[a-z]+$|(^|\/)pages\/|\.html$/i;
 const DOCS = /\.mdx?$|(^|\/)\.env\.example$|(^|\/)(app\/api|pages\/api|routes|cli|bin)\//i; // docs, env and public API surface
@@ -66,7 +68,7 @@ export function read() {
   }
 }
 
-export function record(run, stage, status, payload = {}) {
+export function record(run, stage, status, payload = {}, cli) { // cli: {fallback?} when the orchestrator reports a step; in-process records (sync, demo) get no runner
   if (!run) throw new Error('missing run id');
   if (!STAGES.includes(stage)) throw new Error(`unknown stage "${stage}" (${STAGES.join('|')})`);
   if (!STATUSES.includes(status)) throw new Error(`unknown status "${status}" (${STATUSES.join('|')})`);
@@ -79,7 +81,7 @@ export function record(run, stage, status, payload = {}) {
   }
   payload = validateUsage(payload);
   const sessionId = process.env.CLAUDE_CODE_SESSION_ID; // set by Claude Code; lets the UI link back to the driving session
-  const ev = { ts: new Date().toISOString(), ...payload, ...(sessionId ? { harness: 'claude-code', sessionId, cwd: process.cwd() } : {}), run, stage, status };
+  const ev = { ts: new Date().toISOString(), ...payload, ...(sessionId ? { harness: 'claude-code', sessionId, cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback)), run, stage, status };
   fs.mkdirSync(DIR, { recursive: true });
   fs.appendFileSync(log(), JSON.stringify(ev) + '\n');
   if (TERMINAL.includes(status) || status === 'needs-info') { // a finished (or parked) run gives back its worktree
@@ -139,6 +141,7 @@ function validateReview(run, p, status) {
 export function derive(events) {
   const runs = {};
   for (const e of events) {
+    if (e.stage === 'rules') continue; // rule changes: an audit trail, not a run
     const r = (runs[e.run] ??= { id: e.run, iteration: 0, reviews: {}, loopbacks: [], events: [], outcome: 'in-progress' });
     r.events.push(e);
     Object.assign(r, { stage: e.stage, status: e.status, updated: e.ts });
@@ -158,12 +161,14 @@ export function derive(events) {
       const usd = e.costUsd ?? (e.usage ? costOf(e.model, [u.input || 0, u.output || 0, u.cacheRead || 0, 0, u.cacheWrite || 0]) : null); // shortcut: reported cache writes priced at the 1h rate Claude Code uses
       addBurn((r.burn ??= burnOf()), { stage: e.stage, iteration: r.iteration, axis: e.axis || e.role }, e.tokens || 0, usd, u.cacheRead || 0);
     }
+    if (e.stage === 'build' && e.localChecks) r.localChecks = e.localChecks; // only "F checks" records it
     if (e.stage === 'review' && e.status === 'started') { r.axes = { ...r.axes, [r.iteration]: e.axes }; if (e.sha) r.reviewedSha = e.sha; }
     if (e.stage === 'review' && e.axis) {
       const findings = e.findings || [];
       const verdict = findings.some(blocking) ? 'failed' : 'passed'; // findings outrank the verdict word
-      (r.reviews[r.iteration] ??= {})[e.axis] = { verdict, findings };
+      (r.reviews[r.iteration] ??= {})[e.axis] = { verdict, findings, ...(e.runner && { runner: e.runner }) };
     }
+    if (e.stage !== 'review' && (e.runner || r.runners?.[e.stage])) (r.runners ??= {})[e.stage] = e.runner; // latest event of the stage wins
     if (e.stage === 'gate' && ['spec', 'build'].includes(e.next)) r.loopbacks.push({ iteration: r.iteration, route: e.next, reasons: e.reasons, ts: e.ts });
     if (e.stage === 'approve' && e.status === 'decided') r.decision = { action: e.action, reasons: e.reasons };
     if (OUTCOMES.includes(e.status)) r.outcome = e.status;
@@ -305,19 +310,20 @@ export function withMeasured(runs, events, by = measure(events)) {
   return runs;
 }
 
-export function axesFor(files) {
+export function axesFor(files, extra = []) {
   const axes = ['code', 'security'];
   if (files.some((f) => UI.test(f))) axes.push('ux', 'ui');
   if (files.some((f) => SEO.test(f))) axes.push('seo');
   if (files.some((f) => DOCS.test(f))) axes.push('docs');
+  for (const x of extra) if (files.some((f) => x.when.some((g) => path.matchesGlob(f, g)))) axes.push(x.axis); // user axes only add, never replace. shortcut: path.matchesGlob needs Node >= 22.5 (experimental before 24); swap in a small glob regex if older Node matters
   return axes;
 }
 
 // Loop-backs re-review only what the new commits touch, plus every axis that failed last time.
-export function reviewAxes(r, files) {
+export function reviewAxes(r, files, extra = []) {
   const prev = Math.max(-1, ...Object.keys(r.axes || {}).map(Number).filter((i) => i < r.iteration));
   const failed = prev < 0 ? [] : r.axes[prev].filter((a) => r.reviews[prev]?.[a]?.verdict !== 'passed');
-  return [...new Set([...axesFor(files), ...failed])];
+  return [...new Set([...axesFor(files, extra), ...failed])];
 }
 
 export function gate(r) {
@@ -350,9 +356,26 @@ export function decide(r, f) {
   const notPassed = expected.filter((a) => rev[a]?.verdict !== 'passed');
   if (!expected.length) why.push('no reviews recorded');
   if (notPassed.length) why.push(`axes not passed: ${notPassed.join(', ')}`);
-  if (f.checks !== 'pass') why.push(`CI checks are "${f.checks ?? 'unknown'}"`);
-  const lines = (f.additions || 0) + (f.deletions || 0);
-  if (lines > MAX_DIFF) why.push(`diff is ${lines} lines (max ${MAX_DIFF})`);
+  // CI: required unless a rule says otherwise. Not required never means green: F's own local checks on the reviewed commit stand in, or the run escalates.
+  const pol = f.rules || {}, ci = pol.ci?.value || 'required', cmds = pol['checks.commands']?.value;
+  const by = (x) => `set by ${x.setBy} on ${String(x.setAt).slice(0, 10)}: ${x.reason}`;
+  if (ci === 'required' && f.checks !== 'pass') why.push(`CI checks are "${f.checks ?? 'unknown'}"`);
+  const ruleNote = ci === 'required' ? null : `CI not required by rule ci=${ci}, ${by(pol.ci)}${ci === 'advisory' ? ` (CI is "${f.checks ?? 'unknown'}")` : ''}`;
+  let local = null;
+  if (ci !== 'required' || cmds) {
+    const lc = r.localChecks, short = (s) => String(s || 'none').slice(0, 7);
+    const failing = (lc?.commands || []).filter((c) => c.exit !== 0).map((c) => c.cmd);
+    local = !cmds ? { ok: false, text: 'no checks.commands rule replaces CI, so nothing was checked' }
+      : !lc ? { ok: false, text: 'Local checks: not run ("F checks")' }
+      : lc.sha !== r.reviewedSha ? { ok: false, text: `Local checks: ran on ${short(lc.sha)}, not the reviewed commit ${short(r.reviewedSha)}` }
+      : JSON.stringify((lc.commands || []).map((c) => c.cmd)) !== JSON.stringify(cmds) ? { ok: false, text: 'Local checks: ran a different command list than the checks.commands rule now has' }
+      : lc.state !== 'pass' || failing.length ? { ok: false, text: `Local checks: fail (${failing.join(', ') || 'unknown'})` }
+      : { ok: true, text: `Local checks: pass (${cmds.join(', ')})` };
+  }
+  const ciLine = [ruleNote, local?.text].filter(Boolean).join('. ');
+  if (local && !local.ok) why.push(ciLine);
+  const lines = (f.additions || 0) + (f.deletions || 0), cap = Math.min(MAX_DIFF, pol.diffCap?.value ?? MAX_DIFF);
+  if (lines > cap) why.push(`diff is ${lines} lines (max ${cap}${cap < MAX_DIFF ? ` by rule diffCap, ${by(pol.diffCap)}` : ''})`);
   const sens = (f.files || []).filter((p) => SENSITIVE.test(p));
   if (sens.length) why.push(`touches sensitive paths: ${sens.join(', ')}`);
   if (r.iteration > CAP) why.push(`iteration ${r.iteration} exceeds cap ${CAP}`);
@@ -361,8 +384,10 @@ export function decide(r, f) {
   const src = (f.files || []).filter((p) => SOURCE.test(p) && !TEST.test(p));
   if (src.length && !(f.files || []).some((p) => TEST.test(p))) why.push(`source changed (${src.length} file(s)) with no test change`);
   if (!r.pr) why.push('no PR recorded');
+  if (ciLine && local?.ok && why.length) why.push(ciLine); // context: this escalation happened under a CI rule
   return why.length
     ? { action: 'escalate', reasons: why }
+    : ciLine ? { action: 'merge', reasons: [`trusted author, all axes passed, tests changed, ${lines}-line diff, no sensitive paths`, ...(ci === 'required' ? ['CI green'] : []), ciLine] }
     : { action: 'merge', reasons: [`trusted author, all axes passed, CI green, tests changed, ${lines}-line diff, no sensitive paths`] };
 }
 
@@ -374,6 +399,341 @@ export function risk(r, plannedFiles) {
   const sens = plannedFiles.filter((p) => SENSITIVE.test(p));
   if (sens.length) reasons.push(`plans to touch sensitive paths: ${sens.join(', ')}`);
   return { risky: reasons.length > 0, reasons };
+}
+
+// Who does each step: the built-in brief, the user's own skill or brief, or a harness's tool.
+// User-local only (DIR/skills.json): a repo, and so a PR, can never pick its own reviewers.
+const BUILTIN_AXES = ['code', 'security', 'ux', 'ui', 'seo', 'docs'];
+export const REQUIRED_AXES = ['code', 'security']; // axesFor always selects them; config can swap who reviews, never drop them
+export const STEP_KEYS = ['intake', 'spec', 'build', ...BUILTIN_AXES.map((a) => `review.${a}`), 'verifier', 'postmerge'];
+const HARNESSES = ['claude-code', 'codex'];
+const NAME = /^[\w.-]+(:[\w.-]+)?$/; // skill, plugin:skill or agent type; it ends up in a command line
+const skillsFile = () => path.join(DIR, 'skills.json');
+
+function checkRunner(s, at, more = []) {
+  if (!s || typeof s !== 'object' || Array.isArray(s)) throw new Error(`${at}: a runner must be a JSON object`);
+  const bad = Object.keys(s).filter((k) => !['use', 'name', 'path', 'harness', ...more].includes(k));
+  if (bad.length) throw new Error(`${at}: unknown fields ${bad.join(', ')}`);
+  const ok = s.use === 'default' && !s.name && !s.path && !s.harness
+    || s.use === 'skill' && NAME.test(s.name || '') && !s.path && !s.harness
+    || s.use === 'brief' && /^(\/|~\/).*\.md$/.test(s.path || '') && !s.name && !s.harness // outside any worktree, so a branch can't supply it
+    || s.use === 'provider' && HARNESSES.includes(s.harness) && (s.name === undefined || NAME.test(s.name)) && !s.path;
+  if (!ok) throw new Error(`${at}: expected {"use":"default"}, {"use":"skill","name"}, {"use":"brief","path":"/abs/or/~/….md"} or {"use":"provider","harness":"${HARNESSES.join('|')}","name"?}`);
+}
+
+function checkStep(key, v, at) {
+  if (key === 'rules') return checkRules(v, at);
+  if (key === 'guide') return checkGuide(v, at);
+  if (key !== 'axes.extra') {
+    if (!STEP_KEYS.includes(key)) throw new Error(`${at}: unknown step "${key}" (${STEP_KEYS.join('|')}|axes.extra)`);
+    return checkRunner(v, at);
+  }
+  if (!Array.isArray(v)) throw new Error(`${at}: must be an array of {axis, when, use, …}`);
+  for (const x of v) {
+    checkRunner(x, at, ['axis', 'when']);
+    if (!/^[a-z][a-z0-9-]{0,30}$/.test(x.axis || '') || BUILTIN_AXES.includes(x.axis)) throw new Error(`${at}: extra axis "${x.axis}" must be a new lowercase name; configure built-in axes as review.<axis>`);
+    if (!Array.isArray(x.when) || !x.when.length || !x.when.every((g) => typeof g === 'string' && g)) throw new Error(`${at}: extra axis "${x.axis}" needs "when": ["<glob>", …]`);
+    if (x.use === 'default') throw new Error(`${at}: extra axis "${x.axis}" has no built-in brief; use a skill, brief or provider`);
+  }
+}
+
+function checkSkills(cfg) {
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) throw new Error('skills.json must be a JSON object');
+  for (const [scope, steps] of Object.entries(cfg)) {
+    if (scope !== 'default' && !/^[\w.-]+\/[\w.-]+$/.test(scope)) throw new Error(`skills.json: scope "${scope}" must be "default" or owner/repo`);
+    if (!steps || typeof steps !== 'object' || Array.isArray(steps)) throw new Error(`skills.json: ${scope} must be an object`);
+    for (const [k, v] of Object.entries(steps)) checkStep(k, v, `skills.json ${scope}.${k}`);
+  }
+  return cfg;
+}
+
+export function readSkills() {
+  try { return checkSkills(JSON.parse(fs.readFileSync(skillsFile(), 'utf8'))); } catch (e) {
+    if (e.code === 'ENOENT') return {};
+    throw new Error(e.message.startsWith('skills.json') ? e.message : `skills.json: ${e.message}`);
+  }
+}
+
+// The resolved plan: per step the project's runner, else the global one, else the built-in. Extra axes add up, project wins per axis.
+export function skills(repo, cfg = readSkills()) {
+  const g = cfg.default || {}, p = cfg[repo] || {};
+  const plan = Object.fromEntries(STEP_KEYS.map((k) => [k, p[k] || g[k] || { use: 'default' }]));
+  const all = [...(g['axes.extra'] || []), ...(p['axes.extra'] || [])];
+  const extra = all.filter((x, i) => all.findLastIndex((y) => y.axis === x.axis) === i);
+  return { repo, plan, extra, required: REQUIRED_AXES, guide: rules(repo, cfg).guide };
+}
+
+function writeSkills(cfg) {
+  checkSkills(cfg);
+  fs.mkdirSync(DIR, { recursive: true });
+  fs.writeFileSync(skillsFile() + '.tmp', JSON.stringify(cfg, null, 2));
+  fs.renameSync(skillsFile() + '.tmp', skillsFile());
+}
+
+// value === undefined removes the step from that scope, so a project inherits the global choice again.
+export function setSkill(scope, key, value) {
+  if (key === 'rules' || key === 'guide') throw new Error(`"${key}" is set with "rules set", which records who changed it and why`);
+  if (scope !== 'default' && !/^[\w.-]+\/[\w.-]+$/.test(scope || '')) throw new Error(`scope "${scope}" must be "default" or owner/repo`);
+  const cfg = readSkills();
+  cfg[scope] = { ...cfg[scope], [key]: value };
+  if (value === undefined) { if (!STEP_KEYS.includes(key) && key !== 'axes.extra') throw new Error(`unknown step "${key}"`); delete cfg[scope][key]; }
+  if (!Object.keys(cfg[scope]).length) delete cfg[scope];
+  writeSkills(cfg);
+  return cfg[scope] || {};
+}
+
+// Every runner the picker can offer, by where it comes from. Descriptions come from front matter and are display-only.
+const BUILTIN_TOOLS = [ // Claude Code ships these with no file on disk
+  { name: 'code-review', desc: 'Claude Code built-in /code-review: reviews the current diff. Replies in prose, so the adapter brief converts it.' },
+  { name: 'security-review', desc: 'Claude Code built-in /security-review: security review of the pending changes on the branch. Replies in prose.' },
+];
+const front = (file) => {
+  let t = '';
+  try { t = fs.readFileSync(file, 'utf8').slice(0, 6000); } catch { return ''; }
+  const m = /^---\r?\n([^]*?)\r?\n---/.exec(t);
+  const d = m && /^description:[ \t]*(.*(?:\r?\n[ \t]+.*)*)/m.exec(m[1]);
+  return d ? d[1].replace(/^[|>][-+]?\s*/, '').replace(/\s+/g, ' ').replace(/^(["'])(.*)\1$/, '$2').trim().slice(0, 240) : '';
+};
+const tilde = (p) => (p.startsWith(os.homedir() + path.sep) ? '~' + p.slice(os.homedir().length) : p);
+const dirs = (d) => { try { return fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory() || e.isSymbolicLink()).map((e) => e.name); } catch { return []; } };
+
+function pluginItems(dir, source, group) {
+  let name = path.basename(dir).replace(/~.*$/, '');
+  try { name = JSON.parse(fs.readFileSync(path.join(dir, '.claude-plugin', 'plugin.json'), 'utf8')).name || name; } catch { /* no manifest: folder name */ }
+  const out = [];
+  const add = (n, kind, file, runner) => NAME.test(`${name}:${n}`) && out.push({ source, group: group || `plugin: ${name}`, name: `${name}:${n}`, kind, desc: front(file), runner });
+  for (const s of dirs(path.join(dir, 'skills'))) { const f = path.join(dir, 'skills', s, 'SKILL.md'); if (fs.existsSync(f)) add(s, 'skill', f, { use: 'skill', name: `${name}:${s}` }); }
+  for (const c of ls(path.join(dir, 'commands')).filter((f) => f.endsWith('.md'))) add(c.slice(0, -3), 'command', path.join(dir, 'commands', c), { use: 'skill', name: `${name}:${c.slice(0, -3)}` });
+  for (const a of ls(path.join(dir, 'agents')).filter((f) => f.endsWith('.md'))) add(a.slice(0, -3), 'agent', path.join(dir, 'agents', a), { use: 'provider', harness: 'claude-code', name: `${name}:${a.slice(0, -3)}` });
+  return out;
+}
+
+let globalCatalog; // one disk scan per process: render() runs on every record()
+function scanGlobal() {
+  const home = os.homedir(), claude = path.join(home, '.claude'), out = [];
+  const skillDir = (root, source, group, runnerOf) => {
+    for (const n of dirs(root)) { const f = path.join(root, n, 'SKILL.md'); if (fs.existsSync(f) && n !== 'software-factory') { const runner = runnerOf(n, f); if (runner) out.push({ source, group, name: runner.name || n, kind: 'skill', desc: front(f), runner }); } }
+  };
+  out.push({ source: 'builtin', group: 'Software Factory', name: 'Factory default', kind: 'brief', desc: 'The built-in brief in SKILL.md or references/reviewers.md.', runner: { use: 'default' } });
+  for (const t of BUILTIN_TOOLS) out.push({ source: 'system', group: 'Claude Code', name: t.name, kind: 'tool', desc: t.desc, runner: { use: 'provider', harness: 'claude-code', name: t.name } });
+  let codex = false;
+  try { execFileSync('codex', ['--version'], { stdio: 'ignore', timeout: 5000 }); codex = true; } catch { /* not installed */ }
+  if (codex) out.push(
+    { source: 'system', group: 'Codex', name: 'codex exec', kind: 'tool', desc: 'Runs Codex headless in the run worktree with the step\'s brief; reviews return the JSON contract via --output-schema.', runner: { use: 'provider', harness: 'codex' } },
+    { source: 'system', group: 'Codex', name: 'codex review', kind: 'tool', desc: 'Codex\'s own reviewer against the base branch. Replies in prose, so the adapter brief converts it.', runner: { use: 'provider', harness: 'codex', name: 'review' } });
+  skillDir(path.join(claude, 'skills'), 'global', '~/.claude/skills', (n) => NAME.test(n) && { use: 'skill', name: n });
+  // shortcut: synced (org-provided) skills are named anthropic-skills:<name> in Claude Code; read the prefix from Claude Code if it ever varies.
+  for (const b of dirs(path.join(claude, 'skills', 'synced'))) skillDir(path.join(claude, 'skills', 'synced', b), 'global', 'Synced skills', (n) => NAME.test(`anthropic-skills:${n}`) && { use: 'skill', name: `anthropic-skills:${n}` });
+  const mine = new Set(out.map((x) => x.name));
+  skillDir(path.join(home, '.agents', 'skills'), 'global', '~/.agents/skills', (n, f) => !mine.has(n) && /^[^'"\s]+$/.test(f) && { use: 'brief', path: tilde(f) }); // other harnesses' skills run as a brief
+  let installed = {};
+  try { installed = JSON.parse(fs.readFileSync(path.join(claude, 'plugins', 'installed_plugins.json'), 'utf8')).plugins || {}; } catch { /* no plugins */ }
+  for (const list of Object.values(installed)) for (const e of list) if (e.scope === 'user' && e.installPath) out.push(...pluginItems(e.installPath, 'global'));
+  for (const b of dirs(path.join(claude, 'plugins', 'synced'))) for (const p of dirs(path.join(claude, 'plugins', 'synced', b))) out.push(...pluginItems(path.join(claude, 'plugins', 'synced', b, p), 'global'));
+  for (const f of ls(path.join(DIR, 'briefs')).filter((f) => f.endsWith('.md'))) {
+    const p = path.join(DIR, 'briefs', f);
+    if (/^[^'"\s]+$/.test(p)) out.push({ source: 'yours', group: tilde(path.join(DIR, 'briefs')), name: f, kind: 'brief', desc: front(p), runner: { use: 'brief', path: tilde(p) } });
+  }
+  return out;
+}
+
+// Project skills come from the attached clone's checkout. Picking one for a review lets the repo supply the reviewer;
+// a PR that changes it touches .claude/, which is SENSITIVE, so it can never auto-merge.
+function scanProject(repo) {
+  const clone = projects()[repo]?.path;
+  if (!clone) return [];
+  const out = [], root = path.join(clone, '.claude', 'skills');
+  for (const n of dirs(root)) { const f = path.join(root, n, 'SKILL.md'); if (fs.existsSync(f) && NAME.test(n)) out.push({ source: 'project', group: '.claude/skills', name: n, kind: 'skill', desc: front(f), runner: { use: 'skill', name: n } }); }
+  let installed = {};
+  try { installed = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json'), 'utf8')).plugins || {}; } catch { /* none */ }
+  for (const list of Object.values(installed)) for (const e of list) if (['project', 'local'].includes(e.scope) && e.projectPath === clone && e.installPath) out.push(...pluginItems(e.installPath, 'project'));
+  return out;
+}
+
+export function catalog(repos = []) {
+  globalCatalog ??= scanGlobal();
+  return { global: globalCatalog, projects: Object.fromEntries(repos.map((r) => [r, scanProject(r)])) };
+}
+
+// Everything the Skills sheet needs: raw config (to tell "set here" from "inherited"), resolved plans and the catalog.
+export function skillsData(repos = []) {
+  try {
+    const cfg = readSkills();
+    const scopes = [...new Set([...Object.keys(projects()), ...repos, ...Object.keys(cfg)])].filter((s) => s !== 'default').sort();
+    return { steps: STEP_KEYS, required: REQUIRED_AXES, config: cfg, scopes,
+      plans: Object.fromEntries(['default', ...scopes].map((s) => [s, skills(s === 'default' ? '' : s, cfg)])), catalog: catalog(scopes) };
+  } catch (e) { return { error: e.message }; } // a bad skills.json must not break rendering an event that was already appended
+}
+
+// `F ui`: the dashboard on a loopback port, where the Skills sheet can save. Pure, so the self-test can drive it.
+const same = (a, b) => typeof a === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+export function uiHandle({ method, url, headers = {}, body = '' }, { token, port }) {
+  const reply = (status, x) => ({ status, type: 'application/json', body: JSON.stringify(x) });
+  const hosts = [`127.0.0.1:${port}`, `localhost:${port}`];
+  if (!hosts.includes(headers.host)) return reply(403, { error: 'unexpected Host header' }); // DNS rebinding
+  const u = new URL(url, 'http://local');
+  if (method === 'GET' && u.pathname === '/') {
+    if (!same(u.searchParams.get('t'), token)) return reply(403, { error: 'open the URL that `F ui` printed' });
+    return { status: 200, type: 'text/html; charset=utf-8', body: page({ ui: { token } }) };
+  }
+  if (method === 'POST' && u.pathname === '/skills') {
+    if (!same(headers['x-factory-token'], token)) return reply(403, { error: 'missing or wrong token' });
+    if (!hosts.some((h) => headers.origin === `http://${h}`)) return reply(403, { error: 'cross-origin request' });
+    if (!/^application\/json\b/.test(headers['content-type'] || '')) return reply(415, { error: 'expected application/json' });
+    try {
+      const { scope, step, runner } = JSON.parse(body);
+      setSkill(scope, step, runner === null ? undefined : runner);
+      return reply(200, skillsData(runRepos()));
+    } catch (e) { return reply(400, { error: e.message }); }
+  }
+  return reply(404, { error: 'not found' });
+}
+
+export function ui(port = 0) {
+  const token = crypto.randomBytes(24).toString('base64url');
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 64 * 1024) req.destroy(); });
+    req.on('end', () => {
+      let r;
+      try { r = uiHandle({ method: req.method, url: req.url, headers: req.headers, body }, { token, port: server.address().port }); } catch (e) { r = { status: 500, type: 'application/json', body: JSON.stringify({ error: e.message }) }; }
+      res.writeHead(r.status, { 'content-type': r.type, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY' });
+      res.end(r.body);
+    });
+  });
+  server.listen(port, '127.0.0.1', () => console.log(`factory ui: http://127.0.0.1:${server.address().port}/?t=${token}\nOnly this URL can change skills.json. Ctrl-C to stop.`));
+  return server;
+}
+
+// Policy rules: a closed set of typed switches that F enforces. They can only make the factory stricter, or swap a
+// signal that can't be had (GitHub CI, e.g. when Actions billing fails) for one F measures itself (local checks).
+// Not configurable, ever: TRUSTED, SENSITIVE, the code/security axes, --match-head-commit, imported runs escalating.
+const RULES = {
+  ci: [(v) => ['required', 'advisory', 'skip'].includes(v), 'required|advisory|skip'],
+  'checks.commands': [(v) => Array.isArray(v) && v.length > 0 && v.length <= 10 && v.every((c) => typeof c === 'string' && c.trim() && c.length <= 300 && !/[\r\n\0]/.test(c)), 'a JSON array of 1-10 one-line commands'],
+  diffCap: [(v) => Number.isInteger(v) && v >= 1 && v <= MAX_DIFF, `an integer 1-${MAX_DIFF} (it can only lower the cap)`],
+};
+const RULE_FIELDS = ['value', 'reason', 'setBy', 'setAt', 'until'];
+const LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s || '') && !isNaN(Date.parse(s)) && new Date(s).toISOString().startsWith(s);
+const dayOf = (now = Date.now()) => new Date(now).toISOString().slice(0, 10); // UTC; a rule applies through its whole `until` day
+const isGuideKey = (k) => k === '*' || STEP_KEYS.includes(k) || /^review\.[a-z][a-z0-9-]{0,30}$/.test(k); // review.<extra axis> too
+
+function checkRules(v, at) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error(`${at}: must be an object of rules`);
+  for (const [k, x] of Object.entries(v)) {
+    if (!RULES[k]) throw new Error(`${at}: unknown rule "${k}" (${Object.keys(RULES).join('|')}). Trusted authors, sensitive paths, required axes and the merge checks are not configurable`);
+    if (!x || typeof x !== 'object' || Array.isArray(x)) throw new Error(`${at}.${k}: must be {value, reason, setBy, setAt, until?}`);
+    const bad = Object.keys(x).filter((f) => !RULE_FIELDS.includes(f));
+    if (bad.length) throw new Error(`${at}.${k}: unknown fields ${bad.join(', ')}`);
+    if (!RULES[k][0](x.value)) throw new Error(`${at}.${k}: must be ${RULES[k][1]}, got ${JSON.stringify(x.value)}`);
+    if (typeof x.reason !== 'string' || !x.reason.trim() || x.reason.length > 200) throw new Error(`${at}.${k}: needs a reason (--reason "…", at most 200 characters)`);
+    if (!LOGIN.test(x.setBy || '')) throw new Error(`${at}.${k}: setBy must be a GitHub login`);
+    if (isNaN(Date.parse(x.setAt))) throw new Error(`${at}.${k}: setAt must be a timestamp`);
+    if (x.until !== undefined && !isDay(x.until)) throw new Error(`${at}.${k}: until must be YYYY-MM-DD`);
+  }
+}
+
+function checkGuide(v, at) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error(`${at}: must be an object of step -> text`);
+  for (const [k, t] of Object.entries(v)) {
+    if (!isGuideKey(k)) throw new Error(`${at}: unknown step "${k}" (* | ${STEP_KEYS.join(' | ')} | review.<extra axis>)`);
+    if (typeof t !== 'string' || !t.trim() || t.length > 1000) throw new Error(`${at}.${k}: guidance must be text, at most 1000 characters`);
+  }
+}
+
+// Project rule over global, per key. An expired rule stops applying (the global one, or the built-in, takes over) and warns.
+export function rules(repo, cfg = readSkills(), now = Date.now()) {
+  const today = dayOf(now), policy = {}, expired = [], warnings = [];
+  for (const scope of [...new Set([repo, 'default'])]) {
+    for (const [key, x] of Object.entries(cfg[scope]?.rules || {})) {
+      const what = `${key}=${JSON.stringify(x.value)} (${scope}: ${x.reason})`;
+      if (x.until && x.until < today) { expired.push({ key, scope, ...x }); warnings.push(`${what} expired on ${x.until} and no longer applies; unset it or set it again with a new --until`); continue; }
+      if (policy[key]) continue;
+      policy[key] = { ...x, scope };
+      if (x.until && Date.parse(x.until) - Date.parse(today) <= 3 * 864e5) warnings.push(`${what} expires on ${x.until}`);
+    }
+  }
+  const g = cfg.default?.guide || {}, p = cfg[repo]?.guide || {}, guide = {};
+  for (const k of new Set([...STEP_KEYS, ...Object.keys(g), ...Object.keys(p)])) { // per step: whole-flow text first, then the step's; global before project
+    const texts = k === '*' ? [] : [g['*'], p['*'], g[k], p[k]].filter(Boolean);
+    if (texts.length) guide[k] = texts;
+  }
+  return { repo, policy, guide, expired, warnings };
+}
+
+// The person changing a rule is whoever gh is logged in as; it is never typed in.
+const whoami = () => {
+  let login = '';
+  try { login = gh('api', 'user', '--jq', '.login').trim(); } catch { /* below */ }
+  if (!LOGIN.test(login)) throw new Error('cannot tell who is changing the rule: "gh api user" failed (run gh auth login)');
+  return login;
+};
+
+// Rule changes are owned events in the log (stage "rules"), not run events: derive() skips them and F event refuses them.
+function audit(scope, status, e) {
+  fs.mkdirSync(DIR, { recursive: true });
+  fs.appendFileSync(log(), JSON.stringify({ ts: new Date().toISOString(), ...e, run: scope, stage: 'rules', status }) + '\n');
+  render();
+}
+
+export function setRule(scope, key, raw, { reason, until } = {}) {
+  const cfg = readSkills(), s = { ...cfg[scope] }, step = key.startsWith('guide.') ? key.slice(6) : null;
+  let value = raw;
+  if (step !== null) s.guide = { ...s.guide, [step]: String(raw ?? '') };
+  else {
+    if (!RULES[key]) checkRules({ [key]: {} }, `rules ${scope}`); // throws the unknown-rule message
+    if (key === 'diffCap') value = Number(raw);
+    if (key === 'checks.commands') { try { value = JSON.parse(raw); } catch { value = [raw]; } }
+    if (until !== undefined && !(isDay(until) && until >= dayOf())) throw new Error('--until must be YYYY-MM-DD, today or later');
+  }
+  const setBy = whoami();
+  if (step === null) s.rules = { ...s.rules, [key]: { value, reason, setBy, setAt: new Date().toISOString(), ...(until && { until }) } };
+  cfg[scope] = s;
+  writeSkills(cfg); // validates the whole config first
+  audit(scope, 'set', { key, value, ...(reason && { reason }), ...(until && { until }), setBy });
+  return rules(scope);
+}
+
+export function unsetRule(scope, key, { reason } = {}) {
+  const cfg = readSkills(), s = { ...cfg[scope] }, step = key.startsWith('guide.') ? key.slice(6) : null;
+  const bag = step !== null ? 'guide' : 'rules', k = step ?? key;
+  if (!s[bag] || !(k in s[bag])) throw new Error(`no ${bag === 'guide' ? 'guidance' : 'rule'} "${key}" set for ${scope}`);
+  const setBy = whoami();
+  s[bag] = { ...s[bag] };
+  delete s[bag][k];
+  if (!Object.keys(s[bag]).length) delete s[bag];
+  cfg[scope] = s;
+  writeSkills(cfg);
+  audit(scope, 'unset', { key, ...(reason && { reason }), setBy });
+  return rules(scope);
+}
+
+// F, not the payload, says who did the work. Default runners leave events unchanged; a fallback can only downgrade to default.
+function runnerStamp(run, stage, axis, fallback) {
+  const key = stage === 'review' ? (axis && `review.${axis}`) : stage === 'gate' ? 'verifier' : ['intake', 'spec', 'build'].includes(stage) ? stage : null;
+  if (!key) return {};
+  const { plan, extra } = skills(run.split(/[#:]/)[0]);
+  const { axis: _a, when: _w, ...runner } = plan[key] || extra.find((x) => x.axis === axis) || { use: 'default' };
+  if (fallback) return { runner: { use: 'default', fallback: { from: runner, reason: String(fallback).slice(0, 200) } } };
+  return runner.use === 'default' ? {} : { runner };
+}
+
+// Reviewer output from any runner is untrusted text: anything outside the contract is a failed review, never a pass.
+export function reviewFromText(run, axis, text) {
+  const r = derive(read())[run];
+  const axes = r?.axes?.[r.iteration] || [];
+  if (!axes.includes(axis)) throw new Error(`axis "${axis}" is not one of this iteration's axes (${axes.join(', ') || 'none recorded'})`);
+  try {
+    const p = JSON.parse(String(text).trim().replace(/^```(?:json)?\s*\n([^]*)\n```$/, '$1'));
+    if (!p || typeof p !== 'object' || Array.isArray(p)) throw new Error('not a JSON object');
+    if (p.axis !== axis) throw new Error(`axis is "${p.axis}", expected "${axis}"`); // a reviewer can't overwrite another axis's cell
+    if (!['passed', 'failed'].includes(p.verdict)) throw new Error('verdict must be passed|failed');
+    validateReview(run, p, p.verdict);
+    return { status: (p.findings || []).some(blocking) ? 'failed' : 'passed', payload: p };
+  } catch (e) {
+    return { status: 'failed', payload: { axis, verdict: 'failed', findings: [{ severity: 'high', issue: `reviewer output invalid: ${e.message}`.slice(0, 300), route: 'build' }] } };
+  }
 }
 
 const gh = (...args) => execFileSync(GH, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -660,17 +1020,47 @@ export function facts(r) {
   const { repo, n } = parseRun(r.id);
   const association = gh('api', `repos/${repo}/issues/${n}`, '--jq', '.author_association').trim();
   const autoMerge = projects()[repo]?.autoMerge !== false;
-  if (!r.pr) return { association, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [] };
+  const policy = rules(repo).policy; // a broken config throws here, so decide/merge fail and the run escalates
+  if (!r.pr) return { association, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy };
   const diff = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'additions,deletions,files'));
-  let checks;
-  try {
+  let checks = 'skipped'; // ci=skip: GitHub CI isn't even read
+  if (policy.ci?.value !== 'skip') try {
     const b = JSON.parse(gh('pr', 'checks', r.pr, '-R', repo, '--json', 'bucket')).map((c) => c.bucket);
     checks = !b.length ? 'none' : b.some((x) => x === 'fail' || x === 'cancel') ? 'fail' : b.includes('pending') ? 'pending' : 'pass';
   } catch (e) {
     if (!/no checks reported/i.test(String(e.stderr))) throw e;
     checks = 'none';
   }
-  return { association, autoMerge, checks, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path) };
+  return { association, autoMerge, checks, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), rules: policy };
+}
+
+// Stand-in for CI that F runs itself: the checks.commands rule (never repo or model text) in the run's worktree, on a clean commit.
+// Records an owned build event with exit codes only; output goes to a file and its tail is printed.
+// shortcut: weaker than CI. It runs in the worktree the builder prepared, with the user's environment, and the clean-tree
+// check can't see ignored files (node_modules, .git/info/exclude), so a tampered node_modules/.bin would pass. Upgrade
+// to a fresh clone of the reviewed sha plus a clean install if rules ever stand in for CI on untrusted code.
+export function localChecks(run) {
+  const { repo } = parseRun(run), w = wtInfo(run);
+  if (!w || !fs.existsSync(w.path)) throw new Error(`no worktree for ${run}; run "worktree" first`);
+  const cmds = rules(repo).policy['checks.commands']?.value;
+  if (!cmds) throw new Error(`no checks.commands rule for ${repo}; the user can set one: rules set ${repo} checks.commands '["pnpm test"]' --reason "…"`);
+  if (git('-C', w.path, 'status', '--porcelain').trim()) throw new Error('the worktree has uncommitted changes; commit first, so the checks cover the commit that gets reviewed');
+  const sha = git('-C', w.path, 'rev-parse', 'HEAD').trim();
+  const file = path.join(runDir(run), 'local-checks.log'), fd = fs.openSync(file, 'w'), commands = [];
+  try {
+    for (const cmd of cmds) {
+      fs.writeSync(fd, `$ ${cmd}\n`);
+      const t = Date.now();
+      let exit = 0;
+      try { execFileSync('/bin/sh', ['-c', cmd], { cwd: w.path, env: { ...process.env, CI: '1' }, stdio: ['ignore', fd, fd], timeout: 30 * 60e3 }); } // to a file: no maxBuffer limit
+      catch (e) { exit = e.status ?? (e.signal ? 'timeout' : 1); }
+      commands.push({ cmd, exit, ms: Date.now() - t });
+    }
+  } finally { fs.closeSync(fd); }
+  const state = commands.every((c) => c.exit === 0) ? 'pass' : 'fail';
+  record(run, 'build', state === 'pass' ? 'passed' : 'failed', { localChecks: { state, sha, commands } });
+  const tail = state === 'fail' ? fs.readFileSync(file, 'utf8').split('\n').slice(-60).join('\n') : undefined;
+  return { state, sha, commands, log: file, ...(tail && { tail }) };
 }
 
 // The only merge path: re-decides from live GitHub facts and merges exactly the reviewed commit.
@@ -707,10 +1097,12 @@ export function postmerge(run) {
   const { repo } = parseRun(run);
   const sha = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'mergeCommit')).mergeCommit?.oid;
   if (!sha) return { state: 'not-merged' };
+  const ci = rules(repo).policy.ci?.value;
+  if (ci === 'skip') return { sha, state: 'skipped', reason: 'rule ci=skip: CI on the base branch is not watched, so it never triggers a revert' };
   const runs = JSON.parse(gh('run', 'list', '-R', repo, '--commit', sha, '--json', 'status,conclusion,name,url'));
   const failed = runs.filter((x) => ['failure', 'cancelled', 'timed_out'].includes(x.conclusion)).map((x) => x.url);
   const state = !runs.length ? 'none' : failed.length ? 'fail' : runs.some((x) => x.status !== 'completed') ? 'pending' : 'pass';
-  return { sha, state, failed };
+  return { sha, state, failed, ...(ci === 'advisory' && { advisory: true }) }; // advisory: report red, don't revert on it
 }
 
 // Opens (never merges) a revert PR for a merged run whose main CI went red.
@@ -817,7 +1209,16 @@ export function metrics(runs) {
   };
 }
 
+const runRepos = () => [...new Set([...Object.keys(derive(read())), ...readArchive().map((a) => a.id)].map((id) => id.split(/[#:]/)[0]))];
+
 export function render() {
+  const out = path.join(DIR, 'dashboard.html');
+  fs.mkdirSync(DIR, { recursive: true });
+  fs.writeFileSync(out, page()); // never carries a ui token: that exists only in what `F ui` serves
+  return out;
+}
+
+export function page(extra = {}) {
   const events = read();
   const live = Object.values(withMeasured(derive(events), events));
   const archived = readArchive().filter((a) => !live.some((r) => r.id === a.id));
@@ -829,12 +1230,11 @@ export function render() {
   const repoOf = (id) => id.split(/[#:]/)[0];
   const byProject = {};
   for (const p of new Set(runs.map((r) => repoOf(r.id)))) byProject[p] = metrics(runs.filter((r) => repoOf(r.id) === p));
-  const data = JSON.stringify({ generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs }).replace(/</g, '\\u003c');
-  const html = fs.readFileSync(path.join(HERE, 'dashboard.html'), 'utf8').replace('__FACTORY_DATA__', () => data);
-  fs.mkdirSync(DIR, { recursive: true });
-  const out = path.join(DIR, 'dashboard.html');
-  fs.writeFileSync(out, html);
-  return out;
+  const ruleData = { rules: {}, ruleHistory: read().filter((e) => e.stage === 'rules').slice(-100) };
+  try { const cfg = readSkills(); for (const p of new Set([...Object.keys(byProject), ...Object.keys(projects())])) ruleData.rules[p] = rules(p, cfg); }
+  catch (e) { ruleData.rulesError = e.message; } // render runs after every record(): a bad config must not half-fail the event
+  const data = JSON.stringify({ generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)), ...extra }).replace(/</g, '\\u003c');
+  return fs.readFileSync(path.join(HERE, 'dashboard.html'), 'utf8').replace('__FACTORY_DATA__', () => data);
 }
 
 // Fixture runs covering every outcome; used by `demo` and `test`.
@@ -849,7 +1249,7 @@ export function demo() {
   const intake = (run, title, n, association = 'OWNER') =>
     ev(run, 'intake', 'started', { title, url: `https://github.com/acme/shop/issues/${n}`, author: association === 'OWNER' ? 'acme' : 'drive-by', association });
   const pass = (run, axes, usage) => axes.forEach((axis, i) => ev(run, 'review', 'passed', { axis, findings: [], ...(usage ? { usage: { input: 9 + i, output: 2400 + 300 * i, cacheRead: 38000, cacheWrite: 9000 }, model: 'claude-sonnet-5-5', tokens: 49409 + 301 * i } : {}) }));
-  const g = (run) => { const { status, ...p } = gate(getRun(run)); ev(run, 'gate', status, p); };
+  const g = (run, extra) => { const { status, ...p } = gate(getRun(run)); ev(run, 'gate', status, { ...p, ...extra }); };
   const d = (run, facts) => { const x = decide(getRun(run), facts); ev(run, 'approve', 'decided', x); return x; };
 
   let R = 'acme/shop#41';
@@ -920,6 +1320,60 @@ export function demo() {
   ev(R, 'build', 'passed', { pr: 'https://github.com/acme/shop/pull/92', branch: 'factory/issue-45' });
   ev(R, 'review', 'started', { axes: ['code', 'security', 'ux', 'ui', 'seo'] });
   pass(R, ['code', 'security']);
+
+  // Custom and provider runners: what `skills set` would make F stamp on each event.
+  R = 'acme/shop#50';
+  const who = { spec: { use: 'skill', name: 'my-planner' }, build: { use: 'provider', harness: 'codex' }, verifier: { use: 'provider', harness: 'claude-code', name: 'pr-review-toolkit:code-reviewer' },
+    code: { use: 'provider', harness: 'claude-code', name: 'code-review' }, ui: { use: 'skill', name: 'brand-review' }, a11y: { use: 'brief', path: '~/.claude/factory/briefs/a11y.md' } };
+  const files = ['components/SizePicker.tsx', 'components/SizePicker.test.tsx'];
+  const axes50 = axesFor(files, [{ axis: 'a11y', when: ['**/*.tsx'] }]);
+  const review = (axis, text) => { const { status, payload } = reviewFromText(R, axis, text); ev(R, 'review', status, { ...payload, ...(who[axis] && { runner: who[axis] }) }); };
+  const ok = (axis) => review(axis, JSON.stringify({ axis, verdict: 'passed', findings: [] }));
+  intake(R, 'Add an accessible size picker to the product page', 50);
+  ev(R, 'intake', 'passed', { summary: 'Clear and small: a radio-group picker replacing the select.' });
+  ev(R, 'spec', 'passed', { spec: 'Radio-group size picker with keyboard support; reuses Button tokens.', runner: who.spec });
+  ev(R, 'build', 'started', { runner: who.build });
+  ev(R, 'build', 'passed', { pr: 'https://github.com/acme/shop/pull/94', branch: 'factory/issue-50', runner: who.build });
+  ev(R, 'review', 'started', { axes: axes50 });
+  axes50.filter((a) => a !== 'a11y').forEach(ok);
+  review('a11y', 'Looks accessible to me. Ship it!'); // prose instead of the JSON contract
+  g(R, { runner: who.verifier });
+  ev(R, 'build', 'started', { runner: who.build });
+  ev(R, 'build', 'passed', { runner: who.build });
+  ev(R, 'review', 'started', { axes: axes50 });
+  axes50.filter((a) => a !== 'a11y').forEach(ok);
+  review('a11y', JSON.stringify({ axis: 'a11y', verdict: 'passed', findings: [{ severity: 'low', file: 'components/SizePicker.tsx', line: 31, issue: 'Focus ring uses the default outline instead of the focus token.', route: 'build' }] }));
+  g(R, { runner: who.verifier });
+  d(R, { checks: 'pass', additions: 96, deletions: 14, files });
+  ev(R, 'approve', 'merged');
+
+  // A billing rule: GitHub Actions can't run for acme/shop, so CI is skipped and F's own local checks stand in for it.
+  // Only acme/shop's entry in skills.json is touched, in case FACTORY_DIR points at a real config.
+  const cfg = readSkills(), rule = (value, reason, until) => ({ value, reason, setBy: 'acme', setAt: new Date(t).toISOString(), ...(until && { until }) });
+  cfg['acme/shop'] = { ...cfg['acme/shop'], rules: {
+    ci: rule('skip', 'GitHub Actions billing is failing', dayOf(Date.now() + 30 * 864e5)),
+    'checks.commands': rule(['pnpm test', 'pnpm lint'], 'stands in for CI while Actions is off'),
+    diffCap: rule(150, 'release freeze', dayOf(Date.now() - 864e5)), // expired: shows the warning
+  } };
+  cfg['acme/shop'].rules['checks.commands'].until = dayOf(Date.now() + 2 * 864e5); // ending soon: shows the warning
+  cfg['acme/shop'].guide = { build: 'use pnpm, never npm' };
+  writeSkills(cfg);
+  ev('acme/shop', 'rules', 'set', { key: 'ci', value: 'advisory', reason: 'Actions runners are flaky', setBy: 'acme' });
+  for (const [key, { setAt: _s, ...x }] of Object.entries(cfg['acme/shop'].rules)) ev('acme/shop', 'rules', 'set', { key, ...x });
+  ev('acme/shop', 'rules', 'set', { key: 'guide.build', value: 'use pnpm, never npm', setBy: 'acme' });
+  R = 'acme/shop#51';
+  const sha = '5e1f0c2a9d3b', files51 = ['components/CartTotal.tsx', 'components/CartTotal.test.tsx'], axes51 = axesFor(files51);
+  intake(R, 'Show a delivery estimate under the cart total', 51);
+  ev(R, 'intake', 'passed', { summary: 'Small and clear: one line under the cart total.' });
+  ev(R, 'spec', 'passed', { spec: 'Delivery estimate from the existing shipping helper; no new deps.' });
+  ev(R, 'build', 'started');
+  ev(R, 'build', 'passed', { localChecks: { state: 'pass', sha, commands: [{ cmd: 'pnpm test', exit: 0, ms: 48210 }, { cmd: 'pnpm lint', exit: 0, ms: 9120 }] } });
+  ev(R, 'build', 'passed', { pr: 'https://github.com/acme/shop/pull/95', branch: 'factory/issue-51' });
+  ev(R, 'review', 'started', { axes: axes51, sha });
+  pass(R, axes51);
+  g(R);
+  d(R, { checks: 'skipped', additions: 58, deletions: 4, files: files51, rules: rules('acme/shop').policy });
+  ev(R, 'approve', 'merged');
   demoTranscripts(read().filter((e) => e.sessionId === S.sessionId));
   return render();
 }
@@ -983,6 +1437,19 @@ function test() {
   assert.match(decide({ ...ok, origin: 'x#1', originAssociation: 'NONE' }, facts).reasons.join(), /split from x#1/);
   assert.match(decide(ok, { ...facts, association: 'NONE' }).reasons.join(), /not trusted/); // live value wins
   assert.match(decide(ok, { ...facts, autoMerge: false }).reasons.join(), /auto-merge is turned off/);
+  assert.match(decide(ok, { ...facts, files: ['.claude/skills/review/SKILL.md', 'src/a.test.ts'] }).reasons.join(), /sensitive paths/); // a branch's own agent config
+  // Demo run 50: custom/provider runners are stamped, and prose from a custom reviewer fails the axis instead of passing.
+  const r50 = runs['acme/shop#50'];
+  assert.equal(r50.outcome, 'merged');
+  assert.deepEqual(r50.runners, { spec: { use: 'skill', name: 'my-planner' }, build: { use: 'provider', harness: 'codex' }, gate: { use: 'provider', harness: 'claude-code', name: 'pr-review-toolkit:code-reviewer' } });
+  assert.match(r50.reviews[1].a11y.findings[0].issue, /^reviewer output invalid/);
+  assert.equal(r50.reviews[1].a11y.verdict, 'failed');
+  assert.equal(r50.reviews[2].ui.runner.name, 'brand-review');
+  // Demo run 51: merged under ci=skip because F's local checks passed on the reviewed commit; the reason names the rule.
+  assert.equal(runs['acme/shop#51'].decision.action, 'merge');
+  assert.match(runs['acme/shop#51'].decision.reasons.join(' | '), /CI not required by rule ci=skip, set by acme on 2026-11-20: GitHub Actions billing is failing\. Local checks: pass \(pnpm test, pnpm lint\)/);
+  assert.equal(runs['acme/shop'], undefined); // rule events are not runs
+  assert.deepEqual(rules('acme/shop').expired.map((x) => x.key), ['diffCap']);
   // Verifier-dismissed findings don't block; the cost cap stops looping.
   const dis = { iteration: 1, axes: { 1: ['code'] }, reviews: { 1: { code: { verdict: 'passed', findings: [{ severity: 'high', route: 'build', dismissed: 'not reachable' }] } } } };
   assert.equal(gate(dis).next, 'approve');
@@ -1006,11 +1473,14 @@ function test() {
   assert.equal(pre['acme/shop#44'].burn.byAxis.security.tokens, 49710); // reported per axis
   assert.equal(getRun('acme/shop#43').burn.measured, true);
   assert.equal(getRun('acme/shop#44').burn.measured, false);
-  assert.deepEqual(archive(0), { archived: 4 }); // 41 rejected, 43 merged, 44 escalated, 46 split
+  assert.deepEqual(archive(0), { archived: 6 }); // 41 rejected, 43 merged, 44 escalated, 46 split, 50 + 51 merged
   assert.equal(readArchive().find((a) => a.id === 'acme/shop#43').burn.measured, true); // survives losing its events
   assert.deepEqual(Object.keys(derive(read())).sort(), ['acme/shop#42', 'acme/shop#45', 'acme/shop#47', 'acme/shop#48', 'acme/shop#49', 'eval/golden#4']);
+  assert.equal(read().filter((e) => e.stage === 'rules').length, 5); // the rule audit trail survives archiving
   const page = fs.readFileSync(path.join(DIR, 'dashboard.html'), 'utf8');
-  assert.match(page, /"merged":1,/); // metrics.all counts the archived merge
+  assert.match(page, /"merged":3,/); // metrics.all counts the archived merges
+  assert.equal(page.split('__FACTORY_DATA__').length, 1);
+  assert.match(page, /"ruleHistory":\[\{[^\]]*"key":"ci","value":"skip"/);
   assert.match(page, /"id":"acme\/shop#47"[^]*?"parent":"acme\/shop#46"/); // parent survives archiving
   assert.deepEqual(axesFor(['lib/x.ts']), ['code', 'security']);
   assert.deepEqual(axesFor(['app/blog/page.tsx']), ['code', 'security', 'ux', 'ui', 'seo']);
@@ -1170,6 +1640,228 @@ function cliTest() {
   assert.equal(st.iteration, 2);
   syncTest(cli);
   worktreeTest(cli);
+  rulesTest(cli);
+  skillsTest(cli); // last: it ends by corrupting skills.json
+}
+
+// Policy rules and guidance: resolution, required reasons, expiry, CI replaced by local checks, and the stricter-only guards.
+function rulesTest(cli) {
+  const set = (...a) => JSON.parse(cli(['rules', 'set', ...a]));
+  assert.throws(() => set('acme/rr', 'ci', 'skip'), /needs a reason/);
+  set('default', 'ci', 'advisory', '--reason', 'org-wide Actions outage');
+  const p = set('acme/rr', 'ci', 'skip', '--reason', 'billing', '--until', '2999-01-01');
+  assert.deepEqual([p.policy.ci.value, p.policy.ci.setBy, p.policy.ci.scope, p.policy.ci.until], ['skip', 'stub-user', 'acme/rr', '2999-01-01']); // setBy is gh's login, never typed
+  assert.equal(JSON.parse(cli(['rules', 'acme/other'])).policy.ci.value, 'advisory'); // project over global, global fills in
+  // A closed set of switches, each only stricter: nothing touches trust, sensitive paths, axes or the merge checks.
+  for (const [k, v, re] of [
+    ['trusted', '["NONE"]', /unknown rule "trusted"/], ['sensitive', '[]', /unknown rule "sensitive"/], ['axes', 'code', /unknown rule/],
+    ['review.security', 'off', /unknown rule/], ['matchHeadCommit', 'off', /unknown rule/], ['imported', 'merge', /unknown rule/],
+    ['ci', 'off', /required\|advisory\|skip/], ['diffCap', '400', /can only lower/], ['diffCap', '0', /can only lower/],
+    ['checks.commands', '[]', /1-10/], ['checks.commands', '["a\\nb"]', /1-10/], ['guide.deploy', 'x', /unknown step "deploy"/],
+  ]) assert.throws(() => set('acme/rr', k, v, '--reason', 'x'), re);
+  assert.throws(() => set('acme/rr', 'ci', 'skip', '--reason', 'x', '--until', '2020-01-01'), /--until/);
+  assert.throws(() => set('acme/rr', 'ci', 'skip', '--reason', 'x', '--until', '2026-13-40'), /--until/);
+  assert.throws(() => cli(['skills', 'set', 'acme/rr', 'rules', '{"ci":{"value":"skip","reason":"x","setBy":"me","setAt":"2026-01-01"}}']), /set with "rules set"/);
+  // Rule changes are owned events: recorded by "rules", refused from "event", and never runs.
+  assert.throws(() => cli(['event', 'acme/rr', 'rules', 'set', '-'], '{"key":"ci","value":"skip"}'), /recorded by "rules"/);
+  assert.throws(() => cli(['event', 'acme/rr#1', 'build', 'passed', '-'], '{"localChecks":{"state":"pass","sha":"abc123","commands":[]}}'), /not from a payload: localChecks/);
+  assert.deepEqual(read().filter((e) => e.stage === 'rules' && e.run !== 'acme/wt').map((e) => [e.run, e.status, e.key, e.value, e.setBy]), [['default', 'set', 'ci', 'advisory', 'stub-user'], ['acme/rr', 'set', 'ci', 'skip', 'stub-user']]);
+  assert.equal(derive(read())['acme/rr'], undefined);
+  // Guidance: free text per step, whole-flow first, global before project; it shows up in the resolved stage output.
+  set('default', 'guide.*', 'Keep PRs small.');
+  set('acme/rr', 'guide.build', 'use pnpm, never npm');
+  set('acme/rr', 'guide.review.ui', 'follow our brand tokens');
+  const sk = JSON.parse(cli(['skills', 'acme/rr']));
+  assert.deepEqual(sk.guide.build, ['Keep PRs small.', 'use pnpm, never npm']);
+  assert.deepEqual(sk.guide['review.ui'], ['Keep PRs small.', 'follow our brand tokens']);
+  assert.deepEqual(sk.guide.spec, ['Keep PRs small.']);
+  assert.deepEqual(JSON.parse(cli(['rules', 'acme/rr'])).guide.build, sk.guide.build);
+  // Expiry, on a fixed clock: a project rule applies through its until day, then the global rule takes over, with a warning.
+  const at = '2026-01-01T00:00:00Z', cfg = { default: { rules: { ci: { value: 'advisory', reason: 'g', setBy: 'a', setAt: at } } }, 'acme/rr': { rules: { ci: { value: 'skip', reason: 'billing', setBy: 'a', setAt: at, until: '2026-11-20' } } } };
+  const live = rules('acme/rr', cfg, Date.parse('2026-11-20T23:00:00Z'));
+  assert.equal(live.policy.ci.value, 'skip');
+  assert.match(live.warnings.join(), /expires on 2026-11-20/);
+  const gone = rules('acme/rr', cfg, Date.parse('2026-11-21T00:00:00Z'));
+  assert.deepEqual([gone.policy.ci.value, gone.expired[0].key], ['advisory', 'ci']);
+  assert.match(gone.warnings.join(), /expired on 2026-11-20 and no longer applies/);
+  assert.deepEqual(rules('x/y', { 'x/y': cfg['acme/rr'] }, Date.parse('2027-01-01')).policy, {}); // nothing left: CI required again
+  // decide() under rules: not required is never green.
+  const ok = { association: 'OWNER', iteration: 1, pr: 'x', reviewedSha: 's1', axes: { 1: ['code', 'security'] }, reviews: { 1: { code: { verdict: 'passed' }, security: { verdict: 'passed' } } } };
+  const rule = (value) => ({ value, reason: 'billing', setBy: 'acme', setAt: '2026-11-20T10:00:00Z' });
+  const pol = (ci, cmds, extra) => ({ ...(ci && { ci: rule(ci) }), ...(cmds && { 'checks.commands': rule(cmds) }), ...extra });
+  const lc = (state, sha = 's1', cmds = ['pnpm test']) => ({ state, sha, commands: cmds.map((cmd) => ({ cmd, exit: state === 'pass' ? 0 : 1, ms: 1 })) });
+  const D = (r, f) => decide(r, { checks: 'skipped', additions: 10, deletions: 0, files: ['src/a.ts', 'src/a.test.ts'], ...f });
+  const skip = pol('skip', ['pnpm test']), green = { ...ok, localChecks: lc('pass') };
+  const m = D(green, { rules: skip });
+  assert.equal(m.action, 'merge');
+  assert.match(m.reasons.join(' | '), /CI not required by rule ci=skip, set by acme on 2026-11-20: billing\. Local checks: pass \(pnpm test\)/);
+  const none = D(green, { rules: pol('skip') }); // (b): nothing stands in, so escalate
+  assert.deepEqual([none.action, /no checks.commands rule replaces CI/.test(none.reasons.join())], ['escalate', true]);
+  assert.match(D(ok, { rules: skip }).reasons.join(), /Local checks: not run/);
+  assert.match(D({ ...ok, localChecks: lc('fail') }, { rules: skip }).reasons.join(), /Local checks: fail \(pnpm test\)/);
+  assert.match(D({ ...ok, localChecks: lc('pass', 's0') }, { rules: skip }).reasons.join(), /not the reviewed commit/); // a pass from an older iteration
+  assert.match(D({ ...ok, localChecks: lc('pass', 's1', ['true']) }, { rules: skip }).reasons.join(), /different command list/);
+  assert.equal(D(green, { checks: 'fail', rules: pol('advisory', ['pnpm test']) }).action, 'merge'); // advisory: red CI shown, not blocking
+  assert.match(D(green, { checks: 'fail', rules: pol('advisory', ['pnpm test']) }).reasons.join(), /ci=advisory.*\(CI is "fail"\)/);
+  assert.equal(D(green, { checks: 'fail', rules: pol(null, ['pnpm test']) }).action, 'escalate'); // CI required: local checks never rescue red CI
+  assert.match(D(ok, { checks: 'pass', rules: pol(null, ['pnpm test']) }).reasons.join(), /Local checks: not run/); // ...but do add a requirement
+  // The guards hold under ci=skip with passing local checks.
+  assert.match(D({ ...green, association: 'NONE' }, { rules: skip }).reasons.join(), /not trusted/);
+  assert.match(D(green, { rules: skip, files: ['lib/auth/x.ts', 'lib/auth/x.test.ts'] }).reasons.join(), /sensitive paths/);
+  assert.match(D({ ...green, imported: true }, { rules: skip }).reasons.join(), /imported/);
+  assert.match(D(green, { rules: { ...skip, diffCap: rule(50) }, additions: 60 }).reasons.join(), /max 50 by rule diffCap/);
+  // End to end on acme/shop: the model's checks.json never stands in for CI; F's own check does, and merge still pins the reviewed commit.
+  set('acme/shop', 'ci', 'skip', '--reason', 'Actions billing');
+  set('acme/shop', 'checks.commands', '["pnpm test"]', '--reason', 'stands in for CI');
+  const R = 'acme/shop#8';
+  record(R, 'intake', 'started', { title: 't', association: 'OWNER' });
+  record(R, 'build', 'passed', { pr: 'https://github.com/acme/shop/pull/8' });
+  record(R, 'review', 'started', { axes: ['code', 'security'], sha: 'abc123' });
+  record(R, 'review', 'passed', { axis: 'code', findings: [] });
+  record(R, 'review', 'passed', { axis: 'security', findings: [] });
+  fs.mkdirSync(runDir(R), { recursive: true });
+  fs.writeFileSync(path.join(runDir(R), 'checks.json'),'{"lint":"pass","typecheck":"pass","tests":"pass","build":"pass"}');
+  const no = JSON.parse(cli(['decide', R]));
+  assert.equal(no.action, 'escalate');
+  assert.match(no.reasons.join(), /Local checks: not run/);
+  assert.equal(no.facts.checks, 'skipped'); // gh pr checks isn't even called (the stub would report none)
+  record(R, 'build', 'passed', { localChecks: lc('pass', 'abc123') }); // what "F checks" records (tested for real in worktreeTest)
+  assert.equal(JSON.parse(cli(['merge', R])).merged, true); // stub fails unless --match-head-commit abc123
+  record('acme/shop#9', 'intake', 'started', { title: 'imp', association: 'OWNER', imported: true });
+  assert.equal(JSON.parse(cli(['decide', 'acme/shop#9'])).action, 'escalate');
+  // Re-enable: unset falls back to the global rule, then to the built-in; each unset is audited too.
+  cli(['rules', 'unset', 'acme/shop', 'ci', '--reason', 'billing fixed']);
+  cli(['rules', 'unset', 'acme/shop', 'checks.commands']);
+  assert.equal(JSON.parse(cli(['rules', 'acme/shop'])).policy.ci.value, 'advisory');
+  cli(['rules', 'unset', 'default', 'ci']);
+  assert.deepEqual(JSON.parse(cli(['rules', 'acme/shop'])).policy, {});
+  assert.throws(() => cli(['rules', 'unset', 'acme/shop', 'ci']), /no rule "ci"/);
+  assert.match(cli(['rules', 'unset', 'acme/rr', 'guide.build']), /"guide"/);
+  assert.deepEqual(read().filter((e) => e.stage === 'rules' && e.status === 'unset' && e.run === 'acme/shop').map((e) => [e.run, e.key, e.reason]).slice(0, 1), [['acme/shop', 'ci', 'billing fixed']]);
+  // A hand-edited rule without a reason fails loudly, and the dashboard says so instead of failing every event.
+  fs.writeFileSync(path.join(DIR, 'skills.json'), '{"acme/rr":{"rules":{"ci":{"value":"skip","setBy":"me","setAt":"2026-01-01"}}}}');
+  assert.throws(() => cli(['rules', 'acme/rr']), /needs a reason/);
+  record('acme/rr#2', 'intake', 'started', { title: 't' });
+  assert.match(fs.readFileSync(path.join(DIR, 'dashboard.html'), 'utf8'), /"rulesError":"skills.json acme\/rr.rules.ci: needs a reason/);
+  fs.rmSync(path.join(DIR, 'skills.json'));
+}
+
+// Per-step runners: config resolution and validation, extra axes, F-stamped runner, invalid output = failed review.
+function skillsTest(cli) {
+  const R = 'acme/kit#1';
+  const set = (scope, key, v) => cli(['skills', 'set', scope, key, JSON.stringify(v)]);
+  set('default', 'review.code', { use: 'skill', name: 'house-review' });
+  set('default', 'spec', { use: 'skill', name: 'global-planner' });
+  set('acme/kit', 'spec', { use: 'skill', name: 'my-planner' });
+  set('acme/kit', 'build', { use: 'provider', harness: 'codex' });
+  set('default', 'axes.extra', [{ axis: 'a11y', when: ['**/*.tsx'], use: 'brief', path: '~/.claude/factory/briefs/a11y.md' }]);
+  set('acme/kit', 'axes.extra', [{ axis: 'perf', when: ['src/hot/**'], use: 'skill', name: 'perf-review' }]);
+  const { plan, extra, required } = JSON.parse(cli(['skills', 'acme/kit']));
+  assert.equal(plan.spec.name, 'my-planner'); // project beats global
+  assert.equal(plan['review.code'].name, 'house-review'); // global fills the rest
+  assert.deepEqual(plan['review.security'], { use: 'default' });
+  assert.deepEqual(extra.map((x) => x.axis), ['a11y', 'perf']);
+  assert.deepEqual(required, ['code', 'security']);
+  assert.equal(JSON.parse(cli(['skills', 'acme/other'])).plan.spec.name, 'global-planner');
+  // Refused: unknown steps, any way to switch an axis off, unknown harnesses, shell-ish names, in-tree briefs, extra fields, shadowing a built-in axis.
+  for (const [key, v, re] of [
+    ['review.lint', { use: 'default' }, /unknown step "review.lint"/],
+    ['review.security', { use: 'off' }, /expected/],
+    ['build', { use: 'provider', harness: 'cursor' }, /expected/],
+    ['spec', { use: 'skill', name: 'x; rm -rf ~' }, /expected/],
+    ['review.code', { use: 'brief', path: 'docs/lenient.md' }, /expected/],
+    ['review.code', { use: 'skill', name: 'x', note: 'hi' }, /unknown fields note/],
+    ['axes.extra', [{ axis: 'security', when: ['**'], use: 'skill', name: 'lenient' }], /new lowercase name/],
+    ['axes.extra', [{ axis: 'a11y', when: [], use: 'skill', name: 'x' }], /needs "when"/],
+  ]) assert.throws(() => set('acme/kit', key, v), re);
+  assert.throws(() => set('acme', 'spec', { use: 'default' }), /scope "acme"/);
+  // Required axes are always selected; extra axes only add, by glob.
+  assert.deepEqual(axesFor(['README.md'], extra), ['code', 'security', 'docs']);
+  assert.deepEqual(axesFor(['src/hot/loop.ts', 'web/Button.tsx'], extra), ['code', 'security', 'ux', 'ui', 'a11y', 'perf']);
+  // The runner is F's to stamp from the plan, never the payload's; default runners leave events unchanged.
+  record(R, 'intake', 'started', { title: 't', association: 'OWNER' });
+  assert.throws(() => cli(['event', R, 'spec', 'passed', '-'], '{"runner":{"use":"default"}}'), /not from a payload: runner/);
+  cli(['event', R, 'spec', 'passed', '-'], '{"spec":"s"}');
+  cli(['event', R, 'build', 'started', '--fallback', 'codex not installed']);
+  let r = derive(read())[R];
+  assert.deepEqual(r.runners.spec, { use: 'skill', name: 'my-planner' });
+  assert.deepEqual(r.runners.build, { use: 'default', fallback: { from: { use: 'provider', harness: 'codex' }, reason: 'codex not installed' } });
+  assert.ok(!('runner' in r.events[0]));
+  assert.ok(!('runner' in record(R, 'build', 'passed'))); // in-process records (sync imports, demo) never claim a runner
+  // Raw reviewer output: only the exact contract for the asked axis counts.
+  assert.deepEqual(JSON.parse(cli(['axes', R, 'web/Button.tsx'])).axes, ['code', 'security', 'ux', 'ui', 'a11y']);
+  const review = (axis, text) => JSON.parse(cli(['review', R, axis], text));
+  assert.equal(review('code', '```json\n{"axis":"code","verdict":"passed","findings":[]}\n```').status, 'passed');
+  assert.equal(JSON.parse(cli(['review', R, 'a11y', '--tokens', '1200'], 'Looks accessible to me. Ship it!')).status, 'failed');
+  assert.match(review('ui', '{"axis":"security","verdict":"passed","findings":[]}').findings[0].issue, /reviewer output invalid: axis is "security"/);
+  assert.equal(review('ux', '{"axis":"ux","verdict":"failed","findings":[]}').status, 'failed');
+  assert.match(review('security', '{"axis":"security","verdict":"passed","findings":[],"approve":true}').findings[0].issue, /unknown fields: approve/);
+  assert.throws(() => cli(['review', R, 'seo'], '{}'), /not one of this iteration/);
+  r = derive(read())[R];
+  assert.equal(r.reviews[1].code.runner.name, 'house-review');
+  assert.equal(r.reviews[1].a11y.runner.use, 'brief');
+  assert.equal(r.reviews[1].security.runner, undefined);
+  assert.deepEqual(Object.values(r.reviews[1]).map((v) => v.verdict), ['passed', 'failed', 'failed', 'failed', 'failed']);
+  assert.equal(r.tokens, 1200); // usage survives an invalid reply
+  set('acme/kit', 'verifier', { use: 'provider', harness: 'claude-code', name: 'pr-review-toolkit:code-reviewer' });
+  assert.equal(JSON.parse(cli(['gate', R])).next, 'build');
+  assert.equal(derive(read())[R].runners.gate.name, 'pr-review-toolkit:code-reviewer');
+  // Catalog: every source the picker offers, and every runner it offers passes F's own validation.
+  const home = path.join(DIR, 'skhome'), clone = path.join(DIR, 'kitclone');
+  const put = (p, text) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
+  const md = (desc) => `---\nname: x\ndescription: ${desc}\n---\nbody`;
+  put(path.join(home, '.claude/skills/house-review/SKILL.md'), '---\nname: house-review\ndescription: |\n  Our house\n  review rules\n---\n');
+  put(path.join(home, '.claude/skills/synced/b1/xlsx/SKILL.md'), md('"Spreadsheets"'));
+  put(path.join(home, '.claude/plugins/installed_plugins.json'), JSON.stringify({ plugins: {
+    'tk@m': [{ scope: 'user', installPath: path.join(home, 'plug/tk') }],
+    'pj@m': [{ scope: 'project', projectPath: clone, installPath: path.join(home, 'plug/pj') }],
+    'other@m': [{ scope: 'project', projectPath: '/elsewhere', installPath: path.join(home, 'plug/other') }] } }));
+  put(path.join(home, 'plug/tk/.claude-plugin/plugin.json'), '{"name":"tk"}');
+  put(path.join(home, 'plug/tk/agents/hunter.md'), md('Hunts silent failures'));
+  put(path.join(home, 'plug/tk/commands/review-pr.md'), md('Reviews a PR'));
+  put(path.join(home, 'plug/pj/skills/pjs/SKILL.md'), md('Project plugin skill'));
+  put(path.join(home, 'plug/other/skills/nope/SKILL.md'), md('Another project'));
+  put(path.join(home, '.claude/plugins/synced/b1/design~g2/skills/accessibility-review/SKILL.md'), md('WCAG audit'));
+  put(path.join(home, '.agents/skills/find-skills/SKILL.md'), md('Finds skills'));
+  put(path.join(home, '.agents/skills/house-review/SKILL.md'), md('duplicate of the Claude skill'));
+  put(path.join(DIR, 'briefs/a11y.md'), md('Our a11y brief'));
+  put(path.join(clone, '.claude/skills/kit-review/SKILL.md'), md('Repo review'));
+  saveProject('acme/kit', clone);
+  const cat = JSON.parse(cli(['skills', 'catalog', 'acme/kit'], '', { HOME: home }));
+  const by = (n) => cat.global.find((e) => e.name === n);
+  assert.equal(by('house-review').desc, 'Our house review rules');
+  assert.equal(by('anthropic-skills:xlsx').desc, 'Spreadsheets');
+  assert.deepEqual(by('tk:hunter').runner, { use: 'provider', harness: 'claude-code', name: 'tk:hunter' });
+  assert.deepEqual(by('tk:review-pr').runner, { use: 'skill', name: 'tk:review-pr' });
+  assert.equal(by('design:accessibility-review').group, 'plugin: design');
+  assert.deepEqual(by('find-skills').runner, { use: 'brief', path: '~/.agents/skills/find-skills/SKILL.md' });
+  assert.equal(cat.global.filter((e) => e.name === 'house-review').length, 1);
+  assert.equal(cat.global.find((e) => e.source === 'yours').runner.path, path.join(DIR, 'briefs/a11y.md'));
+  assert.deepEqual(cat.projects['acme/kit'].map((e) => e.name).sort(), ['kit-review', 'pj:pjs']);
+  for (const e of [...cat.global, ...cat.projects['acme/kit']]) checkRunner(e.runner, e.name);
+  // F ui: only the printed URL reads the page, only a same-origin JSON POST with the token writes, and invalid writes change nothing.
+  const tok = 't'.repeat(32), ctx = { token: tok, port: 4242 }, H = { host: '127.0.0.1:4242' };
+  const post = (h, body) => uiHandle({ method: 'POST', url: '/skills', headers: { ...H, origin: 'http://127.0.0.1:4242', 'content-type': 'application/json', 'x-factory-token': tok, ...h }, body: JSON.stringify(body) }, ctx);
+  const ui1 = { scope: 'acme/kit', step: 'review.ui', runner: { use: 'skill', name: 'brand-review' } };
+  assert.equal(uiHandle({ method: 'GET', url: '/?t=' + tok, headers: { host: 'evil.test:4242' } }, ctx).status, 403);
+  assert.equal(uiHandle({ method: 'GET', url: '/', headers: H }, ctx).status, 403);
+  assert.ok(uiHandle({ method: 'GET', url: '/?t=' + tok, headers: H }, ctx).body.includes(tok));
+  const before = fs.readFileSync(path.join(DIR, 'skills.json'), 'utf8');
+  assert.equal(post({ 'x-factory-token': 'u'.repeat(32) }, ui1).status, 403);
+  assert.equal(post({ origin: 'https://evil.test' }, ui1).status, 403);
+  assert.equal(post({ 'content-type': 'text/plain' }, ui1).status, 415);
+  assert.equal(post({}, { ...ui1, step: 'review.lint' }).status, 400);
+  assert.equal(post({}, { ...ui1, scope: '__proto__' }).status, 400);
+  assert.equal(fs.readFileSync(path.join(DIR, 'skills.json'), 'utf8'), before);
+  const saved = post({}, ui1);
+  assert.equal(saved.status, 200);
+  assert.equal(JSON.parse(saved.body).plans['acme/kit'].plan['review.ui'].name, 'brand-review');
+  assert.deepEqual(JSON.parse(post({}, { ...ui1, runner: null }).body).plans['acme/kit'].plan['review.ui'], { use: 'default' }); // unset -> inherits
+  assert.equal(JSON.parse(cli(['skills', 'unset', 'acme/kit', 'build'])).build, undefined);
+  assert.ok(!fs.readFileSync(render(), 'utf8').includes(tok), 'the written dashboard never carries the ui token');
+  // A hand-edited config is validated on every read, so it fails loudly instead of silently running defaults.
+  fs.writeFileSync(path.join(DIR, 'skills.json'), '{"acme/kit":{"review.lint":{"use":"default"}}}');
+  assert.throws(() => cli(['skills', 'acme/kit']), /unknown step "review.lint"/);
 }
 
 // Fake HOME with Claude Code + Codex logs, then sync / re-sync / close-elsewhere against the gh + git stubs.
@@ -1253,6 +1945,21 @@ function worktreeTest(cli) {
   assert.ok(fs.existsSync(path.join(w.path, 'package.json')));
   assert.match(cli(['deps', R], '', env2), process.platform === 'darwin' ? /cloned copy-on-write/ : /./);
   assert.ok(fs.existsSync(path.join(w.path, 'node_modules', 'dep', 'index.js')));
+  // F checks: the checks.commands rule runs in the worktree on a clean HEAD; exit codes are recorded, output goes to a file.
+  assert.throws(() => cli(['checks', R], '', env2), /no checks.commands rule/);
+  cli(['rules', 'set', 'acme/wt', 'checks.commands', '["test -f package.json","echo checked-$((40+2))"]', '--reason', 'Actions billing'], '', env2);
+  const c1 = JSON.parse(cli(['checks', R], '', env2));
+  assert.deepEqual([c1.state, c1.sha, c1.commands.map((c) => c.exit)], ['pass', g(w.path, 'rev-parse', 'HEAD').trim(), [0, 0]]);
+  assert.match(fs.readFileSync(c1.log, 'utf8'), /checked-42/);
+  assert.ok(!JSON.stringify(read()).includes('checked-42')); // output stays out of the log
+  fs.writeFileSync(path.join(w.path, 'wip.txt'), 'x');
+  assert.throws(() => cli(['checks', R], '', env2), /uncommitted changes/);
+  fs.rmSync(path.join(w.path, 'wip.txt'));
+  cli(['rules', 'set', 'acme/wt', 'checks.commands', '["test -f missing.txt","true"]', '--reason', 'Actions billing'], '', env2);
+  const c2 = JSON.parse(cli(['checks', R], '', env2));
+  assert.deepEqual([c2.state, c2.commands.map((c) => c.exit)], ['fail', [1, 0]]);
+  assert.equal(derive(read())[R].localChecks.state, 'fail');
+  cli(['rules', 'unset', 'acme/wt', 'checks.commands'], '', env2);
   cli(['event', R, 'build', 'started'], '', env2);
   fs.mkdirSync(path.join(w.path, 'src')); fs.writeFileSync(path.join(w.path, 'src', 'b.tsx'), 'x');
   g(w.path, 'add', '.'); g(w.path, 'commit', '-qm', 'b');
@@ -1284,6 +1991,11 @@ function worktreeTest(cli) {
   const sha = g(clone, 'rev-parse', 'HEAD').trim();
   cli(['event', R, 'build', 'passed', '-'], '{"pr":"https://github.com/acme/wt/pull/3"}', env2);
   const env3 = { ...env2, STUB_MERGE_SHA: sha };
+  cli(['rules', 'set', 'acme/wt', 'ci', 'skip', '--reason', 'Actions billing'], '', env3);
+  assert.equal(JSON.parse(cli(['postmerge', R], '', env3)).state, 'skipped'); // a billing-red main must not trigger reverts
+  cli(['rules', 'set', 'acme/wt', 'ci', 'advisory', '--reason', 'Actions flaky'], '', env3);
+  assert.deepEqual(JSON.parse(cli(['postmerge', R], '', env3)), { sha, state: 'fail', failed: ['https://github.com/acme/wt/actions/runs/1'], advisory: true }); // shown, never reverted on
+  cli(['rules', 'unset', 'acme/wt', 'ci'], '', env3);
   assert.equal(JSON.parse(cli(['postmerge', R], '', env3)).state, 'fail');
   assert.equal(JSON.parse(cli(['revert', R, 'main CI failed'], '', env3)).pr, 'https://github.com/acme/wt/pull/99');
   g(clone, 'fetch', '-q', 'origin');
@@ -1297,6 +2009,7 @@ function worktreeTest(cli) {
 const isMain = process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   const [cmd, run, ...rest] = process.argv.slice(2);
+  const fb = rest.indexOf('--fallback'), fallback = fb < 0 ? undefined : rest.splice(fb, 2)[1] || 'configured runner unavailable'; // the configured runner couldn't run; the built-in did
   // "-" reads the JSON payload from stdin (use a quoted heredoc) so untrusted text never touches shell quoting.
   const json = (s) => (s === '-' ? JSON.parse(fs.readFileSync(0, 'utf8')) : s ? JSON.parse(s) : {});
   const out = (x) => console.log(JSON.stringify(x, null, 2));
@@ -1305,11 +2018,41 @@ if (isMain) {
       case 'event': {
         const [stage, status] = rest, p = json(rest[2]);
         const owned = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'approve:closed': 'sync' };
-        if (owned[`${stage}:${status}`] || stage === 'gate') throw new Error(`"${stage} ${status}" is recorded by "${owned[`${stage}:${status}`] || 'gate'}", not by hand`);
-        const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'cwd'].filter((k) => k in p);
+        const owner = owned[`${stage}:${status}`] || { gate: 'gate', rules: 'rules' }[stage];
+        if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
+        const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'cwd', 'runner', 'localChecks'].filter((k) => k in p);
         if (typed.length) throw new Error(`these fields come from GitHub or git, not from a payload: ${typed.join(', ')}`);
-        record(run, stage, status, p); break;
+        record(run, stage, status, p, { fallback }); break;
       }
+      case 'review': { // raw reviewer output on stdin, from any runner; invalid output is recorded as a failed review
+        const { status, payload } = reviewFromText(run, rest[0], fs.readFileSync(0, 'utf8'));
+        for (const [flag, k] of [['--tokens', 'tokens'], ['--cost-usd', 'costUsd']]) { // the orchestrator's usage numbers, kept even when the reply is invalid
+          const i = rest.indexOf(flag), v = i < 0 ? undefined : Number(rest[i + 1]);
+          if (i >= 0 && !(v >= 0)) throw new Error(`${flag} needs a number`);
+          if (i >= 0) payload[k] = v;
+        }
+        record(run, 'review', status, payload, { fallback });
+        out({ status, findings: payload.findings }); break;
+      }
+      case 'skills': { // skills <owner/repo> | skills set|unset <owner/repo|default> <step> [json] | skills catalog [owner/repo]
+        if (run === 'catalog') { out(catalog(rest)); break; }
+        if (run === 'unset') { out(setSkill(rest[0], rest[1], undefined)); break; }
+        if (run !== 'set') { out(skills(run || '')); break; }
+        const [scope, key, spec] = rest;
+        if (!scope || !key || !spec) throw new Error('usage: skills set <owner/repo|default> <step> <json runner>');
+        out(setSkill(scope, key, json(spec))); break;
+      }
+      case 'rules': { // rules <owner/repo> | rules set <scope> <key> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <scope> <key> [--reason "…"]
+        const flag = (f) => { const i = rest.indexOf(f); return i < 0 ? undefined : rest.splice(i, 2)[1] ?? ''; };
+        const reason = flag('--reason'), until = flag('--until');
+        const [scope, key, value] = rest;
+        if (run === 'set' && scope && key && value !== undefined) out(setRule(scope, key, value, { reason, until }));
+        else if (run === 'unset' && scope && key) out(unsetRule(scope, key, { reason }));
+        else if (run && run !== 'set' && run !== 'unset') out(rules(run));
+        else throw new Error('usage: rules <owner/repo|default> | rules set <owner/repo|default> <ci|checks.commands|diffCap|guide.<step>> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <owner/repo|default> <key> [--reason "…"]');
+        break;
+      }
+      case 'checks': out(localChecks(run)); break;
       case 'automerge': { // per-project switch; decide() escalates everything when off
         if (!['on', 'off'].includes(rest[0])) throw new Error('usage: automerge <owner/repo> on|off');
         if (!projects()[run]) throw new Error(`${run} is not attached; run sync first`);
@@ -1325,14 +2068,14 @@ if (isMain) {
           files = git('-C', w.path, 'diff', '--name-only', range).split('\n').filter(Boolean);
         }
         const sha = w && fs.existsSync(w.path) ? git('-C', w.path, 'rev-parse', 'HEAD').trim() : undefined;
-        const axes = reviewAxes(r, files);
+        const axes = reviewAxes(r, files, skills(run.split(/[#:]/)[0]).extra);
         record(run, 'review', 'started', { axes, sha, range });
         out({ axes, range, files }); break;
       }
       case 'worktree': out(worktree(run, rest[0])); break;
       case 'deps': console.log(deps(run)); break;
       case 'gc': out(gc()); break;
-      case 'gate': { const { status, ...p } = gate(getRun(run)); record(run, 'gate', status, p); out({ status, ...p }); break; }
+      case 'gate': { const { status, ...p } = gate(getRun(run)); record(run, 'gate', status, p, { fallback }); out({ status, ...p }); break; }
       case 'intake': out(intake(run)); break;
       case 'sync': { // `sync` alone re-syncs every attached project
         const list = run ? [[run, rest[0]]] : Object.entries(projects()).map(([k, v]) => [k, v.path]);
@@ -1358,6 +2101,7 @@ if (isMain) {
       }
       case 'dir': console.log(runDir(run)); break;
       case 'render': console.log(render()); break;
+      case 'ui': ui(Number(run) || 0); break;
       case 'demo': // never pollute the real log with fixtures
         if (!process.env.FACTORY_DIR) DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-demo-'));
         console.log(demo()); break;
@@ -1368,10 +2112,20 @@ if (isMain) {
   sync   [owner/repo] [local clone path]  attach a project and import open PRs + agent sessions (no args: all)
   projects                                list attached projects
   intake <run>                            fetch issue, record intake start, print issue + trusted comments
-  event  <run> <stage> <status> [json|-]  record an event ("-" = JSON on stdin)
+  event  <run> <stage> <status> [json|-] [--fallback why]  record an event ("-" = JSON on stdin)
   worktree <run> [clone path]            create/reuse the run's git worktree (prints its path)
   deps   <run>                            cheapest node_modules for the worktree
   axes   <run> [changed files...]         pick + record review axes (default: worktree diff since last review)
+  review <run> <axis> [--tokens n] [--cost-usd x] [--fallback why]  record a reviewer's raw reply from stdin (invalid = failed review)
+  skills <owner/repo>                     print who runs each step (default, skill, brief or provider)
+  skills set <owner/repo|default> <step> <json>  configure one step (intake, spec, build, review.<axis>, verifier, postmerge, axes.extra)
+  skills unset <owner/repo|default> <step>       drop a step's choice (a project then inherits the global one)
+  skills catalog [owner/repo...]          every runner on this machine: built-in, Claude Code / Codex, global, project, your briefs
+  ui     [port]                           serve the dashboard on 127.0.0.1 with a token, so the Skills sheet can save
+  rules  <owner/repo>                     print the policy rules, warnings and per-step guidance that apply
+  rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, guide.<step> "text"
+  rules unset <owner/repo|default> <key> [--reason "…"]  remove one (back to the global rule, or the built-in)
+  checks <run>                            run the checks.commands rule in the worktree on its HEAD commit (the CI stand-in)
   gc                                      remove worktrees of finished runs
   gate   <run>                            compute + record gate verdict
   decide <run>                            fetch CI + diff, compute + record merge/escalate
