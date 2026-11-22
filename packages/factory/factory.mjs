@@ -11,11 +11,17 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { harnesses } from './harnesses/index.mjs';
 import * as project from './project.mjs'; // also handed whole to the idea-to-app test
-import { PROJECT_EVENTS, newProject, issuesCreate, projectStatus, loop, queue, startIdea, ideas } from './project.mjs';
+import { PROJECT_EVENTS, newProject, issuesCreate, projectStatus, loop, queue, startIdea, retireIdea, ideas } from './project.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 let DIR = process.env.FACTORY_DIR || path.join(os.homedir(), '.claude', 'factory');
-const log = () => path.join(DIR, 'events.jsonl');
+const REAL_DIR = path.resolve(os.homedir(), '.claude', 'factory'); // at load: tests swap HOME in-process later
+// Every state-dir path goes through here, so no test (FACTORY_TEST) can read or write the real ~/.claude/factory.
+const stateDir = () => {
+  if (process.env.FACTORY_TEST && path.resolve(DIR) === REAL_DIR) throw new Error(`FACTORY_TEST is set: refusing the real state dir ${DIR}; set FACTORY_DIR to a temp dir`);
+  return DIR;
+};
+const log = () => path.join(stateDir(), 'events.jsonl');
 let GH = process.env.FACTORY_GH || 'gh'; // overridable only so the self-test can stub GitHub
 let GIT = process.env.FACTORY_GIT || 'git';
 
@@ -65,8 +71,8 @@ const FINDING_KEYS = ['severity', 'file', 'line', 'issue', 'route', 'dismissed']
 const blocking = (f) => BLOCKING.includes(f.severity) && !f.dismissed; // a verifier-dismissed finding never blocks
 
 export const isSensitive = (p) => SENSITIVE.test(p);
-export const factoryDir = () => DIR;
-export const runDir = (run) => path.join(DIR, run.replace(/[^a-z0-9]+/gi, '-'));
+export const factoryDir = () => stateDir();
+export const runDir = (run) => path.join(stateDir(), run.replace(/[^a-z0-9]+/gi, '-'));
 
 export function read() {
   try {
@@ -79,7 +85,7 @@ export function read() {
 
 export function record(run, stage, status, payload = {}, cli) { // cli: {fallback?} when the orchestrator reports a step; in-process records (sync, demo) get no runner
   if (!run) throw new Error('missing run id');
-  if (String(run).endsWith(':project')) throw new Error('project runs are recorded by "new", "issues create" and "loop", not by hand');
+  if (String(run).endsWith(':project')) throw new Error('project runs are recorded by "new", "issues create", "loop" and "retire", not by hand');
   if (!STAGES.includes(stage)) throw new Error(`unknown stage "${stage}" (${STAGES.join('|')})`);
   if (!STATUSES.includes(status)) throw new Error(`unknown status "${status}" (${STATUSES.join('|')})`);
   if (status === 'merged' && derive(read())[run]?.decision?.action !== 'merge') throw new Error('refusing "merged": the recorded decision is not merge');
@@ -92,7 +98,7 @@ export function record(run, stage, status, payload = {}, cli) { // cli: {fallbac
   payload = validateUsage(payload);
   const me = stage === 'ship' ? null : harnesses.find((h) => h.current?.()); // the harness F runs inside, if any; lets the UI link back to the driving session
   const ev = { ts: new Date().toISOString(), ...payload, ...(me ? { harness: me.id, sessionId: me.current(), cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback)), run, stage, status };
-  fs.mkdirSync(DIR, { recursive: true });
+  fs.mkdirSync(stateDir(), { recursive: true });
   fs.appendFileSync(log(), JSON.stringify(ev) + '\n');
   if (TERMINAL.includes(status) || status === 'needs-info') { // a finished (or parked) run gives back its worktree
     try { const c = cleanup(run); if (c.startsWith('kept')) console.error(`factory: ${c}`); } catch (e) { console.error(`factory: worktree cleanup failed: ${e.message}`); }
@@ -220,7 +226,7 @@ const budgetWhy = (b) => `($${b.usd}, ${b.tokens} tokens, ${b.source})`;
 // ---------- measured burn: Claude Code transcripts of the sessions that recorded events ----------
 let PROJECTS = null; // demo and test point this at fixture transcripts
 const projectsRoot = () => PROJECTS || path.join(os.homedir(), '.claude', 'projects');
-const usageFile = () => path.join(DIR, 'usage.json');
+const usageFile = () => path.join(stateDir(), 'usage.json');
 const SUB_AXIS = /^\s*(code|security|ux|ui|seo|docs|[a-z][a-z0-9-]{0,30}(?=\s+review\b))\b/i; // built-ins, or any extra axis in "<axis> review RUN"
 
 // Only token counts, message ids, times and model ids are kept, never message text. Re-reads only bytes appended since last time.
@@ -283,7 +289,7 @@ export function measure(events) {
     out[sid] = s.files.map((f) => [f, (files[f] = scanFile(f, files[f]))]).filter(([, x]) => x).map(([f, x]) => ({ rows: x.rows, axis: x.axis, sub: f !== s.main }));
   }
   const text = JSON.stringify(cache);
-  if (text !== before) { fs.mkdirSync(DIR, { recursive: true }); fs.writeFileSync(usageFile(), text); }
+  if (text !== before) { fs.mkdirSync(stateDir(), { recursive: true }); fs.writeFileSync(usageFile(), text); }
   return out;
 }
 
@@ -434,7 +440,7 @@ export const REQUIRED_AXES = ['code', 'security']; // axesFor always selects the
 export const STEP_KEYS = ['intake', 'spec', 'build', ...BUILTIN_AXES.map((a) => `review.${a}`), 'verifier', 'postmerge'];
 const harnessIds = () => harnesses.map((h) => h.id);
 const NAME = /^[\w.-]+(:[\w.-]+)?$/; // skill, plugin:skill or agent type; it ends up in a command line
-const skillsFile = () => path.join(DIR, 'skills.json');
+const skillsFile = () => path.join(stateDir(), 'skills.json');
 
 function checkRunner(s, at, more = []) {
   if (!s || typeof s !== 'object' || Array.isArray(s)) throw new Error(`${at}: a runner must be a JSON object`);
@@ -491,7 +497,7 @@ export function skills(repo, cfg = readSkills()) {
 
 function writeSkills(cfg) {
   checkSkills(cfg);
-  fs.mkdirSync(DIR, { recursive: true });
+  fs.mkdirSync(stateDir(), { recursive: true });
   fs.writeFileSync(skillsFile() + '.tmp', JSON.stringify(cfg, null, 2));
   fs.renameSync(skillsFile() + '.tmp', skillsFile());
 }
@@ -551,9 +557,9 @@ function scanGlobal() {
   try { installed = JSON.parse(fs.readFileSync(path.join(claude, 'plugins', 'installed_plugins.json'), 'utf8')).plugins || {}; } catch { /* no plugins */ }
   for (const list of Object.values(installed)) for (const e of list) if (e.scope === 'user' && e.installPath) out.push(...pluginItems(e.installPath, 'global'));
   for (const b of dirs(path.join(claude, 'plugins', 'synced'))) for (const p of dirs(path.join(claude, 'plugins', 'synced', b))) out.push(...pluginItems(path.join(claude, 'plugins', 'synced', b, p), 'global'));
-  for (const f of ls(path.join(DIR, 'briefs')).filter((f) => f.endsWith('.md'))) {
-    const p = path.join(DIR, 'briefs', f);
-    if (/^[^'"\s]+$/.test(p)) out.push({ source: 'yours', group: tilde(path.join(DIR, 'briefs')), name: f, kind: 'brief', desc: front(p), runner: { use: 'brief', path: tilde(p) } });
+  for (const f of ls(path.join(stateDir(), 'briefs')).filter((f) => f.endsWith('.md'))) {
+    const p = path.join(stateDir(), 'briefs', f);
+    if (/^[^'"\s]+$/.test(p)) out.push({ source: 'yours', group: tilde(path.join(stateDir(), 'briefs')), name: f, kind: 'brief', desc: front(p), runner: { use: 'brief', path: tilde(p) } });
   }
   return out;
 }
@@ -726,7 +732,7 @@ const whoami = () => {
 
 // Rule changes are owned events in the log (stage "rules"), not run events: derive() skips them and F event refuses them.
 function audit(scope, status, e) {
-  fs.mkdirSync(DIR, { recursive: true });
+  fs.mkdirSync(stateDir(), { recursive: true });
   fs.appendFileSync(log(), JSON.stringify({ ts: new Date().toISOString(), ...e, run: scope, stage: 'rules', status }) + '\n');
   render();
 }
@@ -858,9 +864,9 @@ function intakeFixture(run, n) {
 const git = (...args) => execFileSync(GIT, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 export const adapterCtx = () => ({ gh, git }); // what host and tracker adapters get: the same stubbable gh and git
 const ls = (d) => { try { return fs.readdirSync(d); } catch { return []; } };
-const projectsFile = () => path.join(DIR, 'projects.json');
+const projectsFile = () => path.join(stateDir(), 'projects.json');
 export const projects = () => { try { return JSON.parse(fs.readFileSync(projectsFile(), 'utf8')); } catch { return {}; } };
-const saveProject = (repo, p) => { fs.mkdirSync(DIR, { recursive: true }); fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...projects()[repo], path: p, synced: projects()[repo]?.synced } }, null, 2)); };
+const saveProject = (repo, p) => { fs.mkdirSync(stateDir(), { recursive: true }); fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...projects()[repo], path: p, synced: projects()[repo]?.synced } }, null, 2)); };
 const wtFile = (run) => path.join(runDir(run), 'worktree.json');
 const wtInfo = (run) => { try { return JSON.parse(fs.readFileSync(wtFile(run), 'utf8')); } catch { return null; } };
 
@@ -1014,7 +1020,7 @@ function shipTrack(pairs) {
 export function sync(repo, repoPath) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo || '')) throw new Error(`repo must look like owner/repo, got "${repo}"`);
   repoPath = path.resolve(repoPath || projects()[repo]?.path || '.');
-  fs.mkdirSync(DIR, { recursive: true });
+  fs.mkdirSync(stateDir(), { recursive: true });
   fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...projects()[repo], path: repoPath, synced: new Date().toISOString() } }, null, 2));
   const runs = Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') || r.id.startsWith(repo + ':'));
   const byPr = new Map(runs.filter((r) => r.pr).map((r) => [r.pr, r]));
@@ -1200,8 +1206,8 @@ export function revert(run, reason) {
   }
 }
 
-const archiveFile = () => path.join(DIR, 'archive.jsonl');
-const sessionsFile = () => path.join(DIR, 'sessions.json');
+const archiveFile = () => path.join(stateDir(), 'archive.jsonl');
+const sessionsFile = () => path.join(stateDir(), 'sessions.json');
 const readArchive = () => { try { return fs.readFileSync(archiveFile(), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 
 // Moves finished runs older than `days` out of the live log into compact summaries, so derive/render stay fast.
@@ -1272,8 +1278,8 @@ export function metrics(runs) {
 const runRepos = () => [...new Set([...Object.keys(derive(read())), ...readArchive().map((a) => a.id)].map((id) => id.split(/[#:]/)[0]))];
 
 export function render() {
-  const out = path.join(DIR, 'dashboard.html');
-  fs.mkdirSync(DIR, { recursive: true });
+  const out = path.join(stateDir(), 'dashboard.html');
+  fs.mkdirSync(stateDir(), { recursive: true });
   fs.writeFileSync(out, page()); // never carries a ui token: that exists only in what `F ui` serves
   return out;
 }
@@ -1305,7 +1311,7 @@ export function page(extra = {}) {
 // when asked for, never in page(), which runs on every record().
 const F_CMD = 'node ~/.claude/skills/software-factory/factory.mjs';
 const shq = (x) => (/^[\w@%+=:,./~-]+$/.test(String(x)) ? String(x) : "'" + String(x).replace(/'/g, "'\\''") + "'");
-const onboardFile = () => path.join(DIR, 'onboard.json');
+const onboardFile = () => path.join(stateDir(), 'onboard.json');
 export const SHIP_KINDS = ['web', 'mobile', 'database'];
 export const readOnboard = () => { try { return JSON.parse(fs.readFileSync(onboardFile(), 'utf8')); } catch { return {}; } };
 
@@ -1315,7 +1321,7 @@ export function setShip(scope, kinds) {
   if (!Array.isArray(kinds) || !kinds.every((k) => SHIP_KINDS.includes(k))) throw new Error(`ship must be a list of ${SHIP_KINDS.join('|')}`);
   const o = readOnboard();
   o[scope] = { ...o[scope], ship: SHIP_KINDS.filter((k) => kinds.includes(k)) }; // canonical order, so a re-run writes the same file
-  fs.mkdirSync(DIR, { recursive: true });
+  fs.mkdirSync(stateDir(), { recursive: true });
   fs.writeFileSync(onboardFile() + '.tmp', JSON.stringify(o, null, 2));
   fs.renameSync(onboardFile() + '.tmp', onboardFile());
   render();
@@ -1390,7 +1396,7 @@ export function demo() {
   const S = { harness: 'claude-code', sessionId: 'demo-session', cwd: '/work/shop' }, MEASURED = ['acme/shop#43', 'acme/shop#45'];
   const ev = (run, stage, status, p = {}) => {
     const e = { ts: new Date((t += 97_000)).toISOString(), ...p, ...(MEASURED.includes(run) && stage !== 'ship' ? S : {}), run, stage, status };
-    fs.mkdirSync(DIR, { recursive: true });
+    fs.mkdirSync(stateDir(), { recursive: true });
     fs.appendFileSync(log(), JSON.stringify(e) + '\n');
   };
   const intake = (run, title, n, association = 'OWNER') =>
@@ -1533,7 +1539,7 @@ export function demo() {
 
 // Fake Claude Code transcripts for the demo session: an orchestrator message before each event, one subagent per review axis.
 function demoTranscripts(events) {
-  PROJECTS = path.join(DIR, 'claude-projects');
+  PROJECTS = path.join(stateDir(), 'claude-projects');
   const dir = path.join(PROJECTS, '-work-shop'), subs = path.join(dir, 'demo-session', 'subagents');
   fs.mkdirSync(subs, { recursive: true });
   const SIZE = { intake: [900, 5000], spec: [2600, 2500], build: [3200, 6000], review: [1200, 800], gate: [300, 200], approve: [700, 300] };
@@ -1558,6 +1564,7 @@ function demoTranscripts(events) {
 }
 
 async function test() {
+  process.env.FACTORY_TEST = '1'; // inherited by every F the tests spawn: none may touch the real state dir
   DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-test-'));
   demo();
   const runs = derive(read());
@@ -1782,6 +1789,11 @@ function cliTest() {
   const RUN = 'acme/shop#7';
   const cli = (args, input, env = {}) => execFileSync(process.execPath, [fileURLToPath(import.meta.url), ...args],
     { encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, FACTORY_DIR: DIR, FACTORY_GH: stub, ...env } });
+  // FACTORY_TEST: with no FACTORY_DIR, F refuses the home state dir (here a temp HOME's) for reads and writes alike (#20)
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-home-')), real = { HOME: home, FACTORY_TEST: '1', FACTORY_DIR: '' };
+  for (const args of [['rules', 'set', 'acme/x', 'ci', 'skip', '--reason', 'x'], ['skills', 'set', 'acme/x', 'spec', '{"use":"default"}'], ['render'], ['event', 'acme/x#1', 'intake', 'rejected'], ['new', 'an app', '--name', 'acme/x', '--dry-run']])
+    assert.throws(() => cli(args, '', real), /FACTORY_TEST is set: refusing the real state dir/, args.join(' '));
+  assert.ok(!fs.existsSync(path.join(home, '.claude', 'factory')));
   const issue = JSON.parse(cli(['intake', RUN]));
   assert.equal(issue.title, 'It\'s "odd" $(x)');
   assert.equal(issue.comments.length, 1);
@@ -2398,7 +2410,7 @@ if (isMain) {
     switch (cmd) {
       case 'event': {
         const [stage, status] = rest, p = json(rest[2]);
-        const owned = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'approve:closed': 'sync' };
+        const owned = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'approve:closed': 'sync', 'idea:retired': 'retire' };
         const owner = owned[`${stage}:${status}`] || { gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop', ship: 'ship' }[stage];
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
         const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'cwd', 'runner', 'localChecks',
@@ -2497,6 +2509,7 @@ if (isMain) {
       }
       case 'project': { const s = projectStatus(run || ''); if (!s) throw new Error(`no project ${run}; start one with "new"`); out(s); break; }
       case 'loop': out(await loop(run)); break;
+      case 'retire': { const ri = rest.indexOf('--reason'); out(retireIdea(run, ri < 0 ? '' : rest[ri + 1])); break; }
       case 'archive': out(archive(run ? Number(run) : 14)); break;
       case 'eval': out(evals(run)); break;
       case 'state': out(getRun(run)); break;
@@ -2557,6 +2570,7 @@ if (isMain) {
                                           idea-to-app: record the idea, validate PLAN.md + issues.json, then (with --yes) create the private repo + scaffold
   issues create <owner/repo> <file.json> [--yes]  validate and preview an issue batch; with --yes create it (idempotent by key)
   project <owner/repo>                    idea-to-app status: plan, milestones, next issue, dependency order, burn, loop
+  retire <owner/repo> --reason "<why>"     hide an idea that never got a repo (a leaked fixture) with a recorded event; the log is never rewritten
   loop   <owner/repo>                     next issue to build, or stop (first escalation, project budget, session cap, empty queue)
   automerge <owner/repo> on|off           allow or forbid auto-merge for a project
   archive [days=14]                       compact finished runs older than N days
