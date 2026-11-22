@@ -1,0 +1,142 @@
+{
+  "run": "you/budget-app:project",
+  "repo": "you/budget-app",
+  "stack": "next-web",
+  "visibility": "private",
+  "plan": {
+    "vision": "A calm, private place to see where my money goes each month. I add what I spend in a few seconds, set a budget per category, and always know how much is left, without signing up or sending my data anywhere.",
+    "milestones": [
+      "M1 Track",
+      "M2 Budget",
+      "M3 Own your data"
+    ]
+  },
+  "order": [
+    "amount-format",
+    "store",
+    "categories",
+    "add-transaction",
+    "transaction-list",
+    "edit-delete",
+    "month-switcher",
+    "category-budgets",
+    "budget-summary",
+    "overspend-warning",
+    "export-import",
+    "currency-setting"
+  ],
+  "willEscalate": [],
+  "checks": [
+    "pnpm lint",
+    "pnpm typecheck",
+    "pnpm test",
+    "pnpm build"
+  ],
+  "wouldRun": [
+    "github: create private repo you/budget-app",
+    "in <path>/budget-app: npx --yes create-next-app@15 . --ts --eslint --app --src-dir --use-pnpm --import-alias \"@/*\" --yes",
+    "in <path>/budget-app: pnpm add -D vitest@3 @vitejs/plugin-react@4 jsdom@26 @testing-library/react@16 @testing-library/dom@10",
+    "in <path>/budget-app: npm pkg set \"scripts.test=vitest run\" \"scripts.typecheck=tsc --noEmit\"",
+    "write vitest.config.ts, src/smoke.test.ts, .github/workflows/ci.yml, AGENTS.md, CLAUDE.md, README.md, PLAN.md; git commit; push to you/budget-app main",
+    "F rules set you/budget-app checks.commands '[\"pnpm lint\",\"pnpm typecheck\",\"pnpm test\",\"pnpm build\"]'"
+  ],
+  "issues": [
+    {
+      "key": "amount-format",
+      "title": "Parse and format amounts as integer cents",
+      "milestone": "M1 Track",
+      "dependsOn": []
+    },
+    {
+      "key": "store",
+      "title": "Versioned localStorage store for budget data",
+      "milestone": "M1 Track",
+      "dependsOn": []
+    },
+    {
+      "key": "categories",
+      "title": "Default categories",
+      "milestone": "M1 Track",
+      "dependsOn": [
+        "store"
+      ]
+    },
+    {
+      "key": "add-transaction",
+      "title": "Add an expense or income from a form",
+      "milestone": "M1 Track",
+      "dependsOn": [
+        "amount-format",
+        "store",
+        "categories"
+      ]
+    },
+    {
+      "key": "transaction-list",
+      "title": "List the month's transactions, newest first",
+      "milestone": "M1 Track",
+      "dependsOn": [
+        "add-transaction"
+      ]
+    },
+    {
+      "key": "edit-delete",
+      "title": "Edit and delete a transaction",
+      "milestone": "M1 Track",
+      "dependsOn": [
+        "transaction-list"
+      ]
+    },
+    {
+      "key": "month-switcher",
+      "title": "Switch between months",
+      "milestone": "M2 Budget",
+      "dependsOn": [
+        "transaction-list"
+      ]
+    },
+    {
+      "key": "category-budgets",
+      "title": "Set a monthly budget per category",
+      "milestone": "M2 Budget",
+      "dependsOn": [
+        "categories",
+        "amount-format"
+      ]
+    },
+    {
+      "key": "budget-summary",
+      "title": "Show spent and remaining per category",
+      "milestone": "M2 Budget",
+      "dependsOn": [
+        "category-budgets",
+        "month-switcher"
+      ]
+    },
+    {
+      "key": "overspend-warning",
+      "title": "Warn when a category goes over budget",
+      "milestone": "M2 Budget",
+      "dependsOn": [
+        "budget-summary"
+      ]
+    },
+    {
+      "key": "export-import",
+      "title": "Export and import all data as JSON",
+      "milestone": "M3 Own your data",
+      "dependsOn": [
+        "store"
+      ]
+    },
+    {
+      "key": "currency-setting",
+      "title": "Choose the display currency",
+      "milestone": "M3 Own your data",
+      "dependsOn": [
+        "amount-format",
+        "store"
+      ]
+    }
+  ]
+}

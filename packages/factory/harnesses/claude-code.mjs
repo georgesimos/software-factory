@@ -17,6 +17,23 @@ const TOOLS = [
   { name: 'security-review', tool: 'security-review', desc: 'Claude Code built-in /security-review: security review of the pending changes on the branch. Replies in prose.' },
 ];
 
+// Pinned flags for a `claude -p` provider runner, so its behaviour never rides on -p's defaults.
+// Never --bare: it would skip the `/x` skill being run and needs ANTHROPIC_API_KEY. Repo hooks and .mcp.json are cut by
+// --setting-sources user and --strict-mcp-config instead. Read-only unless `write` (build): manual mode with prompts
+// none denies anything outside the allowlist, where auto mode's classifier could approve other Bash. A schema adds the
+// structured-output contract (reviews). Budget: unknown -> no flag, spent -> refuse.
+function headlessArgs({ schema, budget, write = false } = {}) {
+  const usd = budget == null ? null : Math.floor(Number(budget) * 100) / 100; // whole cents, rounded down
+  if (usd != null && !(usd > 0)) throw new Error(`no run budget left (${budget}); escalate instead of running`); // 0, negative and NaN alike
+  return [
+    '--output-format', 'json', '--setting-sources', 'user', '--strict-mcp-config',
+    '--permission-mode', write ? 'auto' : 'manual', '--permission-prompts', 'none',
+    ...(usd != null ? ['--max-budget-usd', String(usd)] : []),
+    ...(schema ? ['--json-schema', typeof schema === 'string' ? schema : JSON.stringify(schema)] : []),
+    ...(write ? [] : ['--allowedTools', 'Bash(git diff:*)', 'Bash(git log:*)', 'Read', 'Grep', 'Glob']), // variadic: keep last
+  ];
+}
+
 export default {
   id: 'claude-code',
   label: 'Claude Code',
@@ -34,9 +51,8 @@ export default {
     const ok = r.code === 0 && s.loggedIn !== false;
     return { ok, hint: ok ? s.authMethod || 'signed in' : 'claude auth login' };
   },
-  // Display only: the real flags are pinned by `F headless-args RUN [--review|--write]` (read-only manual mode unless --write).
-  headless: () => ({ cmd: 'claude', args: ['-p', '<prompt>', '$(F headless-args <run> [--review|--write])'],
-    note: 'Flags pinned by F headless-args: --output-format json, --setting-sources user, --strict-mcp-config, --permission-mode manual (auto only with --write), --permission-prompts none.' }),
+  headlessArgs, // F headless-args prints these; F names no harness
+  headless: () => ({ cmd: 'claude', args: ['-p', '<prompt>', ...headlessArgs()], note: 'Read-only default; F headless-args <run> --write switches to auto mode for build, --review adds the review schema.' }),
   providerTools: () => TOOLS,
   notes() {
     const label = 'claude-cli:// links ("Open in Claude")', hint = 'Run claude and send one message in an interactive session; that registers the link handler.';

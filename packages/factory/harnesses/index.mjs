@@ -7,7 +7,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ID = /^[a-z][a-z0-9-]{0,30}$/;
-const OPTIONAL = ['headless', 'providerTools', 'sessions', 'notes', 'current'];
+// models(): reserved for per-step model selection; nothing reads it yet.
+const OPTIONAL = ['headless', 'providerTools', 'sessions', 'notes', 'current', 'headlessArgs', 'models'];
 
 // Shape check at load time; behaviour is checked by the shared contract test in factory.mjs.
 export function check(h, file) {

@@ -1,0 +1,53 @@
+{
+  "id": "next-web",
+  "name": "Next.js web app",
+  "description": "Next.js (App Router, TypeScript, ESLint) with pnpm, Vitest + Testing Library, and a CI workflow running the same checks.",
+  "notes": "Init flags were run once for real on 2026-11-22 (create-next-app@15): pnpm lint, typecheck, test and build passed on the result.",
+  "init": [
+    [
+      "npx",
+      "--yes",
+      "create-next-app@15",
+      ".",
+      "--ts",
+      "--eslint",
+      "--app",
+      "--src-dir",
+      "--use-pnpm",
+      "--import-alias",
+      "@/*",
+      "--yes"
+    ],
+    [
+      "pnpm",
+      "add",
+      "-D",
+      "vitest@3",
+      "@vitejs/plugin-react@4",
+      "jsdom@26",
+      "@testing-library/react@16",
+      "@testing-library/dom@10"
+    ],
+    [
+      "npm",
+      "pkg",
+      "set",
+      "scripts.test=vitest run",
+      "scripts.typecheck=tsc --noEmit"
+    ]
+  ],
+  "checks": [
+    "pnpm lint",
+    "pnpm typecheck",
+    "pnpm test",
+    "pnpm build"
+  ],
+  "files": {
+    "vitest.config.ts": "import { defineConfig } from 'vitest/config';\nimport react from '@vitejs/plugin-react';\n\nexport default defineConfig({\n  plugins: [react()],\n  resolve: { alias: { '@': new URL('./src', import.meta.url).pathname } },\n  test: { environment: 'jsdom' },\n});\n",
+    "src/smoke.test.ts": "import { expect, test } from 'vitest';\n\ntest('the test runner works', () => {\n  expect(1 + 1).toBe(2);\n});\n",
+    ".github/workflows/ci.yml": "name: ci\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  checks:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: pnpm/action-setup@v4\n        with:\n          version: 10\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 22\n          cache: pnpm\n      - run: pnpm install --frozen-lockfile\n      - run: pnpm lint\n      - run: pnpm typecheck\n      - run: pnpm test\n      - run: pnpm build\n",
+    "AGENTS.md": "# {{name}}\n\n{{idea}}\n\nThis repo was started by the Software Factory from an idea. `PLAN.md` holds the vision, MVP scope, non-goals, stack and milestones. Read it before changing anything.\n\n## Checks\n\nEvery change keeps these green. CI runs the same commands:\n\n{{checks}}\n\nRun the app locally with `pnpm dev`.\n\n## Working rules\n\n- One issue, one small PR: at most 300 changed lines, tests included.\n- Every source change adds or changes a test.\n- No new dependencies without a human. A change to `package.json` or a lockfile always goes to a human for review.\n- Stay inside the MVP scope in `PLAN.md`. Its non-goals are out of scope.\n",
+    "CLAUDE.md": "@AGENTS.md\n",
+    "README.md": "# {{name}}\n\n{{idea}}\n\nStarted from the `{{stack}}` stack template by the Software Factory. The plan is in [PLAN.md](PLAN.md).\n\n## Develop\n\n```bash\npnpm install\npnpm dev\n```\n\nChecks (CI runs the same):\n\n{{checks}}\n"
+  }
+}

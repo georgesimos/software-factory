@@ -29,4 +29,6 @@ export default {
   sessions: (repoPath, remoteUrl) => [],  // → [{branch, id, cwd, last}] from the agent's local logs; branch names and times only, never prompts
   notes: () => [],                        // → [{label, ok: true|false|null, hint}] extra setup checks for the wizard
   current: () => null,                    // → the session id when F runs inside this agent (from its env), else null
+  // Reserved for per-step model selection (not read yet): the models and aliases a runner on this harness can pick.
+  // models: () => [{ id: 'my-model-1', alias: 'fast', label: 'My Model 1' }],
 };

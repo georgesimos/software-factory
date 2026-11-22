@@ -39,7 +39,8 @@ let server, browser, last;
     const ctx = await browser.newContext({ viewport: { width, height: width < 600 ? 812 : 860 }, colorScheme: scheme });
     const page = (last = await ctx.newPage());
     page.on('pageerror', (e) => errors.push(`${width}/${scheme}: ${e.message}`));
-    page.on('console', (m) => { if (m.type() === 'error' && !/fonts\.g/.test(m.text())) errors.push(`${width}/${scheme} console: ${m.text()}`); });
+    // 400s are the validation refusals the test provokes and asserts on.
+    page.on('console', (m) => { if (m.type() === 'error' && !/fonts\.g|status of 400/.test(m.text())) errors.push(`${width}/${scheme} console: ${m.text()}`); });
     return { ctx, page };
   };
   const shot = async (page, name) => { const f = path.join(SHOTS, name + '.png'); await page.screenshot({ path: f }); shots.push(f); };
@@ -61,7 +62,15 @@ let server, browser, last;
     await card.locator('button', { hasText: 'Attach' }).click();
     await card.locator('.chip', { hasText: 'attached' }).waitFor();
     assert.match(await status(page).innerText(), /Attached acme\/app/);
-    assert.match(await wiz(page).innerText(), /Create from an idea/); // enabled or "coming soon", depending on whether F new exists
+    // F new exists on main, so the idea card records an idea through POST /idea and hands back an id-only command.
+    await wiz(page).locator('[data-k="ob-idea-go"]').click();
+    await status(page).filter({ hasText: 'repo must look like owner/name' }).waitFor(); // validated by startIdea: an empty repo is refused
+    await wiz(page).locator('[data-k="ob-idea-repo"]').fill('acme/budget');
+    await wiz(page).locator('[data-k="ob-idea-text"]').fill('a personal budget app');
+    await wiz(page).locator('[data-k="ob-idea-go"]').click();
+    await status(page).filter({ hasText: 'Idea recorded for acme/budget:project' }).waitFor();
+    assert.match(await wiz(page).locator('.ob-cmd code').last().innerText(), /^\/software-factory new acme\/budget$/);
+    assert.match(fs.readFileSync(path.join(DIR, 'events.jsonl'), 'utf8'), /"stage":"idea","status":"started"/);
     await shot(page, '1280-light-2-repo');
     await next(page);
     assert.equal(await wiz(page).locator('[data-k="ob-scope:acme/app"]').getAttribute('aria-pressed'), 'true');
@@ -122,6 +131,7 @@ let server, browser, last;
     for (let i = 0; i < 6; i++) {
       if (i) await page.keyboard.press('Alt+ArrowRight');
       await wiz(page).locator(`.ob-rail li:nth-child(${i + 1}) button[aria-current="step"]`).waitFor();
+      assert.doesNotMatch(await wiz(page).innerText(), /\b(null|undefined|NaN)\b/, `${width}px step ${i + 1}: no stray null`);
       assert.ok(await page.evaluate(() => [document.documentElement, document.querySelector('.ob-main')].every((n) => n.scrollWidth <= n.clientWidth)), `${width}px: no horizontal scroll`);
       await shot(page, `${width}-${scheme}-${i + 1}`);
     }
