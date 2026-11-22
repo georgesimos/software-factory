@@ -27,12 +27,12 @@ export const PROJECT_BUDGET_USD = 50; // per idea-to-app project, over all its i
 export const MAX_ISSUES_PER_SESSION = 10; // issues one `F loop` session picks before it stops; rule project.maxIssuesPerSession can only lower it
 // $ per million tokens: [input, output, cache read, cache write 5m, cache write 1h]. Fast mode bills 2x.
 // shortcut: hand-copied from Anthropic's pricing pages in 2026-11 (Fable 5.2 input/output checked against Claude Code's own cost-state
-// lines; its cache rates are assumed at the usual 0.1x / 1.25x / 2x); keep them current. Unknown models get no cost, only tokens.
+// lines; its cache read is 0.025x and its writes 1.25x / 2x, per docs/research/model-routing.md §6.1); keep them current. Unknown models get no cost, only tokens.
 const PRICES = {
   'claude-opus-5-5': [4, 20, 0.2, 5, 8],
   'claude-sonnet-5-5': [2, 10, 0.1, 2.5, 4],
   'claude-haiku-5-5': [0.1, 0.5, 0.01, 0.125, 0.2], // shortcut: the prompts-up-to-100K tier; longer prompts bill 5x
-  'claude-fable-5-2': [8, 40, 0.8, 10, 16],
+  'claude-fable-5-2': [8, 40, 0.2, 10, 16],
   'claude-opus-5': [5, 25, 0.5, 6.25, 10],
   'claude-opus-4-7': [5, 25, 0.5, 6.25, 10], 'claude-opus-4-6': [5, 25, 0.5, 6.25, 10], 'claude-opus-4-5': [5, 25, 0.5, 6.25, 10],
   'claude-sonnet-4-6': [3, 15, 0.3, 3.75, 6], 'claude-sonnet-4-5': [3, 15, 0.3, 3.75, 6],
@@ -1728,6 +1728,8 @@ function usageTest() {
   // Appended lines are read incrementally; a deleted transcript keeps its measured rows.
   fs.appendFileSync(main, '{"type":"assistant","usage":1}\n' + msg(380, 'm7', 'claude-opus-5-5', u(0, 50_000)));
   assert.equal(getRun(R).burn.byStage.build.costUsd, 10);
+  assert.equal(costOf('claude-fable-5-2', [0, 0, 1e6, 0, 0]), 0.2); // Fable cache reads list at $0.20/MTok (#15)
+  assert.equal(costOf('claude-fable-5-2', [1e6, 1e6, 1e6, 1e6, 1e6]).toFixed(2), '74.20'); // 8 + 40 + 0.2 + 10 + 16
   fs.rmSync(main);
   assert.equal(getRun(R).burn.total.tokens, 3_471_000);
   // Caps: measured dollars win over tokens; without a price, cache reads don't count toward the token cap.
