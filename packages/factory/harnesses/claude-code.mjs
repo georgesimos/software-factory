@@ -32,7 +32,7 @@ export default {
     let s = {};
     try { s = JSON.parse(r.out); } catch { /* older CLI or not installed */ }
     const ok = r.code === 0 && s.loggedIn !== false;
-    return { ok, hint: ok ? `signed in${s.authMethod ? ` (${s.authMethod})` : ''}` : 'claude auth login' };
+    return { ok, hint: ok ? s.authMethod || 'signed in' : 'claude auth login' };
   },
   headless: () => ({ cmd: 'claude', args: ['-p', '<prompt>', '--output-format', 'json', '--permission-mode', 'auto', '--permission-prompts', 'none'],
     note: 'Say whether --bare is used. Without it, -p runs the repo\'s hooks and MCP servers with no trust prompt, so never in an untrusted checkout.' }),

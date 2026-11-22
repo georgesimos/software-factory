@@ -1258,6 +1258,7 @@ export function setShip(scope, kinds) {
   fs.mkdirSync(DIR, { recursive: true });
   fs.writeFileSync(onboardFile() + '.tmp', JSON.stringify(o, null, 2));
   fs.renameSync(onboardFile() + '.tmp', onboardFile());
+  render();
   return o[scope];
 }
 

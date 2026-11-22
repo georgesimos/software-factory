@@ -23,7 +23,7 @@ const adapter = {
   login() {
     const r = run(['login', 'status']);
     const ok = r.code === 0 && /logged in/i.test(r.out) && !/not logged in/i.test(r.out);
-    return { ok, hint: ok ? r.out.trim().split('\n').pop().toLowerCase() : 'codex login' };
+    return { ok, hint: ok ? r.out.trim().split('\n').pop().replace(/^logged in\s*/i, '') || 'signed in' : 'codex login' };
   },
   headless: () => ({ cmd: 'codex', args: ['exec', '-C', '<worktree>', '-s', 'read-only', '--output-schema', '<review.schema.json>', '-o', '<out.json>', '<prompt>'],
     note: 'Build uses -s workspace-write. Never pass --dangerously-bypass-approvals-and-sandbox.' }),

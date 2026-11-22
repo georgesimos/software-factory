@@ -460,6 +460,66 @@ dialog.sk-pick[open] { display: flex; flex-direction: column; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+/* Setup wizard: a full-screen modal dialog, so the page's reload (skipped under an open dialog) never drops typed input. */
+dialog.ob { width: 100vw; height: 100vh; height: 100dvh; max-width: none; max-height: none; margin: 0; padding: 0; border: 0; background: var(--bg); color: var(--ink); }
+dialog.ob[open] { display: grid; grid-template-columns: 248px minmax(0, 1fr); grid-template-rows: var(--hh) minmax(0, 1fr) auto; }
+.ob-top { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; padding: 0 var(--gut); border-bottom: 1px solid var(--line); }
+.ob-top h2 { margin: 0; font: 600 14px/1 var(--sans); letter-spacing: -.01em; white-space: nowrap; }
+.ob-top .sk-live { margin: 0 0 0 auto; min-width: 0; }
+.ob-rail { grid-row: 2 / 4; overflow: auto; padding: 24px 14px; border-right: 1px solid var(--line); }
+.ob-rail ol { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.ob-rail button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; border: 0; border-radius: 6px; background: none;
+  font-size: 13.5px; color: var(--ink-2); text-align: left; cursor: pointer; }
+.ob-rail button:hover { color: var(--ink); }
+.ob-rail button[aria-current="step"] { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--line-2); }
+.ob-n { display: grid; place-items: center; flex: none; width: 20px; height: 20px; border: 1px solid var(--line-2); border-radius: 50%; font: 500 10.5px/1 var(--mono); color: var(--ink-3); }
+.ob-rail .done .ob-n { border-color: var(--ink); background: var(--ink); color: var(--bg); }
+.ob-rail [aria-current="step"] .ob-n { border-color: var(--accent); color: var(--accent); background: none; }
+.ob-keys { margin: 18px 10px 0; font-size: 11.5px; color: var(--ink-3); }
+.ob-main { overflow: auto; padding: 36px var(--gut) 48px; }
+.ob-step { max-width: 780px; }
+.ob-step h3.ob-h { margin: 0; font: 600 22px/1.25 var(--sans); letter-spacing: -.015em; outline: none; }
+.ob-lead { margin: 6px 0 22px; font-size: 14px; color: var(--ink-2); }
+.ob-foot { grid-column: 2; display: flex; align-items: center; gap: 10px; padding: 12px var(--gut); border-top: 1px solid var(--line); background: var(--bg); }
+.ob-foot .sk-status { flex: 1; min-width: 0; margin: 0; }
+.ob-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 12px; }
+.ob-card { display: grid; align-content: start; gap: 10px; min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.ob-card h4 { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 0; font: 600 14.5px/1.3 var(--sans); overflow-wrap: anywhere; }
+.ob-card.off { border-style: dashed; background: none; color: var(--ink-3); }
+.ob-card.off h4 { color: var(--ink-2); }
+.ob-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; font-size: 13px; color: var(--ink-2); }
+.ob-path { font: 11.5px/1.4 var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
+.ob-cmd { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 6px 6px 10px; border-radius: var(--r); background: var(--sunken); font: 12px/1.45 var(--mono); }
+.ob-cmd code { flex: 1; min-width: 0; overflow-wrap: anywhere; user-select: all; }
+.ob-pick { cursor: pointer; }
+.ob-pick input { position: absolute; opacity: 0; pointer-events: none; }
+.ob-pick:has(input:checked) { border-color: color-mix(in srgb, var(--accent) 60%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent); }
+.ob-pick:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ob-box { display: grid; place-items: center; width: 16px; height: 16px; border: 1px solid var(--line-2); border-radius: 4px; font-size: 11px; line-height: 1; }
+.ob-pick:has(input:checked) .ob-box { border-color: var(--accent); background: var(--accent); color: var(--bg); }
+.ob-sect { margin-top: 28px; }
+.ob-sect > h4 { margin: 0 0 10px; font: 500 10.5px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.ob-form { display: grid; gap: 16px; max-width: 600px; }
+.ob-form textarea.sk-input { min-height: 74px; resize: vertical; font: 12.5px/1.5 var(--mono); }
+.ob-form select.sk-input { width: auto; }
+.ob-check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink); }
+.ob-check input { accent-color: var(--accent); }
+.ob-pre { margin: 0; max-height: 300px; overflow: auto; padding: 12px 14px; border-radius: 8px; background: var(--sunken); font: 11.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ob-scope { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: -8px 0 22px; font-size: 12.5px; color: var(--ink-3); }
+.ob-scope .seg { max-width: 100%; }
+.ob-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.ob-list li { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.ob-list li .sk-act { margin-left: auto; }
+@media (max-width: 760px) {
+  dialog.ob[open] { grid-template-columns: minmax(0, 1fr); grid-template-rows: var(--hh) auto minmax(0, 1fr) auto; }
+  .ob-top .sk-live span { display: none; }
+  .ob-rail { grid-row: 2; padding: 8px var(--gut); border-right: 0; border-bottom: 1px solid var(--line); }
+  .ob-rail ol { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+  .ob-rail button { padding: 6px 8px; white-space: nowrap; }
+  .ob-rail button:not([aria-current="step"]) .ob-t, .ob-keys { display: none; }
+  .ob-main { padding-top: 24px; }
+  .ob-foot { grid-column: 1; }
+}
 </style>
 </head>
 <body>
@@ -481,13 +541,14 @@ const STAGES = ['intake', 'spec', 'build', 'review', 'gate', 'approve'];
 const TERMINAL = ['merged', 'escalated', 'rejected', 'closed', 'split']; // needs-info / awaiting-approval resume in their stage
 const TONE = { 'in-progress': 'run', merged: 'ok', escalated: 'warn', 'needs-info': 'warn', 'awaiting-approval': 'warn', rejected: 'bad', closed: 'idle', split: 'idle' };
 const LABEL = { 'in-progress': 'In progress', merged: 'Merged', escalated: 'Escalated', 'needs-info': 'Needs info', 'awaiting-approval': 'Awaiting approval', rejected: 'Rejected', closed: 'Closed', split: 'Split' };
-const SRC = { 'claude-code': 'Claude Code', codex: 'Codex', 'claude-code+codex': 'Claude Code + Codex', none: 'No session', human: 'Human' };
 const CAP = DATA.cap || 3;
 const DONE_MAX = 20;
 
 const num = (x) => typeof x === 'number' && isFinite(x);
 const arr = (x) => (Array.isArray(x) ? x : []);
 const obj = (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x : {});
+// Harness labels come from the registry (DATA.harnesses); a run's source can be several, joined by "+".
+const srcName = (x) => ({ none: 'No session', human: 'Human' })[x] || String(x).split('+').map((id) => (arr(DATA.harnesses).find((h) => obj(h).id === id) || {}).label || id).join(' + ');
 const repoOf = (id) => String(id).split(/[#:]/)[0];
 const shortId = (id) => String(id).replace(/^[^/#:]*\//, '');
 const keep = (s, k, v) => { try { return v === undefined ? s.getItem(k) : s.setItem(k, v); } catch { return null; } };
@@ -598,7 +659,7 @@ function card(r, selected) {
   if (!r.imported && r.iteration > 0) foot.push(iterDots(r));
   if (!done && r.stage === 'review') foot.push(reviewProgress(r));
   if (!done && r.loopbacks.length) foot.push(el('span', { class: 'loops', title: 'Loop-backs' }, '↺' + r.loopbacks.length));
-  if (r.imported) foot.push(chip('Tracked' + (r.source ? ' · ' + (SRC[r.source] || r.source) : ''), 'quiet'));
+  if (r.imported) foot.push(chip('Tracked' + (r.source ? ' · ' + srcName(r.source) : ''), 'quiet'));
   if (r.children.length) foot.push(chip(`${r.children.length} runs`, 'quiet'));
   if (r.sessions.length) foot.push(chip(`${r.sessions.length} session${r.sessions.length > 1 ? 's' : ''}`, 'quiet'));
   if (r.burn && r.burn.total.tokens) {
@@ -768,7 +829,7 @@ function decision(r) {
   else if (r.decision) body = [head(r.outcome === 'merged' ? 'ok' : r.decision.action === 'merge' ? 'run' : 'warn',
     r.outcome === 'merged' ? 'Merged' : r.outcome === 'escalated' ? 'Escalated to a human' : r.decision.action === 'merge' ? 'Merging' : 'Escalating'), list(r.decision.reasons)];
   else if (r.imported) body = [head('idle', 'Tracked, not driven'), el('p', { class: 'muted', style: 'margin-top:10px' },
-    `Imported${r.source ? ' from ' + (SRC[r.source] || r.source) : ''}. The factory will not build or merge it.`)];
+    `Imported${r.source ? ' from ' + srcName(r.source) : ''}. The factory will not build or merge it.`)];
   else body = el('p', { class: 'muted' }, 'No decision yet.');
   const rev = r.reverted ? el('div', { class: 'callout' }, el('b', {}, 'Reverted'), obj(r.reverted).reason ? ' · ' + r.reverted.reason : '', link(obj(r.reverted).pr, 'Revert PR')) : null;
   return section('Decision', body, rev);
@@ -892,7 +953,7 @@ function detail(r) {
   return el('div', { class: 'd-in' },
     el('div', { class: 'd-bar' }, el('span', { class: 'id' }, r.id), el('span', { class: 'd-bar-t', 'aria-hidden': 'true' }, r.title || r.branch || r.id),
       chip(r.reverted ? 'Reverted' : LABEL[r.outcome], r.reverted ? 'bad' : TONE[r.outcome]),
-      r.imported ? chip('Tracked' + (r.source ? ' · ' + (SRC[r.source] || r.source) : ''), 'quiet') : null,
+      r.imported ? chip('Tracked' + (r.source ? ' · ' + srcName(r.source) : ''), 'quiet') : null,
       r.archived ? chip('Archived', 'quiet') : null, el('div', { class: 'd-acts' }, focus, close)),
     el('h2', { class: 'd-title', id: 'd-title', tabindex: '-1' }, r.title || r.branch || r.id),
     r.spec ? el('p', { class: 'd-spec' }, r.spec) : null,
@@ -1283,7 +1344,265 @@ function pickRunner({ title, step, scope, current, axis }) {
   });
 }
 
+// ---- Setup wizard. Under `F ui` it reads POST /onboard and writes through the /onboard/* endpoints (the same validated
+// functions as the CLI). As a plain file it is read-only and gives the command for every step instead.
+const OB_STEPS = [['ai', 'Local AI'], ['repo', 'Repo'], ['ship', 'What you ship'], ['flow', 'Workflow'], ['rules', 'Rules'], ['start', 'Review and start']];
+const OB_SHIP = [['web', 'Web', 'A site or web app with preview and production deploys.'], ['mobile', 'Mobile', 'An iOS or Android app: builds, TestFlight and the stores.'], ['database', 'Database', 'A Postgres database with a branch per pull request.']];
+const OB = { state: null, loading: false, error: '' };
+const obSaved = () => { try { return obj(JSON.parse(store('factory.onboard') || '{}')); } catch { return {}; } };
+const obKeep = (p) => store('factory.onboard', JSON.stringify({ ...obSaved(), ...p }));
+const obLive = () => !!SK.token;
+// Live state when served by F ui, else what the static page carries.
+const obProjects = () => (OB.state ? Object.keys(obj(OB.state.projects)) : arr(DATA.projects));
+const obScope = () => { const s = obSaved().scope, ps = obProjects(); return s === 'default' || ps.includes(s) ? s : ps[0] || 'default'; };
+const obRules = (scope) => obj(OB.state ? obj(OB.state.rules)[scope] : obj(DATA.rules)[scope]);
+const obShipOf = (scope) => arr(obj(obj(OB.state ? OB.state.ship : DATA.onboard)[scope]).ship);
+const obHooks = () => obj(OB.state ? OB.state.hooks : DATA.hooks);
+
+async function obPost(url, body) {
+  const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-factory-token': SK.token }, body: JSON.stringify(body || {}) });
+  const x = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(x.error || 'request failed (' + res.status + ')');
+  OB.state = { ...OB.state, ...x };
+  if (x.skills) DATA.skills = x.skills; // the Skills sheet and runner picker read it
+  if (x.projects) DATA.projects = Object.keys(x.projects);
+  return x;
+}
+
+const cmdBlock = (cmd) => {
+  const b = el('button', { class: 'copy', type: 'button', 'aria-label': 'Copy command' }, 'Copy');
+  b.onclick = async () => { if (await copyText(cmd)) { b.textContent = 'Copied'; b.classList.add('done'); } };
+  return el('div', { class: 'ob-cmd' }, el('code', {}, cmd), b);
+};
+const state = (ok, yes, no) => el('span', { class: 'ob-row' }, dot(ok ? 'ok' : ok === null ? 'idle' : 'warn'), ok ? yes : no);
+
+function openWizard() {
+  if (document.querySelector('dialog.ob')) return;
+  const d = el('dialog', { class: 'ob', 'aria-labelledby': 'ob-title' });
+  d.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') e.stopPropagation(); // don't also close a run behind it
+    if (e.altKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft') && e.target.closest('dialog') === d) { e.preventDefault(); obGo(d, (Number(obSaved().step) || 0) + (e.key === 'ArrowRight' ? 1 : -1)); }
+  });
+  d.addEventListener('close', () => { session('factory.onboardClosed', '1'); d.remove(); restoreFocus('ob-btn'); });
+  document.body.append(d);
+  d.showModal();
+  drawWizard(d, true);
+  if (obLive() && !OB.state) obLoad(d);
+}
+
+async function obLoad(d) {
+  OB.loading = true; OB.error = ''; drawWizard(d);
+  try { await obPost('/onboard', {}); } catch (e) { OB.error = e.message; }
+  OB.loading = false; drawWizard(d);
+}
+
+function obGo(d, i) {
+  const step = Math.max(0, Math.min(OB_STEPS.length - 1, Number(i) || 0));
+  obKeep({ step, seen: Math.max(Number(obSaved().seen) || 0, step) });
+  drawWizard(d, true);
+}
+
+function drawWizard(d, focusHead) {
+  const step = Math.max(0, Math.min(OB_STEPS.length - 1, Number(obSaved().step) || 0)), [key, title] = OB_STEPS[step];
+  const status = el('p', { class: 'sk-status', role: 'status', 'aria-live': 'polite' });
+  const redraw = (msg) => { drawWizard(d); if (msg) d.querySelector('.ob-foot .sk-status').textContent = msg; };
+  const fail = (e) => { status.className = 'sk-status bad'; status.textContent = e.message || String(e); };
+  const close = el('button', { class: 'close', type: 'button', 'aria-label': 'Close setup' }, 'Close', el('kbd', {}, 'Esc'));
+  close.onclick = () => d.close();
+  const top = el('header', { class: 'ob-top' }, el('div', { class: 'mark', 'aria-hidden': 'true' }), el('h2', { id: 'ob-title' }, 'Set up the factory'),
+    obLive() ? el('p', { class: 'sk-live' }, dot('ok'), el('span', {}, 'Live: saves through F ui')) : el('p', { class: 'sk-live' }, dot('idle'), el('span', {}, 'Read-only page: each step shows the command to run')), close);
+  const seen = Number(obSaved().seen) || 0;
+  const rail = el('nav', { class: 'ob-rail', 'aria-label': 'Setup steps' }, el('ol', {}, OB_STEPS.map(([k, t], i) => {
+    const b = el('button', { type: 'button', class: i < step || i <= seen && i !== step ? 'done' : null, 'aria-current': i === step ? 'step' : null, 'data-k': 'ob-step:' + k },
+      el('span', { class: 'ob-n', 'aria-hidden': 'true' }, i < step || i <= seen && i !== step ? '✓' : String(i + 1)), el('span', { class: 'ob-t' }, t), el('span', { class: 'sr' }, `, step ${i + 1} of ${OB_STEPS.length}`));
+    b.onclick = () => obGo(d, i);
+    return el('li', {}, b);
+  })), el('p', { class: 'ob-keys' }, el('kbd', {}, 'Alt'), ' + ', el('kbd', {}, '←'), ' ', el('kbd', {}, '→'), ' to move between steps'));
+  const head = el('h3', { class: 'ob-h', id: 'ob-h', tabindex: '-1' }, title);
+  const body = obLive() && !OB.state && !OB.error ? [el('p', { class: 'ob-lead' }, 'Checking this machine: harness CLIs, logins and local clones…')]
+    : obLive() && !OB.state ? [el('p', { class: 'sk-err' }, OB.error), obRetry(d)] : OB_BODY[key]({ d, status, redraw, fail });
+  const back = el('button', { class: 'sk-ghost', type: 'button', disabled: step === 0 ? '' : null }, 'Back');
+  back.onclick = () => obGo(d, step - 1);
+  const last = step === OB_STEPS.length - 1;
+  const next = el('button', { class: 'sk-primary', type: 'button', 'data-k': 'ob-next' }, last ? 'Finish' : 'Next');
+  next.onclick = () => { if (last) { obKeep({ done: true }); d.close(); } else obGo(d, step + 1); };
+  d.replaceChildren(top, rail, el('main', { class: 'ob-main' }, el('section', { class: 'ob-step', 'aria-labelledby': 'ob-h' }, head, body)), el('footer', { class: 'ob-foot' }, status, back, next));
+  if (focusHead || !d.contains(document.activeElement)) head.focus({ preventScroll: true }); // a redraw must never drop focus out of the dialog
+}
+const obRetry = (d) => { const b = el('button', { class: 'sk-ghost', type: 'button' }, 'Check again'); b.onclick = () => obLoad(d); return b; };
+
+// Steps 3-6 are configured per project, or globally.
+function obScopePicker(redraw) {
+  const scopes = ['default', ...obProjects()], cur = obScope();
+  return el('div', { class: 'ob-scope' }, 'Applies to', el('nav', { class: 'seg', 'aria-label': 'Configure for' }, scopes.map((s) => {
+    const b = el('button', { type: 'button', 'aria-pressed': String(s === cur), 'data-k': 'ob-scope:' + s }, s === 'default' ? 'All projects' : s);
+    b.onclick = () => { obKeep({ scope: s }); redraw(); restoreFocus('ob-scope:' + s); };
+    return b;
+  })));
+}
+
+const OB_BODY = {
+  ai({ d }) {
+    const lead = el('p', { class: 'ob-lead' }, 'The AI harnesses on this machine. The factory can run any step on any of them once it is installed and signed in.');
+    if (!obLive()) return [lead, el('div', { class: 'ob-grid' }, arr(DATA.harnesses).map(obj).map((h) => el('div', { class: 'ob-card' }, el('h4', {}, h.label),
+      el('span', { class: 'ob-row' }, 'Install with'), cmdBlock(String(h.install || ''))))),
+      el('div', { class: 'ob-sect' }, el('h4', {}, 'Check install and login'), cmdBlock(F_CMD + ' onboard'))];
+    const cards = arr(OB.state.harnesses).map(obj).map((h) => {
+      const login = obj(h.login), ok = h.installed && login.ok;
+      return el('div', { class: 'ob-card', 'data-harness': h.id }, el('h4', {}, dot(ok ? 'ok' : h.installed ? 'warn' : 'bad'), h.label, h.version ? chip(h.version, 'quiet') : null),
+        h.installed ? state(true, 'Installed') : [state(false, '', 'Not installed'), cmdBlock(String(h.install))],
+        h.installed ? (login.ok ? state(true, 'Signed in' + (login.hint ? ' · ' + login.hint : '')) : [state(false, '', 'Not signed in'), cmdBlock(String(login.hint || ''))]) : null,
+        arr(h.notes).map(obj).map((n) => el('div', { class: 'ob-row' }, dot(n.ok ? 'ok' : n.ok === null ? 'idle' : 'warn'), el('span', {}, n.label, ': ', n.hint))),
+        h.headless ? el('div', { class: 'ob-path', title: obj(h.headless).note || '' }, 'Headless: ', [obj(h.headless).cmd, ...arr(obj(h.headless).args)].join(' ')) : null);
+    });
+    return [lead, el('div', { class: 'ob-grid' }, cards.length ? cards : el('p', { class: 'muted' }, 'No harness adapters are registered.')), el('div', { class: 'ob-sect' }, obRetry(d))];
+  },
+
+  repo({ status, redraw, fail }) {
+    const lead = el('p', { class: 'ob-lead' }, 'Attach a local clone. The factory imports its open pull requests and the agent sessions already working on it.');
+    const hooks = obHooks();
+    const idea = el('div', { class: 'ob-card' + (hooks.create ? '' : ' off'), 'aria-disabled': hooks.create ? null : 'true' },
+      el('h4', {}, 'Create from an idea', hooks.create ? null : chip('coming soon', 'quiet')),
+      el('span', { class: 'ob-row' }, 'Describe an app; the factory creates the repo and its first issues.'), hooks.create ? cmdBlock(F_CMD + ' new') : null);
+    if (!obLive()) {
+      const ps = arr(DATA.projects);
+      return [lead, ps.length ? el('ul', { class: 'ob-list' }, ps.map((p) => el('li', {}, dot('ok'), el('span', { class: 'sk-name' }, p), chip('attached', 'ok')))) : null,
+        el('div', { class: 'ob-sect' }, el('h4', {}, 'Find clones'), cmdBlock(F_CMD + ' discover')),
+        el('div', { class: 'ob-sect' }, el('h4', {}, 'Attach one'), cmdBlock(F_CMD + ' sync <owner/repo> <clone path>')),
+        el('div', { class: 'ob-sect' }, el('div', { class: 'ob-grid' }, idea))];
+    }
+    const attached = obj(OB.state.projects), repos = arr(OB.state.repos).map(obj);
+    const others = Object.keys(attached).filter((r) => !repos.some((x) => x.repo === r)).map((r) => ({ repo: r, path: obj(attached[r]).path, attached: true }));
+    const card = (x) => {
+      const on = !!attached[x.repo];
+      const b = on ? chip('attached', 'ok') : el('button', { class: 'sk-primary', type: 'button', 'data-k': 'ob-attach:' + x.repo }, 'Attach');
+      if (!on) b.onclick = async () => {
+        b.disabled = true; status.className = 'sk-status'; status.textContent = 'Attaching ' + x.repo + '…';
+        try { await obPost('/onboard/sync', { repo: x.repo, path: x.path }); obKeep({ scope: x.repo }); redraw('Attached ' + x.repo + '. Its open PRs and agent sessions are on the board.'); restoreFocus('ob-next'); }
+        catch (e) { b.disabled = false; fail(e); }
+      };
+      return el('div', { class: 'ob-card', 'data-repo': x.repo }, el('h4', {}, x.repo), el('span', { class: 'ob-path' }, x.path),
+        el('div', { class: 'ob-row' }, x.lastCommit ? 'Last commit ' + ago(x.lastCommit) : null, num(x.worktrees) && x.worktrees ? chip(x.worktrees + ' worktrees', 'quiet') : null), el('div', {}, b));
+    };
+    const list = [...others, ...repos];
+    return [lead, el('div', { class: 'ob-grid' }, list.length ? list.map(card) : el('div', { class: 'ob-card off' }, el('h4', {}, 'No GitHub clones found'),
+      el('span', { class: 'ob-row' }, 'Point discover at the folder that holds your clones:'), cmdBlock(F_CMD + ' discover <folder>')), idea)];
+  },
+
+  ship({ status, redraw, fail }) {
+    const scope = obScope(), cur = obShipOf(scope), conns = obHooks().connectors;
+    const lead = el('p', { class: 'ob-lead' }, 'What this project ships. Only the choice is stored for now; deploy, store and database connectors read it once they are installed.');
+    const boxes = OB_SHIP.map(([k, t, desc]) => {
+      const input = el('input', { type: 'checkbox', value: k, checked: cur.includes(k) ? '' : null, 'aria-label': t });
+      const mine = Array.isArray(conns) ? conns.map(obj).filter((c) => String(c.kind).startsWith(k) || k === 'mobile' && c.kind === 'store') : null;
+      return el('label', { class: 'ob-card ob-pick', 'data-ship': k }, input, el('h4', {}, el('span', { class: 'ob-box', 'aria-hidden': 'true' }, '✓'), t),
+        el('span', { class: 'ob-row' }, desc),
+        el('div', { class: 'ob-row' }, mine ? (mine.length ? mine.map((c) => chip(c.label)) : chip('no connector yet', 'quiet')) : chip('connectors coming soon', 'quiet')));
+    });
+    const picked = () => boxes.map((b) => b.querySelector('input')).filter((i) => i.checked).map((i) => i.value);
+    const cmd = el('div', {});
+    const drawCmd = () => cmd.replaceChildren(obLive() ? '' : cmdBlock(`${F_CMD} onboard ship ${shq(scope)} ${picked().join(',') || '""'}`));
+    for (const b of boxes) b.querySelector('input').addEventListener('change', drawCmd);
+    drawCmd();
+    const save = obLive() ? el('button', { class: 'sk-primary', type: 'button', 'data-k': 'ob-ship-save' }, 'Save choice') : null;
+    if (save) save.onclick = async () => { try { await obPost('/onboard/ship', { scope, ship: picked() }); redraw('Saved: ' + (picked().join(', ') || 'nothing') + ' for ' + (scope === 'default' ? 'all projects' : scope) + '.'); restoreFocus('ob-ship-save'); } catch (e) { fail(e); } };
+    return [lead, obScopePicker(redraw), el('div', { class: 'ob-grid', role: 'group', 'aria-label': 'Targets' }, boxes), el('div', { class: 'ob-sect' }, save, cmd),
+      conns && conns.error ? el('p', { class: 'sk-err' }, 'Ship connectors failed to load: ' + conns.error) : null];
+  },
+
+  flow({ status, redraw }) {
+    const scope = obScope(), S = skData(), plan = obj(obj(obj(S.plans)[scope]).plan), mine = obj(obj(S.config)[scope]);
+    const names = arr(DATA.harnesses).map((h) => obj(h).label).filter(Boolean);
+    const lead = el('p', { class: 'ob-lead' }, 'Who runs each step: the factory’s built-in brief, a skill, an agent, or a harness tool' + (names.length ? ' (' + names.join(', ') + ')' : '') + '.');
+    if (S.error) return [lead, el('p', { class: 'sk-err' }, 'skills.json is invalid: ' + S.error)];
+    const rows = arr(S.steps).map((step) => {
+      const r = obj(plan[step]), label = stepLabel(step), isDef = !r.use || r.use === 'default';
+      const change = el('button', { class: 'copy', type: 'button', 'data-k': 'ob-run:' + step, 'aria-label': 'Change runner for ' + label }, 'Change');
+      change.onclick = async () => {
+        const p = await pickRunner({ title: label, step, scope, current: r });
+        if (!p) return restoreFocus('ob-run:' + step);
+        try { const m = await skApply(scope, step, p.runner, status); if (m) redraw('Saved ' + label + '.'); restoreFocus('ob-run:' + step); }
+        catch (e) { status.className = 'sk-status bad'; status.textContent = e.message; }
+      };
+      return el('li', { 'data-step': step }, el('span', { class: 'sk-name', style: 'min-width:9em' }, label),
+        el('span', { class: 'sk-name' + (isDef ? ' def' : '') }, runnerName(r, scope)), isDef ? null : chip(kindOf(r, scope)),
+        step in mine ? el('span', { class: 'sk-from here' }, 'set here') : null, el('span', { class: 'sk-act' }, change));
+    });
+    const all = el('button', { class: 'sk-ghost', type: 'button', 'data-k': 'ob-skills' }, 'Open the Skills sheet (extra review axes)');
+    all.onclick = () => { SK.scope = scope; openSkills(); };
+    return [lead, obScopePicker(redraw), el('ul', { class: 'ob-list' }, rows), el('div', { class: 'ob-sect' }, all)];
+  },
+
+  rules({ status, redraw, fail }) {
+    const scope = obScope(), R = obRules(scope), pol = obj(R.policy), own = (k) => obj(pol[k]).scope === scope ? obj(pol[k]) : null;
+    const proj = scope !== 'default', am = proj && obj(obj(OB.state ? OB.state.projects : {})[scope]).autoMerge !== false;
+    const lead = el('p', { class: 'ob-lead' }, 'Rules only make the factory stricter, or swap GitHub CI for checks it runs itself. Every change records who made it and why.');
+    const ci = el('select', { class: 'sk-input', 'aria-label': 'CI' }, ['required', 'advisory', 'skip'].map((v) => el('option', { value: v, selected: (obj(pol.ci).value || 'required') === v ? '' : null }, v)));
+    const checks = el('textarea', { class: 'sk-input', placeholder: 'pnpm test\npnpm lint', 'aria-label': 'Local check commands, one per line' });
+    checks.value = arr(obj(pol['checks.commands']).value).join('\n');
+    const merge = el('input', { type: 'checkbox', checked: am ? '' : null, disabled: proj ? null : '' });
+    const guide = el('textarea', { class: 'sk-input', placeholder: 'e.g. Prefer small PRs. Never touch the billing module.', 'aria-label': 'Guidance for every step' });
+    guide.value = String(obj(obj(obj(skData().config)[scope]).guide)['*'] || ''); // raw: resolved guidance folds "*" into every step
+    const guideNow = guide.value;
+    const reason = el('input', { class: 'sk-input', placeholder: 'Why: e.g. GitHub Actions billing is failing', 'aria-label': 'Reason (required)', maxlength: '200' });
+    const until = el('input', { class: 'sk-input', type: 'date', 'aria-label': 'Until (optional)', style: 'width:auto' });
+    const changes = () => {
+      const out = [], cmds = checks.value.split('\n').map((c) => c.trim()).filter(Boolean), was = obj(pol['checks.commands']).value;
+      if (ci.value !== (obj(pol.ci).value || 'required')) out.push({ key: 'ci', value: ci.value });
+      if (JSON.stringify(cmds) !== JSON.stringify(arr(was))) out.push(cmds.length ? { key: 'checks.commands', value: JSON.stringify(cmds) } : own('checks.commands') ? { key: 'checks.commands', unset: true } : null);
+      if (guide.value.trim() !== guideNow.trim()) out.push(guide.value.trim() ? { key: 'guide.*', value: guide.value.trim(), guide: true } : { key: 'guide.*', unset: true, guide: true });
+      return out.filter(Boolean);
+    };
+    const cmdOf = (c) => c.unset ? `${F_CMD} rules unset ${shq(scope)} ${shq(c.key)}` + (reason.value.trim() ? ` --reason ${shq(reason.value.trim())}` : '')
+      : `${F_CMD} rules set ${shq(scope)} ${shq(c.key)} ${shq(c.value)}` + (c.guide ? '' : ` --reason ${shq(reason.value.trim() || '…')}`) + (until.value && !c.guide ? ` --until ${until.value}` : '');
+    const out = el('div', {});
+    const save = el('button', { class: 'sk-primary', type: 'button', 'data-k': 'ob-rules-save' }, obLive() ? 'Save rules' : 'Show commands');
+    save.onclick = async () => {
+      const cs = changes(), amChanged = proj && merge.checked !== am;
+      if (!cs.length && !amChanged) { status.className = 'sk-status'; status.textContent = 'Nothing changed.'; return; }
+      if (cs.some((c) => !c.guide && !c.unset) && !reason.value.trim()) { fail(new Error('A reason is required: it is recorded with the rule.')); reason.focus(); return; }
+      if (!obLive()) { out.replaceChildren(...cs.map((c) => cmdBlock(cmdOf(c))), amChanged ? cmdBlock(`${F_CMD} automerge ${shq(scope)} ${merge.checked ? 'on' : 'off'}`) : ''); return; }
+      try {
+        for (const c of cs) await obPost('/onboard/rule', { scope, key: c.key, value: c.value, unset: !!c.unset, reason: reason.value.trim() || undefined, until: c.guide ? undefined : until.value || undefined });
+        if (amChanged) await obPost('/onboard/automerge', { repo: scope, on: merge.checked });
+        DATA.rules = { ...obj(DATA.rules), [scope]: obRules(scope) };
+        redraw('Rules saved for ' + (scope === 'default' ? 'all projects' : scope) + '.'); restoreFocus('ob-rules-save');
+      } catch (e) { fail(e); }
+    };
+    const active = Object.entries(pol).map(([k, x]) => el('li', {}, el('span', { class: 'sk-name' }, k + ' = ' + JSON.stringify(obj(x).value)),
+      el('span', { class: 'sk-from' + (obj(x).scope === scope ? ' here' : '') }, (obj(x).scope === 'default' ? 'global' : obj(x).scope) + ' · ' + obj(x).setBy + ': ' + obj(x).reason)));
+    return [lead, obScopePicker(redraw), el('div', { class: 'ob-form' },
+      el('label', { class: 'sk-field' }, 'GitHub CI before merging', ci),
+      el('label', { class: 'sk-field' }, 'Local check commands (run by F checks, one per line; they stand in for CI when it is skipped)', checks),
+      el('label', { class: 'ob-check' }, merge, proj ? 'Allow auto-merge when every gate passes' : 'Auto-merge is set per project: pick one above'),
+      el('label', { class: 'sk-field' }, 'Guidance for every step (optional)', guide),
+      el('label', { class: 'sk-field' }, 'Reason (required for rule changes)', reason),
+      el('label', { class: 'sk-field' }, 'Until (optional; the rule then expires)', until),
+      el('div', {}, save), out),
+      active.length ? el('div', { class: 'ob-sect' }, el('h4', {}, 'Rules in force'), el('ul', { class: 'ob-list' }, active)) : null];
+  },
+
+  start({ redraw }) {
+    const scope = obScope(), plan = obj(obj(skData().plans)[scope]), R = obRules(scope);
+    const repo = scope === 'default' ? '<owner/repo>' : scope;
+    const lead = el('p', { class: 'ob-lead' }, 'The resolved plan the factory will follow, exactly as the CLI prints it.');
+    return [lead, obScopePicker(redraw),
+      el('div', { class: 'ob-sect' }, el('h4', {}, `F skills ${scope}`), el('pre', { class: 'ob-pre', 'data-out': 'skills' }, JSON.stringify(plan, null, 2))),
+      el('div', { class: 'ob-sect' }, el('h4', {}, `F rules ${scope}`), Object.keys(R).length ? el('pre', { class: 'ob-pre', 'data-out': 'rules' }, JSON.stringify(R, null, 2)) : cmdBlock(`${F_CMD} rules ${shq(scope)}`)),
+      el('div', { class: 'ob-sect' }, el('h4', {}, 'First run'),
+        el('p', { class: 'ob-row' }, 'In Claude Code, factory an issue:'), cmdBlock(`/software-factory ${repo}#<issue>`),
+        el('p', { class: 'ob-row' }, 'Or see which issues are ready:'), cmdBlock(`${F_CMD} queue ${repo}`))];
+  },
+};
+
+function wizardButton() {
+  const b = el('button', { class: 'skills-btn', 'data-k': 'ob-btn', 'aria-haspopup': 'dialog', title: 'Set up the factory' }, 'Set up');
+  b.onclick = openWizard;
+  document.querySelector('.top').insertBefore(b, document.querySelector('.skills-btn') || document.getElementById('theme'));
+}
+
 skillsButton();
+wizardButton();
 
 // file:// can't fetch, so the factory rewrites this file on every event and the page reloads to pick it up.
 // Keep scroll and keyboard focus across that reload so it is invisible to the reader.
@@ -1301,6 +1620,8 @@ try {
     if (n) n.focus({ preventScroll: true });
   }
 } catch {}
+// No project yet: open the wizard, unless it was closed earlier in this tab (the page reloads itself every few seconds).
+if (!arr(DATA.projects).length && session('factory.onboardClosed') !== '1') openWizard();
 window.addEventListener('pagehide', () => {
   const wrap = document.getElementById('board-wrap');
   session('factory.view', JSON.stringify({ x: wrap ? wrap.scrollLeft : 0, y: window.scrollY, d: document.getElementById('detail').scrollTop,
