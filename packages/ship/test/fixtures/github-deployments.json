@@ -1,0 +1,194 @@
+{
+  "project": {
+    "repo": "acme/app"
+  },
+  "detect": true,
+  "exec": {
+    "gh api repos/acme/app/deployments?per_page=1": [
+      {
+        "id": 3,
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "environment": "Preview – app",
+        "production_environment": false,
+        "transient_environment": false,
+        "creator": {
+          "login": "vercel[bot]"
+        },
+        "created_at": "2026-11-19T04:00:00Z"
+      }
+    ],
+    "gh auth status": "",
+    "gh api repos/acme/app/deployments?sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa&per_page=30": [
+      {
+        "id": 3,
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "environment": "Preview – app",
+        "production_environment": false,
+        "transient_environment": false,
+        "creator": {
+          "login": "vercel[bot]"
+        },
+        "created_at": "2026-11-19T04:00:00Z"
+      },
+      {
+        "id": 2,
+        "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "environment": "neon-audit",
+        "production_environment": false,
+        "transient_environment": false,
+        "creator": {
+          "login": "acme"
+        },
+        "created_at": "2026-11-19T04:00:00Z"
+      }
+    ],
+    "gh api repos/acme/app/deployments/3/statuses?per_page=1": [
+      {
+        "state": "success",
+        "environment_url": "https://app-git-x.vercel.app",
+        "description": "Deployment has completed",
+        "created_at": "2026-11-19T04:05:00Z"
+      }
+    ],
+    "gh api repos/acme/app/deployments/2/statuses?per_page=1": [
+      {
+        "state": "failure",
+        "environment_url": "",
+        "description": "",
+        "created_at": "2026-11-19T04:05:00Z"
+      }
+    ],
+    "gh api repos/acme/app/deployments?per_page=30": [
+      {
+        "id": 9,
+        "sha": "cccccccccccccccccccccccccccccccccccccccc",
+        "environment": "Preview – app",
+        "production_environment": false,
+        "transient_environment": false,
+        "creator": {
+          "login": "vercel[bot]"
+        },
+        "created_at": "2026-11-19T04:00:00Z"
+      },
+      {
+        "id": 8,
+        "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "environment": "Production – app",
+        "production_environment": false,
+        "transient_environment": false,
+        "creator": {
+          "login": "vercel[bot]"
+        },
+        "created_at": "2026-11-19T04:00:00Z"
+      },
+      {
+        "id": 7,
+        "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "environment": "Preview – app",
+        "production_environment": false,
+        "transient_environment": false,
+        "creator": {
+          "login": "vercel[bot]"
+        },
+        "created_at": "2026-11-19T04:00:00Z"
+      },
+      {
+        "id": 6,
+        "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "environment": "staging",
+        "production_environment": false,
+        "transient_environment": false,
+        "creator": {
+          "login": "vercel[bot]"
+        },
+        "created_at": "2026-11-19T04:00:00Z"
+      }
+    ],
+    "gh api repos/acme/app/deployments/9/statuses?per_page=1": [
+      {
+        "state": "in_progress",
+        "environment_url": "http://insecure.example",
+        "description": "",
+        "created_at": "2026-11-19T04:05:00Z"
+      }
+    ],
+    "gh api repos/acme/app/deployments/8/statuses?per_page=1": [
+      {
+        "state": "inactive",
+        "environment_url": "https://app.vercel.app",
+        "description": "",
+        "created_at": "2026-11-19T04:05:00Z"
+      }
+    ],
+    "gh api repos/acme/app/deployments/6/statuses?per_page=1": [
+      {
+        "state": "error",
+        "environment_url": "https://old.vercel.app",
+        "description": "Deployment has been deleted",
+        "created_at": "2026-11-19T04:05:00Z"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expect": [
+        {
+          "connector": "github-deployments",
+          "kind": "web-deploy",
+          "env": "preview",
+          "state": "ready",
+          "url": "https://app-git-x.vercel.app",
+          "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "at": "2026-11-19T04:05:00.000Z",
+          "detail": "Deployment has completed",
+          "creator": "vercel[bot]"
+        },
+        {
+          "connector": "github-deployments",
+          "kind": "web-deploy",
+          "env": "neon-audit",
+          "state": "error",
+          "sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "at": "2026-11-19T04:05:00.000Z",
+          "creator": "acme"
+        }
+      ]
+    },
+    {
+      "expect": [
+        {
+          "connector": "github-deployments",
+          "kind": "web-deploy",
+          "env": "preview",
+          "state": "building",
+          "sha": "cccccccccccccccccccccccccccccccccccccccc",
+          "at": "2026-11-19T04:05:00.000Z",
+          "creator": "vercel[bot]"
+        },
+        {
+          "connector": "github-deployments",
+          "kind": "web-deploy",
+          "env": "production",
+          "state": "canceled",
+          "url": "https://app.vercel.app",
+          "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "at": "2026-11-19T04:05:00.000Z",
+          "detail": "inactive: a newer deployment replaced it",
+          "creator": "vercel[bot]"
+        },
+        {
+          "connector": "github-deployments",
+          "kind": "web-deploy",
+          "env": "staging",
+          "state": "canceled",
+          "url": "https://old.vercel.app",
+          "sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "at": "2026-11-19T04:05:00.000Z",
+          "detail": "Deployment has been deleted",
+          "creator": "vercel[bot]"
+        }
+      ]
+    }
+  ]
+}

@@ -42,6 +42,12 @@ software-factory/
 │   │   │   ├── gh-stub.mjs   fake `gh` used by the self-test (FACTORY_GH)
 │   │   │   └── git-stub.mjs  fake `git branch --no-merged` used by the sync test (FACTORY_GIT)
 │   │   └── package.json      private; `test` = env -u CLAUDE_CODE_SESSION_ID node factory.mjs test
+│   ├── ship/                 @software-factory/ship: the ship harness (phase 0, read only). See docs/plans/ship-harness.md
+│   │   ├── ship.mjs          CLI (`F ship` is an alias): connectors | detect <repo> | status <repo> [sha]; track() records through F's record()
+│   │   ├── contract.mjs      connector contract: id, kind, detect, auth, status, tagged actions; normalized states per kind; validation
+│   │   ├── connectors/       registry (index.mjs) auto-loads every *.mjs except _*: github-deployments.mjs, _template.mjs
+│   │   ├── CONNECTORS.md     add a provider in 4 steps
+│   │   └── test/             shared contract test over every connector + fixtures/<id>.json, plus a fake one-file provider
 │   └── design-system/        @software-factory/design-system: tokens + React components for the desktop app
 │       ├── src/tokens.ts     source of truth for colour, type and spacing tokens
 │       ├── src/tokens.css    generated from tokens.ts (scripts/tokens-css.ts, checked in build)
@@ -156,7 +162,7 @@ Each line is one event:
 - **`run`**, the run id, takes one of two forms:
   - `owner/repo#N` for an issue or an imported PR (they share GitHub's number space);
   - `owner/repo:<branch>` for an imported agent session that has no PR yet.
-- **`stage`** is one of `intake | spec | build | review | gate | approve`. A seventh, `rules`, marks a rule change rather than a run event: `{run: "<owner/repo|default>", stage: "rules", status: "set|unset", key, value?, reason?, until?, setBy}`. `derive()` skips these, `archive()` keeps them, and the dashboard shows them as rule history.
+- **`stage`** is one of `intake | spec | build | review | gate | approve`. `ship` records deploy state: `{run, stage: "ship", status: "passed|failed|started", connector, kind, env, state, url?, sha, at?, detail?, creator?}`, written only by `packages/ship`'s `track()` through `record()` (from `F sync`, `F postmerge`, and `F decide`/`F merge` under `deploy.preview`). `F event` refuses that stage and those fields, and ship events carry no session stamp. Another stage, `rules`, marks a rule change rather than a run event: `{run: "<owner/repo|default>", stage: "rules", status: "set|unset", key, value?, reason?, until?, setBy}`. `derive()` skips these, `archive()` keeps them, and the dashboard shows them as rule history.
 - **`status`** is one of `started | passed | failed | decided | reverted`, or one of the outcomes `rejected | needs-info | merged | escalated | closed | awaiting-approval | split`.
 - **The payload** is spread into the event: for example `summary`, `spec`, `pr`, `branch`, `axes`, `sha`, `range`, `axis`, `findings`, `reasons`, `next`, `action`, `facts`, `tokens` and `costUsd`. `F checks` records `build passed|failed` with `localChecks: {state, sha, commands: [{cmd, exit, ms}]}`, and `derive()` keeps the latest as `r.localChecks`.
 - **Runner stamp.** When `skills.json` names a non-default runner for the step (`intake`, `spec`, `build`, `review.<axis>` or an extra axis, `verifier` for `gate` events), `record()` adds `runner: {use, name?, path?, harness?}`. A `--fallback "<why>"` flag records `runner: {use: "default", fallback: {from, reason}}`. Default runners add nothing.
@@ -184,6 +190,7 @@ The CLI never rewrites the log, with one exception: `archive` rewrites it by wri
 | `costUsd`, `tokens` | summed from every event that reports them |
 | `sessions[]` | distinct `sessionId`s with their last-seen time |
 | `parent` | set on a split child from the parent's `children` |
+| `deploys[]` | `ship` events: the latest `{connector, kind, env, state, status, url, sha, at, detail}` per connector and env. They never change the run's `stage`, `url`, `updated` or `outcome`. |
 
 `TERMINAL` outcomes are `rejected`, `merged`, `escalated`, `closed` and `split`. `needs-info` and `awaiting-approval` are parked states that resume.
 
@@ -360,6 +367,7 @@ Each step can be run by the built-in brief, a user skill or brief, or a harness 
 | `ci` | `required` (built-in), `advisory`, `skip` | `facts()` doesn't read CI under `skip`. `decide()` treats `advisory` and `skip` as "not required", never as green: it needs `r.localChecks` with `state: pass`, `sha == reviewedSha` and the same command list as the rule, else it escalates. With no `checks.commands` rule there's nothing to stand in, so it escalates. `postmerge()` returns `skipped` under `skip` and flags `advisory`, so a billing-red main never opens revert PRs. |
 | `checks.commands` | 1–10 one-line commands | `F checks <run>` runs them with `/bin/sh -c` in the run's worktree, with `CI=1` and a 30-minute timeout each, on a clean HEAD (a dirty tree is refused). Output goes to `local-checks.log`; only exit codes reach the log. Setting the key also makes local checks required when CI is required. |
 | `diffCap` | `1`–`300` | `decide()` uses `min(300, diffCap)`. Raising the cap isn't possible. |
+| `deploy.preview` | `off` (built-in), `advisory`, `required` | `facts()` asks the ship harness for the reviewed commit's deploys and records them. `decide()` under `required` needs one with `kind: web-deploy`, `env: preview`, `state: ready`, an https `url` and `sha == reviewedSha`, from any connector; otherwise it escalates. `advisory` adds a note. Without `packages/ship`, `required` escalates. |
 
 - **Who and why.** `rules set` needs `--reason` and takes `setBy` from `gh api user`, never from an argument. `F skills set` refuses the `rules` and `guide` keys, and a hand-edited entry without a reason, login or valid date fails validation on every read. `render()` catches that and shows a warning chip, so recording events never fails half-way.
 - **Audit.** Every `set` and `unset` appends a `rules` event (§3.1). `F event` refuses that stage.
@@ -549,4 +557,4 @@ The self-test unsets `CLAUDE_CODE_SESSION_ID`, because some of its assertions ch
 - **Model per event.** Record which model produced each intake, spec, review and verifier event, next to `tokens` and `costUsd`, so the dashboard can attribute cost and quality per model and per axis.
 - **SQLite index.** `events.jsonl` stays the append-only source of truth. A rebuildable SQLite index would replace the full re-derive on every render once logs grow, while `archive` keeps the live log small until then.
 - **Build orchestration (only if needed).** Turborepo on top of pnpm for cached, affected-only builds once the desktop app makes builds slow.
-- **Non-goal for now: third-party integrations.** No Sentry, Figma, PagerDuty or similar. Only `SKILL.md`'s intake fetch, comment and label steps are GitHub-specific, so another tracker can be swapped in later (see "Other trackers" in `SKILL.md`).
+- **Ship harness.** Phase 0 (read-only connectors, GitHub Deployments, `deploy.preview`) is built in `packages/ship`; the next phases (Vercel logs, Neon branches, Expo/EAS, store state, the Ship view) follow [docs/plans/ship-harness.md](plans/ship-harness.md), each provider as one connector file plus its fixture. Other third-party integrations (Sentry, Figma, PagerDuty) are still out of scope. Only `SKILL.md`'s intake fetch, comment and label steps are GitHub-specific, so another tracker can be swapped in later (see "Other trackers" in `SKILL.md`).
