@@ -144,7 +144,7 @@ Then run `F risk RUN <files to touch…>`.
 ## 4. Review: parallel, independent, and only what changed
 
 1. `F axes RUN` diffs WT since the last reviewed commit, or since the base on the first iteration. It returns `{axes, range, files}` and records the reviewed commit. A loop-back re-reviews only the axes the new commits touch plus every axis that failed last time.
-2. In a **single message**, spawn one fresh subagent per axis, or run the axis's configured runner (`plan["review.<axis>"]`, or its `extra` entry). Give each one exactly this, in this order, worded the same every time so the prompt cache is reused:
+2. In a **single message**, spawn one fresh subagent per axis, or run the axis's configured runner (`plan["review.<axis>"]`, or its `extra` entry). When any of them is a [headless Claude Code run](#headless-claude-code-runs), get its flags with `F headless-args RUN --review --share <number of headless reviewers in this message>` so together they stay within the run's budget. Give each one exactly this, in this order, worded the same every time so the prompt cache is reused:
    1. its axis brief from [references/reviewers.md](references/reviewers.md), or for a custom or provider runner, the shared rules and output contract plus its own brief (see [Custom and provider reviewers](references/reviewers.md#custom-and-provider-reviewers));
    2. `guide["review.<axis>"]`, if any, as "User instructions";
    3. `WT`, `range`, the `DIR/spec.md` path and the `DIR/checks.json` path;
