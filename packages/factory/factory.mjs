@@ -19,7 +19,26 @@ const GIT = process.env.FACTORY_GIT || 'git';
 export const CAP = 3;          // max build iterations before escalating
 export const MAX_DIFF = 300;   // added + deleted lines allowed for auto-merge
 export const COST_CAP = 5;     // USD per run; over it, the run stops looping and escalates
-export const TOKEN_CAP = 3_000_000; // same, for runs that record tokens but not dollars
+export const TOKEN_CAP = 3_000_000; // same, for runs that record tokens but not dollars (cache reads not counted when known)
+// $ per million tokens: [input, output, cache read, cache write 5m, cache write 1h]. Fast mode bills 2x.
+// shortcut: hand-copied from Anthropic's pricing pages in 2026-11 (Fable 5.2 input/output checked against Claude Code's own cost-state
+// lines; its cache rates are assumed at the usual 0.1x / 1.25x / 2x); keep them current. Unknown models get no cost, only tokens.
+const PRICES = {
+  'claude-opus-5-5': [4, 20, 0.2, 5, 8],
+  'claude-sonnet-5-5': [2, 10, 0.1, 2.5, 4],
+  'claude-haiku-5-5': [0.1, 0.5, 0.01, 0.125, 0.2], // shortcut: the prompts-up-to-100K tier; longer prompts bill 5x
+  'claude-fable-5-2': [8, 40, 0.8, 10, 16],
+  'claude-opus-5': [5, 25, 0.5, 6.25, 10],
+  'claude-opus-4-7': [5, 25, 0.5, 6.25, 10], 'claude-opus-4-6': [5, 25, 0.5, 6.25, 10], 'claude-opus-4-5': [5, 25, 0.5, 6.25, 10],
+  'claude-sonnet-4-6': [3, 15, 0.3, 3.75, 6], 'claude-sonnet-4-5': [3, 15, 0.3, 3.75, 6],
+  'claude-haiku-4-5': [1, 5, 0.1, 1.25, 2],
+};
+// t = [input, output, cacheRead, cacheWrite5m, cacheWrite1h]; null when the model has no price.
+export const costOf = (model, t, fast) => {
+  const p = PRICES[String(model || '').replace(/\[.*\]$/, '').replace(/-\d{8}$/, '')];
+  return p ? (t.reduce((s, n, i) => s + n * p[i], 0) / 1e6) * (fast ? 2 : 1) : null;
+};
+const USAGE_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite'];
 const TRUSTED = ['OWNER', 'MEMBER', 'COLLABORATOR'];
 const OUTCOMES = ['rejected', 'needs-info', 'merged', 'escalated', 'closed', 'awaiting-approval', 'split'];
 const TERMINAL = ['rejected', 'merged', 'escalated', 'closed', 'split']; // needs-info / awaiting-approval resume later
@@ -33,7 +52,8 @@ const DOCS = /\.mdx?$|(^|\/)\.env\.example$|(^|\/)(app\/api|pages\/api|routes|cl
 const SOURCE = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|rs|java|kt|swift|php|cs|vue|svelte)$/i;
 const TEST = /(\.|_)(test|spec)\.[a-z]+$|(^|\/)(__tests__|tests?|e2e|spec)\//i;
 const SEVERITIES = ['high', 'medium', 'low'];
-const REVIEW_KEYS = ['axis', 'verdict', 'findings', 'costUsd', 'tokens'];
+const REVIEW_KEYS = ['axis', 'verdict', 'findings', 'costUsd', 'tokens', 'usage', 'model'];
+const VERIFIER_KEYS = ['role', 'costUsd', 'tokens', 'usage', 'model'];
 const FINDING_KEYS = ['severity', 'file', 'line', 'issue', 'route', 'dismissed'];
 const blocking = (f) => BLOCKING.includes(f.severity) && !f.dismissed; // a verifier-dismissed finding never blocks
 
@@ -54,6 +74,12 @@ export function record(run, stage, status, payload = {}, cli) { // cli: {fallbac
   if (!STATUSES.includes(status)) throw new Error(`unknown status "${status}" (${STATUSES.join('|')})`);
   if (status === 'merged' && derive(read())[run]?.decision?.action !== 'merge') throw new Error('refusing "merged": the recorded decision is not merge');
   if (stage === 'review' && payload.axis !== undefined) validateReview(run, payload, status);
+  if (stage === 'review' && payload.role !== undefined) {
+    if (payload.role !== 'verifier' || payload.axis !== undefined) throw new Error('role must be "verifier", without an axis');
+    const extra = Object.keys(payload).filter((k) => !VERIFIER_KEYS.includes(k));
+    if (extra.length) throw new Error(`verifier payload has unknown fields: ${extra.join(', ')}`);
+  }
+  payload = validateUsage(payload);
   const sessionId = process.env.CLAUDE_CODE_SESSION_ID; // set by Claude Code; lets the UI link back to the driving session
   const ev = { ts: new Date().toISOString(), ...payload, ...(sessionId ? { harness: 'claude-code', sessionId, cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback)), run, stage, status };
   fs.mkdirSync(DIR, { recursive: true });
@@ -64,6 +90,35 @@ export function record(run, stage, status, payload = {}, cli) { // cli: {fallbac
   render();
   return ev;
 }
+
+// Token numbers come from model-typed payloads: only non-negative numbers and a short model id get stored. `tokens` becomes the usage sum.
+function validateUsage(p) {
+  const u = p.usage;
+  if (u !== undefined) {
+    if (!u || typeof u !== 'object' || Array.isArray(u)) throw new Error('usage must be an object');
+    const bad = Object.keys(u).filter((k) => !USAGE_KEYS.includes(k));
+    if (bad.length) throw new Error(`usage has unknown fields: ${bad.join(', ')} (${USAGE_KEYS.join('|')})`);
+    for (const [k, v] of Object.entries(u)) if (!Number.isSafeInteger(v) || v < 0) throw new Error(`usage.${k} must be a non-negative integer`);
+  }
+  if (p.model !== undefined && !(typeof p.model === 'string' && /^[\w.:[\]-]{1,64}$/.test(p.model))) throw new Error('model must be a short model id');
+  for (const k of ['tokens', 'costUsd']) if (p[k] !== undefined && !(typeof p[k] === 'number' && Number.isFinite(p[k]) && p[k] >= 0)) throw new Error(`${k} must be a non-negative number`);
+  return u ? { ...p, tokens: Object.values(u).reduce((s, n) => s + n, 0) } : p;
+}
+
+// Burn cells: tokens, dollars where the model is priced, cache reads (cheap; left out of the token cap) and unpriced tokens.
+const cell = () => ({ tokens: 0, costUsd: 0, cacheRead: 0, unpriced: 0 });
+const burnOf = () => ({ measured: false, total: cell(), byStage: {}, byIteration: {}, byAxis: {} });
+function addBurn(b, { stage, iteration, axis }, tokens, usd, cacheRead = 0) {
+  for (const c of [b.total, (b.byStage[stage] ??= cell()), (b.byIteration[iteration] ??= cell()), axis ? (b.byAxis[axis] ??= cell()) : null]) {
+    if (!c) continue;
+    c.tokens += tokens; c.cacheRead += cacheRead;
+    if (usd == null) c.unpriced += tokens; else c.costUsd += usd;
+  }
+}
+const finishBurn = (b) => {
+  for (const c of [b.total, ...[b.byStage, b.byIteration, b.byAxis].flatMap(Object.values)]) c.costUsd = c.unpriced && !c.costUsd ? null : +c.costUsd.toFixed(4);
+  return b;
+};
 
 // Reviewer output is untrusted model text: reject anything outside the contract instead of storing it.
 function validateReview(run, p, status) {
@@ -101,6 +156,11 @@ export function derive(events) {
     if (r.outcome === 'awaiting-approval' && !OUTCOMES.includes(e.status)) r.outcome = 'in-progress'; // spec approved
     if (e.status === 'reverted') r.reverted = { pr: e.pr, reason: e.reason };
     if (e.stage === 'build' && e.status === 'started') r.iteration++;
+    if (e.tokens || e.costUsd) { // reported: what the orchestrator copied from a subagent result
+      const u = e.usage || {};
+      const usd = e.costUsd ?? (e.usage ? costOf(e.model, [u.input || 0, u.output || 0, u.cacheRead || 0, 0, u.cacheWrite || 0]) : null); // shortcut: reported cache writes priced at the 1h rate Claude Code uses
+      addBurn((r.burn ??= burnOf()), { stage: e.stage, iteration: r.iteration, axis: e.axis || e.role }, e.tokens || 0, usd, u.cacheRead || 0);
+    }
     if (e.stage === 'build' && e.localChecks) r.localChecks = e.localChecks; // only "F checks" records it
     if (e.stage === 'review' && e.status === 'started') { r.axes = { ...r.axes, [r.iteration]: e.axes }; if (e.sha) r.reviewedSha = e.sha; }
     if (e.stage === 'review' && e.axis) {
@@ -115,16 +175,140 @@ export function derive(events) {
   }
   for (const r of Object.values(runs)) {
     r.durationMs = Date.parse(r.updated) - Date.parse(r.started);
+    if (r.burn) finishBurn(r.burn);
     for (const c of r.children || []) if (runs[c]) runs[c].parent = r.id;
   }
   return runs;
 }
 
 const getRun = (run) => {
-  const r = derive(read())[run] || readArchive().find((a) => a.id === run);
+  const events = read();
+  const r = withMeasured(derive(events), events)[run] || readArchive().find((a) => a.id === run);
   if (!r) throw new Error(`no run ${run}`);
   return r;
 };
+
+// Measured dollars, when known, are the whole budget; otherwise the old rule on reported dollars and non-cache-read tokens.
+export function budget(r) {
+  const m = r.burn?.measured ? r.burn.total : null;
+  const priced = m?.costUsd != null;
+  const usd = priced ? m.costUsd : r.costUsd || 0;
+  const tokens = m ? m.tokens - m.cacheRead : r.tokens || 0;
+  return { over: usd > COST_CAP || (!priced && tokens > TOKEN_CAP), usd: +usd.toFixed(2), tokens, source: m ? 'measured' : 'reported' };
+}
+const budgetWhy = (b) => `($${b.usd}, ${b.tokens} tokens, ${b.source})`;
+
+// ---------- measured burn: Claude Code transcripts of the sessions that recorded events ----------
+let PROJECTS = null; // demo and test point this at fixture transcripts
+const projectsRoot = () => PROJECTS || path.join(os.homedir(), '.claude', 'projects');
+const usageFile = () => path.join(DIR, 'usage.json');
+const SUB_AXIS = /^\s*(code|security|ux|ui|seo|docs)\b/i;
+
+// Only token counts, message ids, times and model ids are kept, never message text. Re-reads only bytes appended since last time.
+function scanFile(file, prev) {
+  let st;
+  try { st = fs.statSync(file); } catch { return prev; } // transcript gone: keep what was measured
+  if (prev && st.size === prev.size) return prev;
+  const from = prev && st.size > prev.offset ? prev.offset : 0;
+  const rows = from ? prev.rows : [];
+  const fd = fs.openSync(file, 'r');
+  const buf = Buffer.alloc(st.size - from);
+  fs.readSync(fd, buf, 0, buf.length, from);
+  fs.closeSync(fd);
+  const end = buf.lastIndexOf(10) + 1; // a half-written last line waits for the next scan
+  for (const line of buf.subarray(0, end).toString('utf8').split('\n')) {
+    if (!line.includes('"usage"') || !line.includes('"assistant"')) continue;
+    let d;
+    try { d = JSON.parse(line); } catch { continue; }
+    const m = d.type === 'assistant' ? d.message : null, u = m?.usage;
+    if (!u || typeof m.id !== 'string') continue;
+    const row = (id, model, x) => {
+      const w = x.cache_creation || {};
+      const w5 = w.ephemeral_5m_input_tokens ?? (x.cache_creation_input_tokens || 0), w1 = w.ephemeral_1h_input_tokens || 0;
+      const t = [x.input_tokens || 0, x.output_tokens || 0, x.cache_read_input_tokens || 0, w5, w1];
+      if (t.some((n) => n > 0)) rows.push([d.timestamp, id, String(model || '?').slice(0, 64), ...t, u.speed === 'fast' ? 1 : 0]);
+    };
+    row(m.id, m.model, u);
+    // Advisor-style calls bill another model inside the same message; top-level usage covers only the main model.
+    (Array.isArray(u.iterations) ? u.iterations : []).forEach((x, i) => { if (x?.type !== 'message' && x?.model) row(`${m.id}:${i}`, x.model, x); });
+  }
+  let axis = prev?.axis;
+  if (axis === undefined && /[\\/]subagents[\\/]/.test(file)) { // the Agent description names the axis (SKILL.md fixes the wording); only the label is kept
+    try {
+      const desc = String(JSON.parse(fs.readFileSync(file.replace(/\.jsonl$/, '.meta.json'), 'utf8')).description || '');
+      axis = /^\s*verif/i.test(desc) ? 'verifier' : SUB_AXIS.exec(desc)?.[1].toLowerCase() || 'other';
+    } catch { axis = 'other'; }
+  }
+  return { size: st.size, offset: from + end, rows, ...(axis ? { axis } : {}) };
+}
+
+// sessionId -> [{rows, axis, sub}] for every main and subagent transcript of the sessions that wrote events.
+export function measure(events) {
+  const ids = [...new Set(events.map((e) => e.sessionId).filter((s) => /^[\w-]+$/.test(s || '')))];
+  if (!ids.length) return {};
+  let cache = {};
+  try { cache = JSON.parse(fs.readFileSync(usageFile(), 'utf8')); } catch { /* first measure */ }
+  const files = (cache.files ||= {}), sessions = (cache.sessions ||= {});
+  const before = JSON.stringify(cache);
+  const root = projectsRoot(), out = {};
+  for (const sid of ids) {
+    const s = (sessions[sid] ||= { files: [] });
+    if (!s.main || !fs.existsSync(s.main)) { // transcripts sit under the folder of the session's start cwd, which can differ from the event's cwd
+      const d = ls(root).find((x) => fs.existsSync(path.join(root, x, `${sid}.jsonl`)));
+      if (d) s.main = path.join(root, d, `${sid}.jsonl`);
+    }
+    if (s.main) {
+      const subs = path.join(path.dirname(s.main), sid, 'subagents');
+      s.files = [...new Set([s.main, ...s.files, ...ls(subs).filter((f) => f.endsWith('.jsonl')).map((f) => path.join(subs, f))])];
+    }
+    out[sid] = s.files.map((f) => [f, (files[f] = scanFile(f, files[f]))]).filter(([, x]) => x).map(([f, x]) => ({ rows: x.rows, axis: x.axis, sub: f !== s.main }));
+  }
+  const text = JSON.stringify(cache);
+  if (text !== before) { fs.mkdirSync(DIR, { recursive: true }); fs.writeFileSync(usageFile(), text); }
+  return out;
+}
+
+// Gives each transcript message to one run and stage, from the session's factory events around it: after a "started"
+// event, that stage; otherwise the stage the next event closes. Messages before a session's first event are not factory
+// work; those after its last event wait for the next event to close their window. Each subagent transcript goes whole to the slot of its first message.
+// shortcut: anything else the session does between two factory events counts too; drive one run per session if that skews it.
+export function withMeasured(runs, events, by = measure(events)) {
+  if (!Object.keys(by).length) return runs;
+  const iter = {}, slots = {};
+  // Archived runs keep stubs of their session events so their windows still close; their messages are then dropped (not in runs).
+  const stubs = readArchive().flatMap((a) => (a.sessionEvents || []).map((e) => ({ ...e, run: a.id })));
+  for (const e of [...events, ...stubs]) {
+    if (e.stage === 'build' && e.status === 'started') iter[e.run] = (iter[e.run] || 0) + 1;
+    if (e.sessionId && by[e.sessionId]) (slots[e.sessionId] ||= []).push({ t: Date.parse(e.ts), run: e.run, stage: e.stage, status: e.status, iteration: iter[e.run] || 0 });
+  }
+  const slot = (list, t) => {
+    let lo = 0, hi = list.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (list[mid].t <= t) lo = mid + 1; else hi = mid; }
+    const prev = list[lo - 1], next = list[lo];
+    return !prev || !next ? null : prev.status === 'started' ? prev : next;
+  };
+  const got = {};
+  for (const [sid, filesOf] of Object.entries(by)) {
+    const list = (slots[sid] || []).sort((a, b) => a.t - b.t), seen = new Set();
+    for (const f of filesOf) {
+      const first = f.sub && f.rows.length ? slot(list, Math.min(...f.rows.map((x) => Date.parse(x[0])))) : null;
+      for (const [ts, id, model, ...rest] of f.rows) {
+        if (seen.has(id)) continue; // streaming writes one line per content block, all with the same usage
+        seen.add(id);
+        const at = f.sub ? first : slot(list, Date.parse(ts));
+        if (!at || !runs[at.run] || runs[at.run].imported) continue; // the factory did not drive an imported run: sync's events only close windows
+        const t = rest.slice(0, 5);
+        addBurn((got[at.run] ||= burnOf()), { stage: at.stage, iteration: at.iteration, axis: f.sub ? f.axis : null }, t.reduce((s, n) => s + n, 0), costOf(model, t, rest[5]), t[2]);
+      }
+    }
+  }
+  for (const [id, b] of Object.entries(got)) {
+    const reported = runs[id].burn;
+    finishBurn(b);
+    runs[id].burn = { ...b, measured: true, byAxis: Object.keys(b.byAxis).length ? b.byAxis : reported?.byAxis || {}, reported: reported?.total || null };
+  }
+  return runs;
+}
 
 export function axesFor(files, extra = []) {
   const axes = ['code', 'security'];
@@ -154,7 +338,8 @@ export function gate(r) {
   const route = findings.some((f) => f.route === 'spec') ? 'spec' : 'build';
   const reasons = failed.map((a) => `${a}: ${rev[a].findings.filter(blocking).length} blocking finding(s)`);
   if (r.iteration >= CAP) return { status: 'failed', next: 'approve', reasons: [...reasons, `loop cap ${CAP} reached`] };
-  if ((r.costUsd || 0) > COST_CAP || (r.tokens || 0) > TOKEN_CAP) return { status: 'failed', next: 'approve', reasons: [...reasons, `budget reached ($${r.costUsd || 0}, ${r.tokens || 0} tokens)`] };
+  const b = budget(r);
+  if (b.over) return { status: 'failed', next: 'approve', reasons: [...reasons, `budget reached ${budgetWhy(b)}`] };
   return { status: 'failed', next: route, reasons };
 }
 
@@ -194,7 +379,8 @@ export function decide(r, f) {
   const sens = (f.files || []).filter((p) => SENSITIVE.test(p));
   if (sens.length) why.push(`touches sensitive paths: ${sens.join(', ')}`);
   if (r.iteration > CAP) why.push(`iteration ${r.iteration} exceeds cap ${CAP}`);
-  if ((r.costUsd || 0) > COST_CAP || (r.tokens || 0) > TOKEN_CAP) why.push(`run budget exceeded ($${r.costUsd || 0}, ${r.tokens || 0} tokens)`);
+  const b = budget(r);
+  if (b.over) why.push(`run budget exceeded ${budgetWhy(b)}`);
   const src = (f.files || []).filter((p) => SOURCE.test(p) && !TEST.test(p));
   if (src.length && !(f.files || []).some((p) => TEST.test(p))) why.push(`source changed (${src.length} file(s)) with no test change`);
   if (!r.pr) why.push('no PR recorded');
@@ -962,11 +1148,12 @@ const readArchive = () => { try { return fs.readFileSync(archiveFile(), 'utf8').
 export function archive(days = 14) {
   const cutoff = new Date(Date.now() - days * 864e5).toISOString();
   const events = read();
-  const runs = derive(events);
+  const runs = withMeasured(derive(events), events); // measured burn is kept in the summary: the archive drops most events
   const old = Object.values(runs).filter((r) => TERMINAL.includes(r.outcome) && r.updated < cutoff && !wtInfo(r.id));
   if (!old.length) return { archived: 0 };
   const ids = new Set(old.map((r) => r.id));
-  fs.appendFileSync(archiveFile(), old.map((r) => JSON.stringify({ ...r, events: r.events.slice(-5), archived: true })).join('\n') + '\n');
+  const sessionEvents = (r) => r.events.filter((e) => e.sessionId).map((e) => ({ ts: e.ts, stage: e.stage, status: e.status, sessionId: e.sessionId }));
+  fs.appendFileSync(archiveFile(), old.map((r) => JSON.stringify({ ...r, events: r.events.slice(-5), sessionEvents: sessionEvents(r), archived: true })).join('\n') + '\n');
   const tmp = log() + '.tmp'; // write-then-rename so a crash never leaves a half log
   fs.writeFileSync(tmp, events.filter((e) => !ids.has(e.run)).map((e) => JSON.stringify(e)).join('\n') + (events.length > ids.size ? '\n' : ''));
   fs.copyFileSync(log(), log() + '.bak');
@@ -1004,7 +1191,11 @@ export function metrics(runs) {
   const built = runs.filter((r) => !r.imported && ['merged', 'escalated'].includes(r.outcome));
   const cycles = built.map((r) => r.durationMs).sort((a, b) => a - b);
   const reverts = runs.filter((r) => r.reverted).length;
-  const costUsd = +runs.reduce((s, r) => s + (r.costUsd || 0), 0).toFixed(2);
+  const spent = (r) => r.burn?.total || { tokens: r.tokens || 0, costUsd: r.costUsd ?? null };
+  const costUsd = +runs.reduce((s, r) => s + (spent(r).costUsd || 0), 0).toFixed(2);
+  const tokens = runs.reduce((s, r) => s + spent(r).tokens, 0);
+  const byStage = {};
+  for (const r of runs) for (const [k, c] of Object.entries(r.burn?.byStage || {})) byStage[k] = (byStage[k] || 0) + c.tokens;
   return {
     runs: runs.length, inProgress: count('in-progress'), merged, escalated, rejected: count('rejected'), needsInfo: count('needs-info'),
     closed: count('closed'), awaitingApproval: count('awaiting-approval'), split: count('split'),
@@ -1013,6 +1204,8 @@ export function metrics(runs) {
     medianCycleMs: cycles.length ? cycles[Math.floor(cycles.length / 2)] : null,
     reverts, revertRate: merged ? +(reverts / merged).toFixed(3) : null,
     costUsd, costPerMergeUsd: merged ? +(costUsd / merged).toFixed(2) : null,
+    tokens, tokensPerMerge: merged ? Math.round(tokens / merged) : null, measuredRuns: runs.filter((r) => r.burn?.measured).length,
+    stageShare: Object.fromEntries(Object.entries(byStage).map(([k, n]) => [k, tokens ? +(n / tokens).toFixed(3) : 0])),
   };
 }
 
@@ -1026,7 +1219,8 @@ export function render() {
 }
 
 export function page(extra = {}) {
-  const live = Object.values(derive(read()));
+  const events = read();
+  const live = Object.values(withMeasured(derive(events), events));
   const archived = readArchive().filter((a) => !live.some((r) => r.id === a.id));
   for (const a of archived) for (const c of a.children || []) { const child = live.find((r) => r.id === c); if (child) child.parent = a.id; }
   const runs = [...live, ...archived].sort((a, b) => b.updated.localeCompare(a.updated));
@@ -1039,21 +1233,22 @@ export function page(extra = {}) {
   const ruleData = { rules: {}, ruleHistory: read().filter((e) => e.stage === 'rules').slice(-100) };
   try { const cfg = readSkills(); for (const p of new Set([...Object.keys(byProject), ...Object.keys(projects())])) ruleData.rules[p] = rules(p, cfg); }
   catch (e) { ruleData.rulesError = e.message; } // render runs after every record(): a bad config must not half-fail the event
-  const data = JSON.stringify({ generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)), ...extra }).replace(/</g, '\\u003c');
+  const data = JSON.stringify({ generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)), ...extra }).replace(/</g, '\\u003c');
   return fs.readFileSync(path.join(HERE, 'dashboard.html'), 'utf8').replace('__FACTORY_DATA__', () => data);
 }
 
 // Fixture runs covering every outcome; used by `demo` and `test`.
 export function demo() {
   let t = Date.parse('2026-11-20T09:00:00Z');
+  const S = { harness: 'claude-code', sessionId: 'demo-session', cwd: '/work/shop' }, MEASURED = ['acme/shop#43', 'acme/shop#45'];
   const ev = (run, stage, status, p = {}) => {
-    const e = { ts: new Date((t += 97_000)).toISOString(), ...p, run, stage, status };
+    const e = { ts: new Date((t += 97_000)).toISOString(), ...p, ...(MEASURED.includes(run) ? S : {}), run, stage, status };
     fs.mkdirSync(DIR, { recursive: true });
     fs.appendFileSync(log(), JSON.stringify(e) + '\n');
   };
   const intake = (run, title, n, association = 'OWNER') =>
     ev(run, 'intake', 'started', { title, url: `https://github.com/acme/shop/issues/${n}`, author: association === 'OWNER' ? 'acme' : 'drive-by', association });
-  const pass = (run, axes) => axes.forEach((axis) => ev(run, 'review', 'passed', { axis, findings: [] }));
+  const pass = (run, axes, usage) => axes.forEach((axis, i) => ev(run, 'review', 'passed', { axis, findings: [], ...(usage ? { usage: { input: 9 + i, output: 2400 + 300 * i, cacheRead: 38000, cacheWrite: 9000 }, model: 'claude-sonnet-5-5', tokens: 49409 + 301 * i } : {}) }));
   const g = (run, extra) => { const { status, ...p } = gate(getRun(run)); ev(run, 'gate', status, { ...p, ...extra }); };
   const d = (run, facts) => { const x = decide(getRun(run), facts); ev(run, 'approve', 'decided', x); return x; };
 
@@ -1112,7 +1307,7 @@ export function demo() {
   ev(R, 'build', 'started');
   ev(R, 'build', 'passed', { pr: 'https://github.com/acme/shop/pull/91', branch: 'factory/issue-44' });
   ev(R, 'review', 'started', { axes: ['code', 'security', 'ux', 'ui'] });
-  pass(R, ['code', 'security', 'ux', 'ui']);
+  pass(R, ['code', 'security', 'ux', 'ui'], true); // reported: copied from each subagent's usage
   g(R);
   d(R, { checks: 'pass', additions: 140, deletions: 12, files: ['lib/auth/github.ts', 'package.json'] });
   ev(R, 'approve', 'escalated');
@@ -1179,7 +1374,34 @@ export function demo() {
   g(R);
   d(R, { checks: 'skipped', additions: 58, deletions: 4, files: files51, rules: rules('acme/shop').policy });
   ev(R, 'approve', 'merged');
+  demoTranscripts(read().filter((e) => e.sessionId === S.sessionId));
   return render();
+}
+
+// Fake Claude Code transcripts for the demo session: an orchestrator message before each event, one subagent per review axis.
+function demoTranscripts(events) {
+  PROJECTS = path.join(DIR, 'claude-projects');
+  const dir = path.join(PROJECTS, '-work-shop'), subs = path.join(dir, 'demo-session', 'subagents');
+  fs.mkdirSync(subs, { recursive: true });
+  const SIZE = { intake: [900, 5000], spec: [2600, 2500], build: [3200, 6000], review: [1200, 800], gate: [300, 200], approve: [700, 300] };
+  let n = 0;
+  const line = (ts, model, out, read, write) => JSON.stringify({ type: 'assistant', timestamp: new Date(ts).toISOString(), sessionId: 'demo-session',
+    message: { id: `msg_demo_${n++}`, model, usage: { input_tokens: 6, output_tokens: out, cache_read_input_tokens: read, cache_creation_input_tokens: write, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: write } } } }) + '\n';
+  let main = '', ctx = 30000;
+  for (const e of events) {
+    const at = Date.parse(e.ts), [out, write] = SIZE[e.stage];
+    ctx += write;
+    main += line(at - 40_000, 'claude-opus-5-5', out, ctx, write);
+    if (e.stage === 'build' && e.status === 'passed') main += line(at - 20_000, 'claude-opus-5-5', out * 2, ctx, write);
+    if (e.stage === 'review' && e.status === 'started') {
+      for (const [j, axis] of [...e.axes, 'verifier'].entries()) {
+        const f = path.join(subs, `agent-${n}`), model = ['ui', 'seo', 'docs', 'verifier'].includes(axis) ? 'claude-sonnet-5-5' : 'claude-opus-5-5';
+        fs.writeFileSync(f + '.meta.json', JSON.stringify({ description: axis === 'verifier' ? 'verifier acme/shop' : `${axis} review acme/shop` }));
+        fs.writeFileSync(f + '.jsonl', [1, 2, 3].map((k) => line(at + 5_000 + k * 9_000, model, 700 + k * 120 + j * 90, (11000 - j * 1500) * k, k === 1 ? 6000 : 1500)).join(''));
+      }
+    }
+  }
+  fs.writeFileSync(path.join(dir, 'demo-session.jsonl'), main);
 }
 
 function test() {
@@ -1248,7 +1470,11 @@ function test() {
   assert.equal(pre['acme/shop#43'].reverted.pr, 'https://github.com/acme/shop/pull/93');
   assert.equal(pre['acme/shop#43'].pr, 'https://github.com/acme/shop/pull/90');
   assert.equal(pre['acme/shop#43'].tokens, 93000);
+  assert.equal(pre['acme/shop#44'].burn.byAxis.security.tokens, 49710); // reported per axis
+  assert.equal(getRun('acme/shop#43').burn.measured, true);
+  assert.equal(getRun('acme/shop#44').burn.measured, false);
   assert.deepEqual(archive(0), { archived: 6 }); // 41 rejected, 43 merged, 44 escalated, 46 split, 50 + 51 merged
+  assert.equal(readArchive().find((a) => a.id === 'acme/shop#43').burn.measured, true); // survives losing its events
   assert.deepEqual(Object.keys(derive(read())).sort(), ['acme/shop#42', 'acme/shop#45', 'acme/shop#47', 'acme/shop#48', 'acme/shop#49', 'eval/golden#4']);
   assert.equal(read().filter((e) => e.stage === 'rules').length, 5); // the rule audit trail survives archiving
   const page = fs.readFileSync(path.join(DIR, 'dashboard.html'), 'utf8');
@@ -1263,8 +1489,80 @@ function test() {
   const html = fs.readFileSync(path.join(DIR, 'dashboard.html'), 'utf8');
   assert.ok(!html.includes('</script><script>alert'));
   discoverTest();
+  usageTest();
   cliTest();
   console.log(`ok - all checks passed (${DIR})`);
+}
+
+// Measured burn from a fake transcript: attribution windows, dedupe, subagent axes, unknown model, cache, bad usage.
+function usageTest() {
+  DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-usage-'));
+  PROJECTS = path.join(DIR, 'projects');
+  const sid = 'sess-u', R = 'acme/u#1', t0 = Date.parse('2026-11-21T10:00:00Z');
+  const at = (s) => new Date(t0 + s * 1000).toISOString();
+  const P = 'acme/u#0', I = 'acme/u:dev/x'; // an earlier in-progress run, and an imported run synced after R ended
+  const evs = [[-80, 'intake', 'started', {}, P], [0, 'intake', 'started'], [100, 'intake', 'passed'], [200, 'spec', 'passed'], [300, 'build', 'started'], [400, 'build', 'passed'],
+    [500, 'review', 'started', { axes: ['code'] }], [600, 'review', 'passed', { axis: 'code', findings: [], tokens: 5000 }], [700, 'gate', 'passed'], [800, 'approve', 'escalated'],
+    [850, 'intake', 'started', { imported: true }, I], [850, 'intake', 'passed', {}, I], [850, 'build', 'started', {}, I]];
+  fs.writeFileSync(log(), evs.map(([s, stage, status, p, run = R]) => JSON.stringify({ ts: at(s), ...p, harness: 'claude-code', sessionId: sid, cwd: '/w/u', run, stage, status })).join('\n') + '\n');
+  const u = (input, output, read = 0, w1 = 0) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: read, cache_creation_input_tokens: w1, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: w1 } });
+  const msg = (s, id, model, usage) => JSON.stringify({ type: 'assistant', timestamp: at(s), message: { id, model, content: [{ type: 'text', text: 'secret prompt' }], usage } }) + '\n';
+  const put = (p, text) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
+  const main = path.join(PROJECTS, '-w-u', `${sid}.jsonl`), subs = path.join(PROJECTS, '-w-u', sid, 'subagents');
+  put(main, [
+    msg(-300, 'mx', 'claude-opus-5-5', u(4242, 0)), // before the session's first event: not factory work
+    msg(-50, 'm0', 'claude-opus-5-5', u(1000, 0)), // after P's "intake started": P
+    msg(50, 'm1', 'claude-opus-5-5', u(1_000_000, 0)), // after "intake started": intake, $4
+    msg(150, 'm2', 'claude-opus-5-5', u(0, 100_000)), // intake passed -> spec passed: spec, $2
+    msg(250, 'm3', 'claude-opus-5-5', u(0, 0, 1_000_000, 1_000_000)), // spec passed -> build started: build, $0.20 + $8
+    msg(350, 'm4', 'claude-mystery-9', u(500, 500)), // unknown model: tokens, no cost
+    msg(350, 'm4', 'claude-mystery-9', u(500, 500)), // streamed duplicate
+    msg(360, 'm5', 'claude-opus-5-5', { ...u(0, 0), iterations: [{ type: 'message' }, { type: 'advisor_message', model: 'claude-fable-5-2', input_tokens: 100_000 }] }), // $0.80 of Fable
+    msg(900, 'm6', 'claude-opus-5-5', u(7777, 0)), // after the imported run's "build started": not factory work
+    '{"type":"user","message":{"content":"secret prompt","usage":1}}\n',
+    '{"type":"assistant","usage":', // half-written line
+  ].join(''));
+  put(path.join(subs, 'agent-a.meta.json'), '{"description":"Code review acme/u#1"}');
+  put(path.join(subs, 'agent-a.jsonl'), msg(520, 's1', 'claude-sonnet-5-5', u(0, 100_000)) + msg(650, 's2', 'claude-sonnet-5-5', u(100_000, 0))); // whole file: review
+  put(path.join(subs, 'agent-b.meta.json'), '{"description":"Verify blocking findings"}');
+  put(path.join(subs, 'agent-b.jsonl'), msg(560, 'v1', 'claude-sonnet-5-5', u(0, 10_000)));
+  put(path.join(subs, 'agent-c.jsonl'), msg(570, 'o1', 'claude-sonnet-5-5', u(10_000, 0))); // no meta: "other"
+  const b = getRun(R).burn;
+  assert.equal(b.measured, true);
+  assert.deepEqual(Object.fromEntries(Object.entries(b.byStage).map(([k, c]) => [k, [c.tokens, c.costUsd]])),
+    { intake: [1_000_000, 4], spec: [100_000, 2], build: [2_101_000, 9], review: [220_000, 1.32] });
+  assert.deepEqual([b.total.tokens, b.total.costUsd, b.total.cacheRead, b.total.unpriced], [3_421_000, 16.32, 1_000_000, 1000]);
+  assert.deepEqual(Object.fromEntries(Object.entries(b.byIteration).map(([k, c]) => [k, c.tokens])), { 0: 1_100_000, 1: 2_321_000 });
+  assert.deepEqual(Object.fromEntries(Object.entries(b.byAxis).map(([k, c]) => [k, c.tokens])), { code: 200_000, verifier: 10_000, other: 10_000 });
+  assert.equal(b.reported.tokens, 5000);
+  assert.equal(getRun(P).burn.total.tokens, 1000);
+  assert.equal(getRun(I).burn, undefined);
+  assert.ok(!fs.readFileSync(usageFile(), 'utf8').includes('secret prompt'));
+  const facts = { checks: 'pass', additions: 1, deletions: 0, files: ['a.md'] };
+  assert.match(decide({ ...getRun(R), association: 'OWNER', pr: 'x' }, facts).reasons.join(), /budget exceeded \(\$16\.32, .* measured\)/);
+  // Appended lines are read incrementally; a deleted transcript keeps its measured rows.
+  fs.appendFileSync(main, '{"type":"assistant","usage":1}\n' + msg(380, 'm7', 'claude-opus-5-5', u(0, 50_000)));
+  assert.equal(getRun(R).burn.byStage.build.costUsd, 10);
+  fs.rmSync(main);
+  assert.equal(getRun(R).burn.total.tokens, 3_471_000);
+  // Caps: measured dollars win over tokens; without a price, cache reads don't count toward the token cap.
+  const m = (tokens, cacheRead, costUsd) => budget({ burn: { measured: true, total: { tokens, cacheRead, costUsd } } }).over;
+  assert.equal(m(9e6, 8.9e6, 1), false);
+  assert.equal(m(5e6, 1e6, null), true);
+  assert.equal(m(5e6, 4.5e6, null), false);
+  // Usage payloads are validated; tokens becomes their sum.
+  assert.equal(record(R, 'build', 'passed', { usage: { input: 10, output: 5 }, model: 'claude-opus-5-5' }).tokens, 15);
+  for (const [p, re] of [[{ usage: { input: -1 } }, /non-negative integer/], [{ usage: { input: 1.5 } }, /non-negative integer/], [{ usage: { prompt: 'x' } }, /unknown fields: prompt/],
+    [{ usage: [1] }, /must be an object/], [{ model: 'x'.repeat(65) }, /short model id/], [{ model: 'a b' }, /short model id/], [{ tokens: '9' }, /tokens must be/]]) assert.throws(() => record(R, 'build', 'passed', p), re);
+  record(R, 'review', 'passed', { role: 'verifier', tokens: 10, model: 'claude-sonnet-5-5' });
+  assert.throws(() => record(R, 'review', 'passed', { role: 'judge' }), /role must be/);
+  assert.throws(() => record(R, 'review', 'passed', { role: 'verifier', findings: [] }), /unknown fields: findings/);
+  assert.equal(derive(read())[R].burn.byAxis.verifier.tokens, 10);
+  // Archiving R drops its events; its stubs keep its messages from falling to P, the session's earlier run.
+  assert.equal(archive(0).archived, 1);
+  assert.equal(getRun(P).burn.total.tokens, 1000);
+  assert.equal(getRun(R).burn.total.tokens, 3_471_000); // from the archive summary
+  PROJECTS = null;
 }
 
 function discoverTest() {
@@ -1795,6 +2093,12 @@ if (isMain) {
       case 'archive': out(archive(run ? Number(run) : 14)); break;
       case 'eval': out(evals(run)); break;
       case 'state': out(getRun(run)); break;
+      case 'usage': { // measured (transcripts) or reported (payload) burn; no run: one line per run
+        if (run) { const r = getRun(run); out({ run: r.id, ...(r.burn || { measured: false, total: null }), budget: budget(r) }); break; }
+        const events = read();
+        out(Object.fromEntries(Object.values(withMeasured(derive(events), events)).filter((r) => r.burn).map((r) => [r.id, { measured: r.burn.measured, ...r.burn.total }])));
+        break;
+      }
       case 'dir': console.log(runDir(run)); break;
       case 'render': console.log(render()); break;
       case 'ui': ui(Number(run) || 0); break;
@@ -1835,6 +2139,7 @@ if (isMain) {
   archive [days=14]                       compact finished runs older than N days
   eval   [fixture]                        score intake on evals/golden with headless claude (costs tokens)
   state  <run>                            print derived run state
+  usage  [run]                            token burn by stage, iteration and axis: measured from transcripts, else reported
   dir    <run>                            print the run's artifact folder
   render | demo | test`);
         process.exitCode = cmd ? 1 : 0;
