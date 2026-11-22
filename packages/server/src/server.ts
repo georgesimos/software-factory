@@ -101,6 +101,7 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
   const id = `${repo}#${issue}`, r = derive(read())[id];
   if (r?.imported) throw new Error(`${id} is imported: never run claude -p in its checkout`);
   if (r && !TERMINAL.includes(r.outcome)) throw new Error(`${id} already has an active run (${r.outcome || r.stage})`);
+  if (listSessions().some((x) => x.label === id && x.state === 'running')) throw new Error(`${id} already has a running session`); // before its first event lands
   const b = r ? budget(r) : null;
   if (b?.over) throw new Error(`run budget exceeded ${budgetWhy(b)}`);
   const d = h.detect();

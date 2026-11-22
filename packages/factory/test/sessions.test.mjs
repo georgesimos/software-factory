@@ -73,6 +73,7 @@ test('launchSession(): an attached repo and an issue number only; #25\'s refusal
   process.env.STUB_LOGGED_OUT = '1';
   try { assert.throws(() => launchSession({ repo: 'acme/app', issue: 3 }), /not signed in: claude auth login/); } finally { delete process.env.STUB_LOGGED_OUT; }
   const s = launchSession({ repo: 'acme/app', issue: 3 }, stubEnv);
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 3 }, stubEnv), /already has a running session/, 'a second POST before the run records anything');
   const ev = await finished(s);
   assert.equal(ev.find((e) => e.data?.type === 'assistant').data.message.content[0].text, 'prompt: /software-factory acme/app#3', 'the prompt is built by the server');
   assert.equal(fs.realpathSync(ev.find((e) => e.data?.subtype === 'init').data.cwd), fs.realpathSync(clone), 'runs in the attached clone');
