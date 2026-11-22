@@ -45,6 +45,11 @@ Since the April 2024 security releases (CVE-2024-27980; Node 18.20.2, 20.12.2 an
   - never `shell: true`, which is deprecated with arguments (DEP0190).
 - Do not hand-roll `cmd.exe` escaping. Mistakes there are command injection, and prompts and JSON schemas are passed as arguments.
 
+**Done in X1 (#49):**
+- `core/src/platform.ts` holds `command()`, `exec()` and `run()`. `gh`, `git`, `deps`, the `F new` init, the `evals` `claude -p` and ship's `exec` all go through it.
+- A shim given an argument that isn't plain fails with a message naming that argument. For example, `claude.cmd` with `evals`' prompt fails that way.
+- **Still open:** the harness adapters keep `spawnSync`, because a harness file may live in an outside registry folder and imports only `node:` builtins. A `.cmd` Codex still reports as not installed. H1's contract can hand harnesses a spawn function.
+
 ## 2. Shells and shell syntax
 
 | Where | What | Rating |

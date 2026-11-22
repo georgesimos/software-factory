@@ -15,3 +15,4 @@ export * from './project.ts';
 export * from './onboard.ts';
 export * from './demo.ts';
 export * from './ship.ts';
+export * from './platform.ts';
