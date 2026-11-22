@@ -585,7 +585,9 @@ $ F queue acme/app
 
 ```console
 $ pnpm --filter @software-factory/factory test
-ok - all checks passed (<tmp dir>)
+ℹ tests 5
+ℹ pass 5
+ℹ fail 0
 ```
 
 The self-test unsets `CLAUDE_CODE_SESSION_ID`, because some of its assertions check exactly which session ids get recorded.
