@@ -5,9 +5,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { IngestProgress, ProjectPicker, type DiscoveredRepo } from '../src/index.ts';
 
 const repos: DiscoveredRepo[] = [
-  { repo: 'acme/shop', path: '/Users/me/dev/shop', attached: true, lastCommit: '2026-11-21T10:00:00Z', worktrees: 2 },
-  { repo: 'acme/app', path: '/Users/me/dev/app', attached: false, lastCommit: '2026-11-20T10:00:00Z', worktrees: 0 },
-  { repo: 'acme/docs', path: '/Users/me/dev/docs', attached: false, lastCommit: null, worktrees: 0, otherClones: ['/tmp/docs'] },
+  { repo: 'acme/shop', path: '/home/me/dev/shop', attached: true, lastCommit: '2026-11-21T10:00:00Z', worktrees: 2 },
+  { repo: 'acme/app', path: '/home/me/dev/app', attached: false, lastCommit: '2026-11-20T10:00:00Z', worktrees: 0 },
+  { repo: 'acme/docs', path: '/home/me/dev/docs', attached: false, lastCommit: null, worktrees: 0, otherClones: ['/tmp/docs'] },
 ];
 
 describe('onboarding', () => {

@@ -76,6 +76,8 @@ export interface Run {
   started?: string;
   updated?: string;
   durationMs?: number;
+  /** Local Claude Code / Codex sessions on the run's branch. */
+  sessions?: import('./Sessions.tsx').AgentSession[];
   /** Latest deploy per "connector/env", recorded by packages/ship. Never moves the run's stage. */
   deploys?: Record<string, Deploy>;
 }

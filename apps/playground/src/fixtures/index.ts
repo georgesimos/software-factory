@@ -1,12 +1,23 @@
 // Realistic fixture data. demo.json is `factory.mjs demo` output (acme/shop, every outcome);
 // the acme/app runs below add the imported/tracked runs `sync` creates, which the demo has none of.
-import type { DiscoveredRepo, Metrics, Run, RunEvent } from '@software-factory/design-system';
+import type { AgentSession, DiscoveredRepo, Metrics, Run, RunEvent } from '@software-factory/design-system';
 import demo from './demo.json';
 
 const T0 = Date.parse('2026-11-20T09:00:00Z');
 let t = T0 + 40 * 60e3;
 const at = () => new Date((t += 61_000)).toISOString();
 const ev = (stage: RunEvent['stage'], status: string, p: Partial<RunEvent> = {}): RunEvent => ({ ts: at(), stage, status, ...p });
+
+const sess = (agent: string, id: string, cwd: string, minsAgo: number): AgentSession => ({ agent, id, cwd, last: new Date(Date.now() - minsAgo * 60e3).toISOString() });
+const SESSIONS: Record<string, AgentSession[]> = {
+  'acme/app#20': [sess('claude-code', '0f3c9a7e-52d1-4c5e-9a43-7e1d2b6c8f10', '/home/dev/Development/acme/app/.worktrees/issue-20', 4)],
+  'acme/app#10': [sess('claude-code', '7b21e0d4-0c3a-4f6e-8d55-91a2c3e4f5a6', '/home/dev/Development/acme/app', 52)],
+  'acme/app#12': [sess('codex', '019a6f2e-3b4c-7d8e-9f01-2a3b4c5d6e7f', '/home/dev/Development/acme/app', 60)],
+  'acme/app:dev/wip-9': [
+    sess('claude-code', 'c4d5e6f7-8a9b-4c0d-a1e2-f3a4b5c6d7e8', '/home/dev/Development/acme/app', 47),
+    sess('codex', '019a7011-aa22-7b33-8c44-9d55e66f7788', '/home/dev/code/app-old', 180),
+  ],
+};
 
 function tracked(id: string, title: string, source: string, pr?: string): Run {
   const events = [ev('intake', 'started'), ev('intake', 'passed', { summary: `Imported open PR from a ${source} session; not built by the factory.` }), ev('build', 'started'), ev('build', 'passed')];
@@ -39,7 +50,7 @@ const extra: Run[] = [
   building,
   tracked('acme/app#12', 'Migrate settings page to the new form primitives', 'codex', 'https://github.com/acme/app/pull/12'),
   tracked('acme/app#10', 'Add retry with backoff to the webhook client', 'claude-code', 'https://github.com/acme/app/pull/10'),
-  { ...tracked('acme/app:simos/wip-9', 'simos/wip-9', 'claude-code+codex'), stage: 'build', status: 'started', events: [ev('intake', 'started'), ev('intake', 'passed'), ev('build', 'started')] },
+  { ...tracked('acme/app:dev/wip-9', 'dev/wip-9', 'claude-code+codex'), stage: 'build', status: 'started', events: [ev('intake', 'started'), ev('intake', 'passed'), ev('build', 'started')] },
   tracked('acme/app#11', 'Bump eslint to v10', 'none', 'https://github.com/acme/app/pull/11'),
   tracked('acme/app#15', 'Rewrite onboarding copy', 'human', 'https://github.com/acme/app/pull/15'),
 ];
@@ -54,7 +65,7 @@ function rebase(runs: Run[], ago = 3 * 60e3): Run[] {
 
 export const CAP: number = demo.cap;
 export const COST_CAP: number = demo.costCap;
-export const RUNS: Run[] = rebase([...(demo.runs as Run[]), ...extra]).sort((a, b) => (b.updated ?? '').localeCompare(a.updated ?? ''));
+export const RUNS: Run[] = rebase([...(demo.runs as Run[]), ...extra].map((r) => (SESSIONS[r.id] ? { ...r, sessions: SESSIONS[r.id] } : r))).sort((a, b) => (b.updated ?? '').localeCompare(a.updated ?? ''));
 export const PROJECTS = ['acme/shop', 'acme/app'];
 export const METRICS: Record<string, Metrics> = {
   '': { ...demo.metrics.all, runs: RUNS.length, inProgress: RUNS.filter((r) => r.outcome === 'in-progress').length, costUsd: 1.13 },
@@ -64,13 +75,13 @@ export const METRICS: Record<string, Metrics> = {
 
 const daysAgo = (d: number) => new Date(Date.now() - d * 864e5).toISOString();
 export const DISCOVERED: DiscoveredRepo[] = [
-  { repo: 'acme/shop', path: '/Users/dev/Development/acme/shop', attached: true, lastCommit: daysAgo(0.1), worktrees: 3 },
-  { repo: 'acme/app', path: '/Users/dev/Development/acme/app', attached: false, lastCommit: daysAgo(0.4), worktrees: 2, otherClones: ['/Users/dev/code/app-old'] },
-  { repo: 'acme/api', path: '/Users/dev/Development/acme/api', attached: false, lastCommit: daysAgo(1), worktrees: 0 },
-  { repo: 'acme/design', path: '/Users/dev/Development/acme/design', attached: false, lastCommit: daysAgo(3), worktrees: 1 },
-  { repo: 'oss-lab/parser-kit', path: '/Users/dev/code/parser-kit', attached: false, lastCommit: daysAgo(12), worktrees: 0 },
-  { repo: 'oss-lab/dotfiles', path: '/Users/dev/dotfiles', attached: false, lastCommit: daysAgo(40), worktrees: 0 },
-  { repo: 'acme/empty-starter', path: '/Users/dev/Development/acme/empty-starter', attached: false, lastCommit: null, worktrees: 0 },
+  { repo: 'acme/shop', path: '/home/dev/Development/acme/shop', attached: true, lastCommit: daysAgo(0.1), worktrees: 3 },
+  { repo: 'acme/app', path: '/home/dev/Development/acme/app', attached: false, lastCommit: daysAgo(0.4), worktrees: 2, otherClones: ['/home/dev/code/app-old'] },
+  { repo: 'acme/api', path: '/home/dev/Development/acme/api', attached: false, lastCommit: daysAgo(1), worktrees: 0 },
+  { repo: 'acme/design', path: '/home/dev/Development/acme/design', attached: false, lastCommit: daysAgo(3), worktrees: 1 },
+  { repo: 'oss-lab/parser-kit', path: '/home/dev/code/parser-kit', attached: false, lastCommit: daysAgo(12), worktrees: 0 },
+  { repo: 'oss-lab/dotfiles', path: '/home/dev/dotfiles', attached: false, lastCommit: daysAgo(40), worktrees: 0 },
+  { repo: 'acme/empty-starter', path: '/home/dev/Development/acme/empty-starter', attached: false, lastCommit: null, worktrees: 0 },
 ];
 /** What `sync` would report per repo, used by the onboarding simulation. */
 export const SYNC: Record<string, { prs: number; sessions: number; closed?: number; error?: string }> = {

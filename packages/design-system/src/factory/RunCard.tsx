@@ -3,6 +3,7 @@ import { Badge } from '../components/Badge.tsx';
 import { Dot } from '../components/Dot.tsx';
 import { cx } from '../components/cx.ts';
 import { OutcomePill } from './OutcomePill.tsx';
+import { SessionsChip } from './Sessions.tsx';
 import { SourceChip } from './SourceChip.tsx';
 import { formatAgo, formatClock, isDone, outcomeOf, repoOf, reviewFailed, runTone, shortId, stageOf, type Run } from './model.ts';
 
@@ -50,6 +51,7 @@ export function RunCard({ run: r, href, onSelect, selected, showRepo, cap = 3, n
       {!done && stageOf(r) === 'review' ? <AxesBar run={r} /> : null}
       {!done && r.loopbacks?.length ? <span className="sf-loops" title="Loop-backs">↺{r.loopbacks.length}</span> : null}
       {r.imported ? <SourceChip source={r.source ?? 'none'} title="Tracked: imported, not driven by the factory" /> : null}
+      {r.sessions?.length ? <SessionsChip sessions={r.sessions} /> : null}
       {r.children?.length ? <Badge quiet>{r.children.length} runs</Badge> : null}
       {r.archived ? <Badge quiet>Archived</Badge> : null}
     </>

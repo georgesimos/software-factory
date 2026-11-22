@@ -1,5 +1,5 @@
 import {
-  ArrowUpRightIcon, Badge, Dot, MetricStat, OutcomePill, ReviewMatrix, SourceChip, StageTrack, Timeline,
+  ArrowUpRightIcon, Badge, Dot, MetricStat, OutcomePill, ReviewMatrix, SessionList, SourceChip, StageTrack, Timeline,
   formatAgo, formatClock, formatDuration, formatMoney, formatTokens, outcomeOf, type Run,
 } from '@software-factory/design-system';
 import type { ReactNode } from 'react';
@@ -52,6 +52,7 @@ export function RunDetail({ run: r, now, hideId }: { run: Run; now?: number; /**
         {r.children?.length ? <Badge quiet>{r.children.length} runs</Badge> : null}
       </div>
       <Section title="Pipeline"><StageTrack run={r} /></Section>
+      {r.sessions?.length ? <Section title="Sessions"><SessionList sessions={r.sessions} now={now} /></Section> : null}
       <Section title="Review"><ReviewMatrix run={r} /></Section>
       <Section title="Decision"><Decision run={r} /></Section>
       <Section title="Run">

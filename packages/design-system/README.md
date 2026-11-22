@@ -3,6 +3,8 @@
 Tokens and React components for the Software Factory desktop app (Electron + Vite + React). Extracted from the factory's
 redesigned `dashboard.html`, so the app looks like the dashboard people already use.
 
+Builds and tests run through Nx in its package-based mode: the scripts below are this package's own, and Nx caches them.
+
 ```bash
 pnpm dev            # playground at http://localhost:5199 (?theme=light|dark)
 pnpm test           # contrast check + Vitest
@@ -54,9 +56,10 @@ pass AA. `control` is new: a 3:1 border for inputs and checkboxes.
 ## Components
 
 - **Basics:** `Button`, `IconButton`, `Input`, `Select`, `Checkbox`, `Badge`, `Dot`, `Kbd`, `Tooltip`, `Dialog` / `Sheet`,
-  `Tabs`, `Table`, `Card`, `EmptyState`, `Skeleton`, `ToastProvider` / `useToast`.
+  `Tabs`, `Table`, `Card`, `EmptyState`, `Skeleton`, `ToastProvider` / `useToast`, `ThemeToggle`.
 - **Factory:** `StageTrack`, `RunCard`, `ReviewMatrix`, `MetricStat` / `MetricStrip`, `SourceChip`, `OutcomePill`, `Timeline`,
-  `CommandMenu`.
+  `CommandMenu`, and `SessionLink` / `SessionList` / `SessionsChip`, which show local Claude Code and Codex sessions on a
+  run's branch and copy the resume command. `resumeCommand()` quotes the paths and ids.
 - **Onboarding:** `ProjectPicker` (discover, then multi-select) and `IngestProgress` (per-project import with PR and session
   counts).
 
@@ -86,8 +89,9 @@ import { ToastProvider, RunCard, CommandMenu } from '@software-factory/design-sy
 - Set `base: './'` in the renderer's Vite config so fonts and assets resolve under `file://`.
 - Fonts are bundled (`src/fonts/`, SIL OFL), so nothing is fetched at runtime and the app works offline. The screenshot script
   asserts that the playground makes no off-localhost requests.
-- For theming, follow the OS by default. To force a theme, set `document.documentElement.dataset.theme`, for example from Electron's
-  `nativeTheme`.
+- For theming, render `<ThemeToggle />`, which offers light, dark and system (the default) and stores the choice in
+  `localStorage` under `sf.theme`. To avoid a flash of the wrong theme, inline `themeInitScript` in the renderer's `<head>`
+  before the stylesheet. Under a strict CSP, allow that script by its hash.
 - For token values in JS (charts, canvas), use `import { color } from '@software-factory/design-system/tokens'`.
 
 `apps/playground/src` is the reference composition. `Board.tsx`, `RunDetail.tsx` and `Onboarding.tsx` are what the app's
