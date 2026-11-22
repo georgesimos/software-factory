@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { INVALID, assertReviewOpen, derive, validateReview } from './derive.ts';
 import { blocking } from './constants.ts';
-import { harnesses } from '../../factory/harnesses/index.mjs';
+import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { read } from './log.ts';
 import { skills } from './skills.ts';
 

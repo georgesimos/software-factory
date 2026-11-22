@@ -43,6 +43,8 @@ importers:
         specifier: ^8.0.0
         version: 8.3.8(@types/node@24.19.2)
 
+  packages/adapters: {}
+
   packages/core:
     devDependencies:
       '@types/node':
