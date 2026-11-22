@@ -207,7 +207,7 @@ Finally, report the outcome with its links, and give the dashboard path, `~/.cla
 | `{"use":"default"}` | The built-in brief in this file or in reviewers.md. |
 | `{"use":"skill","name":"x"}` | Invoke the Skill `x` in a fresh subagent, giving it the step's inputs and its output contract. |
 | `{"use":"brief","path":"…md"}` | Spawn a fresh subagent with that file as its brief, in place of the built-in one. |
-| `{"use":"provider","harness":"claude-code","name":"x"}` | If `x` is one of your Agent subagent types (such as `pr-review-toolkit:code-reviewer`), spawn that agent. Otherwise run the skill headless in WT with pinned flags: `(cd WT && claude -p "/x" <args>)`, where `<args>` is the JSON array from `F headless-args RUN [--review|--write]`, each element single-quoted as one shell word. See [Headless Claude Code runs](#headless-claude-code-runs). |
+| `{"use":"provider","harness":"claude-code","name":"x"}` | If `x` is one of your Agent subagent types (such as `pr-review-toolkit:code-reviewer`), spawn that agent. Otherwise run the skill headless in WT with pinned flags: `(cd WT && claude -p "/x" <args>)`, where `<args>` is the JSON array from `F headless-args RUN [--review|--write] [--share N]`, each element single-quoted as one shell word. For reviewers started together, pass `--share <number of headless reviewers in that message>`. See [Headless Claude Code runs](#headless-claude-code-runs). |
 | `{"use":"provider","harness":"codex"}` | Run Codex headless in WT. Review and verifier steps use `-s read-only` and build uses `-s workspace-write`; never pass `--dangerously-bypass-approvals-and-sandbox`. Review: `codex exec -C WT -s read-only --output-schema ~/.claude/skills/software-factory/references/review.schema.json -o DIR/<axis>.json "<brief>"`. With `"name":"review"`, run `codex review --base BASE` in WT and pass its prose through the adapter. Any other `name` is ignored. |
 
 - **Same contract as the default.**
@@ -221,11 +221,11 @@ Finally, report the outcome with its links, and give the dashboard path, `~/.cla
 
 ### Headless Claude Code runs
 
-`F headless-args RUN [--review|--write]` prints the flags as a JSON array. They are pinned, so a run never depends on `-p`'s defaults:
+`F headless-args RUN [--review|--write] [--share N]` prints the flags as a JSON array. They are pinned, so a run never depends on `-p`'s defaults:
 - `--output-format json`, plus `--json-schema <review.schema.json>` with `--review`.
 - `--permission-prompts none`. With `--write` (build only): `--permission-mode auto`. Every other step is read-only: `--permission-mode manual` with a `git diff`/`git log`/Read/Grep/Glob allowlist, so anything else is denied (auto mode's classifier could approve other commands).
 - **No `--bare`, on purpose.** It would skip the `/x` skill being run and needs `ANTHROPIC_API_KEY`. The repo's hooks and `.mcp.json` servers are cut by `--setting-sources user` and `--strict-mcp-config` instead.
-- `--max-budget-usd` set to what is left of the run's $5 budget. `F` refuses when the budget is spent; go to Approve, which escalates.
+- `--max-budget-usd` set to what is left of the run's $5 budget. Reviewers started in the same message spend it at once, so pass `--share <number of parallel headless reviewers>`: each gets an equal cut, in whole cents rounded down. `F` refuses when the budget is spent or a cut would be under $0.05; go to Approve, which escalates.
 
 Never run `claude -p` in an imported or untrusted checkout, only in this run's own WT; `F headless-args` refuses imported runs.
 

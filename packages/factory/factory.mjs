@@ -768,9 +768,19 @@ export function unsetRule(scope, key, { reason } = {}) {
 }
 
 // Pinned unattended flags come from the harness that runs the skill (claude-code.mjs: `claude -p`), so F names no harness.
-export function headlessArgs(opts) {
+// `share`: how many headless runs spend the remaining budget at once (parallel reviewers). Each gets an equal cut,
+// in whole cents rounded down, so together they can't spend more than is left.
+export const MIN_SHARE_USD = 0.05;
+export function headlessArgs({ share = 1, ...opts } = {}) {
   const h = harnesses.find((x) => x.host && x.headlessArgs);
   if (!h) throw new Error('no host harness with headlessArgs() is registered');
+  if (!Number.isInteger(share) || share < 1) throw new Error(`share must be a positive integer (got ${share})`);
+  const cents = Math.floor(Number(opts.budget) * 100 + 1e-9); // a spent or invalid budget is left for the harness to refuse
+  if (share > 1 && opts.budget != null && cents > 0) {
+    const each = Math.floor(cents / share) / 100;
+    if (each < MIN_SHARE_USD) throw new Error(`budget share $${each} per reviewer is below $${MIN_SHARE_USD}; escalate instead of running`);
+    opts = { ...opts, budget: each };
+  }
   return h.headlessArgs(opts);
 }
 
@@ -1597,6 +1607,16 @@ async function test() {
   assert.equal(hr[hr.indexOf('--json-schema') + 1], '{"type":"object"}');
   assert.equal(hr[hr.indexOf('--permission-mode') + 1], 'manual');
   for (const b of [0, -1, 0.004, NaN, 'x']) assert.throws(() => headlessArgs({ budget: b }), /no run budget left/);
+  // Parallel reviewers split the remaining budget, whole cents rounded down; a share under the minimum refuses.
+  const usdOf = (o) => { const x = headlessArgs(o); return x[x.indexOf('--max-budget-usd') + 1]; };
+  assert.equal(usdOf({ budget: 5, share: 6 }), '0.83');
+  assert.deepEqual(headlessArgs({ budget: 3.456, share: 1 }), headlessArgs({ budget: 3.456 }));
+  assert.equal(usdOf({ budget: 0.58, share: 2 }), '0.29'); // no float drift (0.29 * 100 is 28.999…)
+  assert.equal(usdOf({ budget: 0.3, share: 6 }), '0.05'); // exactly the minimum still runs
+  assert.throws(() => headlessArgs({ budget: 0.29, share: 6 }), /budget share \$0\.04 per reviewer is below \$0\.05/);
+  for (const n of [0, -2, 1.5, NaN, '3']) assert.throws(() => headlessArgs({ budget: 5, share: n }), /share must be a positive integer/);
+  assert.ok(!headlessArgs({ share: 6 }).includes('--max-budget-usd')); // unknown budget: still no flag
+  assert.throws(() => headlessArgs({ budget: 0, share: 6 }), /no run budget left/);
   // Demo run 50: custom/provider runners are stamped, and prose from a custom reviewer fails the axis instead of passing.
   const r50 = runs['acme/shop#50'];
   assert.equal(r50.outcome, 'merged');
@@ -1807,6 +1827,9 @@ function cliTest() {
   assert.equal(st.iteration, 2);
   const hl = JSON.parse(cli(['headless-args', RUN, '--review']));
   assert.equal(hl[hl.indexOf('--max-budget-usd') + 1], String(COST_CAP)); // nothing spent yet
+  const hs = JSON.parse(cli(['headless-args', RUN, '--review', '--share', '4']));
+  assert.equal(hs[hs.indexOf('--max-budget-usd') + 1], String(Math.floor((COST_CAP * 100) / 4) / 100));
+  assert.throws(() => cli(['headless-args', RUN, '--share', 'x']), /share must be a positive integer/);
   assert.deepEqual(JSON.parse(hl[hl.indexOf('--json-schema') + 1]), JSON.parse(fs.readFileSync(path.join(HERE, 'references', 'review.schema.json'), 'utf8')));
   assert.ok(hl.every((a) => !a.includes("'"))); // SKILL.md single-quotes every element
   assert.equal((x => x[x.indexOf('--permission-mode') + 1])(JSON.parse(cli(['headless-args', RUN, '--write']))), 'auto');
@@ -2487,7 +2510,8 @@ if (isMain) {
         const r = getRun(run), b = budget(r);
         if (r.imported) throw new Error(`${run} is imported: never run claude -p in its checkout`);
         if (b.over) throw new Error(`run budget exceeded ${budgetWhy(b)}`);
-        out(headlessArgs({ schema: rest.includes('--review') ? JSON.parse(fs.readFileSync(path.join(HERE, 'references', 'review.schema.json'), 'utf8')) : undefined, budget: COST_CAP - b.usd, write: rest.includes('--write') }));
+        const si = rest.indexOf('--share'), share = si < 0 ? 1 : Number(rest[si + 1]);
+        out(headlessArgs({ schema: rest.includes('--review') ? JSON.parse(fs.readFileSync(path.join(HERE, 'references', 'review.schema.json'), 'utf8')) : undefined, budget: COST_CAP - b.usd, write: rest.includes('--write'), share }));
         break;
       }
       case 'dir': console.log(runDir(run)); break;
@@ -2539,7 +2563,7 @@ if (isMain) {
   eval   [fixture]                        score intake on evals/golden with headless claude (costs tokens)
   state  <run>                            print derived run state
   usage  [run]                            token burn by stage, iteration and axis: measured from transcripts, else reported
-  headless-args <run> [--review|--write]  pinned claude -p flags (read-only unless --write) for a provider runner, with the run's remaining budget (JSON array)
+  headless-args <run> [--review|--write] [--share N]  pinned claude -p flags (read-only unless --write) for a provider runner, with the run's remaining budget split N ways (JSON array)
   dir    <run>                            print the run's artifact folder
   render | demo | test`);
         process.exitCode = cmd ? 1 : 0;

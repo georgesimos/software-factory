@@ -23,7 +23,7 @@ const TOOLS = [
 // none denies anything outside the allowlist, where auto mode's classifier could approve other Bash. A schema adds the
 // structured-output contract (reviews). Budget: unknown -> no flag, spent -> refuse.
 function headlessArgs({ schema, budget, write = false } = {}) {
-  const usd = budget == null ? null : Math.floor(Number(budget) * 100) / 100; // whole cents, rounded down
+  const usd = budget == null ? null : Math.floor(Number(budget) * 100 + 1e-9) / 100; // whole cents, rounded down (1e-9: 0.29 * 100 is 28.999…)
   if (usd != null && !(usd > 0)) throw new Error(`no run budget left (${budget}); escalate instead of running`); // 0, negative and NaN alike
   return [
     '--output-format', 'json', '--setting-sources', 'user', '--strict-mcp-config',
