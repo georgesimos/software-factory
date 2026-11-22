@@ -34,13 +34,22 @@ software-factory/
 │   ├── factory/              @software-factory/factory: the skill. ~/.claude/skills/software-factory symlinks here
 │   │   ├── SKILL.md          orchestration: modes, ground rules, stages 0–7, attach, evals, scheduling
 │   │   ├── factory.mjs       the F CLI: event log, derive, gate/decide/merge, sync, worktrees, dashboard render, self-test
+│   │   ├── project.mjs       idea-to-app: F new, issues create, queue, loop, project (imported by factory.mjs)
+│   │   ├── registry.mjs      loads one-file-per-provider folders (hosts/, trackers/)
+│   │   ├── hosts/            repo hosts: github.mjs, _template.mjs, index.mjs (contract), README.md (recipe)
+│   │   ├── trackers/         issue trackers: github-issues.mjs, _template.mjs, index.mjs (contract), README.md
+│   │   ├── templates/        stack templates, data only: next-web.json, expo-mobile.json, _template.json, README.md
+│   │   ├── examples/
+│   │   │   └── budget-app/   PLAN.md + issues.json for "a personal budget app", and the F new --dry-run output
 │   │   ├── dashboard.html    static dashboard template; F render injects the run data at __FACTORY_DATA__
 │   │   ├── references/
 │   │   │   └── reviewers.md  per-axis reviewer briefs (code, security, ux, ui, seo, docs) and the verifier brief
 │   │   ├── evals/golden/     1.json … 8.json: intake fixtures with the expected outcome (pass / needs-info / reject / split)
 │   │   ├── test/
 │   │   │   ├── gh-stub.mjs   fake `gh` used by the self-test (FACTORY_GH)
-│   │   │   └── git-stub.mjs  fake `git branch --no-merged` used by the sync test (FACTORY_GIT)
+│   │   │   ├── git-stub.mjs  fake `git branch --no-merged` used by the sync test (FACTORY_GIT)
+│   │   │   ├── gh-project-stub.mjs  stateful fake `gh` (repos, labels, issues) for the idea-to-app test
+│   │   │   └── project.mjs   idea-to-app self-test: commands, idempotency, queue, loop stops, adapter contracts
 │   │   └── package.json      private; `test` = env -u CLAUDE_CODE_SESSION_ID node factory.mjs test
 │   └── design-system/        @software-factory/design-system: tokens + React components for the desktop app
 │       ├── src/tokens.ts     source of truth for colour, type and spacing tokens
@@ -88,7 +97,7 @@ The skill never writes state itself. It runs `F` subcommands and acts on their J
 | Area | Commands | Notes |
 |---|---|---|
 | Event log | `event`, `state`, `dir` | `record()` validates the stage and status, appends to `events.jsonl`, and re-renders the dashboard on every write. |
-| Intake | `intake`, `queue` | Fetches the issue from GitHub so title, author and association are never typed by the model. |
+| Intake | `intake` | Fetches the issue from GitHub so title, author and association are never typed by the model. |
 | Spec gate | `risk`, `approval` | Untrusted authors and sensitive planned files require `/factory approve`. |
 | Build | `worktree`, `deps`, `gc` | One git worktree per run; the cheapest available way to get `node_modules`. |
 | Review | `axes`, `review` | `axes` picks the review axes from the diff (plus configured extra axes) and records the reviewed commit SHA. `review` records one reviewer's raw output; anything outside the contract becomes a failed review. |
@@ -97,6 +106,7 @@ The skill never writes state itself. It runs `F` subcommands and acts on their J
 | After merge | `postmerge`, `revert` | Watches CI on the merge commit; opens a revert PR, never merges it. |
 | Onboarding | `discover`, `sync`, `projects`, `automerge` | Finds local clones, imports open PRs and agent sessions. |
 | Rules | `rules`, `rules set`, `rules unset`, `checks` | Per-project or global policy switches and step guidance; local checks that stand in for CI. See [§5.2](#52-rules). |
+| Idea to app | `new`, `issues create`, `queue`, `loop`, `project` | In `project.mjs`. Validates the plan and issue batch Claude wrote, creates the repo and issues through the host and tracker adapters only with `--yes`, and picks the next issue in dependency order. See [§7.7](#77-start-from-an-idea). |
 | Housekeeping | `archive`, `render`, `demo`, `test`, `eval` | `eval` runs headless `claude -p` over the golden fixtures and costs tokens. |
 
 Environment overrides:
@@ -104,6 +114,7 @@ Environment overrides:
 - `FACTORY_DIR`: the state folder. The default is `~/.claude/factory`.
 - `FACTORY_GH` and `FACTORY_GIT`: stubs, used by the self-test only.
 - `FACTORY_FIXTURES`: offline eval issues.
+- `FACTORY_HOSTS`, `FACTORY_TRACKERS` and `FACTORY_TEMPLATES`: load repo hosts, trackers or stack templates from another folder.
 
 ### 2.3 The event log
 
@@ -420,7 +431,7 @@ Claude runs `F discover`, confirms which clone to use, then runs `F sync acme/ap
 
 ### 7.4 next / triage / sweep
 
-- **`next acme/app`** takes the first entry of `F queue acme/app` `.ready`: an issue a human labelled `factory:ready` that is not yet in the log. It builds that issue. This is meant for a `/schedule` routine.
+- **`next acme/app`** takes the first entry of `F queue acme/app` `.ready`: an issue a human labelled `factory:ready` that is not yet in the log and whose `Depends on #N` issues are merged or closed. It builds that issue. This is meant for a `/schedule` routine.
 - **`triage acme/app`** runs intake only on the first 5 `.untriaged` issues: open, not in the log, and with no `factory:*` label.
 - **`sweep acme/app dead-code|coverage`** opens up to 3 **unlabelled** issues whose bodies start "Opened by the software factory sweep". A human decides which ones get `factory:ready`.
 
@@ -442,6 +453,19 @@ When `F postmerge` returns `state: "fail"` within the 20-minute watch:
 3. It opens a PR labelled `factory:needs-human` and records `approve reverted`.
 
 It never merges the revert.
+
+### 7.7 Start from an idea
+
+> "factory new: a personal budget app"
+
+Claude asks at most 5 questions (with defaults), then writes `PLAN.md` and `issues.json`; `F` only validates and executes them. Every step is an event on the run `owner/repo:project` (`idea started`, `plan passed`, `repo created`, `issues created`, `loop running|stopped`), all emitted by `F` itself: `F event` refuses them, and `derive()` skips them so they never appear as issue runs.
+
+1. `F new "<idea>" --name o/r --stack next-web --dry-run` → `needs-plan`, then `dry-run` once both files validate (it writes `PLAN.md`, `issues.json`, `scaffold/` and `dry-run.json` to `--out`; see `packages/factory/examples/budget-app/`).
+2. **Checkpoint 1.** The user approves the name, visibility (private by default) and stack, then `F new … --yes --path <dir>`: host login check first (never creates an account), create the repo (refusing one it did not create), run the template's init, commit, push `main` once, and set `checks.commands` from the template.
+3. **Checkpoint 2.** `F issues create o/r issues.json` previews the batch in dependency order with the issues that will escalate; `--yes` creates it, idempotent by key (a local map plus a hidden key marker in each issue body), with `Depends on #N` lines and an epic.
+4. `F sync`, then `F loop o/r` hands out one `owner/repo#N` at a time to the unchanged stages 0–7, with a `/goal` condition built from the template's checks. It stops on the first run a human must resolve, the project budget (`project.budgetUsd`, at most $50), the per-session cap (`project.maxIssuesPerSession`, at most 10) or an empty queue. `factory continue o/r` resumes with `F project` and `F loop`.
+
+Hosts, trackers and stacks are one file each (see their `README.md`), checked by a shared contract in the self-test. **Follow-up:** per-issue intake, comments and labels still call `gh` directly; moving them onto the tracker adapter is not done.
 
 ---
 
