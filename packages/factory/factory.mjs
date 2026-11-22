@@ -45,7 +45,7 @@ const TERMINAL = ['rejected', 'merged', 'escalated', 'closed', 'split']; // need
 const STAGES = ['intake', 'spec', 'build', 'review', 'gate', 'approve', 'ship']; // ship: deploy observations, recorded only by packages/ship's track()
 const STATUSES = ['started', 'passed', 'failed', 'decided', 'reverted', ...OUTCOMES];
 const BLOCKING = ['high', 'medium'];
-const SENSITIVE = /(^|\/)(auth|login|session|oauth|payments?|billing|money|migrations?)(\/|\.|$)|^\.github\/workflows\/|(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|Gemfile(\.lock)?|go\.(mod|sum)|Cargo\.(toml|lock))$|(^|\/)\.env|(^|\/)\.(claude|codex)\//i; // .claude/.codex: a branch's own agent skills, hooks and settings
+const SENSITIVE = /(^|\/)(auth|login|session|oauth|payments?|billing|money|migrations?)(\/|\.|$)|^\.github\/workflows\/|(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|Gemfile(\.lock)?|go\.(mod|sum)|Cargo\.(toml|lock))$|(^|\/)\.env|(^|\/)\.(claude|codex)\/|(^|\/)\.mcp\.json$/i; // .claude/** (settings, hooks, skills, agents), .codex/ and .mcp.json: `claude -p` in the worktree runs repo hooks and MCP servers with no trust prompt
 const UI = /\.(tsx|jsx|vue|svelte|astro|html|css|scss|sass|less)$/i;
 const SEO = /(^|\/)(page|layout|head|metadata|sitemap|robots|opengraph-image)\.[a-z]+$|(^|\/)pages\/|\.html$/i;
 const DOCS = /\.mdx?$|(^|\/)\.env\.example$|(^|\/)(app\/api|pages\/api|routes|cli|bin)\//i; // docs, env and public API surface
@@ -723,6 +723,23 @@ export function unsetRule(scope, key, { reason } = {}) {
   return rules(scope);
 }
 
+// Pinned flags for a `claude -p` provider runner, so its behaviour never rides on -p's defaults.
+// Never --bare: it would skip the `/x` skill being run and needs ANTHROPIC_API_KEY. Repo hooks and .mcp.json are cut by
+// --setting-sources user and --strict-mcp-config instead. Read-only unless `write` (build): manual mode with prompts
+// none denies anything outside the allowlist, where auto mode's classifier could approve other Bash. A schema adds the
+// structured-output contract (reviews). Budget: unknown -> no flag, spent -> refuse.
+export function headlessArgs({ schema, budget, write = false } = {}) {
+  const usd = budget == null ? null : Math.floor(Number(budget) * 100) / 100; // whole cents, rounded down
+  if (usd != null && !(usd > 0)) throw new Error(`no run budget left (${budget}); escalate instead of running`); // 0, negative and NaN alike
+  return [
+    '--output-format', 'json', '--setting-sources', 'user', '--strict-mcp-config',
+    '--permission-mode', write ? 'auto' : 'manual', '--permission-prompts', 'none',
+    ...(usd != null ? ['--max-budget-usd', String(usd)] : []),
+    ...(schema ? ['--json-schema', typeof schema === 'string' ? schema : JSON.stringify(schema)] : []),
+    ...(write ? [] : ['--allowedTools', 'Bash(git diff:*)', 'Bash(git log:*)', 'Read', 'Grep', 'Glob']), // variadic: keep last
+  ];
+}
+
 // F, not the payload, says who did the work. Default runners leave events unchanged; a fallback can only downgrade to default.
 function runnerStamp(run, stage, axis, fallback) {
   const key = stage === 'review' ? (axis && `review.${axis}`) : stage === 'gate' ? 'verifier' : ['intake', 'spec', 'build'].includes(stage) ? stage : null;
@@ -1262,6 +1279,7 @@ export function page(extra = {}) {
   let links = {};
   try { links = JSON.parse(fs.readFileSync(sessionsFile(), 'utf8')); } catch { /* no sync yet */ }
   for (const r of runs) if (links[r.id]) r.sessions = [...(r.sessions || []), ...links[r.id].filter((x) => !(r.sessions || []).some((y) => y.id === x.id))];
+  for (const r of runs) { const w = wtInfo(r.id); if (w?.path) r.worktree = w.path; } // the dashboard's "Open in Claude" cwd
   const repoOf = (id) => id.split(/[#:]/)[0];
   const byProject = {};
   for (const p of new Set(runs.map((r) => repoOf(r.id)))) byProject[p] = metrics(runs.filter((r) => repoOf(r.id) === p));
@@ -1479,6 +1497,22 @@ function test() {
   assert.match(decide(ok, { ...facts, association: 'NONE' }).reasons.join(), /not trusted/); // live value wins
   assert.match(decide(ok, { ...facts, autoMerge: false }).reasons.join(), /auto-merge is turned off/);
   assert.match(decide(ok, { ...facts, files: ['.claude/skills/review/SKILL.md', 'src/a.test.ts'] }).reasons.join(), /sensitive paths/); // a branch's own agent config
+  for (const f of ['.mcp.json', 'pkg/.mcp.json', '.claude/settings.json', '.claude/settings.local.json', '.claude/hooks/pre.sh', '.claude/agents/x.md']) // claude -p runs these untrusted
+    assert.equal(decide(ok, { ...facts, files: [f, 'src/a.test.ts'] }).action, 'escalate', f);
+  assert.equal(decide(ok, { ...facts, files: ['docs/mcp.json.md', 'src/a.test.ts'] }).action, 'merge');
+  // Headless runner flags: pinned, never --bare, read-only for reviews, budget in whole cents, a spent budget refuses.
+  const ha = headlessArgs({ budget: 3.456, write: true });
+  assert.deepEqual(ha.slice(ha.indexOf('--permission-mode'), ha.indexOf('--permission-mode') + 4), ['--permission-mode', 'auto', '--permission-prompts', 'none']);
+  for (const f of [['--output-format', 'json'], ['--max-budget-usd', '3.45'], ['--setting-sources', 'user']]) assert.equal(ha[ha.indexOf(f[0]) + 1], f[1]);
+  assert.ok(ha.includes('--strict-mcp-config') && !ha.includes('--bare') && !ha.includes('--json-schema') && !ha.includes('--allowedTools'));
+  const ro = headlessArgs(); // verifier, intake, spec: read-only by default
+  assert.equal(ro[ro.indexOf('--permission-mode') + 1], 'manual');
+  assert.deepEqual(ro.slice(ro.indexOf('--allowedTools')), ['--allowedTools', 'Bash(git diff:*)', 'Bash(git log:*)', 'Read', 'Grep', 'Glob']);
+  assert.ok(!headlessArgs().includes('--max-budget-usd')); // unknown budget: no flag
+  const hr = headlessArgs({ schema: { type: 'object' } });
+  assert.equal(hr[hr.indexOf('--json-schema') + 1], '{"type":"object"}');
+  assert.equal(hr[hr.indexOf('--permission-mode') + 1], 'manual');
+  for (const b of [0, -1, 0.004, NaN, 'x']) assert.throws(() => headlessArgs({ budget: b }), /no run budget left/);
   // Demo run 50: custom/provider runners are stamped, and prose from a custom reviewer fails the axis instead of passing.
   const r50 = runs['acme/shop#50'];
   assert.equal(r50.outcome, 'merged');
@@ -1525,6 +1559,9 @@ function test() {
   assert.equal(page.split('__FACTORY_DATA__').length, 1);
   assert.match(page, /"ruleHistory":\[\{[^\]]*"key":"ci","value":"skip"/);
   assert.match(page, /"id":"acme\/shop#47"[^]*?"parent":"acme\/shop#46"/); // parent survives archiving
+  fs.mkdirSync(runDir('acme/shop#45'), { recursive: true });
+  fs.writeFileSync(wtFile('acme/shop#45'), JSON.stringify({ path: '/w/shop-45', branch: 'factory/issue-45' }));
+  assert.match(fs.readFileSync(render(), 'utf8'), /"id":"acme\/shop#45"[^]*?"worktree":"\/w\/shop-45"/); // the "Open in Claude" cwd
   assert.deepEqual(axesFor(['lib/x.ts']), ['code', 'security']);
   assert.deepEqual(axesFor(['app/blog/page.tsx']), ['code', 'security', 'ux', 'ui', 'seo']);
   // Dashboard must not break out of its JSON script tag.
@@ -1683,6 +1720,13 @@ function cliTest() {
   assert.equal(st.outcome, 'merged');
   assert.equal(st.spec, nasty);
   assert.equal(st.iteration, 2);
+  const hl = JSON.parse(cli(['headless-args', RUN, '--review']));
+  assert.equal(hl[hl.indexOf('--max-budget-usd') + 1], String(COST_CAP)); // nothing spent yet
+  assert.deepEqual(JSON.parse(hl[hl.indexOf('--json-schema') + 1]), JSON.parse(fs.readFileSync(path.join(HERE, 'references', 'review.schema.json'), 'utf8')));
+  assert.ok(hl.every((a) => !a.includes("'"))); // SKILL.md single-quotes every element
+  assert.equal((x => x[x.indexOf('--permission-mode') + 1])(JSON.parse(cli(['headless-args', RUN, '--write']))), 'auto');
+  record('acme/hl#1', 'intake', 'started', { imported: true });
+  assert.throws(() => cli(['headless-args', 'acme/hl#1']), /imported/);
   syncTest(cli);
   worktreeTest(cli);
   rulesTest(cli);
@@ -2204,6 +2248,13 @@ if (isMain) {
         out(Object.fromEntries(Object.values(withMeasured(derive(events), events)).filter((r) => r.burn).map((r) => [r.id, { measured: r.burn.measured, ...r.burn.total }])));
         break;
       }
+      case 'headless-args': { // the run's remaining budget; an imported checkout is someone else's code, so never -p there
+        const r = getRun(run), b = budget(r);
+        if (r.imported) throw new Error(`${run} is imported: never run claude -p in its checkout`);
+        if (b.over) throw new Error(`run budget exceeded ${budgetWhy(b)}`);
+        out(headlessArgs({ schema: rest.includes('--review') ? JSON.parse(fs.readFileSync(path.join(HERE, 'references', 'review.schema.json'), 'utf8')) : undefined, budget: COST_CAP - b.usd, write: rest.includes('--write') }));
+        break;
+      }
       case 'dir': console.log(runDir(run)); break;
       case 'render': console.log(render()); break;
       case 'ui': ui(Number(run) || 0); break;
@@ -2246,6 +2297,7 @@ if (isMain) {
   eval   [fixture]                        score intake on evals/golden with headless claude (costs tokens)
   state  <run>                            print derived run state
   usage  [run]                            token burn by stage, iteration and axis: measured from transcripts, else reported
+  headless-args <run> [--review|--write]  pinned claude -p flags (read-only unless --write) for a provider runner, with the run's remaining budget (JSON array)
   dir    <run>                            print the run's artifact folder
   render | demo | test`);
         process.exitCode = cmd ? 1 : 0;
