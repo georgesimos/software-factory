@@ -16,10 +16,10 @@ const PLAIN = /^[\w\-.,:/\\=@+~]+$/;
 const envGet = (env: Env, key: string) => env[Object.keys(env).find((k) => k.toUpperCase() === key) ?? key];
 const isFileSync = (p: string) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
 
-function findOnPath(cmd: string, env: Env, isFile: (p: string) => boolean): string | undefined {
+function findOnPath(cmd: string, env: Env, isFile: (p: string) => boolean, skip?: RegExp): string | undefined {
   const exts = (envGet(env, 'PATHEXT') || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map((e) => e.toLowerCase()); // NTFS ignores case
   const names = exts.some((e) => cmd.toLowerCase().endsWith(e)) ? [cmd, ...exts.map((e) => cmd + e)] : exts.map((e) => cmd + e);
-  const dirs = /[\\/]/.test(cmd) ? [''] : (envGet(env, 'PATH') || '').split(';').filter(Boolean);
+  const dirs = /[\\/]/.test(cmd) ? [''] : (envGet(env, 'PATH') || '').split(';').filter((d) => d && !skip?.test(d));
   for (const d of dirs) for (const n of names) { const p = d ? path.win32.join(d, n) : n; if (isFile(p)) return p; }
   return undefined;
 }
@@ -50,29 +50,36 @@ export function run(cmd: string, args: string[] = [], options: SpawnSyncOptions 
 }
 
 // The POSIX shell for `checks.commands` (written for sh). On Windows that is Git Bash, the shell Claude Code uses:
-// CLAUDE_CODE_GIT_BASH_PATH, else bin\bash.exe beside git.exe on PATH (…\Git\cmd\git.exe). Never cmd.exe.
+// CLAUDE_CODE_GIT_BASH_PATH; else Git's bin\bash.exe one or two levels above git.exe (…\Git\cmd\git.exe,
+// …\Git\mingw64\bin\git.exe); else %ProgramFiles%\Git; else bash.exe on PATH, but not WSL's launcher. Never cmd.exe.
 export function posixShell({ platform = process.platform, env = process.env, isFile = isFileSync }: Resolve = {}): string {
   if (platform !== 'win32') return '/bin/sh';
   const set = envGet(env, 'CLAUDE_CODE_GIT_BASH_PATH');
-  const git = findOnPath('git.exe', env, isFile);
-  const found = [set, git && path.win32.join(path.win32.dirname(git), '..', 'bin', 'bash.exe')].find((p) => p && isFile(p));
+  const git = findOnPath('git.exe', env, isFile), up = (n: number) => git && path.win32.join(path.win32.dirname(git), ...Array(n).fill('..'), 'bin', 'bash.exe');
+  const pf = envGet(env, 'PROGRAMFILES'), onPath = findOnPath('bash.exe', env, isFile, /\\(System32|WindowsApps)\\?$/i); // those bash.exe are WSL's
+  const found = [set, up(1), up(2), pf && path.win32.join(pf, 'Git', 'bin', 'bash.exe'), onPath].find((p) => p && isFile(p));
   if (!found) throw new Error('checks.commands need a POSIX shell: install Git for Windows (Git Bash), or set CLAUDE_CODE_GIT_BASH_PATH to its bash.exe');
   return found;
 }
 
-// `F open`: the OS opener for an https:, file: or claude-cli: URL. No shell: on Windows explorer.exe hands the URL to
-// its registered handler, so an `&` in a URL is never a cmd.exe operator.
+// `F open`: the OS opener for an https: or claude-cli: URL, or a file: URL of an .html page (the dashboard). Any other
+// file: target could be a program (.exe, .bat, .app, .command) that the opener would run. No shell: on Windows
+// explorer.exe hands the URL to its registered handler, so an `&` in a URL is never a cmd.exe operator.
 export function opener(target: string, platform: NodeJS.Platform = process.platform): Command {
   let url: URL;
   try { url = new URL(target); } catch { throw new Error(`not a URL: ${target}`); }
   if (!['https:', 'file:', 'claude-cli:'].includes(url.protocol)) throw new Error(`refusing to open ${url.protocol} URLs; only https:, file: and claude-cli:`);
+  if (url.protocol === 'file:' && !/\.html?$/i.test(url.pathname)) throw new Error(`refusing to open ${url.pathname}: file: URLs must be .html pages`);
   const href = url.href;
   if (platform === 'darwin') return { file: 'open', args: [href] };
   if (platform === 'win32') return { file: 'explorer.exe', args: [href] };
   return { file: 'xdg-open', args: [href] };
 }
-export function open(target: string) {
-  const c = opener(target);
+export function open(target: string, { platform = process.platform, env = process.env, isFile = isFileSync }: Resolve = {}) {
+  const c = opener(target, platform);
+  const found = platform === 'win32' ? findOnPath(c.file, env, isFile) || isFile(path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', c.file))
+    : (envGet(env, 'PATH') || '').split(':').some((d) => d && isFile(path.join(d, c.file)));
+  if (!found) throw new Error(`no ${c.file} here to open ${target}; open it yourself`);
   spawn(c.file, c.args, { detached: true, stdio: 'ignore' }).on('error', () => { /* reported below by the caller's hint */ }).unref();
   return target;
 }

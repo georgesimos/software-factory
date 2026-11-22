@@ -15,13 +15,16 @@ export const STEP_KEYS = ['intake', 'spec', 'build', ...BUILTIN_AXES.map((a) => 
 export const harnessIds = () => harnesses.map((h) => h.id);
 export const NAME = /^[\w.-]+(:[\w.-]+)?$/; // skill, plugin:skill or agent type; it ends up in a command line
 export const skillsFile = () => path.join(stateDir(), 'skills.json');
-export function checkRunner(s, at, more = []) {
+// A brief must live outside any worktree, so a branch can't supply it: an absolute path, or ~. The Windows forms only on
+// Windows, because on macOS and Linux `C:\x.md` and `~\x.md` are relative paths.
+const BRIEF = { posix: /^(\/|~\/).*\.md$/, win32: /^(\/|~[\\/]|[A-Za-z]:[\\/]).*\.md$/ };
+export function checkRunner(s, at, more = [], platform = process.platform) {
   if (!s || typeof s !== 'object' || Array.isArray(s)) throw new Error(`${at}: a runner must be a JSON object`);
   const bad = Object.keys(s).filter((k) => !['use', 'name', 'path', 'harness', ...more].includes(k));
   if (bad.length) throw new Error(`${at}: unknown fields ${bad.join(', ')}`);
   const ok = s.use === 'default' && !s.name && !s.path && !s.harness
     || s.use === 'skill' && NAME.test(s.name || '') && !s.path && !s.harness
-    || s.use === 'brief' && /^(\/|~[\\/]|[A-Za-z]:[\\/]).*\.md$/.test(s.path || '') && !s.name && !s.harness // outside any worktree, so a branch can't supply it
+    || s.use === 'brief' && BRIEF[platform === 'win32' ? 'win32' : 'posix'].test(s.path || '') && !s.name && !s.harness
     || s.use === 'provider' && harnessIds().includes(s.harness) && (s.name === undefined || NAME.test(s.name)) && !s.path;
   if (!ok) throw new Error(`${at}: expected {"use":"default"}, {"use":"skill","name"}, {"use":"brief","path":"/abs/or/~/….md"} or {"use":"provider","harness":"${harnessIds().join('|')}","name"?}`);
 }
