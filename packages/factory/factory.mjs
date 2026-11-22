@@ -711,16 +711,18 @@ export function unsetRule(scope, key, { reason } = {}) {
 
 // Pinned flags for a `claude -p` provider runner, so its behaviour never rides on -p's defaults.
 // Never --bare: it would skip the `/x` skill being run and needs ANTHROPIC_API_KEY. Repo hooks and .mcp.json are cut by
-// --setting-sources user and --strict-mcp-config instead. A schema means a review: read-only, so dontAsk denies anything
-// outside the allowlist (auto mode would let its classifier approve other Bash). Budget: unknown -> no flag, spent -> refuse.
-export function headlessArgs({ schema, budget } = {}) {
+// --setting-sources user and --strict-mcp-config instead. Read-only unless `write` (build): manual mode with prompts
+// none denies anything outside the allowlist, where auto mode's classifier could approve other Bash. A schema adds the
+// structured-output contract (reviews). Budget: unknown -> no flag, spent -> refuse.
+export function headlessArgs({ schema, budget, write = false } = {}) {
   const usd = budget == null ? null : Math.floor(Number(budget) * 100) / 100; // whole cents, rounded down
   if (usd != null && !(usd > 0)) throw new Error(`no run budget left (${budget}); escalate instead of running`); // 0, negative and NaN alike
   return [
     '--output-format', 'json', '--setting-sources', 'user', '--strict-mcp-config',
-    '--permission-mode', schema ? 'dontAsk' : 'auto', '--permission-prompts', 'none',
+    '--permission-mode', write ? 'auto' : 'manual', '--permission-prompts', 'none',
     ...(usd != null ? ['--max-budget-usd', String(usd)] : []),
-    ...(schema ? ['--json-schema', typeof schema === 'string' ? schema : JSON.stringify(schema), '--allowedTools', 'Bash(git diff:*)', 'Bash(git log:*)', 'Read', 'Grep', 'Glob'] : []),
+    ...(schema ? ['--json-schema', typeof schema === 'string' ? schema : JSON.stringify(schema)] : []),
+    ...(write ? [] : ['--allowedTools', 'Bash(git diff:*)', 'Bash(git log:*)', 'Read', 'Grep', 'Glob']), // variadic: keep last
   ];
 }
 
@@ -1458,14 +1460,17 @@ function test() {
     assert.equal(decide(ok, { ...facts, files: [f, 'src/a.test.ts'] }).action, 'escalate', f);
   assert.equal(decide(ok, { ...facts, files: ['docs/mcp.json.md', 'src/a.test.ts'] }).action, 'merge');
   // Headless runner flags: pinned, never --bare, read-only for reviews, budget in whole cents, a spent budget refuses.
-  const ha = headlessArgs({ budget: 3.456 });
+  const ha = headlessArgs({ budget: 3.456, write: true });
   assert.deepEqual(ha.slice(ha.indexOf('--permission-mode'), ha.indexOf('--permission-mode') + 4), ['--permission-mode', 'auto', '--permission-prompts', 'none']);
   for (const f of [['--output-format', 'json'], ['--max-budget-usd', '3.45'], ['--setting-sources', 'user']]) assert.equal(ha[ha.indexOf(f[0]) + 1], f[1]);
-  assert.ok(ha.includes('--strict-mcp-config') && !ha.includes('--bare') && !ha.includes('--json-schema'));
+  assert.ok(ha.includes('--strict-mcp-config') && !ha.includes('--bare') && !ha.includes('--json-schema') && !ha.includes('--allowedTools'));
+  const ro = headlessArgs(); // verifier, intake, spec: read-only by default
+  assert.equal(ro[ro.indexOf('--permission-mode') + 1], 'manual');
+  assert.deepEqual(ro.slice(ro.indexOf('--allowedTools')), ['--allowedTools', 'Bash(git diff:*)', 'Bash(git log:*)', 'Read', 'Grep', 'Glob']);
   assert.ok(!headlessArgs().includes('--max-budget-usd')); // unknown budget: no flag
   const hr = headlessArgs({ schema: { type: 'object' } });
   assert.equal(hr[hr.indexOf('--json-schema') + 1], '{"type":"object"}');
-  assert.equal(hr[hr.indexOf('--permission-mode') + 1], 'dontAsk');
+  assert.equal(hr[hr.indexOf('--permission-mode') + 1], 'manual');
   for (const b of [0, -1, 0.004, NaN, 'x']) assert.throws(() => headlessArgs({ budget: b }), /no run budget left/);
   // Demo run 50: custom/provider runners are stamped, and prose from a custom reviewer fails the axis instead of passing.
   const r50 = runs['acme/shop#50'];
@@ -1673,7 +1678,8 @@ function cliTest() {
   const hl = JSON.parse(cli(['headless-args', RUN, '--review']));
   assert.equal(hl[hl.indexOf('--max-budget-usd') + 1], String(COST_CAP)); // nothing spent yet
   assert.deepEqual(JSON.parse(hl[hl.indexOf('--json-schema') + 1]), JSON.parse(fs.readFileSync(path.join(HERE, 'references', 'review.schema.json'), 'utf8')));
-  assert.ok(!hl[hl.indexOf('--json-schema') + 1].includes("'")); // SKILL.md single-quotes it
+  assert.ok(hl.every((a) => !a.includes("'"))); // SKILL.md single-quotes every element
+  assert.equal((x => x[x.indexOf('--permission-mode') + 1])(JSON.parse(cli(['headless-args', RUN, '--write']))), 'auto');
   record('acme/hl#1', 'intake', 'started', { imported: true });
   assert.throws(() => cli(['headless-args', 'acme/hl#1']), /imported/);
   syncTest(cli);
@@ -2151,7 +2157,7 @@ if (isMain) {
         const r = getRun(run), b = budget(r);
         if (r.imported) throw new Error(`${run} is imported: never run claude -p in its checkout`);
         if (b.over) throw new Error(`run budget exceeded ${budgetWhy(b)}`);
-        out(headlessArgs({ schema: rest.includes('--review') ? JSON.parse(fs.readFileSync(path.join(HERE, 'references', 'review.schema.json'), 'utf8')) : undefined, budget: COST_CAP - b.usd }));
+        out(headlessArgs({ schema: rest.includes('--review') ? JSON.parse(fs.readFileSync(path.join(HERE, 'references', 'review.schema.json'), 'utf8')) : undefined, budget: COST_CAP - b.usd, write: rest.includes('--write') }));
         break;
       }
       case 'dir': console.log(runDir(run)); break;
@@ -2195,7 +2201,7 @@ if (isMain) {
   eval   [fixture]                        score intake on evals/golden with headless claude (costs tokens)
   state  <run>                            print derived run state
   usage  [run]                            token burn by stage, iteration and axis: measured from transcripts, else reported
-  headless-args <run> [--review]          pinned claude -p flags for a provider runner, with the run's remaining budget (JSON array)
+  headless-args <run> [--review|--write]  pinned claude -p flags (read-only unless --write) for a provider runner, with the run's remaining budget (JSON array)
   dir    <run>                            print the run's artifact folder
   render | demo | test`);
         process.exitCode = cmd ? 1 : 0;

@@ -199,7 +199,7 @@ Finally, report the outcome with its links, and give the dashboard path, `~/.cla
 | `{"use":"default"}` | The built-in brief in this file or in reviewers.md. |
 | `{"use":"skill","name":"x"}` | Invoke the Skill `x` in a fresh subagent, giving it the step's inputs and its output contract. |
 | `{"use":"brief","path":"…md"}` | Spawn a fresh subagent with that file as its brief, in place of the built-in one. |
-| `{"use":"provider","harness":"claude-code","name":"x"}` | If `x` is one of your Agent subagent types (such as `pr-review-toolkit:code-reviewer`), spawn that agent. Otherwise run the skill headless in WT with pinned flags: `(cd WT && claude -p "/x" <args>)`, where `<args>` is the JSON array from `F headless-args RUN [--review]`, one shell word per element (single-quote the `--json-schema` value). See [Headless Claude Code runs](#headless-claude-code-runs). |
+| `{"use":"provider","harness":"claude-code","name":"x"}` | If `x` is one of your Agent subagent types (such as `pr-review-toolkit:code-reviewer`), spawn that agent. Otherwise run the skill headless in WT with pinned flags: `(cd WT && claude -p "/x" <args>)`, where `<args>` is the JSON array from `F headless-args RUN [--review|--write]`, each element single-quoted as one shell word. See [Headless Claude Code runs](#headless-claude-code-runs). |
 | `{"use":"provider","harness":"codex"}` | Run Codex headless in WT. Review and verifier steps use `-s read-only` and build uses `-s workspace-write`; never pass `--dangerously-bypass-approvals-and-sandbox`. Review: `codex exec -C WT -s read-only --output-schema ~/.claude/skills/software-factory/references/review.schema.json -o DIR/<axis>.json "<brief>"`. With `"name":"review"`, run `codex review --base BASE` in WT and pass its prose through the adapter. Any other `name` is ignored. |
 
 - **Same contract as the default.**
@@ -213,9 +213,9 @@ Finally, report the outcome with its links, and give the dashboard path, `~/.cla
 
 ### Headless Claude Code runs
 
-`F headless-args RUN [--review]` prints the flags as a JSON array. They are pinned, so a run never depends on `-p`'s defaults:
+`F headless-args RUN [--review|--write]` prints the flags as a JSON array. They are pinned, so a run never depends on `-p`'s defaults:
 - `--output-format json`, plus `--json-schema <review.schema.json>` with `--review`.
-- `--permission-prompts none`, with `--permission-mode auto` for build and other writing steps, and `--permission-mode dontAsk` plus a `git diff`/`git log`/Read/Grep/Glob allowlist for reviews, so a reviewer stays read-only (auto mode would let its classifier approve other commands).
+- `--permission-prompts none`. With `--write` (build only): `--permission-mode auto`. Every other step is read-only: `--permission-mode manual` with a `git diff`/`git log`/Read/Grep/Glob allowlist, so anything else is denied (auto mode's classifier could approve other commands).
 - **No `--bare`, on purpose.** It would skip the `/x` skill being run and needs `ANTHROPIC_API_KEY`. The repo's hooks and `.mcp.json` servers are cut by `--setting-sources user` and `--strict-mcp-config` instead.
 - `--max-budget-usd` set to what is left of the run's $5 budget. `F` refuses when the budget is spent; go to Approve, which escalates.
 
@@ -223,7 +223,7 @@ Never run `claude -p` in an imported or untrusted checkout, only in this run's o
 
 Read the JSON reply:
 - **`structured_output`** (reviews) is the reviewer JSON: pipe it to `F review RUN <axis> --cost-usd <step cost> -`. When it is absent the run produced no valid review: pipe the raw `result` instead, which `F review` records as a failed review. Never write a passing review yourself.
-- **`total_cost_usd`** is the conversation total and is cumulative on `--resume`, so a step's cost is the difference from the previous step's total in that session.
+- **`total_cost_usd`** is the conversation total and is cumulative on `--resume`, so a step's cost is the difference from the previous step's total in that session. It goes in `--cost-usd` for `F review`, or in the step's `F event` payload as `costUsd`.
 - **`session_id`** is only for `claude --resume <id>` to continue the step. `F event` refuses `sessionId` in payloads.
 
 ## Rules: CI off, local checks and guidance

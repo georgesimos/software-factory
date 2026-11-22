@@ -848,7 +848,7 @@ async function copyText(text) {
 const deepCwd = (p) => typeof p === 'string' && /^\/(?!\/)/.test(p) && !p.includes('..') && !/[\p{Cc}\p{Cf}]/u.test(p);
 function openInClaude(r) {
   const cwd = [r.worktree, ...r.sessions.map((s) => s.cwd)].find(deepCwd);
-  if (!cwd || !/^[\w.-]+\/[\w.-]+[#:][\w.-]+$/.test(r.id)) return null; // the id goes into a prompt that runs F
+  if (!cwd || !/^[\w.-]+\/[\w.-]+(#\d+|:[\w.\/-]+)$/.test(r.id)) return null; // owner/repo#N or an import's owner/repo:branch; it goes into a prompt that runs F
   const q = `Continue factory run ${r.id}. Run F state '${r.id}' first.`;
   const query = Object.entries({ cwd, q }).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
   if (encodeURIComponent(q).length >= 5000) return null;
