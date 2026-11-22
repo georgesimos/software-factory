@@ -110,7 +110,7 @@ The skill never writes state itself. It runs `F` subcommands and acts on their J
 
 ### 2.2 The `F` CLI: `factory.mjs`
 
-`factory.mjs` is a single ESM file with no dependencies beyond Node built-ins. It shells out to `gh` and `git` through `execFileSync`, never through a shell. Its responsibilities:
+`factory.mjs` is a thin entry over `packages/core`, `packages/server` and `packages/cli`: TypeScript run by Node directly, with no dependencies beyond Node built-ins. It shells out to `gh` and `git` through `execFileSync`, never through a shell. Its responsibilities:
 
 | Area | Commands | Notes |
 |---|---|---|
