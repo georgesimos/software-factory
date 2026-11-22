@@ -242,6 +242,27 @@ td.v.passed { color: var(--ok); } td.v.failed { color: var(--bad); } td.v.wait {
 .bar { margin-top: 8px; height: 2px; background: var(--line); border-radius: 1px; overflow: hidden; }
 .bar i { display: block; height: 100%; background: var(--ink-2); }
 .bar.over i { background: var(--bad); }
+/* Token burn: one hue in pipeline order, so it reads in both themes; the legend carries the numbers */
+.burn-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 12px; }
+.burn-head .v { font: 400 22px/1 var(--sans); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.burn-head .c { font: 12px var(--mono); color: var(--ink-2); }
+.burn-src { margin: 6px 0 0; font: 11px var(--mono); }
+.burn-bar { display: flex; gap: 2px; height: 8px; margin-top: 14px; border-radius: 2px; overflow: hidden; background: var(--line); }
+.burn-bar i { display: block; min-width: 2px; }
+.b-intake { background: color-mix(in srgb, var(--accent) 30%, var(--surface)); }
+.b-spec { background: color-mix(in srgb, var(--accent) 44%, var(--surface)); }
+.b-build { background: color-mix(in srgb, var(--accent) 58%, var(--surface)); }
+.b-review { background: color-mix(in srgb, var(--accent) 72%, var(--surface)); }
+.b-gate { background: color-mix(in srgb, var(--accent) 86%, var(--surface)); }
+.b-approve { background: var(--accent); }
+.burn-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 10px 0 0; padding: 0; list-style: none; font: 11.5px var(--mono); color: var(--ink-3); }
+.burn-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.burn-legend b { font-weight: 500; color: var(--ink-2); }
+.burn-legend .sw { width: 8px; height: 8px; border-radius: 2px; }
+.burn-iters { margin: 12px 0 0; padding: 0; list-style: none; font: 11.5px var(--mono); color: var(--ink-3); }
+.burn-iters li { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-top: 1px dashed var(--line); }
+td.tok, .axis-burn { font: 11.5px var(--mono); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.axis-burn { margin: 8px 0 0; }
 
 .kids { display: grid; gap: 6px; }
 .kid { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; text-decoration: none; font-size: 13px; }
@@ -366,6 +387,10 @@ const dur = (x) => !num(x) || x < 0 ? null : x < 3600e3 ? [String(Math.max(1, Ma
 const pct = (x) => (num(x) ? [String(Math.round(x * 100)), '%'] : null);
 const money = (x) => (num(x) ? '$' + (x >= 1000 ? Math.round(x).toLocaleString() : x.toFixed(2)) : null);
 const tokens = (x) => (!num(x) ? null : x >= 1e6 ? (x / 1e6).toFixed(1) + 'M' : x >= 1e3 ? Math.round(x / 1e3) + 'k' : String(x));
+const costTxt = (c) => (c.costUsd == null ? '—' : money(c.costUsd) + (c.unpriced ? '+' : '')); // "+": some tokens ran on a model with no price
+const cellN = (c) => (num(obj(c).tokens) ? { tokens: c.tokens, costUsd: num(c.costUsd) ? c.costUsd : null, unpriced: num(c.unpriced) ? c.unpriced : 0 } : null);
+const cellsN = (m) => Object.fromEntries(Object.entries(obj(m)).map(([k, v]) => [k, cellN(v)]).filter(([, v]) => v));
+const burnN = (b) => (cellN(obj(b).total) ? { measured: b.measured === true, total: cellN(b.total), byStage: cellsN(b.byStage), byIteration: cellsN(b.byIteration), byAxis: cellsN(b.byAxis), reported: cellN(b.reported) } : null);
 
 // Every field but id may be missing: normalise once so render code can trust shapes.
 const norm = (r) => {
@@ -377,7 +402,7 @@ const norm = (r) => {
   const axes = {};
   for (const [i, list] of Object.entries(obj(r.axes))) axes[i] = arr(list);
   return { ...r, id: String(r.id), events: arr(r.events).map(obj), reviews, axes, loopbacks: arr(r.loopbacks).map(obj),
-    issues: arr(r.issues), children: arr(r.children),
+    issues: arr(r.issues), children: arr(r.children), burn: burnN(r.burn),
     sessions: arr(r.sessions).map(obj).filter((x) => x.id != null).sort((a, b) => (Date.parse(b.last) || 0) - (Date.parse(a.last) || 0)), iteration: num(r.iteration) ? r.iteration : 0,
     outcome: TONE[r.outcome] ? r.outcome : 'in-progress', stage: STAGES.includes(r.stage) ? r.stage : 'intake',
     decision: r.decision ? { ...obj(r.decision), reasons: arr(obj(r.decision).reasons) } : null };
@@ -433,6 +458,11 @@ function card(r, selected) {
   if (r.imported) foot.push(chip('Tracked' + (r.source ? ' · ' + (SRC[r.source] || r.source) : ''), 'quiet'));
   if (r.children.length) foot.push(chip(`${r.children.length} runs`, 'quiet'));
   if (r.sessions.length) foot.push(chip(`${r.sessions.length} session${r.sessions.length > 1 ? 's' : ''}`, 'quiet'));
+  if (r.burn && r.burn.total.tokens) {
+    const c = chip(tokens(r.burn.total.tokens) + ' tok', 'quiet');
+    c.title = `${r.burn.measured ? 'Measured' : 'Reported'}: ${r.burn.total.tokens.toLocaleString()} tokens · ${costTxt(r.burn.total)}`;
+    foot.push(c);
+  }
   if (r.archived) foot.push(chip('Archived', 'quiet'));
   return el('a', { class: 'card' + (r.imported ? ' tracked' : ''), href: runHref(r.id), 'data-k': 'run:' + r.id, 'aria-current': r.id === selected ? 'true' : null },
     el('div', { class: 'c-top' }, dot(tone, tone === 'run' && state === 'active'), el('span', { class: 'c-id', title: r.id }, project ? '' : el('span', { class: 'c-repo' }, shortId(repoOf(r.id))), el('span', { class: 'c-num' }, r.id.slice(repoOf(r.id).length))),
@@ -455,6 +485,11 @@ function metricsStrip(runs, project) {
   ];
   if (n('costUsd') > 0) items.push(['Spend', ['$', M.costUsd >= 1000 ? Math.round(M.costUsd).toLocaleString() : M.costUsd.toFixed(2)],
     n('costPerMergeUsd') != null ? `${money(M.costPerMergeUsd)} per merge` : num(DATA.costCap) ? `cap ${money(DATA.costCap)} / run` : '']);
+  if (n('tokens') > 0) {
+    const t = n('tokensPerMerge'), top = Object.entries(obj(M.stageShare)).filter(([, v]) => num(v)).sort((a, b) => b[1] - a[1])[0];
+    items.push(['Tokens / merge', t == null ? null : t >= 1e6 ? [(t / 1e6).toFixed(1), 'M'] : [String(Math.round(t / 1e3)), 'k'],
+      [`${tokens(M.tokens)} total`, top ? `${top[0]} ${Math.round(top[1] * 100)}%` : null, `${M.measuredRuns || 0} measured`].filter(Boolean).join(' · ')]);
+  }
   const s = el('section', { class: 'metrics', 'aria-label': 'Metrics' }, items.map(([k, v, sub]) => el('div', { class: 'metric' },
     el('div', { class: 'label' }, k),
     el('div', { class: 'v' + (v ? '' : ' none') }, !v ? '—' : k === 'Spend' ? [el('small', { class: 'pre' }, v[0]), v[1]] : [v[0], v[1] ? el('small', {}, v[1]) : null]),
@@ -513,13 +548,15 @@ function matrix(r) {
   const iters = Object.keys(r.axes).concat(Object.keys(r.reviews)).filter((v, i, a) => a.indexOf(v) === i).sort((a, b) => a - b);
   if (!iters.length) return el('p', { class: 'muted' }, r.imported ? 'Tracked run: the factory does not review it.' : 'No reviews yet.');
   const axes = [...new Set(iters.flatMap((i) => [...(r.axes[i] || []), ...Object.keys(r.reviews[i] || {})]))];
-  const table = el('table', {}, el('thead', {}, el('tr', {}, el('th', { scope: 'col' }, 'Axis'), iters.map((i) => el('th', { scope: 'col' }, 'Iter ' + i)))),
+  const ab = r.burn ? r.burn.byAxis : {}, hasTok = axes.some((a) => ab[a]);
+  const table = el('table', {}, el('thead', {}, el('tr', {}, el('th', { scope: 'col' }, 'Axis'), iters.map((i) => el('th', { scope: 'col' }, 'Iter ' + i)), hasTok ? el('th', { scope: 'col' }, 'Tokens') : null)),
     el('tbody', {}, axes.map((a) => el('tr', {}, el('td', {}, a), iters.map((i) => {
       const v = (r.reviews[i] || {})[a];
       if (!v) return (r.axes[i] || []).includes(a) ? el('td', { class: 'v wait' }, '… pending') : el('td', { class: 'v na', 'aria-label': 'not reviewed' }, '·');
       if (!failed(v)) return el('td', { class: 'v passed' }, '✓ pass', v.findings.length ? el('span', { style: 'color:var(--ink-3)' }, ` · ${v.findings.length}`) : null);
       return el('td', { class: 'v failed' }, `✕ ${v.findings.filter(blocking).length || 'fail'}`);
-    })))));
+    }), hasTok ? el('td', { class: 'tok', title: ab[a] ? costTxt(ab[a]) : null }, ab[a] ? tokens(ab[a].tokens) : '·') : null))));
+  const extra = Object.entries(ab).filter(([k]) => !axes.includes(k));
   const finds = iters.slice().reverse().flatMap((i) => Object.entries(r.reviews[i] || {}).flatMap(([axis, v]) => v.findings.map((f, j) => {
     const dis = f.dismissed != null && f.dismissed !== false;
     const tipId = `tip-${i}-${axis}-${j}`.replace(/[^\w-]/g, '_');
@@ -530,7 +567,8 @@ function matrix(r) {
       el('div', { class: 'fm' }, [axis, 'iter ' + i, f.severity, where, '→ ' + (f.route || 'build'), dis ? 'dismissed' : null].filter(Boolean).join(' · ')),
       dis ? el('span', { class: 'tip', role: 'tooltip', id: tipId }, 'Dismissed: ' + (typeof f.dismissed === 'string' && f.dismissed ? f.dismissed : 'no reason given')) : null);
   })));
-  return [table, finds.length ? el('ul', { class: 'finds', 'aria-label': 'Findings' }, finds) : null];
+  return [table, extra.length ? el('p', { class: 'axis-burn' }, extra.map(([k, c]) => `${k} ${tokens(c.tokens)} · ${costTxt(c)}`).join('  ·  ')) : null,
+    finds.length ? el('ul', { class: 'finds', 'aria-label': 'Findings' }, finds) : null];
 }
 
 function decision(r) {
@@ -554,17 +592,39 @@ function decision(r) {
 }
 
 function facts(r) {
+  const spent = r.burn ? r.burn.total : { tokens: num(r.tokens) ? r.tokens : null, costUsd: num(r.costUsd) ? r.costUsd : null };
+  const src = r.burn ? (r.burn.measured ? ' · measured' : ' · reported') : '';
   const items = [['Iterations', `${r.iteration} / ${CAP}`, r.loopbacks.length ? `${r.loopbacks.length} loop-back${r.loopbacks.length > 1 ? 's' : ''}` : 'no loop-backs']];
-  if (num(r.costUsd)) {
+  if (num(spent.costUsd)) {
     const capped = num(DATA.costCap) && DATA.costCap > 0;
-    const b = capped ? el('div', { class: 'bar' + (r.costUsd > DATA.costCap ? ' over' : ''), 'aria-hidden': 'true' }, el('i')) : null;
-    if (b) b.firstChild.style.width = Math.min(100, (r.costUsd / DATA.costCap) * 100) + '%';
-    items.push(['Cost', money(r.costUsd), capped ? `of ${money(DATA.costCap)} cap` : '', b]);
+    const b = capped ? el('div', { class: 'bar' + (spent.costUsd > DATA.costCap ? ' over' : ''), 'aria-hidden': 'true' }, el('i')) : null;
+    if (b) b.firstChild.style.width = Math.min(100, (spent.costUsd / DATA.costCap) * 100) + '%';
+    items.push(['Cost', costTxt(spent), (capped ? `of ${money(DATA.costCap)} cap` : '') + src, b]);
   }
-  if (num(r.tokens)) items.push(['Tokens', tokens(r.tokens), '']);
+  if (num(spent.tokens)) items.push(['Tokens', tokens(spent.tokens), src.slice(3)]);
   const d = dur(num(r.durationMs) ? r.durationMs : Date.parse(r.updated) - Date.parse(r.started));
   if (d) items.push(['Duration', d.join(''), r.started ? 'since ' + clock(r.started) : '']);
   return el('div', { class: 'facts' }, items.map(([k, v, s, extra]) => el('div', { class: 'fact' }, el('div', { class: 'label' }, k), el('div', { class: 'v' }, v), extra, s ? el('div', { class: 's' }, s) : null)));
+}
+
+function burn(r) {
+  const b = r.burn;
+  if (!b || !b.total.tokens) return null;
+  const parts = STAGES.filter((s) => b.byStage[s] && b.byStage[s].tokens > 0);
+  const bar = el('div', { class: 'burn-bar', role: 'img', 'aria-label': 'Tokens by stage: ' + parts.map((s) => `${s} ${tokens(b.byStage[s].tokens)}`).join(', ') },
+    parts.map((s) => { const i = el('i', { class: 'b-' + s }); i.style.flex = String(b.byStage[s].tokens); return i; }));
+  const legend = el('ul', { class: 'burn-legend' }, parts.map((s) => el('li', {}, el('span', { class: 'sw b-' + s, 'aria-hidden': 'true' }),
+    el('b', {}, s), `${tokens(b.byStage[s].tokens)} · ${costTxt(b.byStage[s])}`)));
+  const iters = Object.keys(b.byIteration).sort((x, y) => x - y);
+  const note = [b.measured ? 'Measured from session transcripts' : 'Reported by subagents (other work not counted)',
+    b.measured && b.reported ? `subagents reported ${tokens(b.reported.tokens)}` : null,
+    b.total.unpriced ? `${tokens(b.total.unpriced)} on unpriced models` : null].filter(Boolean).join(' · ');
+  return section('Burn',
+    el('div', { class: 'burn-head' }, el('span', { class: 'v' }, tokens(b.total.tokens) + ' tokens'), el('span', { class: 'c' }, costTxt(b.total)),
+      chip(b.measured ? 'Measured' : 'Reported', b.measured ? 'run' : 'quiet')),
+    el('p', { class: 'muted burn-src' }, note), bar, legend,
+    iters.length > 1 ? el('ul', { class: 'burn-iters', 'aria-label': 'Tokens by iteration' }, iters.map((i) => el('li', {},
+      el('span', {}, i === '0' ? 'Before build' : 'Iteration ' + i), el('span', {}, `${tokens(b.byIteration[i].tokens)} · ${costTxt(b.byIteration[i])}`)))) : null);
 }
 
 function family(r) {
@@ -660,6 +720,7 @@ function detail(r) {
     section('Review', matrix(r)),
     decision(r),
     section('Run', facts(r)),
+    burn(r),
     family(r),
     sessions(r),
     timeline(r));
