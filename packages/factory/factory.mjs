@@ -577,10 +577,10 @@ export function catalog(repos = []) {
 }
 
 // Everything the Skills sheet needs: raw config (to tell "set here" from "inherited"), resolved plans and the catalog.
-export function skillsData(repos = []) {
+export function skillsData(repos = [], keep = () => true) {
   try {
-    const cfg = readSkills();
-    const scopes = [...new Set([...Object.keys(projects()), ...repos, ...Object.keys(cfg)])].filter((s) => s !== 'default').sort();
+    const all = readSkills(), cfg = Object.fromEntries(Object.entries(all).filter(([s]) => s === 'default' || keep(s)));
+    const scopes = [...new Set([...Object.keys(projects()), ...repos, ...Object.keys(cfg)])].filter((s) => s !== 'default' && keep(s)).sort();
     return { steps: STEP_KEYS, required: REQUIRED_AXES, config: cfg, scopes,
       plans: Object.fromEntries(['default', ...scopes].map((s) => [s, skills(s === 'default' ? '' : s, cfg)])), catalog: catalog(scopes) };
   } catch (e) { return { error: e.message }; } // a bad skills.json must not break rendering an event that was already appended
@@ -656,6 +656,7 @@ export function setAutoMerge(repo, on) {
   return projects()[repo];
 }
 
+const ARTIFACT_URL = /^https:\/\/claude\.ai\/(code\/)?artifact\/[\w-]+$/;
 // Policy rules: a closed set of typed switches that F enforces. They can only make the factory stricter, or swap a
 // signal that can't be had (GitHub CI, e.g. when Actions billing fails) for one F measures itself (local checks).
 // Not configurable, ever: TRUSTED, SENSITIVE, the code/security axes, --match-head-commit, imported runs escalating.
@@ -666,6 +667,7 @@ const RULES = {
   'project.budgetUsd': [(v) => typeof v === 'number' && v > 0 && v <= PROJECT_BUDGET_USD, `dollars, above 0 and at most ${PROJECT_BUDGET_USD} (it can only lower the cap)`],
   'project.maxIssuesPerSession': [(v) => Number.isInteger(v) && v >= 1 && v <= MAX_ISSUES_PER_SESSION, `an integer 1-${MAX_ISSUES_PER_SESSION} (it can only lower the cap)`],
   'deploy.preview': [(v) => ['required', 'advisory', 'off'].includes(v), 'required|advisory|off (off is the built-in; required adds a merge condition)'],
+  artifact: [(v) => typeof v === 'string' && ARTIFACT_URL.test(v), 'a private claude.ai Artifact URL (https://claude.ai/artifact/<id>); opts this repo\'s runs in to republishing it'],
 };
 const RULE_FIELDS = ['value', 'reason', 'setBy', 'setAt', 'until'];
 const LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
@@ -1278,27 +1280,44 @@ export function render() {
   return out;
 }
 
-export function page(extra = {}) {
+export function page(extra = {}, keep = () => true) { // keep(owner/repo): which projects to show (the Artifact leaves out fixtures)
   const events = read();
   const live = Object.values(withMeasured(derive(events), events));
   const archived = readArchive().filter((a) => !live.some((r) => r.id === a.id));
   for (const a of archived) for (const c of a.children || []) { const child = live.find((r) => r.id === c); if (child) child.parent = a.id; }
-  const runs = [...live, ...archived].sort((a, b) => b.updated.localeCompare(a.updated));
+  const repoOf = (id) => id.split(/[#:]/)[0];
+  const runs = [...live, ...archived].filter((r) => keep(repoOf(r.id))).sort((a, b) => b.updated.localeCompare(a.updated));
   let links = {};
   try { links = JSON.parse(fs.readFileSync(sessionsFile(), 'utf8')); } catch { /* no sync yet */ }
   for (const r of runs) if (links[r.id]) r.sessions = [...(r.sessions || []), ...links[r.id].filter((x) => !(r.sessions || []).some((y) => y.id === x.id))];
   for (const r of runs) { const w = wtInfo(r.id); if (w?.path) r.worktree = w.path; } // the dashboard's "Open in Claude" cwd
-  const repoOf = (id) => id.split(/[#:]/)[0];
+  const attached = Object.keys(projects()).filter(keep);
   const byProject = {};
   for (const p of new Set(runs.map((r) => repoOf(r.id)))) byProject[p] = metrics(runs.filter((r) => repoOf(r.id) === p));
-  const ruleData = { rules: {}, ruleHistory: read().filter((e) => e.stage === 'rules').slice(-100) };
-  try { const cfg = readSkills(); for (const p of new Set([...Object.keys(byProject), ...Object.keys(projects())])) ruleData.rules[p] = rules(p, cfg); }
+  const ruleData = { rules: {}, ruleHistory: events.filter((e) => e.stage === 'rules' && keep(e.run)).slice(-100) };
+  try { const cfg = readSkills(); for (const p of new Set([...Object.keys(byProject), ...attached])) ruleData.rules[p] = rules(p, cfg); }
   catch (e) { ruleData.rulesError = e.message; } // render runs after every record(): a bad config must not half-fail the event
   let idea = {};
-  try { idea = { ideas: ideas(events, Object.fromEntries(runs.map((r) => [r.id, r]))) }; } catch (e) { idea = { ideasError: e.message }; } // never fail the event that triggered the render
-  const data = JSON.stringify({ generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)),
+  try { idea = { ideas: Object.fromEntries(Object.entries(ideas(events, Object.fromEntries(runs.map((r) => [r.id, r])))).filter(([k]) => keep(k))) }; } catch (e) { idea = { ideasError: e.message }; } // never fail the event that triggered the render
+  const data = JSON.stringify({ generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: attached, metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject), keep),
     harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), ...idea, ...extra }).replace(/</g, '\\u003c');
   return fs.readFileSync(path.join(HERE, 'dashboard.html'), 'utf8').replace('__FACTORY_DATA__', () => data);
+}
+
+// The claude.ai Artifact page (#18): the host adds the document skeleton, updates arrive by republish (no reload timer),
+// and it refuses to ship a token. Throws when the dashboard markup drifts, so a broken page is never published.
+const notFixture = (repo) => !/^acme\//.test(repo); // shortcut: hides any acme/* project, the self-test's fixture owner, until #20 stops the leak
+export function artifact(html = page({}, notFixture)) {
+  for (const re of [/^<!doctype html>\s*/i, /<html[^>]*>\s*/i, /<head>\s*/i, /<\/head>\s*/i, /<body[^>]*>\s*/i, /<\/body>\s*/i, /<\/html>\s*/i,
+    /<meta charset="utf-8">\s*/i, /<meta name="viewport"[^>]*>\s*/i]) {
+    if (!re.test(html)) throw new Error(`artifact: the dashboard no longer has ${re}`);
+    html = html.replace(re, '');
+  }
+  const reload = 'setTimeout(tick, 10000);';
+  if (html.split(reload).length !== 2) throw new Error('artifact: the reload timer is not in the dashboard exactly once');
+  html = html.replace(reload, '/* Artifact: updates arrive by republish, so no reload timer. */');
+  if (html.includes('"token":"')) throw new Error('artifact: refusing to publish a page that carries a token');
+  return html;
 }
 
 // ---- Onboarding: the wizard (dashboard, via `F ui`) and `F onboard`. What spawns CLIs or walks the disk runs only
@@ -1672,6 +1691,7 @@ async function test() {
   record('evil/x#1', 'intake', 'started', { title: '</script><script>alert(1)</script>' });
   const html = fs.readFileSync(path.join(DIR, 'dashboard.html'), 'utf8');
   assert.ok(!html.includes('</script><script>alert'));
+  artifactTest();
   discoverTest();
   usageTest();
   cliTest();
@@ -1973,6 +1993,28 @@ function onboardTest(cli) {
   }
 }
 
+// The claude.ai Artifact page (#18): no skeleton, no reload timer, no fixture projects, nothing dashboard.html doesn't carry, never a token.
+function artifactTest() {
+  const dataOf = (h) => JSON.parse(h.match(/<script type="application\/json" id="data">([^<]*)<\/script>/)[1]);
+  const before = fs.readFileSync(path.join(DIR, 'dashboard.html'), 'utf8'), out = path.join(DIR, 'artifact.html');
+  const line = execFileSync(process.execPath, [fileURLToPath(import.meta.url), 'render', '--artifact', out], { env: { ...process.env, FACTORY_DIR: DIR }, encoding: 'utf8' });
+  assert.equal(fs.readFileSync(path.join(DIR, 'dashboard.html'), 'utf8'), before); // the local dashboard is left alone
+  const art = fs.readFileSync(out, 'utf8'), a = dataOf(art), full = dataOf(page());
+  assert.match(line, /artifact\.html: \d+ bytes, 2 runs/);
+  assert.ok(!/<!doctype|<html|<head>|<\/head>|<body|<\/body>|<\/html>|<meta charset|<meta name="viewport"|setTimeout\(tick, 10000\);/i.test(art));
+  assert.match(art, /<script type="application\/json" id="data">/);
+  assert.ok(!art.includes('</script><script>alert')); // a kept run's title still can't break out of the JSON tag
+  assert.deepEqual(Object.keys(a), Object.keys(full)); // nothing beyond what the dashboard shows
+  assert.deepEqual(a.runs.map((r) => r.id).sort(), ['eval/golden#4', 'evil/x#1']);
+  assert.ok(full.runs.some((r) => r.id.startsWith('acme/')));
+  assert.deepEqual(a.metrics.all, metrics(a.runs)); // recomputed without the fixtures
+  assert.ok(!JSON.stringify([a.runs, a.ideas, a.projects, a.metrics, a.rules, a.ruleHistory, a.skills.scopes, a.skills.config, a.skills.plans]).includes('acme/'));
+  assert.throws(() => artifact(page({ ui: { token: 'secret' } })), /carries a token/);
+  assert.throws(() => artifact('<p>no skeleton</p>'), /no longer has/);
+  assert.throws(() => artifact(page().replace('setTimeout(tick, 10000);', '')), /exactly once/);
+  fs.rmSync(out);
+}
+
 // Policy rules and guidance: resolution, required reasons, expiry, CI replaced by local checks, and the stricter-only guards.
 function rulesTest(cli) {
   const set = (...a) => JSON.parse(cli(['rules', 'set', ...a]));
@@ -1988,6 +2030,7 @@ function rulesTest(cli) {
     ['ci', 'off', /required\|advisory\|skip/], ['diffCap', '400', /can only lower/], ['diffCap', '0', /can only lower/],
     ['checks.commands', '[]', /1-10/], ['checks.commands', '["a\\nb"]', /1-10/], ['guide.deploy', 'x', /unknown step "deploy"/],
     ['deploy.preview', 'maybe', /required\|advisory\|off/], ['deploy.production', 'required', /unknown rule/],
+    ['artifact', 'https://evil.example/artifact/x', /claude\.ai Artifact URL/], ['artifact', 'https://claude.ai/artifact/x?y=1', /claude\.ai Artifact URL/],
   ]) assert.throws(() => set('acme/rr', k, v, '--reason', 'x'), re);
   assert.throws(() => set('acme/rr', 'ci', 'skip', '--reason', 'x', '--until', '2020-01-01'), /--until/);
   assert.throws(() => set('acme/rr', 'ci', 'skip', '--reason', 'x', '--until', '2026-13-40'), /--until/);
@@ -2105,6 +2148,8 @@ function rulesTest(cli) {
   record('acme/rr#2', 'intake', 'started', { title: 't' });
   assert.match(fs.readFileSync(path.join(DIR, 'dashboard.html'), 'utf8'), /"rulesError":"skills.json acme\/rr.rules.ci: needs a reason/);
   fs.rmSync(path.join(DIR, 'skills.json'));
+  assert.equal(set('acme/rr', 'artifact', 'https://claude.ai/artifact/FEMb-sU_9', '--reason', 'phone view').policy.artifact.value, 'https://claude.ai/artifact/FEMb-sU_9'); // opt-in per repo
+  cli(['rules', 'unset', 'acme/rr', 'artifact']);
 }
 
 // Per-step runners: config resolution and validation, extra axes, F-stamped runner, invalid output = failed review.
@@ -2435,7 +2480,7 @@ if (isMain) {
         if (run === 'set' && scope && key && value !== undefined) out(setRule(scope, key, value, { reason, until }));
         else if (run === 'unset' && scope && key) out(unsetRule(scope, key, { reason }));
         else if (run && run !== 'set' && run !== 'unset') out(rules(run));
-        else throw new Error('usage: rules <owner/repo|default> | rules set <owner/repo|default> <ci|checks.commands|diffCap|deploy.preview|project.budgetUsd|project.maxIssuesPerSession|guide.<step>> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <owner/repo|default> <key> [--reason "…"]');
+        else throw new Error('usage: rules <owner/repo|default> | rules set <owner/repo|default> <ci|checks.commands|diffCap|deploy.preview|artifact|project.budgetUsd|project.maxIssuesPerSession|guide.<step>> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <owner/repo|default> <key> [--reason "…"]');
         break;
       }
       case 'checks': out(localChecks(run)); break;
@@ -2515,7 +2560,14 @@ if (isMain) {
         break;
       }
       case 'dir': console.log(runDir(run)); break;
-      case 'render': console.log(render()); break;
+      case 'render': { // render [--artifact <out>]: the local dashboard, or the claude.ai Artifact page (never touches dashboard.html)
+        if (run !== '--artifact') { console.log(render()); break; }
+        if (!rest[0]) throw new Error('usage: render --artifact <out.html>');
+        const html = artifact();
+        fs.writeFileSync(rest[0], html);
+        console.log(`${rest[0]}: ${html.length} bytes, ${JSON.parse(html.match(/<script type="application\/json" id="data">([^<]*)<\/script>/)[1]).runs.length} runs`);
+        break;
+      }
       case 'ui': ui(Number(run) || 0); break;
       case 'demo': // never pollute the real log with fixtures
         if (!process.env.FACTORY_DIR) DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-demo-'));
@@ -2541,7 +2593,7 @@ if (isMain) {
   skills catalog [owner/repo...]          every runner on this machine: built-in, harness tools, global, project, your briefs
   ui     [port]                           serve the dashboard on 127.0.0.1 with a token, so the Skills sheet and setup wizard can save
   rules  <owner/repo>                     print the policy rules, warnings and per-step guidance that apply
-  rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, deploy.preview required|advisory|off, project.budgetUsd x, project.maxIssuesPerSession n, guide.<step> "text"
+  rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, deploy.preview required|advisory|off, artifact https://claude.ai/artifact/<id>, project.budgetUsd x, project.maxIssuesPerSession n, guide.<step> "text"
   rules unset <owner/repo|default> <key> [--reason "…"]  remove one (back to the global rule, or the built-in)
   checks <run>                            run the checks.commands rule in the worktree on its HEAD commit (the CI stand-in)
   gc                                      remove worktrees of finished runs
@@ -2565,7 +2617,8 @@ if (isMain) {
   usage  [run]                            token burn by stage, iteration and axis: measured from transcripts, else reported
   headless-args <run> [--review|--write] [--share N]  pinned claude -p flags (read-only unless --write) for a provider runner, with the run's remaining budget split N ways (JSON array)
   dir    <run>                            print the run's artifact folder
-  render | demo | test`);
+  render [--artifact <out>]              rewrite dashboard.html, or write the claude.ai Artifact page to <out>
+  demo | test`);
         process.exitCode = cmd ? 1 : 0;
     }
   } catch (e) {

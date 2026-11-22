@@ -769,7 +769,8 @@ function board(runs, selected) {
 const RULE_LABEL = { ci: (v) => ({ skip: 'CI skipped', advisory: 'CI advisory', required: 'CI required' })[v] || 'CI ' + v,
   'checks.commands': (v) => 'Local checks ×' + arr(v).length, diffCap: (v) => 'Diff cap ' + v,
   'project.budgetUsd': (v) => 'Project budget $' + v, 'project.maxIssuesPerSession': (v) => v + ' issues / session',
-  'deploy.preview': (v) => ({ required: 'Preview required', advisory: 'Preview advisory', off: 'Preview off' })[v] || 'Preview ' + v };
+  'deploy.preview': (v) => ({ required: 'Preview required', advisory: 'Preview advisory', off: 'Preview off' })[v] || 'Preview ' + v,
+  artifact: () => 'Publishes to Artifact' };
 const dayNow = () => new Date().toISOString().slice(0, 10);
 function ruleChips() {
   const seen = new Set(), out = [], today = dayNow();
@@ -907,7 +908,8 @@ function decision(r) {
   else if (r.outcome === 'split') body = [head('idle', `Split into ${r.children.length || 'several'} runs`), list(lastWith((e) => e.status === 'split').reasons)];
   else if (r.outcome === 'awaiting-approval') body = [head('warn', 'Spec awaiting human approval'), list(lastWith((e) => e.status === 'awaiting-approval').reasons)];
   else if (r.decision) body = [head(r.outcome === 'merged' ? 'ok' : r.decision.action === 'merge' ? 'run' : 'warn',
-    r.outcome === 'merged' ? 'Merged' : r.outcome === 'escalated' ? 'Escalated to a human' : r.decision.action === 'merge' ? 'Merging' : 'Escalating'), list(r.decision.reasons)];
+    r.outcome === 'merged' ? 'Merged' : r.outcome === 'escalated' ? 'Escalated to a human' : r.decision.action === 'merge' ? 'Merging' : 'Escalating'), list(r.decision.reasons),
+    r.outcome === 'escalated' && r.pr ? el('p', { style: 'margin-top:10px' }, link(r.pr, 'Review and merge on GitHub')) : null]; // approval is never taken from the page (#21)
   else if (r.imported) body = [head('idle', 'Tracked, not driven'), el('p', { class: 'muted', style: 'margin-top:10px' },
     `Imported${r.source ? ' from ' + srcName(r.source) : ''}. The factory will not build or merge it.`)];
   else body = el('p', { class: 'muted' }, 'No decision yet.');
