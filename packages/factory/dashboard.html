@@ -138,6 +138,10 @@ button { font: inherit; color: inherit; }
 td.v .chip.rn { margin: 0 0 0 6px; vertical-align: middle; }
 .rules { display: flex; gap: 6px; min-width: 0; overflow: hidden; flex: 0 1000 auto; } /* shrinks before the project switcher */
 .rules .chip { flex: none; white-space: nowrap; cursor: default; }
+.rlog { margin-top: 40px; }
+.rlog ul { list-style: none; margin: 10px 0 0; padding: 0; font: 12px/1.5 var(--mono); color: var(--ink-2); }
+.rlog li { padding: 3px 0; overflow-wrap: anywhere; }
+.rlog time { color: var(--ink-3); margin-right: 8px; }
 .iters { display: inline-flex; gap: 3px; align-items: center; }
 .iters i { width: 6px; height: 6px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--line-2); }
 .iters i.on { background: var(--ink-2); box-shadow: none; }
@@ -527,6 +531,17 @@ function ruleChips() {
   return out;
 }
 
+// Who changed which rule, when and why: the audit trail from `F rules set|unset`, newest first.
+function ruleLog() {
+  const h = arr(DATA.ruleHistory).map(obj).filter((e) => !project || e.run === project || e.run === 'default').slice(-8).reverse();
+  if (!h.length) return null;
+  return el('section', { class: 'rlog', 'aria-label': 'Rule changes' }, el('h2', { class: 'label' }, 'Rule changes'),
+    el('ul', {}, h.map((e) => el('li', {}, el('time', { datetime: e.ts || null }, clock(e.ts)),
+      el('b', {}, `${e.status} ${e.key}`), e.status === 'set' ? ' = ' + JSON.stringify(e.value) : '',
+      ' · ', e.run === 'default' ? 'all projects' : String(e.run), ' · by ', String(e.setBy || '?'),
+      e.reason ? ' · ' + e.reason : '', e.until ? ' · until ' + e.until : ''))));
+}
+
 // ---------- detail ----------
 const section = (title, ...kids) => el('section', { class: 'sec' }, el('h3', { class: 'label' }, title), kids);
 
@@ -751,7 +766,7 @@ function render() {
       el('h2', {}, project ? `No runs for ${project}` : 'No runs yet'),
       el('p', {}, 'Start one with ', el('code', {}, '/software-factory <issue>'), ' or attach a repo to import work in flight.')));
   } else {
-    shell.replaceChildren(el('h2', { class: 'sr' }, 'Overview'), metricsStrip(runs, project), board(runs, sel && sel.id));
+    shell.replaceChildren(...[el('h2', { class: 'sr' }, 'Overview'), metricsStrip(runs, project), board(runs, sel && sel.id), ruleLog()].filter(Boolean));
     document.getElementById('board-wrap').scrollLeft = scrollX;
   }
   const inProg = runs.filter((r) => r.outcome === 'in-progress').length;

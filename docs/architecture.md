@@ -429,7 +429,7 @@ The outputs below are real, generated from the demo fixtures in a throwaway stat
 
 ```bash
 export FACTORY_DIR=$(mktemp -d)          # never touch the real ~/.claude/factory
-F demo                                   # writes 10 sample runs covering most outcomes, one under a ci=skip rule
+F demo                                   # writes 11 sample runs covering most outcomes, one under a ci=skip rule
 # → $FACTORY_DIR/dashboard.html
 ```
 

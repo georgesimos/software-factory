@@ -721,6 +721,9 @@ export function facts(r) {
 
 // Stand-in for CI that F runs itself: the checks.commands rule (never repo or model text) in the run's worktree, on a clean commit.
 // Records an owned build event with exit codes only; output goes to a file and its tail is printed.
+// shortcut: weaker than CI. It runs in the worktree the builder prepared, with the user's environment, and the clean-tree
+// check can't see ignored files (node_modules, .git/info/exclude), so a tampered node_modules/.bin would pass. Upgrade
+// to a fresh clone of the reviewed sha plus a clean install if rules ever stand in for CI on untrusted code.
 export function localChecks(run) {
   const { repo } = parseRun(run), w = wtInfo(run);
   if (!w || !fs.existsSync(w.path)) throw new Error(`no worktree for ${run}; run "worktree" first`);
@@ -1023,8 +1026,12 @@ export function demo() {
     'checks.commands': rule(['pnpm test', 'pnpm lint'], 'stands in for CI while Actions is off'),
     diffCap: rule(150, 'release freeze', dayOf(Date.now() - 864e5)), // expired: shows the warning
   } };
+  cfg['acme/shop'].rules['checks.commands'].until = dayOf(Date.now() + 2 * 864e5); // ending soon: shows the warning
+  cfg['acme/shop'].guide = { build: 'use pnpm, never npm' };
   writeSkills(cfg);
+  ev('acme/shop', 'rules', 'set', { key: 'ci', value: 'advisory', reason: 'Actions runners are flaky', setBy: 'acme' });
   for (const [key, { setAt: _s, ...x }] of Object.entries(cfg['acme/shop'].rules)) ev('acme/shop', 'rules', 'set', { key, ...x });
+  ev('acme/shop', 'rules', 'set', { key: 'guide.build', value: 'use pnpm, never npm', setBy: 'acme' });
   R = 'acme/shop#51';
   const sha = '5e1f0c2a9d3b', files51 = ['components/CartTotal.tsx', 'components/CartTotal.test.tsx'], axes51 = axesFor(files51);
   intake(R, 'Show a delivery estimate under the cart total', 51);
@@ -1109,7 +1116,7 @@ function test() {
   assert.equal(pre['acme/shop#43'].tokens, 93000);
   assert.deepEqual(archive(0), { archived: 6 }); // 41 rejected, 43 merged, 44 escalated, 46 split, 50 + 51 merged
   assert.deepEqual(Object.keys(derive(read())).sort(), ['acme/shop#42', 'acme/shop#45', 'acme/shop#47', 'acme/shop#48', 'acme/shop#49', 'eval/golden#4']);
-  assert.equal(read().filter((e) => e.stage === 'rules').length, 3); // the rule audit trail survives archiving
+  assert.equal(read().filter((e) => e.stage === 'rules').length, 5); // the rule audit trail survives archiving
   const page = fs.readFileSync(path.join(DIR, 'dashboard.html'), 'utf8');
   assert.match(page, /"merged":3,/); // metrics.all counts the archived merges
   assert.equal(page.split('__FACTORY_DATA__').length, 1);
@@ -1501,6 +1508,8 @@ function worktreeTest(cli) {
   const env3 = { ...env2, STUB_MERGE_SHA: sha };
   cli(['rules', 'set', 'acme/wt', 'ci', 'skip', '--reason', 'Actions billing'], '', env3);
   assert.equal(JSON.parse(cli(['postmerge', R], '', env3)).state, 'skipped'); // a billing-red main must not trigger reverts
+  cli(['rules', 'set', 'acme/wt', 'ci', 'advisory', '--reason', 'Actions flaky'], '', env3);
+  assert.deepEqual(JSON.parse(cli(['postmerge', R], '', env3)), { sha, state: 'fail', failed: ['https://github.com/acme/wt/actions/runs/1'], advisory: true }); // shown, never reverted on
   cli(['rules', 'unset', 'acme/wt', 'ci'], '', env3);
   assert.equal(JSON.parse(cli(['postmerge', R], '', env3)).state, 'fail');
   assert.equal(JSON.parse(cli(['revert', R, 'main CI failed'], '', env3)).pr, 'https://github.com/acme/wt/pull/99');
