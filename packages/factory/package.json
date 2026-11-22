@@ -2,6 +2,7 @@
   "name": "@software-factory/factory",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Claude Code skill + zero-dependency CLI that takes a GitHub issue to a merged or escalated PR.",
   "type": "module",
   "bin": { "factory": "./factory.mjs" },

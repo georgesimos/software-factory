@@ -19,7 +19,8 @@ software-factory/
 ├── pnpm-workspace.yaml       workspaces: packages/*, apps/*
 ├── pnpm-lock.yaml
 ├── tsconfig.base.json        shared TS settings for the TS packages
-├── .gitignore                node_modules, dist, .nx, .env* (keeps .env.example)
+├── .gitignore                node_modules, dist, .env* (keeps .env.example), .claude/
+├── LICENSE                   Apache-2.0
 ├── README.md
 ├── scripts/
 │   └── scrub-factory.sh      re-runnable scrub of personal branch names in factory test fixtures
@@ -56,7 +57,7 @@ software-factory/
     └── playground/           Vite playground: tokens, components, onboarding, board and run-detail mocks (`pnpm dev`)
 ```
 
-**Monorepo tooling.** The repo uses pnpm workspaces. An Nx package-based setup has been decided but is not wired up yet: there is no `nx.json` and no Nx dependency. Root `pnpm test` runs the contrast check, then `pnpm -r test` across every package, which includes the factory self-test.
+**Monorepo tooling.** The repo uses plain pnpm workspaces, with no Nx or Turborepo; at this size they would add config and caches without real speed-up. Add Turborepo (one `turbo.json`) if builds get slow. Root `pnpm test` runs the contrast check, then `pnpm -r test` across every package, which includes the factory self-test.
 
 **Runtime state is not in the repo.** It lives in `~/.claude/factory/` and is never committed (see [§3](#3-data-model)).
 
@@ -479,6 +480,5 @@ The self-test unsets `CLAUDE_CODE_SESSION_ID`, because some of its assertions ch
 - **Desktop app.** An Electron + Vite/React shell built from `@software-factory/design-system`, fed by a new `F serve` command: a loopback HTTP server plus SSE over `derive()`. `factory.mjs` remains the only writer.
 - **Model per event.** Record which model produced each intake, spec, review and verifier event, next to `tokens` and `costUsd`, so the dashboard can attribute cost and quality per model and per axis.
 - **SQLite index.** `events.jsonl` stays the append-only source of truth. A rebuildable SQLite index would replace the full re-derive on every render once logs grow, while `archive` keeps the live log small until then.
-- **Nx wiring.** Add `nx.json` with package-based targets (`build`, `test`, `contrast`) and affected-only CI.
-- **License.** TBD (MIT or Apache-2.0) before the repo goes public.
+- **Build orchestration (only if needed).** Turborepo on top of pnpm for cached, affected-only builds once the desktop app makes builds slow.
 - **Non-goal for now: third-party integrations.** No Sentry, Figma, PagerDuty or similar. Only `SKILL.md`'s intake fetch, comment and label steps are GitHub-specific, so another tracker can be swapped in later (see "Other trackers" in `SKILL.md`).
