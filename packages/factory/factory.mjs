@@ -19,7 +19,8 @@ export const MAX_DIFF = 300;   // added + deleted lines allowed for auto-merge
 export const COST_CAP = 5;     // USD per run; over it, the run stops looping and escalates
 export const TOKEN_CAP = 3_000_000; // same, for runs that record tokens but not dollars (cache reads not counted when known)
 // $ per million tokens: [input, output, cache read, cache write 5m, cache write 1h]. Fast mode bills 2x.
-// shortcut: hand-copied from Anthropic's pricing pages in 2026-11; keep them current, and add new models here. Unknown models get no cost, only tokens.
+// shortcut: hand-copied from Anthropic's pricing pages in 2026-11 (Fable 5.2 input/output checked against Claude Code's own cost-state
+// lines; its cache rates are assumed at the usual 0.1x / 1.25x / 2x); keep them current. Unknown models get no cost, only tokens.
 const PRICES = {
   'claude-opus-5-5': [4, 20, 0.2, 5, 8],
   'claude-sonnet-5-5': [2, 10, 0.1, 2.5, 4],
@@ -263,13 +264,15 @@ export function measure(events) {
 }
 
 // Gives each transcript message to one run and stage, from the session's factory events around it: after a "started"
-// event, that stage; otherwise the stage the next event closes. Messages before a session's first event, or after a
-// finished run with no later event, are not factory work. Each subagent transcript goes whole to the slot of its first message.
+// event, that stage; otherwise the stage the next event closes. Messages before a session's first event are not factory
+// work; those after its last event wait for the next event to close their window. Each subagent transcript goes whole to the slot of its first message.
 // shortcut: anything else the session does between two factory events counts too; drive one run per session if that skews it.
 export function withMeasured(runs, events, by = measure(events)) {
   if (!Object.keys(by).length) return runs;
   const iter = {}, slots = {};
-  for (const e of events) {
+  // Archived runs keep stubs of their session events so their windows still close; their messages are then dropped (not in runs).
+  const stubs = readArchive().flatMap((a) => (a.sessionEvents || []).map((e) => ({ ...e, run: a.id })));
+  for (const e of [...events, ...stubs]) {
     if (e.stage === 'build' && e.status === 'started') iter[e.run] = (iter[e.run] || 0) + 1;
     if (e.sessionId && by[e.sessionId]) (slots[e.sessionId] ||= []).push({ t: Date.parse(e.ts), run: e.run, stage: e.stage, status: e.status, iteration: iter[e.run] || 0 });
   }
@@ -277,10 +280,7 @@ export function withMeasured(runs, events, by = measure(events)) {
     let lo = 0, hi = list.length;
     while (lo < hi) { const mid = (lo + hi) >> 1; if (list[mid].t <= t) lo = mid + 1; else hi = mid; }
     const prev = list[lo - 1], next = list[lo];
-    if (!prev) return null;
-    if (prev.status === 'started') return prev;
-    if (next) return next;
-    return [...TERMINAL, 'needs-info', 'awaiting-approval'].includes(prev.status) ? null : prev; // shortcut: an in-progress run's open tail goes to its current stage
+    return !prev || !next ? null : prev.status === 'started' ? prev : next;
   };
   const got = {};
   for (const [sid, filesOf] of Object.entries(by)) {
@@ -291,7 +291,7 @@ export function withMeasured(runs, events, by = measure(events)) {
         if (seen.has(id)) continue; // streaming writes one line per content block, all with the same usage
         seen.add(id);
         const at = f.sub ? first : slot(list, Date.parse(ts));
-        if (!at || !runs[at.run]) continue;
+        if (!at || !runs[at.run] || runs[at.run].imported) continue; // the factory did not drive an imported run: sync's events only close windows
         const t = rest.slice(0, 5);
         addBurn((got[at.run] ||= burnOf()), { stage: at.stage, iteration: at.iteration, axis: f.sub ? f.axis : null }, t.reduce((s, n) => s + n, 0), costOf(model, t, rest[5]), t[2]);
       }
@@ -760,7 +760,8 @@ export function archive(days = 14) {
   const old = Object.values(runs).filter((r) => TERMINAL.includes(r.outcome) && r.updated < cutoff && !wtInfo(r.id));
   if (!old.length) return { archived: 0 };
   const ids = new Set(old.map((r) => r.id));
-  fs.appendFileSync(archiveFile(), old.map((r) => JSON.stringify({ ...r, events: r.events.slice(-5), archived: true })).join('\n') + '\n');
+  const sessionEvents = (r) => r.events.filter((e) => e.sessionId).map((e) => ({ ts: e.ts, stage: e.stage, status: e.status, sessionId: e.sessionId }));
+  fs.appendFileSync(archiveFile(), old.map((r) => JSON.stringify({ ...r, events: r.events.slice(-5), sessionEvents: sessionEvents(r), archived: true })).join('\n') + '\n');
   const tmp = log() + '.tmp'; // write-then-rename so a crash never leaves a half log
   fs.writeFileSync(tmp, events.filter((e) => !ids.has(e.run)).map((e) => JSON.stringify(e)).join('\n') + (events.length > ids.size ? '\n' : ''));
   fs.copyFileSync(log(), log() + '.bak');
@@ -1029,22 +1030,25 @@ function usageTest() {
   PROJECTS = path.join(DIR, 'projects');
   const sid = 'sess-u', R = 'acme/u#1', t0 = Date.parse('2026-11-21T10:00:00Z');
   const at = (s) => new Date(t0 + s * 1000).toISOString();
-  const evs = [[0, 'intake', 'started'], [100, 'intake', 'passed'], [200, 'spec', 'passed'], [300, 'build', 'started'], [400, 'build', 'passed'],
-    [500, 'review', 'started', { axes: ['code'] }], [600, 'review', 'passed', { axis: 'code', findings: [], tokens: 5000 }], [700, 'gate', 'passed'], [800, 'approve', 'escalated']];
-  fs.writeFileSync(log(), evs.map(([s, stage, status, p]) => JSON.stringify({ ts: at(s), ...p, harness: 'claude-code', sessionId: sid, cwd: '/w/u', run: R, stage, status })).join('\n') + '\n');
+  const P = 'acme/u#0', I = 'acme/u:dev/x'; // an earlier in-progress run, and an imported run synced after R ended
+  const evs = [[-80, 'intake', 'started', {}, P], [0, 'intake', 'started'], [100, 'intake', 'passed'], [200, 'spec', 'passed'], [300, 'build', 'started'], [400, 'build', 'passed'],
+    [500, 'review', 'started', { axes: ['code'] }], [600, 'review', 'passed', { axis: 'code', findings: [], tokens: 5000 }], [700, 'gate', 'passed'], [800, 'approve', 'escalated'],
+    [850, 'intake', 'started', { imported: true }, I], [850, 'intake', 'passed', {}, I], [850, 'build', 'started', {}, I]];
+  fs.writeFileSync(log(), evs.map(([s, stage, status, p, run = R]) => JSON.stringify({ ts: at(s), ...p, harness: 'claude-code', sessionId: sid, cwd: '/w/u', run, stage, status })).join('\n') + '\n');
   const u = (input, output, read = 0, w1 = 0) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: read, cache_creation_input_tokens: w1, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: w1 } });
   const msg = (s, id, model, usage) => JSON.stringify({ type: 'assistant', timestamp: at(s), message: { id, model, content: [{ type: 'text', text: 'secret prompt' }], usage } }) + '\n';
   const put = (p, text) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
   const main = path.join(PROJECTS, '-w-u', `${sid}.jsonl`), subs = path.join(PROJECTS, '-w-u', sid, 'subagents');
   put(main, [
-    msg(-50, 'm0', 'claude-opus-5-5', u(1000, 0)), // before the session's first event: not factory work
+    msg(-300, 'mx', 'claude-opus-5-5', u(4242, 0)), // before the session's first event: not factory work
+    msg(-50, 'm0', 'claude-opus-5-5', u(1000, 0)), // after P's "intake started": P
     msg(50, 'm1', 'claude-opus-5-5', u(1_000_000, 0)), // after "intake started": intake, $4
     msg(150, 'm2', 'claude-opus-5-5', u(0, 100_000)), // intake passed -> spec passed: spec, $2
     msg(250, 'm3', 'claude-opus-5-5', u(0, 0, 1_000_000, 1_000_000)), // spec passed -> build started: build, $0.20 + $8
     msg(350, 'm4', 'claude-mystery-9', u(500, 500)), // unknown model: tokens, no cost
     msg(350, 'm4', 'claude-mystery-9', u(500, 500)), // streamed duplicate
     msg(360, 'm5', 'claude-opus-5-5', { ...u(0, 0), iterations: [{ type: 'message' }, { type: 'advisor_message', model: 'claude-fable-5-2', input_tokens: 100_000 }] }), // $0.80 of Fable
-    msg(900, 'm6', 'claude-opus-5-5', u(7777, 0)), // after the run ended: not counted
+    msg(900, 'm6', 'claude-opus-5-5', u(7777, 0)), // after the imported run's "build started": not factory work
     '{"type":"user","message":{"content":"secret prompt","usage":1}}\n',
     '{"type":"assistant","usage":', // half-written line
   ].join(''));
@@ -1061,6 +1065,8 @@ function usageTest() {
   assert.deepEqual(Object.fromEntries(Object.entries(b.byIteration).map(([k, c]) => [k, c.tokens])), { 0: 1_100_000, 1: 2_321_000 });
   assert.deepEqual(Object.fromEntries(Object.entries(b.byAxis).map(([k, c]) => [k, c.tokens])), { code: 200_000, verifier: 10_000, other: 10_000 });
   assert.equal(b.reported.tokens, 5000);
+  assert.equal(getRun(P).burn.total.tokens, 1000);
+  assert.equal(getRun(I).burn, undefined);
   assert.ok(!fs.readFileSync(usageFile(), 'utf8').includes('secret prompt'));
   const facts = { checks: 'pass', additions: 1, deletions: 0, files: ['a.md'] };
   assert.match(decide({ ...getRun(R), association: 'OWNER', pr: 'x' }, facts).reasons.join(), /budget exceeded \(\$16\.32, .* measured\)/);
@@ -1082,6 +1088,10 @@ function usageTest() {
   assert.throws(() => record(R, 'review', 'passed', { role: 'judge' }), /role must be/);
   assert.throws(() => record(R, 'review', 'passed', { role: 'verifier', findings: [] }), /unknown fields: findings/);
   assert.equal(derive(read())[R].burn.byAxis.verifier.tokens, 10);
+  // Archiving R drops its events; its stubs keep its messages from falling to P, the session's earlier run.
+  assert.equal(archive(0).archived, 1);
+  assert.equal(getRun(P).burn.total.tokens, 1000);
+  assert.equal(getRun(R).burn.total.tokens, 3_471_000); // from the archive summary
   PROJECTS = null;
 }
 
