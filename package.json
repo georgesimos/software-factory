@@ -10,7 +10,8 @@
     "contrast": "pnpm --filter @software-factory/design-system contrast",
     "tokens": "pnpm --filter @software-factory/design-system tokens",
     "dev": "pnpm --filter @software-factory/playground dev",
-    "screenshots": "node scripts/screenshots.mjs"
+    "screenshots": "node scripts/screenshots.mjs",
+    "screenshots:web": "node scripts/screenshots-web.mjs"
   },
   "devDependencies": {
     "playwright-core": "^1.58.0",
