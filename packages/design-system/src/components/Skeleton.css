@@ -1,0 +1,6 @@
+.sf-skeleton {
+  display: block; max-width: 100%; border-radius: var(--sf-radius-sm);
+  background: linear-gradient(90deg, var(--sf-color-sunken) 0%, var(--sf-color-line) 50%, var(--sf-color-sunken) 100%) 0 0 / 200% 100%;
+  animation: sf-shimmer 1.4s linear infinite;
+}
+@keyframes sf-shimmer { to { background-position: -200% 0; } }

@@ -1,0 +1,18 @@
+.sf-tabs {
+  display: flex; gap: 2px; padding: 2px; width: fit-content; max-width: 100%;
+  border: 1px solid var(--sf-color-line); border-radius: var(--sf-radius-lg);
+  overflow-x: auto; scrollbar-width: none;
+}
+.sf-tabs::-webkit-scrollbar { display: none; }
+.sf-tab {
+  flex: none; display: inline-flex; align-items: center; gap: var(--sf-space-1-5); height: 26px; padding: 0 var(--sf-space-2-5);
+  border: 0; border-radius: var(--sf-radius-md); background: none; color: var(--sf-color-ink-2);
+  font-size: var(--sf-text-md); white-space: nowrap; cursor: pointer;
+  transition: color var(--sf-motion-duration-fast), background-color var(--sf-motion-duration-fast);
+}
+.sf-tab:hover { color: var(--sf-color-ink); }
+.sf-tab[aria-selected="true"] { background: var(--sf-color-surface); color: var(--sf-color-ink); box-shadow: 0 0 0 1px var(--sf-color-line-2); }
+.sf-tab:focus-visible { outline-offset: -2px; }
+.sf-tab-prefix { color: var(--sf-color-ink-3); margin-right: -6px; }
+.sf-tab-count { font: var(--sf-text-xs) var(--sf-font-mono); color: var(--sf-color-ink-3); font-variant-numeric: tabular-nums; }
+.sf-tabpanel:focus-visible { outline-offset: 4px; }

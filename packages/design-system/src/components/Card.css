@@ -1,0 +1,5 @@
+.sf-card { min-width: 0; background: var(--sf-color-surface); border: 1px solid var(--sf-color-line); border-radius: var(--sf-radius-md); }
+.sf-card[data-variant="ghost"] { background: transparent; }
+.sf-card[data-padding="sm"] { padding: var(--sf-space-2-5) var(--sf-space-3); }
+.sf-card[data-padding="md"] { padding: var(--sf-space-4); }
+.sf-card[data-padding="lg"] { padding: var(--sf-space-6); }

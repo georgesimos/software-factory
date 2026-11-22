@@ -1,0 +1,39 @@
+.sf-input {
+  width: 100%; height: 32px; padding: 0 var(--sf-space-2-5);
+  border: 1px solid var(--sf-color-control); border-radius: var(--sf-radius-md);
+  background: var(--sf-color-surface); color: var(--sf-color-ink); font-size: var(--sf-text-md);
+  transition: border-color var(--sf-motion-duration-fast), box-shadow var(--sf-motion-duration-fast);
+}
+.sf-input::placeholder { color: var(--sf-color-ink-3); }
+.sf-input:hover { border-color: var(--sf-color-ink-3); }
+.sf-input:focus-visible { outline: none; border-color: var(--sf-color-accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sf-color-accent) 22%, transparent); }
+.sf-input[aria-invalid="true"] { border-color: var(--sf-color-bad); }
+.sf-input:disabled { opacity: 0.5; cursor: not-allowed; }
+.sf-input-wrap { position: relative; display: block; }
+.sf-input-wrap .sf-input { padding-left: 32px; }
+.sf-input-icon { position: absolute; left: 10px; top: 50%; translate: 0 -50%; display: flex; color: var(--sf-color-ink-3); pointer-events: none; }
+.sf-input-icon svg { width: 14px; height: 14px; }
+.sf-select {
+  appearance: none; padding-right: 28px; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, var(--sf-color-ink-3) 50%), linear-gradient(135deg, var(--sf-color-ink-3) 50%, transparent 50%);
+  background-position: calc(100% - 14px) 50%, calc(100% - 10px) 50%; background-size: 4px 4px; background-repeat: no-repeat;
+}
+
+.sf-check { display: inline-flex; align-items: flex-start; gap: var(--sf-space-2-5); cursor: pointer; min-width: 0; }
+.sf-check:has(:disabled) { cursor: not-allowed; }
+.sf-checkbox {
+  appearance: none; flex: none; position: relative; width: 16px; height: 16px; margin: 2px 0 0;
+  border: 1px solid var(--sf-color-control); border-radius: var(--sf-radius-sm); background: var(--sf-color-surface); cursor: inherit;
+  transition: background-color var(--sf-motion-duration-fast), border-color var(--sf-motion-duration-fast);
+}
+.sf-checkbox:hover { border-color: var(--sf-color-ink-2); }
+.sf-checkbox:checked, .sf-checkbox:indeterminate { background: var(--sf-color-ink); border-color: var(--sf-color-ink); }
+.sf-checkbox:checked::after {
+  content: ""; position: absolute; left: 4.5px; top: 1.5px; width: 5px; height: 9px;
+  border: solid var(--sf-color-bg); border-width: 0 1.5px 1.5px 0; rotate: 45deg;
+}
+.sf-checkbox:indeterminate::after { content: ""; position: absolute; left: 3px; right: 3px; top: 6.5px; height: 1.5px; background: var(--sf-color-bg); }
+.sf-checkbox:disabled { opacity: 0.5; }
+.sf-check-text { display: grid; gap: 2px; min-width: 0; }
+.sf-check-label { font-size: var(--sf-text-md); line-height: 20px; }
+.sf-check-desc { font: var(--sf-text-sm) / 1.4 var(--sf-font-mono); color: var(--sf-color-ink-3); }

@@ -1,0 +1,34 @@
+/* Minimal global layer: box model, body type, focus, reduced motion. */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--sf-color-bg);
+  color: var(--sf-color-ink);
+  font: var(--sf-weight-regular) var(--sf-text-base) / var(--sf-leading-normal) var(--sf-font-sans);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "ss01", "cv11";
+}
+[data-theme] { background: var(--sf-color-bg); color: var(--sf-color-ink); }
+a { color: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--sf-color-accent); outline-offset: 2px; }
+
+.sf-mono { font-family: var(--sf-font-mono); }
+.sf-label {
+  font: var(--sf-weight-medium) var(--sf-text-xs) / 1.4 var(--sf-font-mono);
+  letter-spacing: var(--sf-tracking-label);
+  text-transform: uppercase;
+  color: var(--sf-color-ink-3);
+}
+.sf-muted { color: var(--sf-color-ink-3); font-size: var(--sf-text-md); margin: 0; }
+.sf-sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Status dot: the smallest unit of state. */
+.sf-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex: none; background: var(--sf-dot, var(--sf-tone-idle)); }
+.sf-dot[data-live] { animation: sf-live 2s var(--sf-motion-ease-in-out) infinite; }
+@keyframes sf-live { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--sf-dot) 18%, transparent); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
+}

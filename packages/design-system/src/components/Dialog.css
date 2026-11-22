@@ -1,0 +1,33 @@
+.sf-dialog {
+  padding: 0; border: 1px solid var(--sf-color-line); border-radius: var(--sf-radius-xl);
+  background: var(--sf-color-surface); color: var(--sf-color-ink); box-shadow: var(--sf-shadow-dialog);
+  width: min(520px, calc(100vw - 32px)); max-height: min(720px, calc(100dvh - 64px)); overflow: auto; overscroll-behavior: contain;
+}
+.sf-dialog::backdrop { background: color-mix(in srgb, var(--sf-color-bg) 55%, rgb(0 0 0 / 0.25)); }
+.sf-dialog[open] { animation: sf-dialog-in var(--sf-motion-duration-slow) var(--sf-motion-ease-out); }
+.sf-dialog[open]::backdrop { animation: sf-fade-in var(--sf-motion-duration-slow) var(--sf-motion-ease-out); }
+@keyframes sf-dialog-in { from { opacity: 0; transform: translateY(6px) scale(0.99); } }
+@keyframes sf-fade-in { from { opacity: 0; } }
+
+.sf-dialog[data-variant="sheet"] {
+  margin: 0 0 0 auto; height: 100dvh; max-height: none; width: min(600px, 100vw);
+  border-width: 0 0 0 1px; border-radius: 0; box-shadow: var(--sf-shadow-panel);
+}
+.sf-dialog[data-variant="sheet"][open] { animation-name: sf-sheet-in; }
+@keyframes sf-sheet-in { from { opacity: 0; transform: translateX(12px); } }
+
+.sf-dialog-in { display: flex; flex-direction: column; min-height: 100%; }
+.sf-dialog-head { display: flex; align-items: flex-start; gap: var(--sf-space-3); padding: var(--sf-space-5) var(--sf-space-6) 0; }
+.sf-dialog-titles { flex: 1; min-width: 0; }
+.sf-dialog-title { margin: 0; font: var(--sf-weight-medium) var(--sf-text-lg) / var(--sf-leading-tight) var(--sf-font-sans); letter-spacing: var(--sf-tracking-snug); }
+.sf-dialog-desc { margin: var(--sf-space-1-5) 0 0; color: var(--sf-color-ink-2); font-size: var(--sf-text-md); }
+.sf-dialog-body { padding: var(--sf-space-4) var(--sf-space-6) var(--sf-space-6); flex: 1; }
+.sf-dialog-foot {
+  display: flex; justify-content: flex-end; gap: var(--sf-space-2); padding: var(--sf-space-3) var(--sf-space-6);
+  border-top: 1px solid var(--sf-color-line); background: var(--sf-color-sunken);
+}
+@media (max-width: 640px) {
+  .sf-dialog-head { padding: var(--sf-space-4) var(--sf-space-4) 0; }
+  .sf-dialog-body { padding: var(--sf-space-4); }
+  .sf-dialog-foot { padding: var(--sf-space-3) var(--sf-space-4); }
+}

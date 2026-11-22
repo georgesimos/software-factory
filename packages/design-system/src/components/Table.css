@@ -1,0 +1,6 @@
+.sf-table-wrap { overflow-x: auto; max-width: 100%; }
+.sf-table { width: 100%; border-collapse: collapse; font-size: var(--sf-text-md); }
+.sf-table th, .sf-table td { padding: var(--sf-space-2) var(--sf-space-2-5) var(--sf-space-2) 0; border-bottom: 1px solid var(--sf-color-line); text-align: left; vertical-align: top; }
+.sf-table th { font: var(--sf-weight-medium) var(--sf-text-2xs) / 1.4 var(--sf-font-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--sf-color-ink-3); white-space: nowrap; }
+.sf-table td.sf-num, .sf-table th.sf-num { text-align: right; font-family: var(--sf-font-mono); font-variant-numeric: tabular-nums; }
+.sf-table tbody tr:last-child td { border-bottom: 0; }
