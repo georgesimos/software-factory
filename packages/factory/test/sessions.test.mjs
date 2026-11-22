@@ -8,11 +8,12 @@ import { test } from 'node:test';
 import { setup } from './setup.mjs';
 import { HERE } from '../factory.mjs';
 import { record } from '../../core/src/log.ts';
-import { saveProject } from '../../core/src/workspace.ts';
+import { projects, saveProject } from '../../core/src/workspace.ts';
 import { command, opener } from '../../core/src/platform.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
 import { launchSession, ui, uiHandle } from '../../server/src/server.ts';
+import { COST_CAP } from '../../core/src/constants.ts';
 
 setup();
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-shome-'));
@@ -22,7 +23,7 @@ const claude = harnesses.find((h) => h.id === 'claude-code');
 const finished = (s) => new Promise((resolve) => { const ev = []; subscribe(s, (e) => { ev.push(e); if (e.type === 'exit') resolve(ev); }); });
 const LOCAL = 'local_0123abcd-0123-4567-89ab-0123456789ab';
 
-test('claude-code launch(): headless pins stream-json --verbose with the prompt on stdin; terminal is plain claude', () => {
+test('claude-code launch(): headless pins stream-json --verbose with the prompt on stdin; terminal is plain claude; sdk gets the same policy as options', () => {
   const h = claude.launch({ mode: 'headless', prompt: '/software-factory acme/app#3', budget: 4.5, write: true });
   assert.equal(h.cmd, 'claude');
   assert.equal(h.args[0], '-p');
@@ -33,7 +34,12 @@ test('claude-code launch(): headless pins stream-json --verbose with the prompt 
   assert.deepEqual(claude.launch({ mode: 'headless', prompt: 'x', resume: 'abc' }).args.slice(0, 2), ['--resume', 'abc']);
   assert.deepEqual(claude.launch({ mode: 'terminal', resume: 'abc' }), { cmd: 'claude', args: ['--resume', 'abc'] });
   assert.throws(() => claude.launch({ mode: 'headless' }), /needs a prompt/);
-  assert.throws(() => claude.launch({ mode: 'sdk', prompt: 'x' }), /no sdk mode/);
+  const sd = claude.launch({ mode: 'sdk', prompt: 'x', budget: 2 });
+  assert.deepEqual([sd.module, sd.prompt, sd.options.permissionMode, sd.options.maxBudgetUsd, sd.options.strictMcpConfig], ['@anthropic-ai/claude-agent-sdk', 'x', 'dontAsk', 2, true]);
+  assert.deepEqual([claude.launch({ mode: 'sdk', prompt: 'x', write: true }).options.permissionMode, claude.launch({ mode: 'sdk', prompt: 'x', write: true }).options.allowedTools], ['auto', undefined]);
+  assert.equal(sd.options.permissionPrompts, 'none', 'no prompt can stall an sdk run');
+  assert.throws(() => claude.launch({ mode: 'sdk' }), /needs a prompt/);
+  assert.throws(() => claude.launch({ mode: 'nope', prompt: 'x' }), /no nope mode/);
   assert.ok(claude.headlessArgs().includes('json') && !claude.headlessArgs().includes('stream-json'), 'F headless-args is unchanged');
 });
 
@@ -64,7 +70,6 @@ test('startSession() runs a headless launch and streams NDJSON events, text, std
   assert.deepEqual(ev.map((e) => e.n), ev.map((_, i) => i), 'events are numbered in order');
   const late = []; subscribe(s, (e) => late.push(e), 3); // a reconnect replays from Last-Event-ID + 1
   assert.deepEqual(late.map((e) => e.n), ev.slice(3).map((e) => e.n));
-  assert.throws(() => startSession(claude, { mode: 'terminal' }, { cwd: home }), /not available yet/);
   const sub = []; subscribe({ events: [{ n: 7 }, { n: 8 }], state: 'exited', listeners: new Set() }, (e) => sub.push(e), 2);
   assert.deepEqual(sub, [{ type: 'dropped', from: 2, first: 7 }, { n: 7 }, { n: 8 }], 'a replay past the buffer says what was lost');
   const none = startSession(claude, { mode: 'headless', prompt: 'x' }, { cwd: home, env: { ...stubEnv, PATH: fs.mkdtempSync(path.join(os.tmpdir(), 'factory-nobin-')) } });
@@ -89,7 +94,7 @@ test('launchSession(): an attached repo and an issue number only; #25\'s refusal
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 3 }), /not attached/);
   saveProject('acme/app', clone);
   for (const [x, re] of [[{ repo: 'acme/app', issue: '3' }, /positive issue number/], [{ repo: 'acme/app', issue: 0 }, /positive issue number/], [{ repo: '../x', issue: 3 }, /owner\/repo/],
-    [{ repo: 'acme/app', issue: 3, mode: 'sdk' }, /modes are headless, terminal/], [{ repo: 'acme/app', issue: 3, harness: 'codex' }, /cannot launch/], [{ repo: 'acme/app', issue: 3, harness: 'nope' }, /cannot launch/]]) {
+    [{ repo: 'acme/app', issue: 3, mode: 'nope' }, /modes are headless, terminal, sdk/], [{ repo: 'acme/app', issue: 3, harness: 'codex' }, /cannot launch/], [{ repo: 'acme/app', issue: 3, harness: 'nope' }, /cannot launch/]]) {
     assert.throws(() => launchSession(x), re, JSON.stringify(x));
   }
   record('acme/app#4', 'intake', 'started', {});
@@ -141,4 +146,52 @@ test('F ui streams a live session over HTTP as server-sent events, to the end', 
     assert.deepEqual(blocks.map((b) => JSON.parse(b.split('data: ')[1]).type).at(-1), 'exit');
     assert.match(blocks[0], /^id: 0\ndata: /);
   } finally { console.log = log; server.closeAllConnections(); server.close(); }
+});
+
+// Stand-ins for node-pty and the Agent SDK: the host passes these in, so no real module or binary is touched.
+function fakePty() {
+  const rec = {};
+  return { rec, spawn(file, args, opts) {
+    Object.assign(rec, { file, args, cwd: opts.cwd });
+    let data, exit;
+    setTimeout(() => data('ready\r\n'), 5);
+    return { onData: (f) => { data = f; }, onExit: (f) => { exit = f; }, write: (x) => { data(`echo:${x}`); if (x === 'exit\r') exit({ exitCode: 0 }); }, resize: (c, r) => { rec.size = [c, r]; }, kill: () => exit({ exitCode: null }) };
+  } };
+}
+const fakeSdk = (fail) => ({ rec: {}, async *query(q) { this.rec.q = q; yield { type: 'system', subtype: 'init', session_id: 'sdk-1' }; if (fail) throw new Error('boom'); yield { type: 'result', subtype: 'success' }; } });
+
+test('terminal mode: a pseudo-terminal from the host, with input and resize through /api/sessions/input', async () => {
+  const pty = fakePty();
+  const s = startSession(claude, { mode: 'terminal', resume: 'abc' }, { cwd: home, env: stubEnv, modules: { pty } });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual([pty.rec.file, pty.rec.args, pty.rec.cwd], ['claude', ['--resume', 'abc'], home]);
+  const tok = 't'.repeat(32), H = { host: '127.0.0.1:4646', origin: 'http://127.0.0.1:4646', 'content-type': 'application/json', 'x-factory-token': tok };
+  const input = (body) => uiHandle({ method: 'POST', url: '/api/sessions/input', headers: H, body: JSON.stringify(body) }, { token: tok, port: 4646 });
+  assert.equal(input({ id: s.id, cols: 100, rows: 30 }).status, 200);
+  assert.deepEqual(pty.rec.size, [100, 30]);
+  for (const bad of [{ id: s.id, data: 7 }, { id: s.id, cols: 0, rows: 5 }, { id: 'nope', data: 'x' }]) assert.equal(input(bad).status, 400, JSON.stringify(bad));
+  const done = finished(s);
+  assert.equal(input({ id: s.id, data: 'exit\r' }).status, 200);
+  const ev = await done;
+  assert.deepEqual(ev.filter((e) => e.type === 'output').map((e) => e.data), ['ready\r\n', 'echo:exit\r']);
+  assert.deepEqual(ev.at(-1).code, 0);
+  assert.equal(input({ id: s.id, data: 'x' }).status, 400, 'an exited session takes no input');
+});
+
+test('sdk mode: query() from the host, one event per message; a failure or a missing module ends with an error event', async () => {
+  const sdk = fakeSdk();
+  const ev = await finished(startSession(claude, { mode: 'sdk', prompt: 'hi', budget: 3 }, { cwd: home, modules: { sdk } }));
+  assert.deepEqual(ev.map((e) => e.data?.type ?? e.type), ['system', 'result', 'exit']);
+  assert.deepEqual([sdk.rec.q.prompt, sdk.rec.q.options.cwd, sdk.rec.q.options.maxBudgetUsd, sdk.rec.q.options.abortController instanceof AbortController], ['hi', home, 3, true]);
+  const bad = await finished(startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { sdk: fakeSdk(true) } }));
+  assert.deepEqual(bad.slice(-2).map((e) => [e.type, e.message ?? e.code]), [['error', 'boom'], ['exit', null]]);
+  const nomod = { id: 'x', modes: ['sdk'], launch: () => ({ module: '@nope/none', prompt: 'p', options: {} }) };
+  assert.match((await finished(startSession(nomod, { mode: 'sdk' }, { cwd: home }))).find((e) => e.type === 'error').message, /sdk mode needs @nope\/none, which is not installed/);
+});
+
+test('launchSession() passes the host modules on: an sdk run in the attached clone with the run budget and write mode', async () => {
+  const sdk = fakeSdk();
+  await finished(launchSession({ repo: 'acme/app', issue: 8, mode: 'sdk' }, stubEnv, { sdk }));
+  const { prompt, options } = sdk.rec.q;
+  assert.deepEqual([prompt, options.cwd, options.maxBudgetUsd, options.permissionMode], ['/software-factory acme/app#8', projects()['acme/app'].path, COST_CAP, 'auto']);
 });

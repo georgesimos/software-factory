@@ -81,6 +81,13 @@ export const UI_ROUTES = {
   },
   '/onboard/automerge': ({ repo, on }) => { setAutoMerge(repo, on); return onboardConfig(); },
   '/sessions': (x) => ({ session: launchSession(x).id }),
+  '/sessions/input': ({ id, data, cols, rows }) => { // keystrokes and size for a terminal session
+    const s = getSession(id);
+    if (!s?.write || s.state !== 'running') throw new Error('no running terminal session with that id');
+    if (data !== undefined) { if (typeof data !== 'string' || data.length > 65536) throw new Error('data must be a string up to 64 KB'); s.write(data); }
+    if (cols !== undefined || rows !== undefined) { if (![cols, rows].every((n) => Number.isInteger(n) && n > 0 && n <= 1000)) throw new Error('cols and rows must be 1-1000'); s.resize(cols, rows); }
+    return { ok: true };
+  },
   '/sessions/stop': ({ id }) => { const s = getSession(id); if (s?.state !== 'running') throw new Error('no running session with that id'); s.stop(); return { ok: true }; },
   '/sessions/open': ({ harness = 'claude-code', id }) => { // the desktop app's own link for a session, when the harness has one
     const h = harnesses.find((y) => y.id === harness), url = h?.openDesktop?.(id);
@@ -90,7 +97,9 @@ export const UI_ROUTES = {
 };
 // POST /api/sessions: start the factory on one issue in an attached clone (#25's checks). The request names a repo and an
 // issue only; the folder comes from projects() and the prompt is built here, so no request text reaches the harness.
-export function launchSession({ harness = 'claude-code', mode = 'headless', repo, issue }, env = process.env) {
+// node-pty and the SDK for terminal and sdk sessions, set by a host that ships them (the desktop app); else imported lazily.
+export const hostModules = { pty: undefined, sdk: undefined };
+export function launchSession({ harness = 'claude-code', mode = 'headless', repo, issue }, env = process.env, modules = hostModules) {
   const h = harnesses.find((y) => y.id === harness);
   if (!h?.launch) throw new Error(`harness ${String(harness).slice(0, 40)} cannot launch sessions`);
   if (!(h.modes || []).includes(mode)) throw new Error(`${h.id} modes are ${(h.modes || []).join(', ')}`);
@@ -109,7 +118,7 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
   if (!d.installed) throw new Error(`${h.label} is not installed: ${h.install}`);
   const l = h.login();
   if (!l.ok) throw new Error(`${h.label} is not signed in: ${l.hint}`);
-  return startSession(h, { mode, prompt: `/software-factory ${id}`, budget: COST_CAP - (b?.usd || 0), write: true }, { cwd, env, label: id });
+  return startSession(h, { mode, prompt: `/software-factory ${id}`, budget: COST_CAP - (b?.usd || 0), write: true }, { cwd, env, label: id, modules });
 }
 
 export function ui(port = 0) {

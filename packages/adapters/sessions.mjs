@@ -1,6 +1,7 @@
 // Runs what a harness's launch() describes and keeps its events in memory for the server to stream (ADR §5).
-// Outside harnesses/, so the registry never loads it as a harness. Headless only for now; terminal (node-pty) and sdk are
-// H1 part 2, loaded lazily here so F itself stays dependency-free. argv only, never a shell (core/src/platform.ts).
+// Outside harnesses/, so the registry never loads it as a harness. headless spawns the CLI; terminal needs node-pty and
+// sdk the harness's SDK. Neither is a dependency of F: the host passes them in (modules.pty, modules.sdk), else they are
+// imported lazily by name. argv only, never a shell (core/src/platform.ts).
 import crypto from 'node:crypto';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
@@ -30,9 +31,8 @@ export function subscribe(s, fn, from = 0) {
 }
 
 // h: the harness adapter; opts go to h.launch(); cwd and env are the host's, never the request's.
-export function startSession(h, opts, { cwd, env = process.env, label = '' }) {
+export function startSession(h, opts, { cwd, env = process.env, label = '', modules = {} }) {
   if (typeof h.launch !== 'function' || !(h.modes || []).includes(opts.mode)) throw new Error(`${h.id} cannot launch in ${opts.mode} mode`);
-  if (opts.mode !== 'headless') throw new Error(`${opts.mode} mode is not available yet (H1 part 2)`);
   const spec = h.launch(opts);
   const s = { id: crypto.randomUUID(), harness: h.id, mode: opts.mode, label, state: 'running', exit: null, started: new Date().toISOString(), events: [], next: 0, listeners: new Set(), stop: () => {} };
   sessions.set(s.id, s);
@@ -44,8 +44,11 @@ export function startSession(h, opts, { cwd, env = process.env, label = '' }) {
     const old = [...sessions.values()].filter((x) => x.state !== 'running');
     for (const x of old.slice(0, -KEEP_EXITED)) sessions.delete(x.id);
   };
+  const fail = (e) => { emit(s, { type: 'error', message: e.message }); done(null); };
+  if (opts.mode === 'terminal') { terminal(s, spec, { cwd, env, modules, done }).catch(fail); return s; }
+  if (opts.mode === 'sdk') { sdk(s, spec, { cwd, modules, done }).catch(fail); return s; }
   let c;
-  try { c = command(spec.cmd, spec.args); } catch (e) { emit(s, { type: 'error', message: e.message }); done(null); return s; }
+  try { c = command(spec.cmd, spec.args); } catch (e) { fail(e); return s; }
   // spec.stdin carries the prompt: as an argument its space and # would need cmd.exe quoting, which a .cmd shim can't get
   const child = spawn(c.file, c.args, { cwd, env, stdio: [spec.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], windowsVerbatimArguments: !!c.windowsVerbatimArguments });
   if (spec.stdin !== undefined) child.stdin.on('error', () => { /* exited before reading it: reported by close */ }).end(spec.stdin);
@@ -59,4 +62,31 @@ export function startSession(h, opts, { cwd, env = process.env, label = '' }) {
   child.on('error', (e) => { emit(s, { type: 'error', message: e.code === 'ENOENT' ? `${spec.cmd} is not installed` : e.message }); done(null); });
   child.on('close', (code, signal) => done(code ?? signal)); // after stdout and stderr end, so every line is in; a kill gives its signal
   return s;
+}
+
+const load = async (given, name, what) => {
+  if (given) return given;
+  try { return await import(name); } catch { throw new Error(`${what} needs ${name}, which is not installed here`); }
+};
+
+// An interactive harness in a pseudo-terminal (ConPTY on Windows). Output is raw terminal data for xterm.js; input and
+// resize come back through write() and resize().
+async function terminal(s, spec, { cwd, env, modules, done }) {
+  const pty = await load(modules.pty, 'node-pty', 'terminal mode');
+  const c = command(spec.cmd, spec.args);
+  const p = pty.spawn(c.file, c.args, { name: 'xterm-256color', cols: 120, rows: 32, cwd, env });
+  s.write = (data) => p.write(data);
+  s.resize = (cols, rows) => p.resize(cols, rows);
+  s.stop = () => p.kill();
+  p.onData((data) => emit(s, { type: 'output', data }));
+  p.onExit(({ exitCode }) => done(exitCode));
+}
+
+// The harness's SDK in this process (it runs its own CLI binary as a child). Each SDK message is one event.
+async function sdk(s, spec, { cwd, modules, done }) {
+  const mod = await load(modules.sdk, spec.module, 'sdk mode');
+  const abortController = new AbortController();
+  s.stop = () => abortController.abort();
+  for await (const m of mod.query({ prompt: spec.prompt, options: { ...spec.options, cwd, abortController } })) emit(s, { type: 'event', data: m });
+  done(0);
 }
