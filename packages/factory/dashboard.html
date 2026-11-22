@@ -71,6 +71,7 @@ button { font: inherit; color: inherit; }
 .theme button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--line-2); }
 .ptog { display: grid; place-items: center; flex: none; width: 32px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 8px;
   background: none; color: var(--ink-3); cursor: pointer; }
+.ptog[hidden] { display: none; }
 .ptog:hover { color: var(--ink); border-color: var(--line-2); }
 .ptog .pi { width: 15px; height: 12px; border: 1.5px solid currentColor; border-radius: 2.5px; }
 .ptog[aria-expanded="true"] { color: var(--ink); }
@@ -174,6 +175,9 @@ body.dragging { cursor: col-resize; user-select: none; }
   padding: 10px var(--px); background: color-mix(in srgb, var(--surface) 90%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
 .d-bar .id { font: 12px var(--mono); color: var(--ink-3); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .d-bar .chip { flex: 0 1 auto; min-width: 0; }
+.d-bar-t { display: none; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 14px/1.3 var(--sans); letter-spacing: -.01em; }
+.detail.scrolled .d-bar-t { display: block; } /* once the big title scrolls away, the bar carries it */
+.detail.scrolled .d-bar .id, .detail.scrolled .d-bar .chip { display: none; }
 .d-acts { margin-left: auto; display: flex; gap: 6px; flex: none; }
 .act { display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px; border: 1px solid var(--line);
   border-radius: 6px; background: none; cursor: pointer; font: 12px var(--mono); color: var(--ink-2); white-space: nowrap; }
@@ -296,7 +300,13 @@ a.kid:hover { border-color: var(--line-2); }
 .tl .txt { font-size: 13px; color: var(--ink-2); overflow-wrap: anywhere; }
 .tl ul { margin: 2px 0 0; padding-left: 16px; font-size: 13px; color: var(--ink-2); }
 
-@media (min-width: 1100px) {
+@media (max-width: 1100px) {
+  :root { --gut: 20px; }
+  .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .metric:nth-child(3n + 1) { padding-left: 0; }
+  .metric:last-child:nth-child(3n + 2) { grid-column: span 2; }
+}
+@media (width >= 1100px) {
   body.panel .shell { margin-right: var(--panel); }
   body.focus { --panel: calc(100vw - 340px); }
   body:not(.panel) .detail, body:not(.panel) .resizer { display: none; }
@@ -315,13 +325,7 @@ a.kid:hover { border-color: var(--line-2); }
     .metric .v { font-size: 30px; margin-top: 12px; }
   }
 }
-@media (max-width: 1100px) {
-  :root { --gut: 20px; }
-  .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .metric:nth-child(3n + 1) { padding-left: 0; }
-  .metric:last-child:nth-child(3n + 2) { grid-column: span 2; }
-}
-@media (max-width: 1099px) {
+@media (width < 1100px) {
   body.open .shell { display: none; }
   body:not(.open) .detail, .resizer, .ptog, .act.focus { display: none; }
   .detail { position: static; width: auto; border-left: 0; overflow: visible; overflow-x: clip; background: var(--bg); --px: var(--gut); } /* clip: the enter slide must not scroll the page */
@@ -690,7 +694,7 @@ function detail(r) {
   const links = [r.imported ? null : link(r.url, 'Issue'), link(r.pr, 'Pull request'), issueLinks].flat().filter(Boolean);
   links.forEach((a, i) => a.setAttribute('data-k', 'link:' + i));
   return el('div', { class: 'd-in' },
-    el('div', { class: 'd-bar' }, el('span', { class: 'id' }, r.id),
+    el('div', { class: 'd-bar' }, el('span', { class: 'id' }, r.id), el('span', { class: 'd-bar-t', 'aria-hidden': 'true' }, r.title || r.branch || r.id),
       chip(r.reverted ? 'Reverted' : LABEL[r.outcome], r.reverted ? 'bad' : TONE[r.outcome]),
       r.imported ? chip('Tracked' + (r.source ? ' · ' + (SRC[r.source] || r.source) : ''), 'quiet') : null,
       r.archived ? chip('Archived', 'quiet') : null, el('div', { class: 'd-acts' }, focus, close)),
@@ -771,8 +775,14 @@ function render() {
   tog.title = (shown ? 'Hide' : 'Show') + ' run panel (])';
   d.classList.remove('enter');
   d.replaceChildren(sel ? detail(sel) : emptyDetail());
+  titleWatch.disconnect();
+  d.classList.remove('scrolled');
+  if (sel) titleWatch.observe(document.getElementById('d-title'));
   syncSep();
 }
+
+const titleWatch = new IntersectionObserver(([e]) => document.getElementById('detail').classList.toggle('scrolled', !e.isIntersecting && e.boundingClientRect.top < 200),
+  { rootMargin: '-113px 0px 0px 0px' }); // header + sticky bar
 
 // Panel width: drag the separator or use its arrow keys. The CSS clamp has the final say, so read the width back from layout.
 const MIN_W = 420, BOARD_MIN = 340;
@@ -845,13 +855,13 @@ window.addEventListener('hashchange', () => {
   if (BYID.has(selectedId())) store('factory.panelCollapsed', '0'); // choosing a run always opens the panel
   render();
   const d = document.getElementById('detail');
-  if (document.body.classList.contains('open')) { d.classList.add('enter'); d.scrollTop = 0; if (matchMedia('(max-width: 1099px)').matches) window.scrollTo(0, 0); document.getElementById('d-title').focus({ preventScroll: true }); document.querySelector('.card[aria-current]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+  if (document.body.classList.contains('open')) { d.classList.add('enter'); d.scrollTop = 0; if (matchMedia('(width < 1100px)').matches) window.scrollTo(0, 0); document.getElementById('d-title').focus({ preventScroll: true }); document.querySelector('.card[aria-current]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
 });
 window.addEventListener('popstate', render);
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && document.body.classList.contains('open')) { e.preventDefault(); closeRun(); }
   else if (e.key === ']' && !e.metaKey && !e.ctrlKey && !e.altKey && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)
-    && matchMedia('(min-width: 1100px)').matches && !document.getElementById('ptog').hidden) { e.preventDefault(); setCollapsed(document.body.classList.contains('panel')); }
+    && matchMedia('(width >= 1100px)').matches && !document.getElementById('ptog').hidden) { e.preventDefault(); setCollapsed(document.body.classList.contains('panel')); }
 });
 
 // file:// can't fetch, so the factory rewrites this file on every event and the page reloads to pick it up.
