@@ -488,6 +488,8 @@ dialog.ob[open] { display: grid; grid-template-columns: 248px minmax(0, 1fr); gr
 .ob-card.off { border-style: dashed; background: none; color: var(--ink-3); }
 .ob-card.off h4 { color: var(--ink-2); }
 .ob-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; font-size: 13px; color: var(--ink-2); }
+.ob-note { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--ink-2); }
+.ob-note .dot { margin-top: 7px; }
 .ob-path { font: 11.5px/1.4 var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
 .ob-cmd { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 6px 6px 10px; border-radius: var(--r); background: var(--sunken); font: 12px/1.45 var(--mono); }
 .ob-cmd code { flex: 1; min-width: 0; overflow-wrap: anywhere; user-select: all; }
@@ -495,13 +497,15 @@ dialog.ob[open] { display: grid; grid-template-columns: 248px minmax(0, 1fr); gr
 .ob-pick input { position: absolute; opacity: 0; pointer-events: none; }
 .ob-pick:has(input:checked) { border-color: color-mix(in srgb, var(--accent) 60%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent); }
 .ob-pick:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
-.ob-box { display: grid; place-items: center; width: 16px; height: 16px; border: 1px solid var(--line-2); border-radius: 4px; font-size: 11px; line-height: 1; }
+.ob-box { display: grid; place-items: center; width: 16px; height: 16px; border: 1px solid var(--line-2); border-radius: 4px; font-size: 11px; line-height: 1; color: transparent; }
 .ob-pick:has(input:checked) .ob-box { border-color: var(--accent); background: var(--accent); color: var(--bg); }
 .ob-sect { margin-top: 28px; }
 .ob-sect > h4 { margin: 0 0 10px; font: 500 10.5px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.ob-sect > h4.ob-cli { text-transform: none; letter-spacing: 0; font-size: 12px; color: var(--ink-2); }
+.ob-step-name { flex: none; width: 11.5em; }
+@media (max-width: 760px) { .ob-step-name { width: 100%; } }
 .ob-form { display: grid; gap: 16px; max-width: 600px; }
 .ob-form textarea.sk-input { min-height: 74px; resize: vertical; font: 12.5px/1.5 var(--mono); }
-.ob-form select.sk-input { width: auto; }
 .ob-check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink); }
 .ob-check input { accent-color: var(--accent); }
 .ob-pre { margin: 0; max-height: 300px; overflow: auto; padding: 12px 14px; border-radius: 8px; background: var(--sunken); font: 11.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -1407,7 +1411,7 @@ function drawWizard(d, focusHead) {
   const status = el('p', { class: 'sk-status', role: 'status', 'aria-live': 'polite' });
   const redraw = (msg) => { drawWizard(d); if (msg) d.querySelector('.ob-foot .sk-status').textContent = msg; };
   const fail = (e) => { status.className = 'sk-status bad'; status.textContent = e.message || String(e); };
-  const close = el('button', { class: 'close', type: 'button', 'aria-label': 'Close setup' }, 'Close', el('kbd', {}, 'Esc'));
+  const close = el('button', { class: 'act close', type: 'button', 'aria-label': 'Close setup' }, 'Close', el('kbd', {}, 'Esc'));
   close.onclick = () => d.close();
   const top = el('header', { class: 'ob-top' }, el('div', { class: 'mark', 'aria-hidden': 'true' }), el('h2', { id: 'ob-title' }, 'Set up the factory'),
     obLive() ? el('p', { class: 'sk-live' }, dot('ok'), el('span', {}, 'Live: saves through F ui')) : el('p', { class: 'sk-live' }, dot('idle'), el('span', {}, 'Read-only page: each step shows the command to run')), close);
@@ -1452,7 +1456,7 @@ const OB_BODY = {
       return el('div', { class: 'ob-card', 'data-harness': h.id }, el('h4', {}, dot(ok ? 'ok' : h.installed ? 'warn' : 'bad'), h.label, h.version ? chip(h.version, 'quiet') : null),
         h.installed ? state(true, 'Installed') : [state(false, '', 'Not installed'), cmdBlock(String(h.install))],
         h.installed ? (login.ok ? state(true, 'Signed in' + (login.hint ? ' · ' + login.hint : '')) : [state(false, '', 'Not signed in'), cmdBlock(String(login.hint || ''))]) : null,
-        arr(h.notes).map(obj).map((n) => el('div', { class: 'ob-row' }, dot(n.ok ? 'ok' : n.ok === null ? 'idle' : 'warn'), el('span', {}, n.label, ': ', n.hint))),
+        arr(h.notes).map(obj).map((n) => el('div', { class: 'ob-note' }, dot(n.ok ? 'ok' : n.ok === null ? 'idle' : 'warn'), el('span', {}, n.label, ': ', n.hint))),
         h.headless ? el('div', { class: 'ob-path', title: obj(h.headless).note || '' }, 'Headless: ', [obj(h.headless).cmd, ...arr(obj(h.headless).args)].join(' ')) : null);
     });
     return [lead, el('div', { class: 'ob-grid' }, cards.length ? cards : el('p', { class: 'muted' }, 'No harness adapters are registered.')), el('div', { class: 'ob-sect' }, obRetry(d))];
@@ -1524,7 +1528,7 @@ const OB_BODY = {
         try { const m = await skApply(scope, step, p.runner, status); if (m) redraw('Saved ' + label + '.'); restoreFocus('ob-run:' + step); }
         catch (e) { status.className = 'sk-status bad'; status.textContent = e.message; }
       };
-      return el('li', { 'data-step': step }, el('span', { class: 'sk-name', style: 'min-width:9em' }, label),
+      return el('li', { 'data-step': step }, el('span', { class: 'sk-name ob-step-name' }, label),
         el('span', { class: 'sk-name' + (isDef ? ' def' : '') }, runnerName(r, scope)), isDef ? null : chip(kindOf(r, scope)),
         step in mine ? el('span', { class: 'sk-from here' }, 'set here') : null, el('span', { class: 'sk-act' }, change));
     });
@@ -1545,7 +1549,7 @@ const OB_BODY = {
     guide.value = String(obj(obj(obj(skData().config)[scope]).guide)['*'] || ''); // raw: resolved guidance folds "*" into every step
     const guideNow = guide.value;
     const reason = el('input', { class: 'sk-input', placeholder: 'Why: e.g. GitHub Actions billing is failing', 'aria-label': 'Reason (required)', maxlength: '200' });
-    const until = el('input', { class: 'sk-input', type: 'date', 'aria-label': 'Until (optional)', style: 'width:auto' });
+    const until = el('input', { class: 'sk-input', type: 'date', 'aria-label': 'Until (optional)' });
     const changes = () => {
       const out = [], cmds = checks.value.split('\n').map((c) => c.trim()).filter(Boolean), was = obj(pol['checks.commands']).value;
       if (ci.value !== (obj(pol.ci).value || 'required')) out.push({ key: 'ci', value: ci.value });
@@ -1587,8 +1591,8 @@ const OB_BODY = {
     const repo = scope === 'default' ? '<owner/repo>' : scope;
     const lead = el('p', { class: 'ob-lead' }, 'The resolved plan the factory will follow, exactly as the CLI prints it.');
     return [lead, obScopePicker(redraw),
-      el('div', { class: 'ob-sect' }, el('h4', {}, `F skills ${scope}`), el('pre', { class: 'ob-pre', 'data-out': 'skills' }, JSON.stringify(plan, null, 2))),
-      el('div', { class: 'ob-sect' }, el('h4', {}, `F rules ${scope}`), Object.keys(R).length ? el('pre', { class: 'ob-pre', 'data-out': 'rules' }, JSON.stringify(R, null, 2)) : cmdBlock(`${F_CMD} rules ${shq(scope)}`)),
+      el('div', { class: 'ob-sect' }, el('h4', { class: 'ob-cli' }, `F skills ${scope}`), el('pre', { class: 'ob-pre', 'data-out': 'skills' }, JSON.stringify(plan, null, 2))),
+      el('div', { class: 'ob-sect' }, el('h4', { class: 'ob-cli' }, `F rules ${scope}`), Object.keys(R).length ? el('pre', { class: 'ob-pre', 'data-out': 'rules' }, JSON.stringify(R, null, 2)) : cmdBlock(`${F_CMD} rules ${shq(scope)}`)),
       el('div', { class: 'ob-sect' }, el('h4', {}, 'First run'),
         el('p', { class: 'ob-row' }, 'In Claude Code, factory an issue:'), cmdBlock(`/software-factory ${repo}#<issue>`),
         el('p', { class: 'ob-row' }, 'Or see which issues are ready:'), cmdBlock(`${F_CMD} queue ${repo}`))];
