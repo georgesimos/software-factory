@@ -1,0 +1,155 @@
+/* Generated from tokens.ts by `pnpm tokens`. Do not edit by hand. */
+:root {
+  --sf-font-sans: "Geist", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --sf-font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sf-text-2xs: 10.5px;
+  --sf-text-xs: 11px;
+  --sf-text-sm: 12px;
+  --sf-text-md: 13px;
+  --sf-text-base: 14px;
+  --sf-text-lg: 16px;
+  --sf-text-xl: 19px;
+  --sf-text-2xl: 24px;
+  --sf-text-display: clamp(30px, 3.4vw, 44px);
+  --sf-weight-regular: 400;
+  --sf-weight-medium: 500;
+  --sf-weight-semibold: 600;
+  --sf-leading-tight: 1.25;
+  --sf-leading-snug: 1.38;
+  --sf-leading-normal: 1.5;
+  --sf-tracking-tight: -0.02em;
+  --sf-tracking-snug: -0.01em;
+  --sf-tracking-normal: 0;
+  --sf-tracking-label: 0.08em;
+  --sf-space-0: 0;
+  --sf-space-1: 4px;
+  --sf-space-2: 8px;
+  --sf-space-3: 12px;
+  --sf-space-4: 16px;
+  --sf-space-5: 20px;
+  --sf-space-6: 24px;
+  --sf-space-8: 32px;
+  --sf-space-10: 40px;
+  --sf-space-16: 64px;
+  --sf-space-0-5: 2px;
+  --sf-space-1-5: 6px;
+  --sf-space-2-5: 10px;
+  --sf-radius-xs: 3px;
+  --sf-radius-sm: 4px;
+  --sf-radius-md: 6px;
+  --sf-radius-lg: 8px;
+  --sf-radius-xl: 10px;
+  --sf-radius-full: 999px;
+  --sf-motion-duration-fast: 120ms;
+  --sf-motion-duration-base: 150ms;
+  --sf-motion-duration-slow: 200ms;
+  --sf-motion-ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --sf-motion-ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+  --sf-z-raised: 1;
+  --sf-z-sticky: 30;
+  --sf-z-sheet: 40;
+  --sf-z-dialog: 50;
+  --sf-z-toast: 60;
+  --sf-z-tooltip: 70;
+}
+
+/* Light is the default; a [data-theme] attribute on any element themes that subtree. */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --sf-color-bg: #fafaf9;
+  --sf-color-surface: #ffffff;
+  --sf-color-sunken: #f4f4f2;
+  --sf-color-ink: #111110;
+  --sf-color-ink-2: #57574f;
+  --sf-color-ink-3: #707069;
+  --sf-color-line: #e8e8e4;
+  --sf-color-line-2: #d5d5cf;
+  --sf-color-control: #8c8c85;
+  --sf-color-accent: #3550dc;
+  --sf-color-ok: #2c7a51;
+  --sf-color-bad: #bf3d2b;
+  --sf-color-warn: #946003;
+  --sf-color-idle: #8c8c85;
+  --sf-shadow-overlay: 0 8px 24px -8px rgb(0 0 0 / 0.3);
+  --sf-shadow-panel: -32px 0 64px -48px rgb(0 0 0 / 0.35);
+  --sf-shadow-dialog: 0 24px 64px -24px rgb(0 0 0 / 0.3), 0 0 0 1px rgb(0 0 0 / 0.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --sf-color-bg: #0b0b0c;
+    --sf-color-surface: #121214;
+    --sf-color-sunken: #0f0f11;
+    --sf-color-ink: #ededeb;
+    --sf-color-ink-2: #a5a59f;
+    --sf-color-ink-3: #82827c;
+    --sf-color-line: #222225;
+    --sf-color-line-2: #333337;
+    --sf-color-control: #6a6a65;
+    --sf-color-accent: #8c9dff;
+    --sf-color-ok: #6cbf8f;
+    --sf-color-bad: #ec8b79;
+    --sf-color-warn: #d9ad5e;
+    --sf-color-idle: #67675f;
+    --sf-shadow-overlay: 0 8px 24px -8px rgb(0 0 0 / 0.7);
+    --sf-shadow-panel: -32px 0 64px -48px rgb(0 0 0 / 0.9);
+    --sf-shadow-dialog: 0 24px 64px -24px rgb(0 0 0 / 0.8), 0 0 0 1px rgb(255 255 255 / 0.04);
+  }
+}
+[data-theme="dark"] {
+  color-scheme: dark;
+  --sf-color-bg: #0b0b0c;
+  --sf-color-surface: #121214;
+  --sf-color-sunken: #0f0f11;
+  --sf-color-ink: #ededeb;
+  --sf-color-ink-2: #a5a59f;
+  --sf-color-ink-3: #82827c;
+  --sf-color-line: #222225;
+  --sf-color-line-2: #333337;
+  --sf-color-control: #6a6a65;
+  --sf-color-accent: #8c9dff;
+  --sf-color-ok: #6cbf8f;
+  --sf-color-bad: #ec8b79;
+  --sf-color-warn: #d9ad5e;
+  --sf-color-idle: #67675f;
+  --sf-shadow-overlay: 0 8px 24px -8px rgb(0 0 0 / 0.7);
+  --sf-shadow-panel: -32px 0 64px -48px rgb(0 0 0 / 0.9);
+  --sf-shadow-dialog: 0 24px 64px -24px rgb(0 0 0 / 0.8), 0 0 0 1px rgb(255 255 255 / 0.04);
+}
+
+/* Semantic state tokens. Declared on every themed element so they resolve against that element's palette. */
+:root,
+[data-theme] {
+  --sf-tone-neutral: var(--sf-color-ink-2);
+  --sf-tone-run: var(--sf-color-accent);
+  --sf-tone-ok: var(--sf-color-ok);
+  --sf-tone-bad: var(--sf-color-bad);
+  --sf-tone-warn: var(--sf-color-warn);
+  --sf-tone-idle: var(--sf-color-idle);
+  --sf-stage-pending: var(--sf-color-idle);
+  --sf-stage-active: var(--sf-color-accent);
+  --sf-stage-done: var(--sf-color-ok);
+  --sf-stage-failed: var(--sf-color-bad);
+  --sf-stage-warn: var(--sf-color-warn);
+  --sf-stage-skipped: var(--sf-color-idle);
+  --sf-outcome-in-progress: var(--sf-color-accent);
+  --sf-outcome-merged: var(--sf-color-ok);
+  --sf-outcome-escalated: var(--sf-color-warn);
+  --sf-outcome-rejected: var(--sf-color-bad);
+  --sf-outcome-needs-info: var(--sf-color-warn);
+  --sf-outcome-closed: var(--sf-color-idle);
+  --sf-outcome-awaiting-approval: var(--sf-color-warn);
+  --sf-outcome-split: var(--sf-color-idle);
+  --sf-outcome-reverted: var(--sf-color-bad);
+  --sf-verdict-passed: var(--sf-color-ok);
+  --sf-verdict-failed: var(--sf-color-bad);
+  --sf-verdict-pending: var(--sf-color-accent);
+  --sf-verdict-dismissed: var(--sf-color-idle);
+  --sf-verdict-not-reviewed: var(--sf-color-idle);
+  --sf-source-factory: var(--sf-color-accent);
+  --sf-source-claude-code: var(--sf-color-ink-2);
+  --sf-source-codex: var(--sf-color-ink-2);
+  --sf-source-human: var(--sf-color-ink-2);
+  --sf-source-none: var(--sf-color-idle);
+}
