@@ -95,6 +95,7 @@ The skill never writes state itself. It runs `F` subcommands and acts on their J
 | Decisions | `gate`, `decide`, `merge` | Pure functions over derived state plus live GitHub facts. |
 | After merge | `postmerge`, `revert` | Watches CI on the merge commit; opens a revert PR, never merges it. |
 | Onboarding | `discover`, `sync`, `projects`, `automerge` | Finds local clones, imports open PRs and agent sessions. |
+| Rules | `rules`, `rules set`, `rules unset`, `checks` | Per-project or global policy switches and step guidance; local checks that stand in for CI. See [§5.2](#52-rules). |
 | Housekeeping | `archive`, `render`, `demo`, `test`, `eval` | `eval` runs headless `claude -p` over the golden fixtures and costs tokens. |
 
 Environment overrides:
@@ -152,9 +153,9 @@ Each line is one event:
 - **`run`**, the run id, takes one of two forms:
   - `owner/repo#N` for an issue or an imported PR (they share GitHub's number space);
   - `owner/repo:<branch>` for an imported agent session that has no PR yet.
-- **`stage`** is one of `intake | spec | build | review | gate | approve`.
+- **`stage`** is one of `intake | spec | build | review | gate | approve`. A seventh, `rules`, marks a rule change rather than a run event: `{run: "<owner/repo|default>", stage: "rules", status: "set|unset", key, value?, reason?, until?, setBy}`. `derive()` skips these, `archive()` keeps them, and the dashboard shows them as rule history.
 - **`status`** is one of `started | passed | failed | decided | reverted`, or one of the outcomes `rejected | needs-info | merged | escalated | closed | awaiting-approval | split`.
-- **The payload** is spread into the event: for example `summary`, `spec`, `pr`, `branch`, `axes`, `sha`, `range`, `axis`, `findings`, `reasons`, `next`, `action`, `facts`, `tokens` and `costUsd`.
+- **The payload** is spread into the event: for example `summary`, `spec`, `pr`, `branch`, `axes`, `sha`, `range`, `axis`, `findings`, `reasons`, `next`, `action`, `facts`, `tokens` and `costUsd`. `F checks` records `build passed|failed` with `localChecks: {state, sha, commands: [{cmd, exit, ms}]}`, and `derive()` keeps the latest as `r.localChecks`.
 - **Runner stamp.** When `skills.json` names a non-default runner for the step (`intake`, `spec`, `build`, `review.<axis>` or an extra axis, `verifier` for `gate` events), `record()` adds `runner: {use, name?, path?, harness?}`. A `--fallback "<why>"` flag records `runner: {use: "default", fallback: {from, reason}}`. Default runners add nothing.
 - **Harness stamp.** When `CLAUDE_CODE_SESSION_ID` is set, `record()` adds `harness: "claude-code"`, `sessionId` and `cwd`. That is how a run links back to the session driving it.
 
@@ -188,7 +189,7 @@ The CLI never rewrites the log, with one exception: `archive` rewrites it by wri
 | File | Written by | Contents |
 |---|---|---|
 | `projects.json` | `sync`, `worktree`, `automerge` | `{ "owner/repo": { path, synced, autoMerge? } }`, mapping each attached project to its local clone |
-| `skills.json` | `skills set`, or by hand | `{ "default": {step: runner}, "owner/repo": {step: runner, "axes.extra": [...]} }`. Validated on every read. See [§5.1](#51-runners). |
+| `skills.json` | `skills set`, `rules set/unset`, or by hand | `{ "default": {step: runner}, "owner/repo": {step: runner, "axes.extra": [...], "rules": {key: {value, reason, setBy, setAt, until?}}, "guide": {step: text}} }`. Validated on every read. See [§5.1](#51-runners) and [§5.2](#52-rules). |
 | `sessions.json` | `sync` | `{ runId: [ {agent, id, cwd, last} ×≤5 ] }`, linking runs to local Claude Code and Codex sessions by branch |
 | `archive.jsonl` | `archive` | one compact run per line (derived state plus its last 5 events, `archived: true`) for finished runs older than N days (default 14) |
 | `events.jsonl.bak` | `archive` | the log as it was before the last archive |
@@ -199,7 +200,8 @@ The CLI never rewrites the log, with one exception: `archive` rewrites it by wri
 | Path | Purpose |
 |---|---|
 | `spec.md` | the spec (Goal, Non-goals, Acceptance criteria, Files, Test plan, Risks, `## Changes` on a loop-back) |
-| `checks.json` | `{lint, typecheck, tests, build, notes}`. Reviewers read this instead of re-running the checks. |
+| `checks.json` | `{lint, typecheck, tests, build, notes}`. Reviewers read this instead of re-running the checks. Written by the model, so nothing mechanical reads it. |
+| `local-checks.log` | output of the last `F checks`; its tail is printed on failure, never logged |
 | `worktree.json` | `{repoPath, path, branch, base}` |
 | `wt/` | the run's **git worktree** on branch `factory/issue-N`. It shares the clone's object store and is created from `origin/factory/issue-N` when that branch exists (resume) or `origin/<base>` otherwise. |
 | `revert/` | a temporary worktree for `F revert`, always removed afterwards |
@@ -288,8 +290,8 @@ On a loop-back, `reviewAxes()` re-reviews only the axes the new commits touch, p
 |---|---|---|
 | **Trusted associations read live** | `TRUSTED = OWNER, MEMBER, COLLABORATOR`. `facts()` re-reads `author_association` from GitHub at merge time, and the live value wins over the logged one. | A role change, or a forged log value, that would turn on auto-merge |
 | **Untrusted issue text** | `F intake` returns only the body and the comments from the issue author or trusted associations; all others are counted as `ignoredComments`. `SKILL.md` and `reviewers.md` treat all issue, PR, diff and reviewer text as data. | Prompt injection ("skip review", "merge now") and drive-by comments that steer requirements |
-| **Owned events** | `F event` refuses `intake started` (owned by `intake`), `review started` (`axes`), every `gate` event (`gate`), `approve decided/merged` (`merge`), `approve reverted` (`revert`) and `approve closed` (`sync`). `record()` itself refuses `merged` unless the recorded decision is `merge`. | The model recording its own approval or a merge |
-| **Typed fields** | `F event` rejects payloads that carry `association`, `originAssociation`, `origin`, `author`, `sha`, `imported`, `source`, `action`, `harness`, `sessionId`, `cwd` or `runner`. These only come from GitHub, git, the harness or `skills.json`. | Spoofed trust, provenance, session links or runner |
+| **Owned events** | `F event` refuses `intake started` (owned by `intake`), `review started` (`axes`), every `gate` event (`gate`), `approve decided/merged` (`merge`), `approve reverted` (`revert`) `approve closed` (`sync`) and every `rules` event (`rules`). `record()` itself refuses `merged` unless the recorded decision is `merge`. | The model recording its own approval or a merge |
+| **Typed fields** | `F event` rejects payloads that carry `association`, `originAssociation`, `origin`, `author`, `sha`, `imported`, `source`, `action`, `harness`, `sessionId`, `cwd`, `runner` or `localChecks`. These only come from GitHub, git, the harness, `skills.json` or `F checks`. | Spoofed trust, provenance, session links or runner |
 | **Review contract** | `validateReview()` rejects unknown fields, an axis outside this iteration's selection, a severity other than `high`/`medium`/`low`, a route other than `spec`/`build`, an empty `issue`, and a `failed` verdict with no blocking finding. `derive()` recomputes the verdict from the findings. | Reviewer output smuggling text or a misleading verdict |
 | **Verifier** | Its dismissals are stored as `dismissed: "<reason>"`. A dismissed finding stays visible but does not block. | False positives blocking the gate, without hiding them |
 | **Sensitive paths** | `SENSITIVE` matches auth, login, session, oauth, payments, billing, money and migrations; `.github/workflows/`; package manifests and lockfiles (npm, pnpm, yarn, bun, pip, poetry, Gemfile, Go, Cargo); `.env*`; and `.claude/` and `.codex/`, whose skills, hooks and settings a headless runner in the worktree would load. `risk` checks them before the build, `decide` after. | Auto-merging changes to security, money, CI or the supply chain |
@@ -297,6 +299,7 @@ On a loop-back, `reviewAxes()` re-reviews only the axes the new commits touch, p
 | **Test gate** | Source changed with no test file changed: escalate. Docs-only changes pass. | Untested behaviour changes |
 | **Caps** | Loop cap 3, budget $5 or 3M tokens, diff cap 300 lines, CI-fix cap 2 (in `SKILL.md`), post-merge watch of 20 min. | Runaway loops and cost, and oversized auto-merges |
 | **Imported runs** | `sync` imports are tracked only: `decide()` always escalates them, and the skill never builds, pushes or merges them. | The factory taking over a human's or another agent's PR |
+| **Rules are stricter-only** | A closed set (`ci`, `checks.commands`, `diffCap`), each with a reason, the `gh` login that set it, and an optional expiry. CI that isn't required is never green: `decide()` then needs `F checks` passing on the reviewed commit, with the current command list, or it escalates. See [§5.2](#52-rules). | A rule, or the model, quietly turning CI off |
 | **Merge-exact-commit** | `--match-head-commit reviewedSha` | Merging code that was not reviewed |
 | **Revert never merges** | `F revert` opens a PR labelled `factory:needs-human` | Automated rollback chains |
 | **Shell safety** | Payloads go through stdin (`-`) in a quoted heredoc, and `gh`/`git` run via `execFileSync` with arguments, never a shell string. | Shell injection from issue titles and bodies |
@@ -318,12 +321,28 @@ Each step can be run by the built-in brief, a user skill or brief, or a harness 
 
 - **Steps:** `intake`, `spec`, `build`, `review.code|security|ux|ui|seo|docs`, `verifier`, `postmerge` and `axes.extra`. A project's step wins over `default`; extra axes from both are combined, and the project's entry wins for the same axis name.
 - **Runners:** `default`, `skill` (a name like `x` or `plugin:x`), `brief` (an absolute or `~/` `.md` path) and `provider` (`harness` is `claude-code` or `codex`). Unknown fields, unknown steps, names outside `[\w.-]` and extra axes that reuse a built-in name are refused.
-- **What can't be configured.** There is no runner that turns an axis off. `code` and `security` are always selected, and extra axes only add. `gate`, `decide`, `merge`, the caps, `TRUSTED` and `SENSITIVE` don't read the config.
+- **What can't be configured.** There is no runner that turns an axis off. `code` and `security` are always selected, and extra axes only add. Runners never reach `gate`, `decide`, `merge`, the caps, `TRUSTED` or `SENSITIVE`. Only the policy rules in [§5.2](#52-rules) reach `decide`, and only to make it stricter or to swap CI for local checks.
 - **Contract.** Every reviewer's reply goes through `F review`, which requires a JSON object for the requested axis that passes `validateReview`. Anything else (prose, another axis, unknown fields, a `failed` verdict with no blocking finding) is recorded as a failed review with a high "reviewer output invalid" finding, so it loops back and, at the cap, escalates. A prose provider such as `/code-review` goes through the adapter brief in `references/reviewers.md` first.
 - **User-local only.** There is no in-repo `.factory/skills.json`. Even read from the base branch, one merged PR could change the reviewers and the verifier for every later run. Config is a per-user choice, like `automerge`.
 - **Stamped only from the CLI.** `F event`, `F review` and `F gate` stamp the runner. In-process records such as `sync` imports never do, so a tracked human PR never shows a `codex` chip. The verifier's runner is stamped on every `gate` event while it is configured, even in an iteration with nothing to verify.
 - **Resolved per event.** The plan is read at each event, not frozen per run, so a config change mid-run applies from the next step.
 - **Not recorded.** `postmerge` runners leave no event of their own. They can only add a reason to `F revert`, which never merges.
+
+### 5.2 Rules
+
+`F rules <owner/repo>` resolves the rules from `skills.json`: the project's entry wins key by key over `default`, an entry past its `until` day stops applying (the global one, then the built-in, takes over) and is listed under `expired` with a warning, and one ending within 3 days warns too.
+
+| Key | Values | Enforced in |
+|---|---|---|
+| `ci` | `required` (built-in), `advisory`, `skip` | `facts()` doesn't read CI under `skip`. `decide()` treats `advisory` and `skip` as "not required", never as green: it needs `r.localChecks` with `state: pass`, `sha == reviewedSha` and the same command list as the rule, else it escalates. With no `checks.commands` rule there's nothing to stand in, so it escalates. `postmerge()` returns `skipped` under `skip` and flags `advisory`, so a billing-red main never opens revert PRs. |
+| `checks.commands` | 1–10 one-line commands | `F checks <run>` runs them with `/bin/sh -c` in the run's worktree, with `CI=1` and a 30-minute timeout each, on a clean HEAD (a dirty tree is refused). Output goes to `local-checks.log`; only exit codes reach the log. Setting the key also makes local checks required when CI is required. |
+| `diffCap` | `1`–`300` | `decide()` uses `min(300, diffCap)`. Raising the cap isn't possible. |
+
+- **Who and why.** `rules set` needs `--reason` and takes `setBy` from `gh api user`, never from an argument. `F skills set` refuses the `rules` and `guide` keys, and a hand-edited entry without a reason, login or valid date fails validation on every read. `render()` catches that and shows a warning chip, so recording events never fails half-way.
+- **Audit.** Every `set` and `unset` appends a `rules` event (§3.1). `F event` refuses that stage.
+- **Guidance.** `guide.<step>` is free text (`*`, a step key, or `review.<extra axis>`, at most 1000 characters). `F skills` and `F rules` return it per step, whole-flow text first and global before project, and `SKILL.md` puts it in that step's brief, before any repo or issue text. It is user-local, so trusted, and no mechanical check reads it.
+- **Not configurable.** `TRUSTED`, `SENSITIVE`, the `code` and `security` axes, `--match-head-commit`, imported runs escalating, the owned events and the typed fields. An unknown key is refused with that list.
+- **Not built.** There is no in-repo `.factory/` rules file, for the same reason as runners (§5.1), and no `autoMerge` rule: `F automerge` already covers it.
 
 ---
 
@@ -410,7 +429,7 @@ The outputs below are real, generated from the demo fixtures in a throwaway stat
 
 ```bash
 export FACTORY_DIR=$(mktemp -d)          # never touch the real ~/.claude/factory
-F demo                                   # writes 9 sample runs covering most outcomes
+F demo                                   # writes 10 sample runs covering most outcomes, one under a ci=skip rule
 # → $FACTORY_DIR/dashboard.html
 ```
 

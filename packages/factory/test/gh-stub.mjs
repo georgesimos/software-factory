@@ -8,7 +8,8 @@ const pr = (number, headRefName, closes, title = `PR ${number}`) => ({
   title, author: { login: 'acme' }, closingIssuesReferences: { nodes: closes.map((n) => ({ number: n })) },
 });
 
-if (args[0] === 'repo' && args[1] === 'view') out('main\n');
+if (a === 'api user --jq .login') out('stub-user\n');
+else if (args[0] === 'repo' && args[1] === 'view') out('main\n');
 else if (args[0] === 'pr' && args[1] === 'view' && a.includes('--json mergeCommit')) out({ mergeCommit: { oid: process.env.STUB_MERGE_SHA } });
 else if (args[0] === 'run' && args[1] === 'list') out([{ status: 'completed', conclusion: 'failure', name: 'ci', url: 'https://github.com/acme/wt/actions/runs/1' }]);
 else if (args[0] === 'pr' && args[1] === 'create') out('https://github.com/acme/wt/pull/99\n');

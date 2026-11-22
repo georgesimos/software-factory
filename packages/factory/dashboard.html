@@ -136,6 +136,8 @@ button { font: inherit; color: inherit; }
 .chip.quiet { color: var(--ink-3); border-style: dashed; }
 .chip.rn { margin-top: 5px; padding: 2px 5px; font-size: 9.5px; color: var(--ink-3); }
 td.v .chip.rn { margin: 0 0 0 6px; vertical-align: middle; }
+.rules { display: flex; gap: 6px; min-width: 0; overflow: hidden; flex: 0 1000 auto; } /* shrinks before the project switcher */
+.rules .chip { flex: none; white-space: nowrap; cursor: default; }
 .iters { display: inline-flex; gap: 3px; align-items: center; }
 .iters i { width: 6px; height: 6px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--line-2); }
 .iters i.on { background: var(--ink-2); box-shadow: none; }
@@ -293,6 +295,8 @@ body.open .metric:last-child:nth-child(3n + 2) { grid-column: span 2; }
   :root { --gut: 16px; }
   .top { flex-wrap: wrap; height: auto; gap: 10px 12px; padding-block: 12px; }
   .seg { order: 3; flex: 1 0 100%; }
+  .rules { order: 4; flex: 1 0 100%; flex-wrap: wrap; }
+  .rules .chip { flex: 0 1 auto; white-space: normal; }
   .upd-word { display: none; }
   .updated { gap: 6px; }
   .shell { padding-top: 24px; }
@@ -317,6 +321,7 @@ body.open .metric:last-child:nth-child(3n + 2) { grid-column: span 2; }
 <header class="top">
   <h1 class="brand"><span class="mark" aria-hidden="true"></span>Software Factory</h1>
   <nav class="seg" id="projects" aria-label="Project"></nav>
+  <div class="rules" id="rules" role="group" aria-label="Active rules"></div>
   <div class="updated" id="updated"></div>
   <div class="theme" id="theme" role="group" aria-label="Theme"></div>
 </header>
@@ -493,6 +498,35 @@ function board(runs, selected) {
   return el('div', { class: 'board-wrap', id: 'board-wrap' }, el('div', { class: 'board' + (open ? '' : ' shut') }, cols, doneCol));
 }
 
+// Policy rules in force for the shown project(s), from `F rules set`. Quiet unless expired or ending within 3 days.
+const RULE_LABEL = { ci: (v) => ({ skip: 'CI skipped', advisory: 'CI advisory', required: 'CI required' })[v] || 'CI ' + v,
+  'checks.commands': (v) => 'Local checks ×' + arr(v).length, diffCap: (v) => 'Diff cap ' + v };
+const dayNow = () => new Date().toISOString().slice(0, 10);
+function ruleChips() {
+  const seen = new Set(), out = [], today = dayNow();
+  if (DATA.rulesError) out.push(el('span', { class: 'chip warn', title: String(DATA.rulesError) }, 'Rules config invalid'));
+  for (const [repo, x] of Object.entries(obj(DATA.rules))) {
+    if (project && repo !== project) continue;
+    const entries = [...Object.entries(obj(obj(x).policy)).map(([key, e]) => ({ ...obj(e), key })), ...arr(obj(x).expired).map(obj)];
+    for (const e of entries) {
+      const k = [e.scope, e.key, e.until].join('|');
+      if (seen.has(k) || !RULE_LABEL[e.key]) continue;
+      seen.add(k);
+      const until = /^\d{4}-\d{2}-\d{2}$/.test(e.until || '') ? e.until : null;
+      const gone = until && until < today, ending = until && !gone && Date.parse(until) - Date.parse(today) <= 3 * 864e5;
+      const who = e.scope === 'default' ? 'all projects' : String(e.scope);
+      const reason = String(e.reason || ''), short = reason.length > 30 ? reason.slice(0, 30).replace(/\s+\S*$/, '') + '…' : reason;
+      const history = arr(DATA.ruleHistory).map(obj).filter((h) => h.run === e.scope && h.key === e.key)
+        .map((h) => `${String(h.ts).slice(0, 10)} ${h.status}${h.status === 'set' ? ' ' + JSON.stringify(h.value) : ''} by ${h.setBy}${h.reason ? ': ' + h.reason : ''}`);
+      const text = (project ? '' : (e.scope === 'default' ? 'all' : shortId(e.scope)) + ': ') + (gone ? 'Expired: ' : '') + RULE_LABEL[e.key](e.value) + (short ? ' · ' + short : '') + (ending ? ' · ends ' + until.slice(5) : '');
+      const title = `${e.key}=${JSON.stringify(e.value)} for ${who}, set by ${e.setBy} on ${String(e.setAt).slice(0, 10)}: ${reason}` +
+        (until ? `. Until ${until}` : '') + (gone ? '. Expired: no longer applied.' : '') + (history.length ? '\nHistory:\n' + history.join('\n') : '');
+      out[gone || ending ? 'unshift' : 'push'](el('span', { class: 'chip ' + (gone || ending ? 'warn' : 'quiet'), title }, text)); // warnings first: never the one clipped
+    }
+  }
+  return out;
+}
+
 // ---------- detail ----------
 const section = (title, ...kids) => el('section', { class: 'sec' }, el('h3', { class: 'label' }, title), kids);
 
@@ -642,7 +676,7 @@ function timeline(r) {
     el('span', { class: 'rail' }, dot(tone(e.status))),
     el('div', { class: 'body' },
       el('div', { class: 'what' }, el('b', {}, e.stage || '?'), ' · ', e.status || '?', e.axis ? ' · ' + e.axis : '', e.next ? ' → ' + e.next : '',
-        num(e.costUsd) ? ' · ' + money(e.costUsd) : '', num(e.tokens) ? ' · ' + tokens(e.tokens) + ' tok' : ''),
+        num(e.costUsd) ? ' · ' + money(e.costUsd) : '', num(e.tokens) ? ' · ' + tokens(e.tokens) + ' tok' : '', e.localChecks ? ' · local checks ' + obj(e.localChecks).state : ''),
       e.summary || e.reason || e.spec ? el('div', { class: 'txt' }, e.summary || e.reason || e.spec) : null,
       arr(e.reasons).length ? el('div', { class: 'txt' }, arr(e.reasons).join(' · ')) : null,
       arr(e.questions).length ? el('ul', {}, arr(e.questions).map((q) => el('li', {}, q))) : null)))),
@@ -706,6 +740,7 @@ function render() {
     b.onclick = () => { project = p; store('factory.project', p); if (selectedId()) history.replaceState(null, '', location.pathname + location.search); render(); restoreFocus('proj:' + p); };
     return b;
   }));
+  document.getElementById('rules').replaceChildren(...ruleChips());
   const fresh = Date.now() - Date.parse(DATA.generated) < 5 * 60e3;
   document.getElementById('updated').replaceChildren(...(DATA.generated ? [dot(fresh ? 'ok' : 'idle'), el('time', { datetime: DATA.generated, title: clock(DATA.generated) }, el('span', { class: 'upd-word' }, 'Updated '), ago(DATA.generated))] : []));
 
