@@ -612,14 +612,26 @@ export function uiHandle({ method, url, headers = {}, body = '' }, { token, port
     if (!same(u.searchParams.get('t'), token)) return reply(403, { error: 'open the URL that `F ui` printed' });
     return { status: 200, type: 'text/html; charset=utf-8', body: page({ ui: { token } }) };
   }
-  if (method === 'POST' && Object.hasOwn(UI_ROUTES, u.pathname)) { // every write (and the onboarding read) passes the same checks
+  const route = u.pathname.startsWith('/api/') ? u.pathname.slice(4) : u.pathname; // /api/<p> and the original <p> are one route
+  if (method === 'GET' && u.pathname.startsWith('/api/')) { // reads: same token; browsers omit Origin on same-origin GETs, so only a foreign one is refused
+    if (!same(headers['x-factory-token'], token)) return reply(403, { error: 'missing or wrong token' });
+    if (headers.origin !== undefined && !hosts.some((h) => headers.origin === `http://${h}`)) return reply(403, { error: 'cross-origin request' });
+    if (route === '/runs') return reply(200, { runs: runsData() });
+    const m = route.match(/^\/runs\/([^/]+)\/([^/]+)\/([^/]+)$/);
+    if (!m) return reply(404, { error: 'not found' });
+    const [, owner, repo, n] = m; // raw segments: the checks below admit no %-escapes
+    if (!LOGIN.test(owner) || !/^[\w.-]{1,100}$/.test(repo) || !/^\d{1,9}$/.test(n)) return reply(400, { error: 'expected /api/runs/<owner>/<repo>/<issue number>' });
+    const run = runsData().find((r) => r.id === `${owner}/${repo}#${n}`);
+    return run ? reply(200, { run }) : reply(404, { error: `no run ${owner}/${repo}#${n}` });
+  }
+  if (method === 'POST' && Object.hasOwn(UI_ROUTES, route)) { // every write (and the onboarding read) passes the same checks
     if (!same(headers['x-factory-token'], token)) return reply(403, { error: 'missing or wrong token' });
     if (!hosts.some((h) => headers.origin === `http://${h}`)) return reply(403, { error: 'cross-origin request' });
     if (!/^application\/json\b/.test(headers['content-type'] || '')) return reply(415, { error: 'expected application/json' });
     try {
       const x = JSON.parse(body || '{}');
       if (!x || typeof x !== 'object' || Array.isArray(x)) throw new Error('expected a JSON object');
-      return reply(200, UI_ROUTES[u.pathname](x));
+      return reply(200, UI_ROUTES[route](x));
     } catch (e) { return reply(400, { error: e.message }); }
   }
   return reply(404, { error: 'not found' });
@@ -1294,8 +1306,8 @@ export function render() {
   return out;
 }
 
-export function page(extra = {}) {
-  const events = read();
+// The run list the dashboard embeds and GET /api/runs returns: live + archived, linked sessions, worktree path.
+export function runsData(events = read()) {
   const live = Object.values(withMeasured(derive(events), events));
   const archived = readArchive().filter((a) => !live.some((r) => r.id === a.id));
   for (const a of archived) for (const c of a.children || []) { const child = live.find((r) => r.id === c); if (child) child.parent = a.id; }
@@ -1304,6 +1316,12 @@ export function page(extra = {}) {
   try { links = JSON.parse(fs.readFileSync(sessionsFile(), 'utf8')); } catch { /* no sync yet */ }
   for (const r of runs) if (links[r.id]) r.sessions = [...(r.sessions || []), ...links[r.id].filter((x) => !(r.sessions || []).some((y) => y.id === x.id))];
   for (const r of runs) { const w = wtInfo(r.id); if (w?.path) r.worktree = w.path; } // the dashboard's "Open in Claude" cwd
+  return runs;
+}
+
+export function page(extra = {}) {
+  const events = read();
+  const runs = runsData(events);
   const repoOf = (id) => id.split(/[#:]/)[0];
   const byProject = {};
   for (const p of new Set(runs.map((r) => repoOf(r.id)))) byProject[p] = metrics(runs.filter((r) => repoOf(r.id) === p));
@@ -1947,7 +1965,7 @@ function onboardTest(cli) {
     const post = (url, body, h = {}) => uiHandle({ method: 'POST', url, headers: { ...H, ...h }, body: JSON.stringify(body) }, ctx);
     const err = (url, body) => { const r = post(url, body); assert.equal(r.status, 400, r.body); return JSON.parse(r.body).error; };
     const ok = (url, body) => { const r = post(url, body); assert.equal(r.status, 200, `${url}: ${r.body}`); return JSON.parse(r.body); };
-    for (const url of ['/onboard', '/onboard/sync', '/onboard/ship', '/onboard/rule', '/onboard/automerge']) {
+    for (const url of ['/onboard', '/onboard/sync', '/onboard/ship', '/onboard/rule', '/onboard/automerge'].flatMap((u) => [u, '/api' + u])) {
       assert.equal(post(url, {}, { 'x-factory-token': 'x'.repeat(32) }).status, 403);
       assert.equal(post(url, {}, { origin: 'http://evil.test' }).status, 403);
       assert.equal(post(url, {}, { host: 'evil.test:4343' }).status, 403);
@@ -1956,6 +1974,8 @@ function onboardTest(cli) {
     assert.equal(uiHandle({ method: 'GET', url: '/onboard', headers: H }, ctx).status, 404);
     assert.equal(post('/onboard/__proto__', {}).status, 404);
     assert.equal(uiHandle({ method: 'POST', url: '/onboard', headers: H, body: '[]' }, ctx).status, 400);
+    assert.equal(post('/api/onboard/__proto__', {}).status, 404);
+    assert.deepEqual(ok('/api/onboard', {}), ok('/onboard', {}));
     const s = ok('/onboard', {});
     assert.deepEqual(s.harnesses.map((h) => [h.id, h.installed, h.login.ok]), [['claude-code', true, true], ['codex', true, true]]);
     assert.deepEqual(s.repos.map((r) => [r.repo, r.path, r.attached]), [['acme/app', clone, false]]);
@@ -2257,6 +2277,31 @@ function skillsTest(cli) {
   assert.deepEqual(JSON.parse(post({}, { ...ui1, runner: null }).body).plans['acme/kit'].plan['review.ui'], { use: 'default' }); // unset -> inherits
   assert.equal(JSON.parse(cli(['skills', 'unset', 'acme/kit', 'build'])).build, undefined);
   assert.ok(!fs.readFileSync(render(), 'utf8').includes(tok), 'the written dashboard never carries the ui token');
+  // /api/*: the same routes and checks under one prefix, plus token-guarded reads of the run list.
+  assert.equal(post({}, ui1).body, uiHandle({ method: 'POST', url: '/api/skills', headers: { ...H, origin: 'http://127.0.0.1:4242', 'content-type': 'application/json', 'x-factory-token': tok }, body: JSON.stringify(ui1) }, ctx).body);
+  const get = (url, h = {}) => uiHandle({ method: 'GET', url, headers: { ...H, 'x-factory-token': tok, ...h } }, ctx);
+  const all = get('/api/runs');
+  assert.equal(all.status, 200);
+  assert.deepEqual(JSON.parse(all.body).runs.map((r) => r.id), runsData().map((r) => r.id));
+  const issueRun = runsData().find((r) => /^[\w-]+\/[\w.-]+#\d+$/.test(r.id));
+  assert.ok(issueRun, 'fixture has an issue run');
+  const [o, rp, n] = issueRun.id.split(/[/#]/);
+  const one = get(`/api/runs/${o}/${rp}/${n}`);
+  assert.equal(one.status, 200);
+  assert.equal(JSON.parse(one.body).run.id, issueRun.id);
+  for (const r of [all, one]) assert.ok(!r.body.includes(tok), 'API reads never carry the ui token');
+  assert.equal(get(`/api/runs/${o}/${rp}/999999`).status, 404);
+  assert.equal(get(`/api/runs/${o}/${rp}/x1`).status, 400);
+  assert.equal(get('/api/runs/-bad/repo/1').status, 400);
+  assert.equal(get('/api/runs/a/b/%zz').status, 400);
+  assert.equal(get('/api/nope').status, 404);
+  assert.equal(get('/api/runs', { 'x-factory-token': undefined }).status, 403);
+  assert.equal(get('/api/runs', { 'x-factory-token': 'u'.repeat(32) }).status, 403);
+  assert.equal(get('/api/runs', { origin: 'https://evil.test' }).status, 403);
+  assert.equal(get('/api/runs', { origin: 'http://127.0.0.1:4242' }).status, 200);
+  assert.equal(get('/api/runs', { host: 'evil.test:4242' }).status, 403);
+  assert.equal(get('/runs').status, 404, 'reads live only under /api');
+  assert.equal(uiHandle({ method: 'DELETE', url: '/api/runs', headers: { ...H, 'x-factory-token': tok } }, ctx).status, 404);
   // A hand-edited config is validated on every read, so it fails loudly instead of silently running defaults.
   fs.writeFileSync(path.join(DIR, 'skills.json'), '{"acme/kit":{"review.lint":{"use":"default"}}}');
   assert.throws(() => cli(['skills', 'acme/kit']), /unknown step "review.lint"/);
