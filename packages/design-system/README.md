@@ -81,6 +81,8 @@ import '@software-factory/design-system/styles.css'; // tokens, self-hosted Geis
 import { ToastProvider, RunCard, CommandMenu } from '@software-factory/design-system';
 ```
 
+- The source uses `.ts` extensions in imports, so the app's tsconfig needs `moduleResolution: "Bundler"`,
+  `allowImportingTsExtensions` and `noEmit`. Extending `tsconfig.base.json` covers all three.
 - Set `base: './'` in the renderer's Vite config so fonts and assets resolve under `file://`.
 - Fonts are bundled (`src/fonts/`, SIL OFL), so nothing is fetched at runtime and the app works offline. The screenshot script
   asserts that the playground makes no off-localhost requests.

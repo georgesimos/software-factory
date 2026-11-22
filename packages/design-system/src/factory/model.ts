@@ -76,6 +76,21 @@ export interface Run {
   started?: string;
   updated?: string;
   durationMs?: number;
+  /** Latest deploy per "connector/env", recorded by packages/ship. Never moves the run's stage. */
+  deploys?: Record<string, Deploy>;
+}
+
+export interface Deploy {
+  connector?: string;
+  kind?: string;
+  env?: string;
+  state?: string;
+  status?: string;
+  url?: string;
+  sha?: string;
+  at?: string;
+  detail?: string;
+  creator?: string;
 }
 
 export interface Metrics {

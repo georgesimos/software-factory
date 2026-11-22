@@ -56,16 +56,16 @@ export function RunCard({ run: r, href, onSelect, selected, showRepo, cap = 3, n
   );
   const body = (
     <>
-      <div className="sf-rc-top">
+      <span className="sf-rc-top">
         <Dot tone={tone} live={live} />
         <span className="sf-rc-id" title={r.id}>
           {showRepo ? <span className="sf-rc-repo">{shortId(repo)}</span> : null}
           <span className="sf-rc-num">{r.id.slice(repo.length)}</span>
         </span>
         {r.updated ? <time dateTime={r.updated} title={formatClock(r.updated, now)}>{formatAgo(r.updated, now)}</time> : null}
-      </div>
-      <div className="sf-rc-title">{r.title || r.branch || shortId(r.id)}</div>
-      <div className="sf-rc-foot">{foot}</div>
+      </span>
+      <span className="sf-rc-title">{r.title || r.branch || shortId(r.id)}</span>
+      <span className="sf-rc-foot">{foot}</span>
     </>
   );
   const props = {
