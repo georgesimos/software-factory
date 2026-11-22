@@ -462,6 +462,32 @@ dialog.sk-pick[open] { display: flex; flex-direction: column; }
   .sk-table tr.sk-row > .sk-runcell { grid-column: 1 / -1; grid-row: 2; }
   .skills-btn { padding: 5px 8px; }
 }
+/* idea-to-app project view: one panel per project from `F new`, above the metrics */
+.idea { margin-bottom: 36px; padding: 22px 24px 20px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.idea-h { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
+.idea-h h2 { margin: 0; font: 500 20px/1.2 var(--sans); letter-spacing: -.015em; }
+.idea-h h2 a { color: inherit; text-decoration: none; }
+.idea-h h2 a:hover { text-decoration: underline; }
+.idea-h .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.idea-q { margin: 10px 0 0; font: 13px var(--mono); color: var(--ink-2); }
+.idea-v { margin: 8px 0 0; max-width: 72ch; color: var(--ink-2); }
+.idea-g { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px 32px; margin-top: 22px; }
+.idea-g .v { margin-top: 8px; font-size: 14px; overflow-wrap: anywhere; }
+.idea-g .s { margin-top: 6px; font: 12px var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
+.ms { list-style: none; margin: 8px 0 0; padding: 0; }
+.ms li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 10px; padding: 3px 0; font-size: 13px; }
+.ms li .bar { grid-column: 1 / -1; margin-top: 5px; }
+.ms li .bar.full i { background: var(--ok); }
+.ms .n { font: 12px var(--mono); color: var(--ink-3); }
+.order { margin: 22px 0 0; padding: 14px 0 0; border-top: 1px solid var(--line); }
+.order ol { margin: 10px 0 0; padding: 0; list-style: none; counter-reset: o; columns: 2 380px; column-gap: 32px; }
+.order li { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; break-inside: avoid; font-size: 13px; counter-increment: o; }
+.order li::before { content: counter(o); flex: none; width: 18px; font: 11px var(--mono); color: var(--ink-3); text-align: right; }
+.order li .k { flex: none; font: 12px var(--mono); color: var(--ink-2); }
+.order li .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.order li .after { flex: none; margin-left: auto; font: 11px var(--mono); color: var(--ink-3); }
+.order li .chip { flex: none; padding: 1px 5px; font-size: 10px; }
+@media (max-width: 640px) { .idea { padding: 18px 16px; } .order li .after { display: none; } }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
@@ -558,6 +584,7 @@ const norm = (r) => {
     decision: r.decision ? { ...obj(r.decision), reasons: arr(obj(r.decision).reasons) } : null };
 };
 const RUNS = arr(DATA.runs).filter((r) => r && r.id != null).map(norm);
+const IDEAS = Object.entries(obj(DATA.ideas)).map(([repo, p]) => ({ ...obj(p), repo: String(repo) })); // F new projects, keyed by repo
 const BYID = new Map(RUNS.map((r) => [r.id, r]));
 const isDone = (r) => TERMINAL.includes(r.outcome) || !!r.archived;
 const blocking = (f) => ['high', 'medium'].includes(f.severity) && !f.dismissed;
@@ -676,6 +703,7 @@ function board(runs, selected) {
 // Policy rules in force for the shown project(s), from `F rules set`. Quiet unless expired or ending within 3 days.
 const RULE_LABEL = { ci: (v) => ({ skip: 'CI skipped', advisory: 'CI advisory', required: 'CI required' })[v] || 'CI ' + v,
   'checks.commands': (v) => 'Local checks ×' + arr(v).length, diffCap: (v) => 'Diff cap ' + v,
+  'project.budgetUsd': (v) => 'Project budget $' + v, 'project.maxIssuesPerSession': (v) => v + ' issues / session',
   'deploy.preview': (v) => ({ required: 'Preview required', advisory: 'Preview advisory', off: 'Preview off' })[v] || 'Preview ' + v };
 const dayNow = () => new Date().toISOString().slice(0, 10);
 function ruleChips() {
@@ -712,6 +740,39 @@ function ruleLog() {
       el('b', {}, `${e.status} ${e.key}`), e.status === 'set' ? ' = ' + JSON.stringify(e.value) : '',
       ' · ', e.run === 'default' ? 'all projects' : String(e.run), ' · by ', String(e.setBy || '?'),
       e.reason ? ' · ' + e.reason : '', e.until ? ' · until ' + e.until : ''))));
+}
+
+// ---------- idea-to-app project ----------
+const PHASE = { idea: ['Idea', 'quiet'], planned: ['Planned', 'quiet'], repo: ['Repo created', 'run'], issues: ['Issues created', 'run'], running: ['Loop running', 'run'], stopped: ['Loop stopped', 'warn'] };
+const ISSUE_TONE = { merged: 'ok', escalated: 'warn', 'needs-info': 'warn', 'awaiting-approval': 'warn', rejected: 'bad', reverted: 'bad', 'in-progress': 'run', ready: 'run', blocked: 'quiet', planned: 'quiet', closed: 'quiet', split: 'quiet' };
+const bar = (part, whole, cls) => { const b = el('div', { class: 'bar' + (cls ? ' ' + cls : ''), 'aria-hidden': 'true' }, el('i')); b.firstChild.style.width = Math.min(100, whole > 0 ? (part / whole) * 100 : 0) + '%'; return b; };
+function ideaPanel(p) {
+  const issues = arr(p.issues).map(obj), plan = obj(p.plan), burnP = obj(p.burn), loopP = obj(p.loop), remote = obj(p.remote), nx = obj(p.next);
+  const ref = (i) => { const t = i.run ? '#' + String(i.run).split('#').pop() : String(i.key || '');
+    return i.run && BYID.has(i.run) ? el('a', { class: 'k', href: runHref(i.run) }, t) : link(i.url, t, 'k') || el('span', { class: 'k' }, t); };
+  const byKey = new Map(issues.map((i) => [i.key, i]));
+  const [phase, tone] = PHASE[p.phase] || [String(p.phase || 'Idea'), 'quiet'];
+  const name = p.repo.split('/').slice(1).join('/') || p.repo;
+  const chips = [chip(phase, tone), p.stack ? chip(String(p.stack), 'quiet') : null, p.visibility ? chip(String(p.visibility), 'quiet') : null, p.dryRun && !p.remote ? chip('Dry run', 'quiet') : null];
+  const merged = issues.filter((i) => i.state === 'merged').length;
+  const ms = el('ul', { class: 'ms' }, arr(p.milestones).map(obj).map((m) => el('li', {}, el('span', {}, String(m.name || '')),
+    el('span', { class: 'n' }, `${num(m.merged) ? m.merged : 0} / ${num(m.total) ? m.total : 0}`), bar(m.merged, m.total, m.total && m.merged >= m.total ? 'full' : ''))));
+  const nextV = nx.key ? [ref(nx), ' ', String(nx.title || '')] : issues.length ? (merged === issues.length ? 'All issues merged' : 'Nothing ready') : 'No issues yet';
+  const nextS = loopP.state === 'stopped' ? 'Stopped: ' + String(loopP.reason || '') : loopP.state === 'running' ? `Loop running · ${num(loopP.picked) ? loopP.picked : 0} of ${num(loopP.maxIssuesPerSession) ? loopP.maxIssuesPerSession : '?'} this session` : 'factory continue ' + p.repo;
+  const usd = num(burnP.usd) ? burnP.usd : 0, cap = num(burnP.budgetUsd) ? burnP.budgetUsd : 0;
+  const grid = el('div', { class: 'idea-g' },
+    el('div', {}, el('div', { class: 'label' }, 'Milestones'), ms, el('div', { class: 's' }, `${merged} of ${issues.length} issues merged`)),
+    el('div', {}, el('div', { class: 'label' }, 'Next issue'), el('div', { class: 'v' }, nextV), el('div', { class: 's' }, nextS)),
+    el('div', {}, el('div', { class: 'label' }, 'Project burn'), el('div', { class: 'v' }, `${money(usd)} of ${money(cap)}`), bar(usd, cap, burnP.over ? 'over' : ''),
+      el('div', { class: 's' }, [num(burnP.tokens) && burnP.tokens ? tokens(burnP.tokens) + ' tokens' : null, 'issue runs only'].filter(Boolean).join(' · '))));
+  const order = issues.length ? el('section', { class: 'order', 'aria-label': 'Dependency order' }, el('h3', { class: 'label', style: 'margin:0' }, 'Dependency order'),
+    el('ol', {}, issues.map((i) => el('li', {}, chip(String(i.state || 'planned'), ISSUE_TONE[i.state] || 'quiet'), ref(i), el('span', { class: 't', title: String(i.title || '') }, String(i.title || '')),
+      arr(i.dependsOn).length ? el('span', { class: 'after' }, 'after ' + arr(i.dependsOn).map((d) => { const x = byKey.get(d); return x && x.run ? '#' + String(x.run).split('#').pop() : String(d); }).join(', ')) : null)))) : null;
+  return el('section', { class: 'idea', 'aria-label': 'Project ' + p.repo },
+    el('div', { class: 'idea-h' }, el('span', { class: 'label' }, 'Project'), el('h2', {}, link(remote.url, name) || name), el('div', { class: 'chips' }, chips)),
+    p.idea ? el('p', { class: 'idea-q' }, '“' + String(p.idea) + '”') : null,
+    plan.vision ? el('p', { class: 'idea-v' }, String(plan.vision)) : null,
+    grid, order);
 }
 
 // ---------- detail ----------
@@ -957,7 +1018,7 @@ const emptyDetail = () => el('div', { class: 'd-in' }, el('div', { class: 'd-bar
     el('p', {}, 'Pick a card on the board to see its pipeline, review and timeline. Press ', el('kbd', {}, ']'), ' to hide this panel.')));
 
 // ---------- shell ----------
-const projects = [...new Set([...arr(DATA.projects).map(String), ...RUNS.map((r) => repoOf(r.id))])];
+const projects = [...new Set([...arr(DATA.projects).map(String), ...RUNS.map((r) => repoOf(r.id)), ...IDEAS.map((p) => p.repo)])];
 let project = store('factory.project') || '';
 if (!projects.includes(project)) project = '';
 
@@ -991,12 +1052,13 @@ function render() {
 
   const shell = document.getElementById('shell');
   const scrollX = document.getElementById('board-wrap')?.scrollLeft || 0; // keep the board where the reader left it
+  const panels = IDEAS.filter((p) => !project || p.repo === project).map(ideaPanel);
   if (!runs.length) {
-    shell.replaceChildren(el('div', { class: 'empty' }, el('div', { class: 'mark', 'aria-hidden': 'true' }),
+    shell.replaceChildren(...panels, el('div', { class: 'empty' }, el('div', { class: 'mark', 'aria-hidden': 'true' }),
       el('h2', {}, project ? `No runs for ${project}` : 'No runs yet'),
-      el('p', {}, 'Start one with ', el('code', {}, '/software-factory <issue>'), ' or attach a repo to import work in flight.')));
+      el('p', {}, 'Start one with ', el('code', {}, '/software-factory <issue>'), ', start from an idea with ', el('code', {}, '/software-factory new: <idea>'), ', or attach a repo to import work in flight.')));
   } else {
-    shell.replaceChildren(...[el('h2', { class: 'sr' }, 'Overview'), metricsStrip(runs, project), board(runs, sel && sel.id), ruleLog()].filter(Boolean));
+    shell.replaceChildren(...[el('h2', { class: 'sr' }, 'Overview'), ...panels, metricsStrip(runs, project), board(runs, sel && sel.id), ruleLog()].filter(Boolean));
     document.getElementById('board-wrap').scrollLeft = scrollX;
   }
   const inProg = runs.filter((r) => r.outcome === 'in-progress').length;

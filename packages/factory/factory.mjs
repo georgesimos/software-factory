@@ -9,6 +9,8 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import * as project from './project.mjs'; // also handed whole to the idea-to-app test
+import { PROJECT_EVENTS, newProject, issuesCreate, projectStatus, loop, queue, startIdea, ideas } from './project.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 let DIR = process.env.FACTORY_DIR || path.join(os.homedir(), '.claude', 'factory');
@@ -20,6 +22,8 @@ export const CAP = 3;          // max build iterations before escalating
 export const MAX_DIFF = 300;   // added + deleted lines allowed for auto-merge
 export const COST_CAP = 5;     // USD per run; over it, the run stops looping and escalates
 export const TOKEN_CAP = 3_000_000; // same, for runs that record tokens but not dollars (cache reads not counted when known)
+export const PROJECT_BUDGET_USD = 50; // per idea-to-app project, over all its issue runs; rule project.budgetUsd can only lower it
+export const MAX_ISSUES_PER_SESSION = 10; // issues one `F loop` session picks before it stops; rule project.maxIssuesPerSession can only lower it
 // $ per million tokens: [input, output, cache read, cache write 5m, cache write 1h]. Fast mode bills 2x.
 // shortcut: hand-copied from Anthropic's pricing pages in 2026-11 (Fable 5.2 input/output checked against Claude Code's own cost-state
 // lines; its cache rates are assumed at the usual 0.1x / 1.25x / 2x); keep them current. Unknown models get no cost, only tokens.
@@ -57,6 +61,8 @@ const VERIFIER_KEYS = ['role', 'costUsd', 'tokens', 'usage', 'model'];
 const FINDING_KEYS = ['severity', 'file', 'line', 'issue', 'route', 'dismissed'];
 const blocking = (f) => BLOCKING.includes(f.severity) && !f.dismissed; // a verifier-dismissed finding never blocks
 
+export const isSensitive = (p) => SENSITIVE.test(p);
+export const factoryDir = () => DIR;
 export const runDir = (run) => path.join(DIR, run.replace(/[^a-z0-9]+/gi, '-'));
 
 export function read() {
@@ -70,6 +76,7 @@ export function read() {
 
 export function record(run, stage, status, payload = {}, cli) { // cli: {fallback?} when the orchestrator reports a step; in-process records (sync, demo) get no runner
   if (!run) throw new Error('missing run id');
+  if (String(run).endsWith(':project')) throw new Error('project runs are recorded by "new", "issues create" and "loop", not by hand');
   if (!STAGES.includes(stage)) throw new Error(`unknown stage "${stage}" (${STAGES.join('|')})`);
   if (!STATUSES.includes(status)) throw new Error(`unknown status "${status}" (${STATUSES.join('|')})`);
   if (status === 'merged' && derive(read())[run]?.decision?.action !== 'merge') throw new Error('refusing "merged": the recorded decision is not merge');
@@ -141,7 +148,7 @@ function validateReview(run, p, status) {
 export function derive(events) {
   const runs = {};
   for (const e of events) {
-    if (e.stage === 'rules') continue; // rule changes: an audit trail, not a run
+    if (e.stage === 'rules' || PROJECT_EVENTS[e.stage]) continue; // rule changes (an audit trail) and idea-to-app project events: not runs
     if (e.stage === 'ship') { // deploy state, typed by a connector: the latest per connector and env. Never moves the run's stage, url, clock or outcome.
       const r = runs[e.run];
       if (r) (r.deploys ??= {})[`${e.connector}/${e.env}`] = { connector: e.connector, kind: e.kind, env: e.env, state: e.state, status: e.status, url: e.url, sha: e.sha, at: e.at, detail: e.detail, creator: e.creator, ts: e.ts };
@@ -186,6 +193,9 @@ export function derive(events) {
   }
   return runs;
 }
+
+// Live runs (with measured burn) over archived summaries, by id.
+export const allRuns = (events = read()) => ({ ...Object.fromEntries(readArchive().map((a) => [a.id, a])), ...withMeasured(derive(events), events) });
 
 const getRun = (run) => {
   const events = read();
@@ -589,11 +599,16 @@ export function uiHandle({ method, url, headers = {}, body = '' }, { token, port
     if (!same(u.searchParams.get('t'), token)) return reply(403, { error: 'open the URL that `F ui` printed' });
     return { status: 200, type: 'text/html; charset=utf-8', body: page({ ui: { token } }) };
   }
-  if (method === 'POST' && u.pathname === '/skills') {
+  if (method === 'POST' && ['/skills', '/idea'].includes(u.pathname)) {
     if (!same(headers['x-factory-token'], token)) return reply(403, { error: 'missing or wrong token' });
     if (!hosts.some((h) => headers.origin === `http://${h}`)) return reply(403, { error: 'cross-origin request' });
     if (!/^application\/json\b/.test(headers['content-type'] || '')) return reply(415, { error: 'expected application/json' });
     try {
+      if (u.pathname === '/idea') { // the wizard only records the idea; repo and issue creation stay in the Claude session, behind its checkpoints
+        const { repo, idea, stack } = JSON.parse(body);
+        const p = startIdea({ repo, idea, stack });
+        return reply(200, { run: p.id, next: `/software-factory new ${p.repo}` }); // an id, never the idea text: it is pasted into a terminal
+      }
       const { scope, step, runner } = JSON.parse(body);
       setSkill(scope, step, runner === null ? undefined : runner);
       return reply(200, skillsData(runRepos()));
@@ -625,6 +640,8 @@ const RULES = {
   ci: [(v) => ['required', 'advisory', 'skip'].includes(v), 'required|advisory|skip'],
   'checks.commands': [(v) => Array.isArray(v) && v.length > 0 && v.length <= 10 && v.every((c) => typeof c === 'string' && c.trim() && c.length <= 300 && !/[\r\n\0]/.test(c)), 'a JSON array of 1-10 one-line commands'],
   diffCap: [(v) => Number.isInteger(v) && v >= 1 && v <= MAX_DIFF, `an integer 1-${MAX_DIFF} (it can only lower the cap)`],
+  'project.budgetUsd': [(v) => typeof v === 'number' && v > 0 && v <= PROJECT_BUDGET_USD, `dollars, above 0 and at most ${PROJECT_BUDGET_USD} (it can only lower the cap)`],
+  'project.maxIssuesPerSession': [(v) => Number.isInteger(v) && v >= 1 && v <= MAX_ISSUES_PER_SESSION, `an integer 1-${MAX_ISSUES_PER_SESSION} (it can only lower the cap)`],
   'deploy.preview': [(v) => ['required', 'advisory', 'off'].includes(v), 'required|advisory|off (off is the built-in; required adds a merge condition)'],
 };
 const RULE_FIELDS = ['value', 'reason', 'setBy', 'setAt', 'until'];
@@ -697,7 +714,7 @@ export function setRule(scope, key, raw, { reason, until } = {}) {
   if (step !== null) s.guide = { ...s.guide, [step]: String(raw ?? '') };
   else {
     if (!RULES[key]) checkRules({ [key]: {} }, `rules ${scope}`); // throws the unknown-rule message
-    if (key === 'diffCap') value = Number(raw);
+    if (['diffCap', 'project.budgetUsd', 'project.maxIssuesPerSession'].includes(key)) value = Number(raw);
     if (key === 'checks.commands') { try { value = JSON.parse(raw); } catch { value = [raw]; } }
     if (until !== undefined && !(isDay(until) && until >= dayOf())) throw new Error('--until must be YYYY-MM-DD, today or later');
   }
@@ -812,6 +829,7 @@ function intakeFixture(run, n) {
 }
 
 const git = (...args) => execFileSync(GIT, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+export const adapterCtx = () => ({ gh, git }); // what host and tracker adapters get: the same stubbable gh and git
 const ls = (d) => { try { return fs.readdirSync(d); } catch { return []; } };
 const projectsFile = () => path.join(DIR, 'projects.json');
 export const projects = () => { try { return JSON.parse(fs.readFileSync(projectsFile(), 'utf8')); } catch { return {}; } };
@@ -1030,7 +1048,7 @@ export function sync(repo, repoPath) {
   const done = new Set(doneBranches); // squash-merged branches still look unmerged to git
   const recent = new Date(Date.now() - 14 * 864e5).toISOString();
   for (const [branch, s] of Object.entries(sessions)) {
-    if (ours(branch) || openHeads.has(branch) || done.has(branch) || byBranch.has(branch) || !unmerged.has(branch) || s.last < recent) continue;
+    if (ours(branch) || branch === 'project' || openHeads.has(branch) || done.has(branch) || byBranch.has(branch) || !unmerged.has(branch) || s.last < recent) continue;
     const id = `${repo}:${branch}`;
     importRun(id, { title: branch, source: s.agents.join('+') }, `Imported ${s.agents.join('+')} session on an unmerged branch with no PR yet.`);
     record(id, 'build', 'started', { branch });
@@ -1181,17 +1199,6 @@ export function revert(run, reason) {
   }
 }
 
-// Work queue for scheduled/triage runs: ready issues not yet in the log, and untriaged open issues.
-export function queue(repo) {
-  const known = new Set(Object.keys(derive(read())));
-  const list = (...a) => JSON.parse(gh('issue', 'list', '-R', repo, '--state', 'open', '--limit', '100', '--json', 'number,title,labels', ...a));
-  const fresh = (i) => !known.has(`${repo}#${i.number}`);
-  return {
-    ready: list('--label', 'factory:ready').filter(fresh).map((i) => ({ run: `${repo}#${i.number}`, title: i.title })),
-    untriaged: list().filter((i) => fresh(i) && !i.labels.some((l) => l.name.startsWith('factory:'))).map((i) => ({ run: `${repo}#${i.number}`, title: i.title })),
-  };
-}
-
 const archiveFile = () => path.join(DIR, 'archive.jsonl');
 const sessionsFile = () => path.join(DIR, 'sessions.json');
 const readArchive = () => { try { return fs.readFileSync(archiveFile(), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
@@ -1286,7 +1293,9 @@ export function page(extra = {}) {
   const ruleData = { rules: {}, ruleHistory: read().filter((e) => e.stage === 'rules').slice(-100) };
   try { const cfg = readSkills(); for (const p of new Set([...Object.keys(byProject), ...Object.keys(projects())])) ruleData.rules[p] = rules(p, cfg); }
   catch (e) { ruleData.rulesError = e.message; } // render runs after every record(): a bad config must not half-fail the event
-  const data = JSON.stringify({ generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)), ...extra }).replace(/</g, '\\u003c');
+  let idea = {};
+  try { idea = { ideas: ideas(events, Object.fromEntries(runs.map((r) => [r.id, r]))) }; } catch (e) { idea = { ideasError: e.message }; } // never fail the event that triggered the render
+  const data = JSON.stringify({ generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)), ...idea, ...extra }).replace(/</g, '\\u003c');
   return fs.readFileSync(path.join(HERE, 'dashboard.html'), 'utf8').replace('__FACTORY_DATA__', () => data);
 }
 
@@ -1463,7 +1472,7 @@ function demoTranscripts(events) {
   fs.writeFileSync(path.join(dir, 'demo-session.jsonl'), main);
 }
 
-function test() {
+async function test() {
   DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-test-'));
   demo();
   const runs = derive(read());
@@ -1571,6 +1580,7 @@ function test() {
   discoverTest();
   usageTest();
   cliTest();
+  await (await import('./test/project.mjs')).projectTest({ uiHandle, read, project }); // idea-to-app: new, issues create, queue, loop, adapter contracts
   console.log(`ok - all checks passed (${DIR})`);
 }
 
@@ -2158,7 +2168,7 @@ if (isMain) {
       case 'event': {
         const [stage, status] = rest, p = json(rest[2]);
         const owned = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'approve:closed': 'sync' };
-        const owner = owned[`${stage}:${status}`] || { gate: 'gate', rules: 'rules', ship: 'ship' }[stage];
+        const owner = owned[`${stage}:${status}`] || { gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop', ship: 'ship' }[stage];
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
         const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'cwd', 'runner', 'localChecks',
           'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // the last row: set by ship connectors only
@@ -2194,7 +2204,7 @@ if (isMain) {
         if (run === 'set' && scope && key && value !== undefined) out(setRule(scope, key, value, { reason, until }));
         else if (run === 'unset' && scope && key) out(unsetRule(scope, key, { reason }));
         else if (run && run !== 'set' && run !== 'unset') out(rules(run));
-        else throw new Error('usage: rules <owner/repo|default> | rules set <owner/repo|default> <ci|checks.commands|diffCap|deploy.preview|guide.<step>> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <owner/repo|default> <key> [--reason "…"]');
+        else throw new Error('usage: rules <owner/repo|default> | rules set <owner/repo|default> <ci|checks.commands|diffCap|deploy.preview|project.budgetUsd|project.maxIssuesPerSession|guide.<step>> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <owner/repo|default> <key> [--reason "…"]');
         break;
       }
       case 'checks': out(localChecks(run)); break;
@@ -2238,7 +2248,20 @@ if (isMain) {
       case 'approval': out(approval(run)); break;
       case 'postmerge': out(postmerge(run)); break;
       case 'revert': out(revert(run, rest.join(' ') || 'CI failed on the base branch after merge')); break;
-      case 'queue': out(queue(run)); break;
+      case 'queue': out(await queue(run)); break;
+      case 'new': { // new "<idea>" [--name owner/repo] [--stack id] [--dry-run] [--yes] [--out dir] [--path dir] [--public] [--host id] [--tracker id]
+        const has = (f) => { const i = rest.indexOf(f); return i >= 0 && !!rest.splice(i, 1); };
+        const opt = (f) => { const i = rest.indexOf(f); return i < 0 ? undefined : rest.splice(i, 2)[1]; };
+        const o = { idea: run, name: opt('--name'), stack: opt('--stack'), out: opt('--out'), dest: opt('--path'), host: opt('--host'), tracker: opt('--tracker'), dryRun: has('--dry-run'), yes: has('--yes'), visibility: has('--public') ? 'public' : undefined };
+        if (rest.length) throw new Error(`unknown arguments: ${rest.join(' ')}`);
+        out(await newProject(Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)))); break;
+      }
+      case 'issues': { // issues create <owner/repo> <file.json> [--yes]
+        if (run !== 'create' || !rest[0] || !rest[1]) throw new Error('usage: issues create <owner/repo> <issues.json> [--yes]');
+        out(await issuesCreate(rest[0], rest[1], { yes: rest.includes('--yes') })); break;
+      }
+      case 'project': { const s = projectStatus(run || ''); if (!s) throw new Error(`no project ${run}; start one with "new"`); out(s); break; }
+      case 'loop': out(await loop(run)); break;
       case 'archive': out(archive(run ? Number(run) : 14)); break;
       case 'eval': out(evals(run)); break;
       case 'state': out(getRun(run)); break;
@@ -2261,7 +2284,7 @@ if (isMain) {
       case 'demo': // never pollute the real log with fixtures
         if (!process.env.FACTORY_DIR) DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-demo-'));
         console.log(demo()); break;
-      case 'test': test(); break;
+      case 'test': await test(); break;
       default:
         console.log(`usage: factory.mjs <command>
   discover [roots...]                     find local GitHub clones for onboarding (default: ~/Development, ~/code, ...)
@@ -2280,7 +2303,7 @@ if (isMain) {
   skills catalog [owner/repo...]          every runner on this machine: built-in, Claude Code / Codex, global, project, your briefs
   ui     [port]                           serve the dashboard on 127.0.0.1 with a token, so the Skills sheet can save
   rules  <owner/repo>                     print the policy rules, warnings and per-step guidance that apply
-  rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, deploy.preview required|advisory|off, guide.<step> "text"
+  rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, deploy.preview required|advisory|off, project.budgetUsd x, project.maxIssuesPerSession n, guide.<step> "text"
   rules unset <owner/repo|default> <key> [--reason "…"]  remove one (back to the global rule, or the built-in)
   checks <run>                            run the checks.commands rule in the worktree on its HEAD commit (the CI stand-in)
   gc                                      remove worktrees of finished runs
@@ -2291,7 +2314,12 @@ if (isMain) {
   approval <run>                          trusted "/factory approve|reject" comment since waiting?
   postmerge <run>                         CI state of the merge commit on the base branch
   revert <run> [reason]                   open a revert PR (never merged by the factory)
-  queue  <owner/repo>                     factory:ready issues + untriaged open issues not in the log
+  queue  <owner/repo>                     factory:ready issues whose dependencies are merged (ready), the rest (blocked), untriaged open issues
+  new    "<idea>" [--name owner/repo] [--stack next-web] [--dry-run] [--yes] [--path dir] [--out dir]
+                                          idea-to-app: record the idea, validate PLAN.md + issues.json, then (with --yes) create the private repo + scaffold
+  issues create <owner/repo> <file.json> [--yes]  validate and preview an issue batch; with --yes create it (idempotent by key)
+  project <owner/repo>                    idea-to-app status: plan, milestones, next issue, dependency order, burn, loop
+  loop   <owner/repo>                     next issue to build, or stop (first escalation, project budget, session cap, empty queue)
   automerge <owner/repo> on|off           allow or forbid auto-merge for a project
   archive [days=14]                       compact finished runs older than N days
   eval   [fixture]                        score intake on evals/golden with headless claude (costs tokens)
