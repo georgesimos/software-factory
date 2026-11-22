@@ -7,7 +7,7 @@ import { derive, getRun } from './derive.ts';
 import { execFileSync } from 'node:child_process';
 import { git, projects } from './workspace.ts';
 import { io, read, readArchive, record, runDir } from './log.ts';
-import { shipTrack } from '../../factory/factory.mjs';
+import { shipTrack } from './ship.ts';
 import { rules } from './rules.ts';
 
 export const gh = (...args) => execFileSync(io.gh, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });

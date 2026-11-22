@@ -2,7 +2,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { dashboard, shipTrack } from '../../factory/factory.mjs';
+import { dashboard } from './log.ts';
+import { shipTrack } from './ship.ts';
 import { read, record, sessionsFile, stateDir } from './log.ts';
 import { derive } from './derive.ts';
 import { gh, openPRs } from './github.ts';

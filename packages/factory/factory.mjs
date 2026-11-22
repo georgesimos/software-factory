@@ -26,6 +26,9 @@ import { discover, sessionsByBranch, sync } from '../core/src/sync.ts';
 import { evals } from '../core/src/eval.ts';
 import { SHIP_KINDS, onboardConfig, onboardState, onboardText, readOnboard, setShip } from '../core/src/onboard.ts';
 import { demo } from '../core/src/demo.ts';
+import { dashboard } from '../core/src/log.ts';
+import { hooks, loadShip, ship, shipConnectors, shipTrack } from '../core/src/ship.ts';
+export { dashboard, hooks, ship, shipConnectors, shipTrack };
 import { page, render, runsData, same, ui, uiHandle } from '../server/src/server.ts';
 export { page, render, runsData, same, ui, uiHandle };
 export { demo };
@@ -45,33 +48,6 @@ export { archive, factoryDir, io, read, record, runDir };
 export { CAP, COST_CAP, MAX_DIFF, MAX_ISSUES_PER_SESSION, PROJECT_BUDGET_USD, TOKEN_CAP, costOf, isSensitive };
 
 export const HERE = path.dirname(fileURLToPath(import.meta.url));
-// render() lives with the server after the split; code bound for core calls dashboard.render().
-export const dashboard = { render: () => render() };
-
-// packages/ship, when it sits next to the factory (the repo layout). Optional: without it F works, and deploy.preview=required escalates.
-let SHIP = null;
-async function loadShip() {
-  const file = path.join(HERE, '..', 'ship', 'ship.mjs');
-  if (!fs.existsSync(file)) return null;
-  try { const m = await import(pathToFileURL(file).href); await m.ready(); return m; } catch (e) { console.error(`factory: ship harness failed to load: ${e.message}`); return null; }
-}
-// Records deploy state through record(). A failed lookup is reported in the result, never thrown: it must not break sync or merge.
-export function shipTrack(pairs) {
-  if (!SHIP || !pairs.length) return undefined;
-  try { return SHIP.track(pairs, { runs: derive(read()), record }); } catch (e) { return { recorded: [], errors: [{ error: e.message }] }; }
-}
-
-// Hooks for parallel work: "Create from an idea" turns on once F has a `new` command; the ship step lists
-// packages/ship's connectors once that package exists.
-// shortcut: `new` is detected by its CLI case in this file; switch to an exported function once idea-to-app lands.
-const SHIP_FILE = path.join(HERE, '..', 'ship', 'ship.mjs');
-let hasNew;
-export const hooks = () => ({ create: (hasNew ??= /^\s+case 'new':/m.test(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8'))), ship: fs.existsSync(SHIP_FILE) });
-
-// packages/ship's own connector registry, loaded by the CLI (onboard, ui) through loadShip(). Never a hardcoded provider list.
-let SHIP_LIST = null;
-export const shipConnectors = () => SHIP_LIST;
-
 async function test() {
   delete process.env.CLAUDE_CODE_SESSION_ID; // in-process record() would stamp the outer session's id
   process.env.FACTORY_TEST = '1'; // inherited by every F the tests spawn: none may touch the real state dir
@@ -945,16 +921,15 @@ function worktreeTest(cli) {
   assert.ok(!fs.existsSync(path.join(runDir(R), 'revert')));
 }
 
-const isMain = process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
-if (isMain) {
-  const [cmd, run, ...rest] = process.argv.slice(2);
+export async function main(argv) {
+  const [cmd, run, ...rest] = argv;
   const fb = rest.indexOf('--fallback'), fallback = fb < 0 ? undefined : rest.splice(fb, 2)[1] || 'configured runner unavailable'; // the configured runner couldn't run; the built-in did
   // "-" reads the JSON payload from stdin (use a quoted heredoc) so untrusted text never touches shell quoting.
   const json = (s) => (s === '-' ? JSON.parse(fs.readFileSync(0, 'utf8')) : s ? JSON.parse(s) : {});
   const out = (x) => console.log(JSON.stringify(x, null, 2));
   try {
-    if (['sync', 'postmerge', 'revert', 'decide', 'merge', 'ship', 'onboard', 'ui'].includes(cmd)) SHIP = await loadShip();
-    if (SHIP && ['onboard', 'ui'].includes(cmd)) SHIP_LIST = (await SHIP.ready()).connectors.map((c) => ({ id: c.id, kind: c.kind, label: c.label || c.id }));
+    if (['sync', 'postmerge', 'revert', 'decide', 'merge', 'ship', 'onboard', 'ui'].includes(cmd)) ship.mod = await loadShip();
+    if (ship.mod && ['onboard', 'ui'].includes(cmd)) ship.list = (await ship.mod.ready()).connectors.map((c) => ({ id: c.id, kind: c.kind, label: c.label || c.id }));
     switch (cmd) {
       case 'event': {
         const [stage, status] = rest, p = json(rest[2]);
@@ -1034,8 +1009,8 @@ if (isMain) {
         break;
       }
       case 'ship': { // thin alias: ship.mjs connectors | detect <owner/repo> | status <owner/repo> [sha]  (reads only)
-        if (!SHIP) throw new Error('the ship harness (packages/ship) is not installed next to the factory');
-        out(await SHIP.main([run, ...rest].filter(Boolean), { path: projects()[rest[0]]?.path })); break;
+        if (!ship.mod) throw new Error('the ship harness (packages/ship) is not installed next to the factory');
+        out(await ship.mod.main([run, ...rest].filter(Boolean), { path: projects()[rest[0]]?.path })); break;
       }
       case 'discover': out(discover([run, ...rest].filter(Boolean))); break;
       case 'decide': { const r = getRun(run); const f = r.imported ? {} : facts(r); const d = decide(r, f); record(run, 'approve', 'decided', { ...d, facts: f }); out({ ...d, facts: f }); break; }
@@ -1136,3 +1111,6 @@ if (isMain) {
     process.exitCode = 1;
   }
 }
+
+const isMain = process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMain) await main(process.argv.slice(2));

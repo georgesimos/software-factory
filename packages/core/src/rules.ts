@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import { MAX_DIFF, MAX_ISSUES_PER_SESSION, PROJECT_BUDGET_USD } from './constants.ts';
 import { STEP_KEYS, readSkills, writeSkills } from './skills.ts';
-import { dashboard } from '../../factory/factory.mjs';
+import { dashboard } from './log.ts';
 import { gh } from './github.ts';
 import { projects, projectsFile } from './workspace.ts';
 import { log, stateDir } from './log.ts';

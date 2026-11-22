@@ -2,7 +2,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { checkScope, rules } from './rules.ts';
-import { dashboard, hooks, shipConnectors } from '../../factory/factory.mjs';
+import { dashboard } from './log.ts';
+import { hooks, shipConnectors } from './ship.ts';
 import { discover } from './sync.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { projects } from './workspace.ts';

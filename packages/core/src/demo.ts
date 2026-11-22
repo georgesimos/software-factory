@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { axesFor, decide, gate } from './gate.ts';
-import { dashboard } from '../../factory/factory.mjs';
+import { dashboard } from './log.ts';
 import { dayOf, rules } from './rules.ts';
 import { facts, intake } from './github.ts';
 import { getRun } from './derive.ts';

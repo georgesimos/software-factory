@@ -79,3 +79,12 @@ $M packages/core/src/demo.ts demo,demoTranscripts
 ```bash
 $M packages/server/src/server.ts same,uiHandle,UI_ROUTES,ui,runRepos,render,runsData,page
 ```
+
+**S10 seams** (#46, part 1; hand edits like S1, so fold them into S1 when regenerating). Done when `grep -rn "factory/factory.mjs" packages/core/src packages/server/src` finds no import:
+- `let SHIP`, `let SHIP_LIST`, `loadShip`, `shipTrack`, `hooks`, `shipConnectors` and `SHIP_FILE` become `packages/core/src/ship.ts`, with one `ship = { mod, list }` object that the CLI assigns. `SHIP_FILE` uses `import.meta.dirname`.
+- `hooks().create` is `true`. It used to regex `factory.mjs` for `case 'new':`, which would silently turn false once the switch moved; its own `shortcut:` comment said to drop that once idea-to-app landed.
+- `dashboard` is defined in `core/src/log.ts` as a no-op; `server.ts` assigns `dashboard.render = render` when it loads.
+- `workspace.ts` drops an unused `same` import; `eval.ts` reads `evals/golden` through `import.meta.dirname` instead of `HERE`.
+- The CLI block `if (isMain) { … }` becomes `export async function main(argv) { … }` plus `if (isMain) await main(process.argv.slice(2));`, so `move.ts` can move it by name.
+
+`check.sh` now also compares the dashboard data `F render` embeds after the demo (hooks, runs, rules…), not only `F state`.

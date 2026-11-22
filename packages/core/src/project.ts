@@ -12,7 +12,7 @@ import { rules, setRule } from './rules.ts';
 import { adapterCtx } from './github.ts';
 import { allRuns, budget } from './derive.ts';
 import { isSensitive, PROJECT_BUDGET_USD, MAX_ISSUES_PER_SESSION } from './constants.ts';
-import { dashboard } from '../../factory/factory.mjs';
+import { dashboard } from './log.ts';
 import * as hosts from '../../adapters/hosts/index.mjs';
 import * as trackers from '../../adapters/trackers/index.mjs';
 
