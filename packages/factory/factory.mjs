@@ -24,7 +24,7 @@ const TERMINAL = ['rejected', 'merged', 'escalated', 'closed', 'split']; // need
 const STAGES = ['intake', 'spec', 'build', 'review', 'gate', 'approve'];
 const STATUSES = ['started', 'passed', 'failed', 'decided', 'reverted', ...OUTCOMES];
 const BLOCKING = ['high', 'medium'];
-const SENSITIVE = /(^|\/)(auth|login|session|oauth|payments?|billing|money|migrations?)(\/|\.|$)|^\.github\/workflows\/|(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|Gemfile(\.lock)?|go\.(mod|sum)|Cargo\.(toml|lock))$|(^|\/)\.env/i;
+const SENSITIVE = /(^|\/)(auth|login|session|oauth|payments?|billing|money|migrations?)(\/|\.|$)|^\.github\/workflows\/|(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|Gemfile(\.lock)?|go\.(mod|sum)|Cargo\.(toml|lock))$|(^|\/)\.env|(^|\/)\.(claude|codex)\//i; // .claude/.codex: a branch's own agent skills, hooks and settings
 const UI = /\.(tsx|jsx|vue|svelte|astro|html|css|scss|sass|less)$/i;
 const SEO = /(^|\/)(page|layout|head|metadata|sitemap|robots|opengraph-image)\.[a-z]+$|(^|\/)pages\/|\.html$/i;
 const DOCS = /\.mdx?$|(^|\/)\.env\.example$|(^|\/)(app\/api|pages\/api|routes|cli|bin)\//i; // docs, env and public API surface
@@ -46,14 +46,14 @@ export function read() {
   }
 }
 
-export function record(run, stage, status, payload = {}) {
+export function record(run, stage, status, payload = {}, fallback) {
   if (!run) throw new Error('missing run id');
   if (!STAGES.includes(stage)) throw new Error(`unknown stage "${stage}" (${STAGES.join('|')})`);
   if (!STATUSES.includes(status)) throw new Error(`unknown status "${status}" (${STATUSES.join('|')})`);
   if (status === 'merged' && derive(read())[run]?.decision?.action !== 'merge') throw new Error('refusing "merged": the recorded decision is not merge');
   if (stage === 'review' && payload.axis !== undefined) validateReview(run, payload, status);
   const sessionId = process.env.CLAUDE_CODE_SESSION_ID; // set by Claude Code; lets the UI link back to the driving session
-  const ev = { ts: new Date().toISOString(), ...payload, ...(sessionId ? { harness: 'claude-code', sessionId, cwd: process.cwd() } : {}), run, stage, status };
+  const ev = { ts: new Date().toISOString(), ...payload, ...(sessionId ? { harness: 'claude-code', sessionId, cwd: process.cwd() } : {}), ...runnerStamp(run, stage, payload.axis, fallback), run, stage, status };
   fs.mkdirSync(DIR, { recursive: true });
   fs.appendFileSync(log(), JSON.stringify(ev) + '\n');
   if (TERMINAL.includes(status) || status === 'needs-info') { // a finished (or parked) run gives back its worktree
@@ -102,8 +102,9 @@ export function derive(events) {
     if (e.stage === 'review' && e.axis) {
       const findings = e.findings || [];
       const verdict = findings.some(blocking) ? 'failed' : 'passed'; // findings outrank the verdict word
-      (r.reviews[r.iteration] ??= {})[e.axis] = { verdict, findings };
+      (r.reviews[r.iteration] ??= {})[e.axis] = { verdict, findings, ...(e.runner && { runner: e.runner }) };
     }
+    if (e.stage !== 'review' && (e.runner || r.runners?.[e.stage])) (r.runners ??= {})[e.stage] = e.runner; // latest event of the stage wins
     if (e.stage === 'gate' && ['spec', 'build'].includes(e.next)) r.loopbacks.push({ iteration: r.iteration, route: e.next, reasons: e.reasons, ts: e.ts });
     if (e.stage === 'approve' && e.status === 'decided') r.decision = { action: e.action, reasons: e.reasons };
     if (OUTCOMES.includes(e.status)) r.outcome = e.status;
@@ -121,19 +122,20 @@ const getRun = (run) => {
   return r;
 };
 
-export function axesFor(files) {
+export function axesFor(files, extra = []) {
   const axes = ['code', 'security'];
   if (files.some((f) => UI.test(f))) axes.push('ux', 'ui');
   if (files.some((f) => SEO.test(f))) axes.push('seo');
   if (files.some((f) => DOCS.test(f))) axes.push('docs');
+  for (const x of extra) if (files.some((f) => x.when.some((g) => path.matchesGlob(f, g)))) axes.push(x.axis); // user axes only add, never replace
   return axes;
 }
 
 // Loop-backs re-review only what the new commits touch, plus every axis that failed last time.
-export function reviewAxes(r, files) {
+export function reviewAxes(r, files, extra = []) {
   const prev = Math.max(-1, ...Object.keys(r.axes || {}).map(Number).filter((i) => i < r.iteration));
   const failed = prev < 0 ? [] : r.axes[prev].filter((a) => r.reviews[prev]?.[a]?.verdict !== 'passed');
-  return [...new Set([...axesFor(files), ...failed])];
+  return [...new Set([...axesFor(files, extra), ...failed])];
 }
 
 export function gate(r) {
@@ -188,6 +190,103 @@ export function risk(r, plannedFiles) {
   const sens = plannedFiles.filter((p) => SENSITIVE.test(p));
   if (sens.length) reasons.push(`plans to touch sensitive paths: ${sens.join(', ')}`);
   return { risky: reasons.length > 0, reasons };
+}
+
+// Who does each step: the built-in brief, the user's own skill or brief, or a harness's tool.
+// User-local only (DIR/skills.json): a repo, and so a PR, can never pick its own reviewers.
+const BUILTIN_AXES = ['code', 'security', 'ux', 'ui', 'seo', 'docs'];
+export const REQUIRED_AXES = ['code', 'security']; // axesFor always selects them; config can swap who reviews, never drop them
+export const STEP_KEYS = ['intake', 'spec', 'build', ...BUILTIN_AXES.map((a) => `review.${a}`), 'verifier', 'postmerge'];
+const HARNESSES = ['claude-code', 'codex'];
+const NAME = /^[\w.-]+(:[\w.-]+)?$/; // skill, plugin:skill or agent type; it ends up in a command line
+const skillsFile = () => path.join(DIR, 'skills.json');
+
+function checkRunner(s, at, more = []) {
+  if (!s || typeof s !== 'object' || Array.isArray(s)) throw new Error(`${at}: a runner must be a JSON object`);
+  const bad = Object.keys(s).filter((k) => !['use', 'name', 'path', 'harness', ...more].includes(k));
+  if (bad.length) throw new Error(`${at}: unknown fields ${bad.join(', ')}`);
+  const ok = s.use === 'default' && !s.name && !s.path && !s.harness
+    || s.use === 'skill' && NAME.test(s.name || '') && !s.path && !s.harness
+    || s.use === 'brief' && /^(\/|~\/).*\.md$/.test(s.path || '') && !s.name && !s.harness // outside any worktree, so a branch can't supply it
+    || s.use === 'provider' && HARNESSES.includes(s.harness) && (s.name === undefined || NAME.test(s.name)) && !s.path;
+  if (!ok) throw new Error(`${at}: expected {"use":"default"}, {"use":"skill","name"}, {"use":"brief","path":"/abs/or/~/….md"} or {"use":"provider","harness":"${HARNESSES.join('|')}","name"?}`);
+}
+
+function checkStep(key, v, at) {
+  if (key !== 'axes.extra') {
+    if (!STEP_KEYS.includes(key)) throw new Error(`${at}: unknown step "${key}" (${STEP_KEYS.join('|')}|axes.extra)`);
+    return checkRunner(v, at);
+  }
+  if (!Array.isArray(v)) throw new Error(`${at}: must be an array of {axis, when, use, …}`);
+  for (const x of v) {
+    checkRunner(x, at, ['axis', 'when']);
+    if (!/^[a-z][a-z0-9-]{0,30}$/.test(x.axis || '') || BUILTIN_AXES.includes(x.axis)) throw new Error(`${at}: extra axis "${x.axis}" must be a new lowercase name; configure built-in axes as review.<axis>`);
+    if (!Array.isArray(x.when) || !x.when.length || !x.when.every((g) => typeof g === 'string' && g)) throw new Error(`${at}: extra axis "${x.axis}" needs "when": ["<glob>", …]`);
+    if (x.use === 'default') throw new Error(`${at}: extra axis "${x.axis}" has no built-in brief; use a skill, brief or provider`);
+  }
+}
+
+function checkSkills(cfg) {
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) throw new Error('skills.json must be a JSON object');
+  for (const [scope, steps] of Object.entries(cfg)) {
+    if (scope !== 'default' && !/^[\w.-]+\/[\w.-]+$/.test(scope)) throw new Error(`skills.json: scope "${scope}" must be "default" or owner/repo`);
+    if (!steps || typeof steps !== 'object' || Array.isArray(steps)) throw new Error(`skills.json: ${scope} must be an object`);
+    for (const [k, v] of Object.entries(steps)) checkStep(k, v, `skills.json ${scope}.${k}`);
+  }
+  return cfg;
+}
+
+export function readSkills() {
+  try { return checkSkills(JSON.parse(fs.readFileSync(skillsFile(), 'utf8'))); } catch (e) {
+    if (e.code === 'ENOENT') return {};
+    throw new Error(e.message.startsWith('skills.json') ? e.message : `skills.json: ${e.message}`);
+  }
+}
+
+// The resolved plan: per step the project's runner, else the global one, else the built-in. Extra axes add up, project wins per axis.
+export function skills(repo, cfg = readSkills()) {
+  const g = cfg.default || {}, p = cfg[repo] || {};
+  const plan = Object.fromEntries(STEP_KEYS.map((k) => [k, p[k] || g[k] || { use: 'default' }]));
+  const all = [...(g['axes.extra'] || []), ...(p['axes.extra'] || [])];
+  const extra = all.filter((x, i) => all.findLastIndex((y) => y.axis === x.axis) === i);
+  return { repo, plan, extra, required: REQUIRED_AXES };
+}
+
+export function setSkill(scope, key, value) {
+  const cfg = readSkills();
+  cfg[scope] = { ...cfg[scope], [key]: value };
+  checkSkills(cfg);
+  fs.mkdirSync(DIR, { recursive: true });
+  fs.writeFileSync(skillsFile() + '.tmp', JSON.stringify(cfg, null, 2));
+  fs.renameSync(skillsFile() + '.tmp', skillsFile());
+  return cfg[scope];
+}
+
+// F, not the payload, says who did the work. Default runners leave events unchanged; a fallback can only downgrade to default.
+function runnerStamp(run, stage, axis, fallback) {
+  const key = stage === 'review' ? (axis && `review.${axis}`) : stage === 'gate' ? 'verifier' : ['intake', 'spec', 'build'].includes(stage) ? stage : null;
+  if (!key) return {};
+  const { plan, extra } = skills(run.split(/[#:]/)[0]);
+  const { axis: _a, when: _w, ...runner } = plan[key] || extra.find((x) => x.axis === axis) || { use: 'default' };
+  if (fallback) return { runner: { use: 'default', fallback: { from: runner, reason: String(fallback).slice(0, 200) } } };
+  return runner.use === 'default' ? {} : { runner };
+}
+
+// Reviewer output from any runner is untrusted text: anything outside the contract is a failed review, never a pass.
+export function reviewFromText(run, axis, text) {
+  const r = derive(read())[run];
+  const axes = r?.axes?.[r.iteration] || [];
+  if (!axes.includes(axis)) throw new Error(`axis "${axis}" is not one of this iteration's axes (${axes.join(', ') || 'none recorded'})`);
+  try {
+    const p = JSON.parse(String(text).trim().replace(/^```(?:json)?\s*\n([^]*)\n```$/, '$1'));
+    if (!p || typeof p !== 'object' || Array.isArray(p)) throw new Error('not a JSON object');
+    if (p.axis !== axis) throw new Error(`axis is "${p.axis}", expected "${axis}"`); // a reviewer can't overwrite another axis's cell
+    if (!['passed', 'failed'].includes(p.verdict)) throw new Error('verdict must be passed|failed');
+    validateReview(run, p, p.verdict);
+    return { status: (p.findings || []).some(blocking) ? 'failed' : 'passed', payload: p };
+  } catch (e) {
+    return { status: 'failed', payload: { axis, verdict: 'failed', findings: [{ severity: 'high', issue: `reviewer output invalid: ${e.message}`.slice(0, 300), route: 'build' }] } };
+  }
 }
 
 const gh = (...args) => execFileSync(GH, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -654,7 +753,7 @@ export function demo() {
   const intake = (run, title, n, association = 'OWNER') =>
     ev(run, 'intake', 'started', { title, url: `https://github.com/acme/shop/issues/${n}`, author: association === 'OWNER' ? 'acme' : 'drive-by', association });
   const pass = (run, axes) => axes.forEach((axis) => ev(run, 'review', 'passed', { axis, findings: [] }));
-  const g = (run) => { const { status, ...p } = gate(getRun(run)); ev(run, 'gate', status, p); };
+  const g = (run, extra) => { const { status, ...p } = gate(getRun(run)); ev(run, 'gate', status, { ...p, ...extra }); };
   const d = (run, facts) => { const x = decide(getRun(run), facts); ev(run, 'approve', 'decided', x); return x; };
 
   let R = 'acme/shop#41';
@@ -725,6 +824,32 @@ export function demo() {
   ev(R, 'build', 'passed', { pr: 'https://github.com/acme/shop/pull/92', branch: 'factory/issue-45' });
   ev(R, 'review', 'started', { axes: ['code', 'security', 'ux', 'ui', 'seo'] });
   pass(R, ['code', 'security']);
+
+  // Custom and provider runners: what `skills set` would make F stamp on each event.
+  R = 'acme/shop#50';
+  const who = { spec: { use: 'skill', name: 'my-planner' }, build: { use: 'provider', harness: 'codex' }, verifier: { use: 'provider', harness: 'claude-code', name: 'pr-review-toolkit:code-reviewer' },
+    code: { use: 'provider', harness: 'claude-code', name: 'code-review' }, ui: { use: 'skill', name: 'brand-review' }, a11y: { use: 'brief', path: '~/.claude/factory/briefs/a11y.md' } };
+  const files = ['components/SizePicker.tsx', 'components/SizePicker.test.tsx'];
+  const axes50 = axesFor(files, [{ axis: 'a11y', when: ['**/*.tsx'] }]);
+  const review = (axis, text) => { const { status, payload } = reviewFromText(R, axis, text); ev(R, 'review', status, { ...payload, ...(who[axis] && { runner: who[axis] }) }); };
+  const ok = (axis) => review(axis, JSON.stringify({ axis, verdict: 'passed', findings: [] }));
+  intake(R, 'Add an accessible size picker to the product page', 50);
+  ev(R, 'intake', 'passed', { summary: 'Clear and small: a radio-group picker replacing the select.' });
+  ev(R, 'spec', 'passed', { spec: 'Radio-group size picker with keyboard support; reuses Button tokens.', runner: who.spec });
+  ev(R, 'build', 'started', { runner: who.build });
+  ev(R, 'build', 'passed', { pr: 'https://github.com/acme/shop/pull/94', branch: 'factory/issue-50', runner: who.build });
+  ev(R, 'review', 'started', { axes: axes50 });
+  axes50.filter((a) => a !== 'a11y').forEach(ok);
+  review('a11y', 'Looks accessible to me. Ship it!'); // prose instead of the JSON contract
+  g(R, { runner: who.verifier });
+  ev(R, 'build', 'started', { runner: who.build });
+  ev(R, 'build', 'passed', { runner: who.build });
+  ev(R, 'review', 'started', { axes: axes50 });
+  axes50.filter((a) => a !== 'a11y').forEach(ok);
+  review('a11y', JSON.stringify({ axis: 'a11y', verdict: 'passed', findings: [{ severity: 'low', file: 'components/SizePicker.tsx', line: 31, issue: 'Focus ring uses the default outline instead of the focus token.', route: 'build' }] }));
+  g(R, { runner: who.verifier });
+  d(R, { checks: 'pass', additions: 96, deletions: 14, files });
+  ev(R, 'approve', 'merged');
   return render();
 }
 
@@ -761,6 +886,14 @@ function test() {
   assert.match(decide({ ...ok, origin: 'x#1', originAssociation: 'NONE' }, facts).reasons.join(), /split from x#1/);
   assert.match(decide(ok, { ...facts, association: 'NONE' }).reasons.join(), /not trusted/); // live value wins
   assert.match(decide(ok, { ...facts, autoMerge: false }).reasons.join(), /auto-merge is turned off/);
+  assert.match(decide(ok, { ...facts, files: ['.claude/skills/review/SKILL.md', 'src/a.test.ts'] }).reasons.join(), /sensitive paths/); // a branch's own agent config
+  // Demo run 50: custom/provider runners are stamped, and prose from a custom reviewer fails the axis instead of passing.
+  const r50 = runs['acme/shop#50'];
+  assert.equal(r50.outcome, 'merged');
+  assert.deepEqual(r50.runners, { spec: { use: 'skill', name: 'my-planner' }, build: { use: 'provider', harness: 'codex' }, gate: { use: 'provider', harness: 'claude-code', name: 'pr-review-toolkit:code-reviewer' } });
+  assert.match(r50.reviews[1].a11y.findings[0].issue, /^reviewer output invalid/);
+  assert.equal(r50.reviews[1].a11y.verdict, 'failed');
+  assert.equal(r50.reviews[2].ui.runner.name, 'brand-review');
   // Verifier-dismissed findings don't block; the cost cap stops looping.
   const dis = { iteration: 1, axes: { 1: ['code'] }, reviews: { 1: { code: { verdict: 'passed', findings: [{ severity: 'high', route: 'build', dismissed: 'not reachable' }] } } } };
   assert.equal(gate(dis).next, 'approve');
@@ -781,10 +914,10 @@ function test() {
   assert.equal(pre['acme/shop#43'].reverted.pr, 'https://github.com/acme/shop/pull/93');
   assert.equal(pre['acme/shop#43'].pr, 'https://github.com/acme/shop/pull/90');
   assert.equal(pre['acme/shop#43'].tokens, 93000);
-  assert.deepEqual(archive(0), { archived: 4 }); // 41 rejected, 43 merged, 44 escalated, 46 split
+  assert.deepEqual(archive(0), { archived: 5 }); // 41 rejected, 43 merged, 44 escalated, 46 split, 50 merged
   assert.deepEqual(Object.keys(derive(read())).sort(), ['acme/shop#42', 'acme/shop#45', 'acme/shop#47', 'acme/shop#48', 'acme/shop#49', 'eval/golden#4']);
   const page = fs.readFileSync(path.join(DIR, 'dashboard.html'), 'utf8');
-  assert.match(page, /"merged":1,/); // metrics.all counts the archived merge
+  assert.match(page, /"merged":2,/); // metrics.all counts the archived merges
   assert.match(page, /"id":"acme\/shop#47"[^]*?"parent":"acme\/shop#46"/); // parent survives archiving
   assert.deepEqual(axesFor(['lib/x.ts']), ['code', 'security']);
   assert.deepEqual(axesFor(['app/blog/page.tsx']), ['code', 'security', 'ux', 'ui', 'seo']);
@@ -872,6 +1005,68 @@ function cliTest() {
   assert.equal(st.iteration, 2);
   syncTest(cli);
   worktreeTest(cli);
+  skillsTest(cli);
+}
+
+// Per-step runners: config resolution and validation, extra axes, F-stamped runner, invalid output = failed review.
+function skillsTest(cli) {
+  const R = 'acme/kit#1';
+  const set = (scope, key, v) => cli(['skills', 'set', scope, key, JSON.stringify(v)]);
+  set('default', 'review.code', { use: 'skill', name: 'house-review' });
+  set('default', 'spec', { use: 'skill', name: 'global-planner' });
+  set('acme/kit', 'spec', { use: 'skill', name: 'my-planner' });
+  set('acme/kit', 'build', { use: 'provider', harness: 'codex' });
+  set('default', 'axes.extra', [{ axis: 'a11y', when: ['**/*.tsx'], use: 'brief', path: '~/.claude/factory/briefs/a11y.md' }]);
+  set('acme/kit', 'axes.extra', [{ axis: 'perf', when: ['src/hot/**'], use: 'skill', name: 'perf-review' }]);
+  const { plan, extra, required } = JSON.parse(cli(['skills', 'acme/kit']));
+  assert.equal(plan.spec.name, 'my-planner'); // project beats global
+  assert.equal(plan['review.code'].name, 'house-review'); // global fills the rest
+  assert.deepEqual(plan['review.security'], { use: 'default' });
+  assert.deepEqual(extra.map((x) => x.axis), ['a11y', 'perf']);
+  assert.deepEqual(required, ['code', 'security']);
+  assert.equal(JSON.parse(cli(['skills', 'acme/other'])).plan.spec.name, 'global-planner');
+  // Refused: unknown steps, any way to switch an axis off, unknown harnesses, shell-ish names, in-tree briefs, extra fields, shadowing a built-in axis.
+  for (const [key, v, re] of [
+    ['review.lint', { use: 'default' }, /unknown step "review.lint"/],
+    ['review.security', { use: 'off' }, /expected/],
+    ['build', { use: 'provider', harness: 'cursor' }, /expected/],
+    ['spec', { use: 'skill', name: 'x; rm -rf ~' }, /expected/],
+    ['review.code', { use: 'brief', path: 'docs/lenient.md' }, /expected/],
+    ['review.code', { use: 'skill', name: 'x', note: 'hi' }, /unknown fields note/],
+    ['axes.extra', [{ axis: 'security', when: ['**'], use: 'skill', name: 'lenient' }], /new lowercase name/],
+    ['axes.extra', [{ axis: 'a11y', when: [], use: 'skill', name: 'x' }], /needs "when"/],
+  ]) assert.throws(() => set('acme/kit', key, v), re);
+  assert.throws(() => set('acme', 'spec', { use: 'default' }), /scope "acme"/);
+  // Required axes are always selected; extra axes only add, by glob.
+  assert.deepEqual(axesFor(['README.md'], extra), ['code', 'security', 'docs']);
+  assert.deepEqual(axesFor(['src/hot/loop.ts', 'web/Button.tsx'], extra), ['code', 'security', 'ux', 'ui', 'a11y', 'perf']);
+  // The runner is F's to stamp from the plan, never the payload's; default runners leave events unchanged.
+  record(R, 'intake', 'started', { title: 't', association: 'OWNER' });
+  assert.throws(() => cli(['event', R, 'spec', 'passed', '-'], '{"runner":{"use":"default"}}'), /not from a payload: runner/);
+  cli(['event', R, 'spec', 'passed', '-'], '{"spec":"s"}');
+  cli(['event', R, 'build', 'started', '--fallback', 'codex not installed']);
+  let r = derive(read())[R];
+  assert.deepEqual(r.runners.spec, { use: 'skill', name: 'my-planner' });
+  assert.deepEqual(r.runners.build, { use: 'default', fallback: { from: { use: 'provider', harness: 'codex' }, reason: 'codex not installed' } });
+  assert.ok(!('runner' in r.events[0]));
+  // Raw reviewer output: only the exact contract for the asked axis counts.
+  assert.deepEqual(JSON.parse(cli(['axes', R, 'web/Button.tsx'])).axes, ['code', 'security', 'ux', 'ui', 'a11y']);
+  const review = (axis, text) => JSON.parse(cli(['review', R, axis], text));
+  assert.equal(review('code', '```json\n{"axis":"code","verdict":"passed","findings":[]}\n```').status, 'passed');
+  assert.equal(review('a11y', 'Looks accessible to me. Ship it!').status, 'failed');
+  assert.match(review('ui', '{"axis":"security","verdict":"passed","findings":[]}').findings[0].issue, /reviewer output invalid: axis is "security"/);
+  assert.equal(review('ux', '{"axis":"ux","verdict":"failed","findings":[]}').status, 'failed');
+  assert.match(review('security', '{"axis":"security","verdict":"passed","findings":[],"approve":true}').findings[0].issue, /unknown fields: approve/);
+  assert.throws(() => cli(['review', R, 'seo'], '{}'), /not one of this iteration/);
+  r = derive(read())[R];
+  assert.equal(r.reviews[1].code.runner.name, 'house-review');
+  assert.equal(r.reviews[1].a11y.runner.use, 'brief');
+  assert.equal(r.reviews[1].security.runner, undefined);
+  assert.deepEqual(Object.values(r.reviews[1]).map((v) => v.verdict), ['passed', 'failed', 'failed', 'failed', 'failed']);
+  assert.equal(JSON.parse(cli(['gate', R])).next, 'build');
+  // A hand-edited config is validated on every read, so it fails loudly instead of silently running defaults.
+  fs.writeFileSync(path.join(DIR, 'skills.json'), '{"acme/kit":{"review.lint":{"use":"default"}}}');
+  assert.throws(() => cli(['skills', 'acme/kit']), /unknown step "review.lint"/);
 }
 
 // Fake HOME with Claude Code + Codex logs, then sync / re-sync / close-elsewhere against the gh + git stubs.
@@ -999,6 +1194,7 @@ function worktreeTest(cli) {
 const isMain = process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
   const [cmd, run, ...rest] = process.argv.slice(2);
+  const fb = rest.indexOf('--fallback'), fallback = fb < 0 ? undefined : rest.splice(fb, 2)[1] || 'configured runner unavailable'; // the configured runner couldn't run; the built-in did
   // "-" reads the JSON payload from stdin (use a quoted heredoc) so untrusted text never touches shell quoting.
   const json = (s) => (s === '-' ? JSON.parse(fs.readFileSync(0, 'utf8')) : s ? JSON.parse(s) : {});
   const out = (x) => console.log(JSON.stringify(x, null, 2));
@@ -1008,9 +1204,20 @@ if (isMain) {
         const [stage, status] = rest, p = json(rest[2]);
         const owned = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'approve:closed': 'sync' };
         if (owned[`${stage}:${status}`] || stage === 'gate') throw new Error(`"${stage} ${status}" is recorded by "${owned[`${stage}:${status}`] || 'gate'}", not by hand`);
-        const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'cwd'].filter((k) => k in p);
+        const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'cwd', 'runner'].filter((k) => k in p);
         if (typed.length) throw new Error(`these fields come from GitHub or git, not from a payload: ${typed.join(', ')}`);
-        record(run, stage, status, p); break;
+        record(run, stage, status, p, fallback); break;
+      }
+      case 'review': { // raw reviewer output on stdin, from any runner; invalid output is recorded as a failed review
+        const { status, payload } = reviewFromText(run, rest[0], fs.readFileSync(0, 'utf8'));
+        record(run, 'review', status, payload, fallback);
+        out({ status, findings: payload.findings }); break;
+      }
+      case 'skills': { // skills <owner/repo> | skills set <owner/repo|default> <step> <json>
+        if (run !== 'set') { out(skills(run || '')); break; }
+        const [scope, key, spec] = rest;
+        if (!scope || !key || !spec) throw new Error('usage: skills set <owner/repo|default> <step> <json runner>');
+        out(setSkill(scope, key, json(spec))); break;
       }
       case 'automerge': { // per-project switch; decide() escalates everything when off
         if (!['on', 'off'].includes(rest[0])) throw new Error('usage: automerge <owner/repo> on|off');
@@ -1027,14 +1234,14 @@ if (isMain) {
           files = git('-C', w.path, 'diff', '--name-only', range).split('\n').filter(Boolean);
         }
         const sha = w && fs.existsSync(w.path) ? git('-C', w.path, 'rev-parse', 'HEAD').trim() : undefined;
-        const axes = reviewAxes(r, files);
+        const axes = reviewAxes(r, files, skills(run.split(/[#:]/)[0]).extra);
         record(run, 'review', 'started', { axes, sha, range });
         out({ axes, range, files }); break;
       }
       case 'worktree': out(worktree(run, rest[0])); break;
       case 'deps': console.log(deps(run)); break;
       case 'gc': out(gc()); break;
-      case 'gate': { const { status, ...p } = gate(getRun(run)); record(run, 'gate', status, p); out({ status, ...p }); break; }
+      case 'gate': { const { status, ...p } = gate(getRun(run)); record(run, 'gate', status, p, fallback); out({ status, ...p }); break; }
       case 'intake': out(intake(run)); break;
       case 'sync': { // `sync` alone re-syncs every attached project
         const list = run ? [[run, rest[0]]] : Object.entries(projects()).map(([k, v]) => [k, v.path]);
@@ -1064,10 +1271,13 @@ if (isMain) {
   sync   [owner/repo] [local clone path]  attach a project and import open PRs + agent sessions (no args: all)
   projects                                list attached projects
   intake <run>                            fetch issue, record intake start, print issue + trusted comments
-  event  <run> <stage> <status> [json|-]  record an event ("-" = JSON on stdin)
+  event  <run> <stage> <status> [json|-] [--fallback why]  record an event ("-" = JSON on stdin)
   worktree <run> [clone path]            create/reuse the run's git worktree (prints its path)
   deps   <run>                            cheapest node_modules for the worktree
   axes   <run> [changed files...]         pick + record review axes (default: worktree diff since last review)
+  review <run> <axis> [--fallback why]    record a reviewer's raw output from stdin (invalid output = failed review)
+  skills <owner/repo>                     print who runs each step (default, skill, brief or provider)
+  skills set <owner/repo|default> <step> <json>  configure one step (intake, spec, build, review.<axis>, verifier, postmerge, axes.extra)
   gc                                      remove worktrees of finished runs
   gate   <run>                            compute + record gate verdict
   decide <run>                            fetch CI + diff, compute + record merge/escalate

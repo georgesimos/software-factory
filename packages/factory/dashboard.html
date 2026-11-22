@@ -134,6 +134,8 @@ button { font: inherit; color: inherit; }
 .chip.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 34%, transparent); }
 .chip.run { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 32%, transparent); }
 .chip.quiet { color: var(--ink-3); border-style: dashed; }
+.chip.rn { margin-top: 5px; padding: 2px 5px; font-size: 9.5px; color: var(--ink-3); }
+td.v .chip.rn { margin: 0 0 0 6px; vertical-align: middle; }
 .iters { display: inline-flex; gap: 3px; align-items: center; }
 .iters i { width: 6px; height: 6px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--line-2); }
 .iters i.on { background: var(--ink-2); box-shadow: none; }
@@ -348,6 +350,16 @@ const el = (tag, attrs = {}, ...kids) => {
 const link = (url, text, cls) => (/^https:\/\//.test(url || '') ? el('a', { href: url, target: '_blank', rel: 'noopener noreferrer', class: cls }, text) : null);
 const runHref = (id) => '#' + encodeURIComponent(id);
 const chip = (text, tone) => el('span', { class: 'chip' + (tone ? ' ' + tone : '') }, text);
+// Who did a step, when it wasn't the built-in brief. Text and title only; `short` drops the kind for the narrow pipeline track.
+const runnerChip = (x, short, what = 'Run by') => {
+  x = obj(x);
+  const fb = obj(x.fallback), from = obj(fb.from), last = (n) => String(n).split(':').pop();
+  const name = (y) => y.use === 'skill' ? 'skill: ' + y.name : y.use === 'brief' ? 'brief: ' + String(y.path || '').split('/').pop() : y.use === 'provider' ? [y.harness, y.name].filter(Boolean).join(': ') : null;
+  const full = x.fallback ? 'default · fallback' : name(x);
+  if (!full) return null;
+  const text = !short || x.fallback ? full : x.use === 'brief' ? full.slice(7) : last(x.name || x.harness);
+  return el('span', { class: 'chip rn', title: x.fallback ? `Configured ${name(from) || 'runner'} was unavailable: ${fb.reason || 'no reason given'}` : what + ' ' + full }, text);
+};
 const dot = (tone, live) => el('span', { class: 'dot ' + tone + (live ? ' live' : ''), 'aria-hidden': 'true' });
 
 const ago = (ts) => {
@@ -372,7 +384,7 @@ const norm = (r) => {
   const reviews = {};
   for (const [i, axes] of Object.entries(obj(r.reviews))) {
     reviews[i] = {};
-    for (const [a, v] of Object.entries(obj(axes))) reviews[i][a] = { verdict: obj(v).verdict, findings: arr(obj(v).findings).map(obj) };
+    for (const [a, v] of Object.entries(obj(axes))) reviews[i][a] = { verdict: obj(v).verdict, findings: arr(obj(v).findings).map(obj), runner: obj(v).runner };
   }
   const axes = {};
   for (const [i, list] of Object.entries(obj(r.axes))) axes[i] = arr(list);
@@ -489,7 +501,7 @@ function track(r) {
   const t = el('ol', { class: 'track', style: 'list-style:none;margin:0;padding:0' }, STAGES.map((s, i) => {
     const [cls, sub] = stageState(r, s);
     return el('li', { class: ['st', cls, i === cur ? 'cur' : '', live && i > cur && cls ? 'stale' : ''].join(' '), 'aria-current': i === cur ? 'step' : null },
-      el('span', { class: 'n', 'aria-hidden': 'true' }), el('div', { class: 'nm' }, s), el('div', { class: 'sb' }, sub || ' '),
+      el('span', { class: 'n', 'aria-hidden': 'true' }), el('div', { class: 'nm' }, s), el('div', { class: 'sb' }, sub || ' '), runnerChip(obj(r.runners)[s], true, s === 'gate' ? 'Verifier run by' : undefined),
       el('span', { class: 'sr' }, cls ? `: ${cls === 'active' ? 'in progress' : cls === 'skip' ? 'skipped' : cls}` : ': not reached'));
   }));
   const routes = {};
@@ -517,8 +529,8 @@ function matrix(r) {
     el('tbody', {}, axes.map((a) => el('tr', {}, el('td', {}, a), iters.map((i) => {
       const v = (r.reviews[i] || {})[a];
       if (!v) return (r.axes[i] || []).includes(a) ? el('td', { class: 'v wait' }, '… pending') : el('td', { class: 'v na', 'aria-label': 'not reviewed' }, '·');
-      if (!failed(v)) return el('td', { class: 'v passed' }, '✓ pass', v.findings.length ? el('span', { style: 'color:var(--ink-3)' }, ` · ${v.findings.length}`) : null);
-      return el('td', { class: 'v failed' }, `✕ ${v.findings.filter(blocking).length || 'fail'}`);
+      if (!failed(v)) return el('td', { class: 'v passed' }, '✓ pass', v.findings.length ? el('span', { style: 'color:var(--ink-3)' }, ` · ${v.findings.length}`) : null, runnerChip(v.runner));
+      return el('td', { class: 'v failed' }, `✕ ${v.findings.filter(blocking).length || 'fail'}`, runnerChip(v.runner));
     })))));
   const finds = iters.slice().reverse().flatMap((i) => Object.entries(r.reviews[i] || {}).flatMap(([axis, v]) => v.findings.map((f, j) => {
     const dis = f.dismissed != null && f.dismissed !== false;
