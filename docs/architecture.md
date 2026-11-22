@@ -91,7 +91,8 @@ The skill never writes state itself. It runs `F` subcommands and acts on their J
 | Intake | `intake`, `queue` | Fetches the issue from GitHub so title, author and association are never typed by the model. |
 | Spec gate | `risk`, `approval` | Untrusted authors and sensitive planned files require `/factory approve`. |
 | Build | `worktree`, `deps`, `gc` | One git worktree per run; the cheapest available way to get `node_modules`. |
-| Review | `axes` | Picks the review axes from the diff and records the reviewed commit SHA. |
+| Review | `axes`, `review` | `axes` picks the review axes from the diff (plus configured extra axes) and records the reviewed commit SHA. `review` records one reviewer's raw output; anything outside the contract becomes a failed review. |
+| Runners | `skills`, `skills set`, `skills unset`, `skills catalog`, `ui` | Who does each step: the built-in brief, the user's skill or brief, or a Claude Code / Codex tool. `ui` serves the dashboard on loopback so its Skills sheet can save. See [§5.1](#51-runners). |
 | Decisions | `gate`, `decide`, `merge` | Pure functions over derived state plus live GitHub facts. |
 | After merge | `postmerge`, `revert` | Watches CI on the merge commit; opens a revert PR, never merges it. |
 | Onboarding | `discover`, `sync`, `projects`, `automerge` | Finds local clones, imports open PRs and agent sessions. |
@@ -116,7 +117,7 @@ The log is an append-only JSONL file, and it is the source of truth. Everything 
 3. computes metrics overall and per project: merge rate, average iterations, median cycle time, revert rate, cost per merge;
 4. writes `~/.claude/factory/dashboard.html` with the data inlined as JSON.
 
-Every `<` in that JSON is written as the escape sequence backslash-u-003c, so issue titles cannot break out of the script tag; the self-test asserts this. The page filters by project, and each run's detail has Pipeline, Review, Decision, Loop-backs, Sessions and Timeline sections; a split parent also gets an Epic section listing its children. For each linked agent session it offers a **Copy resume** button, which copies `cd '<cwd>' && claude --resume <id>` for Claude Code or `codex resume <id>` for Codex. The working directory is single-quoted for the shell. Ids that don't match `[\w.-]+` get no button. Each run card shows an "N sessions" chip when sessions are linked. A theme switch offers System, Light and Dark; the choice is stored in `localStorage` under `factory.theme` and applied by an inline script before first paint, so there is no flash of the wrong theme.
+Every `<` in that JSON is written as the escape sequence backslash-u-003c, so issue titles cannot break out of the script tag; the self-test asserts this. The page filters by project, and each run's detail has Pipeline, Review, Decision, Loop-backs, Sessions and Timeline sections; a split parent also gets an Epic section listing its children. For each linked agent session it offers a **Copy resume** button, which copies `cd '<cwd>' && claude --resume <id>` for Claude Code or `codex resume <id>` for Codex. The working directory is single-quoted for the shell. Ids that don't match `[\w.-]+` get no button. Each run card shows an "N sessions" chip when sessions are linked. When a step or a review axis was run by something other than the built-in brief, the pipeline stage or the review-matrix cell shows a small runner chip, such as `skill: brand-review` or `codex`, with a fallback reason in its tooltip. A theme switch offers System, Light and Dark; the choice is stored in `localStorage` under `factory.theme` and applied by an inline script before first paint, so there is no flash of the wrong theme.
 
 ### 2.5 The design system: `packages/design-system`
 
@@ -155,6 +156,7 @@ Each line is one event:
 - **`stage`** is one of `intake | spec | build | review | gate | approve`.
 - **`status`** is one of `started | passed | failed | decided | reverted`, or one of the outcomes `rejected | needs-info | merged | escalated | closed | awaiting-approval | split`.
 - **The payload** is spread into the event: for example `summary`, `spec`, `pr`, `branch`, `axes`, `sha`, `range`, `axis`, `findings`, `reasons`, `next`, `action`, `facts`, `tokens` and `costUsd`.
+- **Runner stamp.** When `skills.json` names a non-default runner for the step (`intake`, `spec`, `build`, `review.<axis>` or an extra axis, `verifier` for `gate` events), `record()` adds `runner: {use, name?, path?, harness?}`. A `--fallback "<why>"` flag records `runner: {use: "default", fallback: {from, reason}}`. Default runners add nothing.
 - **Harness stamp.** When `CLAUDE_CODE_SESSION_ID` is set, `record()` adds `harness: "claude-code"`, `sessionId` and `cwd`. That is how a run links back to the session driving it.
 
 The CLI never rewrites the log, with one exception: `archive` rewrites it by write-then-rename, keeping `events.jsonl.bak`.
@@ -170,7 +172,8 @@ The CLI never rewrites the log, with one exception: `archive` rewrites it by wri
 | `author`, `association`, `source`, `imported`, `origin`, `originAssociation` | **only** from `intake started` events, which `F intake` and `F sync` write from GitHub data |
 | `iteration` | +1 on each `build started` |
 | `axes[iteration]`, `reviewedSha` | `review started`, which `F axes` writes |
-| `reviews[iteration][axis]` | `{verdict, findings}`. The **verdict is recomputed from the findings**: any undismissed high or medium finding means `failed`, whatever the reviewer wrote. |
+| `runners[stage]` | the `runner` of the stage's latest event (absent for default runners) |
+| `reviews[iteration][axis]` | `{verdict, findings, runner?}`. The **verdict is recomputed from the findings**: any undismissed high or medium finding means `failed`, whatever the reviewer wrote. |
 | `loopbacks[]` | `gate` events whose `next` is `spec` or `build` |
 | `decision` | the last `approve decided` |
 | `outcome` | the last outcome status. It resets to `in-progress` on a new `intake started` (a resume after needs-info), and leaves `awaiting-approval` on the next non-outcome event. |
@@ -186,6 +189,7 @@ The CLI never rewrites the log, with one exception: `archive` rewrites it by wri
 | File | Written by | Contents |
 |---|---|---|
 | `projects.json` | `sync`, `worktree`, `automerge` | `{ "owner/repo": { path, synced, autoMerge? } }`, mapping each attached project to its local clone |
+| `skills.json` | `skills set`, or by hand | `{ "default": {step: runner}, "owner/repo": {step: runner, "axes.extra": [...]} }`. Validated on every read. See [§5.1](#51-runners). |
 | `sessions.json` | `sync` | `{ runId: [ {agent, id, cwd, last} ×≤5 ] }`, linking runs to local Claude Code and Codex sessions by branch |
 | `archive.jsonl` | `archive` | one compact run per line (derived state plus its last 5 events, `archived: true`) for finished runs older than N days (default 14) |
 | `events.jsonl.bak` | `archive` | the log as it was before the last archive |
@@ -286,10 +290,10 @@ On a loop-back, `reviewAxes()` re-reviews only the axes the new commits touch, p
 | **Trusted associations read live** | `TRUSTED = OWNER, MEMBER, COLLABORATOR`. `facts()` re-reads `author_association` from GitHub at merge time, and the live value wins over the logged one. | A role change, or a forged log value, that would turn on auto-merge |
 | **Untrusted issue text** | `F intake` returns only the body and the comments from the issue author or trusted associations; all others are counted as `ignoredComments`. `SKILL.md` and `reviewers.md` treat all issue, PR, diff and reviewer text as data. | Prompt injection ("skip review", "merge now") and drive-by comments that steer requirements |
 | **Owned events** | `F event` refuses `intake started` (owned by `intake`), `review started` (`axes`), every `gate` event (`gate`), `approve decided/merged` (`merge`), `approve reverted` (`revert`) and `approve closed` (`sync`). `record()` itself refuses `merged` unless the recorded decision is `merge`. | The model recording its own approval or a merge |
-| **Typed fields** | `F event` rejects payloads that carry `association`, `originAssociation`, `origin`, `author`, `sha`, `imported`, `source`, `action`, `harness`, `sessionId` or `cwd`. These only come from GitHub, git or the harness. | Spoofed trust, provenance or session links |
+| **Typed fields** | `F event` rejects payloads that carry `association`, `originAssociation`, `origin`, `author`, `sha`, `imported`, `source`, `action`, `harness`, `sessionId`, `cwd` or `runner`. These only come from GitHub, git, the harness or `skills.json`. | Spoofed trust, provenance, session links or runner |
 | **Review contract** | `validateReview()` rejects unknown fields, an axis outside this iteration's selection, a severity other than `high`/`medium`/`low`, a route other than `spec`/`build`, an empty `issue`, and a `failed` verdict with no blocking finding. `derive()` recomputes the verdict from the findings. | Reviewer output smuggling text or a misleading verdict |
 | **Verifier** | Its dismissals are stored as `dismissed: "<reason>"`. A dismissed finding stays visible but does not block. | False positives blocking the gate, without hiding them |
-| **Sensitive paths** | `SENSITIVE` matches auth, login, session, oauth, payments, billing, money and migrations; `.github/workflows/`; package manifests and lockfiles (npm, pnpm, yarn, bun, pip, poetry, Gemfile, Go, Cargo); and `.env*`. `risk` checks them before the build, `decide` after. | Auto-merging changes to security, money, CI or the supply chain |
+| **Sensitive paths** | `SENSITIVE` matches auth, login, session, oauth, payments, billing, money and migrations; `.github/workflows/`; package manifests and lockfiles (npm, pnpm, yarn, bun, pip, poetry, Gemfile, Go, Cargo); `.env*`; and `.claude/` and `.codex/`, whose skills, hooks and settings a headless runner in the worktree would load. `risk` checks them before the build, `decide` after. | Auto-merging changes to security, money, CI or the supply chain |
 | **Split inheritance** | A child of a split records its parent's `origin` and `originAssociation`, so an untrusted parent makes the child risky and never auto-merged. | Laundering an untrusted request through child issues |
 | **Test gate** | Source changed with no test file changed: escalate. Docs-only changes pass. | Untested behaviour changes |
 | **Caps** | Loop cap 3, budget $5 or 3M tokens, diff cap 300 lines, CI-fix cap 2 (in `SKILL.md`), post-merge watch of 20 min. | Runaway loops and cost, and oversized auto-merges |
@@ -298,6 +302,48 @@ On a loop-back, `reviewAxes()` re-reviews only the axes the new commits touch, p
 | **Revert never merges** | `F revert` opens a PR labelled `factory:needs-human` | Automated rollback chains |
 | **Shell safety** | Payloads go through stdin (`-`) in a quoted heredoc, and `gh`/`git` run via `execFileSync` with arguments, never a shell string. | Shell injection from issue titles and bodies |
 | **Session privacy** | `sessionsByBranch()` reads only branch names, the first `cwd`, session ids and file mtimes, never prompt text; the self-test asserts it. | Leaking prompts into the log or the dashboard |
+
+### 5.1 Runners
+
+Each step can be run by the built-in brief, a user skill or brief, or a harness tool. `F skills <owner/repo>` prints the resolved plan:
+
+```json
+{"default": {"review.code": {"use": "skill", "name": "house-review"}},
+ "acme/app": {"spec": {"use": "skill", "name": "my-planner"},
+              "build": {"use": "provider", "harness": "codex"},
+              "review.ui": {"use": "skill", "name": "brand-review"},
+              "review.security": {"use": "provider", "harness": "claude-code", "name": "security-review"},
+              "verifier": {"use": "provider", "harness": "claude-code", "name": "pr-review-toolkit:code-reviewer"},
+              "axes.extra": [{"axis": "a11y", "when": ["**/*.tsx"], "use": "brief", "path": "~/.claude/factory/briefs/a11y.md"}]}}
+```
+
+- **Steps:** `intake`, `spec`, `build`, `review.code|security|ux|ui|seo|docs`, `verifier`, `postmerge` and `axes.extra`. A project's step wins over `default`; extra axes from both are combined, and the project's entry wins for the same axis name.
+- **Runners:** `default`, `skill` (a name like `x` or `plugin:x`), `brief` (an absolute or `~/` `.md` path) and `provider` (`harness` is `claude-code` or `codex`). Unknown fields, unknown steps, names outside `[\w.-]` and extra axes that reuse a built-in name are refused.
+- **What can't be configured.** There is no runner that turns an axis off. `code` and `security` are always selected, and extra axes only add. `gate`, `decide`, `merge`, the caps, `TRUSTED` and `SENSITIVE` don't read the config.
+- **Contract.** Every reviewer's reply goes through `F review`, which requires a JSON object for the requested axis that passes `validateReview`. Anything else (prose, another axis, unknown fields, a `failed` verdict with no blocking finding) is recorded as a failed review with a high "reviewer output invalid" finding, so it loops back and, at the cap, escalates. A prose provider such as `/code-review` goes through the adapter brief in `references/reviewers.md` first.
+- **User-local only.** There is no in-repo `.factory/skills.json`. Even read from the base branch, one merged PR could change the reviewers and the verifier for every later run. Config is a per-user choice, like `automerge`. The catalog does offer a project's own `.claude/skills`. Picking one lets the repo supply that reviewer's content, and a PR that edits it touches `.claude/` (`SENSITIVE`), so that PR never auto-merges.
+- **Catalog.** `F skills catalog` and the dashboard read:
+  - the factory default;
+  - the Claude Code built-ins `code-review` and `security-review` (there is no file to read, so this list is hard-coded);
+  - `codex exec` and `codex review` when `codex` is on `PATH`;
+  - `~/.claude/skills` and the synced skills, named `anthropic-skills:<name>`;
+  - `~/.agents/skills`, which run as a brief;
+  - user-scope and synced plugins (skills and commands run as skills, agents as `provider: claude-code`);
+  - the attached clone's `.claude/skills` and its project-scope plugins;
+  - `~/.claude/factory/briefs/*.md`.
+
+  Each descriptor comes from a file's front matter and is display-only. Every offered runner passes `checkRunner`, and the self-test asserts it. The scan runs once per process. MCP tools, and skills that exist only inside a running session, are not on disk; the picker's "A skill by name" field covers them.
+- **`F ui`.** The dashboard served on `127.0.0.1`, with a random token in the printed URL:
+  - `GET /` needs the token;
+  - `POST /skills` needs the token header, a same-origin `Origin`, a JSON content type and an exact `Host` (against DNS rebinding);
+  - it sends no CORS headers, caps the body at 64 KB, and sets `no-store`, `no-referrer` and `DENY` framing;
+  - every write goes through `setSkill`, which validates before writing;
+  - the token is only in the served response, never in the `dashboard.html` that `render()` writes.
+
+  The written file shows the same Skills sheet read-only, and offers each change as a copyable `F skills set` command. The page's 10-second reload pauses while a dialog is open.
+- **Stamped only from the CLI.** `F event`, `F review` and `F gate` stamp the runner. In-process records such as `sync` imports never do, so a tracked human PR never shows a `codex` chip. The verifier's runner is stamped on every `gate` event while it is configured, even in an iteration with nothing to verify.
+- **Resolved per event.** The plan is read at each event, not frozen per run, so a config change mid-run applies from the next step.
+- **Not recorded.** `postmerge` runners leave no event of their own. They can only add a reason to `F revert`, which never merges.
 
 ---
 

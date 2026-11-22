@@ -1,0 +1,24 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["axis", "verdict", "findings"],
+  "properties": {
+    "axis": { "type": "string" },
+    "verdict": { "type": "string", "enum": ["passed", "failed"] },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "file", "line", "issue", "route"],
+        "properties": {
+          "severity": { "type": "string", "enum": ["high", "medium", "low"] },
+          "file": { "type": ["string", "null"] },
+          "line": { "type": ["integer", "null"] },
+          "issue": { "type": "string" },
+          "route": { "type": "string", "enum": ["spec", "build"] }
+        }
+      }
+    }
+  }
+}
