@@ -1145,7 +1145,9 @@ export function merge(run) {
   gh('pr', 'ready', r.pr, '-R', repo);
   gh('pr', 'merge', r.pr, '-R', repo, '--squash', '--delete-branch', '--match-head-commit', r.reviewedSha);
   record(run, 'approve', 'merged');
-  try { gh('issue', 'edit', n, '-R', repo, '--remove-label', 'factory:in-progress', '--add-label', 'factory:merged'); } catch { /* label is cosmetic */ }
+  // REST labels endpoint: `gh issue edit --add-label` fails on current gh (Projects classic deprecation). Labels are cosmetic.
+  try { gh('api', '-X', 'POST', `repos/${repo}/issues/${n}/labels`, '-f', 'labels[]=factory:merged'); } catch { /* cosmetic */ }
+  try { gh('api', '-X', 'DELETE', `repos/${repo}/issues/${n}/labels/factory:in-progress`); } catch { /* absent label: 404 */ }
   return { merged: true, ...d };
 }
 

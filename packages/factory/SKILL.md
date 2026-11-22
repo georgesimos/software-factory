@@ -185,7 +185,7 @@ Run `F gate RUN`. Its `next` decides where the run goes:
    If they hold, it marks the PR ready, squash-merges it and labels the issue.
 2. **`merged: false`, or `F merge` fails with an error:** escalate. Never retry the merge by hand.
    1. `gh pr ready <pr>`.
-   2. `gh pr edit <pr> --add-label factory:needs-human`.
+   2. `gh api -X POST repos/OWNER/REPO/issues/<pr number>/labels -f 'labels[]=factory:needs-human'`. Not `gh pr edit --add-label`, which fails on current `gh` (Projects classic deprecation); this endpoint labels PRs and issues alike.
    3. `gh pr comment <pr>` with the reasons and the open findings.
    4. `F event RUN approve escalated`.
    
