@@ -1,7 +1,11 @@
 // core/src/platform.ts: how a command resolves on Windows, simulated on any OS (the files are a fake set, not a disk).
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { command, run } from '../../core/src/platform.ts';
+import { evalCommand } from '../../core/src/eval.ts';
 
 const files = new Set(['C:\\bin\\gh.exe', 'C:\\Program Files\\nodejs\\npm.cmd', 'C:\\Program Files\\nodejs\\node.exe', 'C:\\tools\\x.bat']);
 const win = { platform: 'win32', env: { Path: 'C:\\bin;C:\\Program Files\\nodejs;C:\\tools', PATHEXT: '.COM;.EXE;.BAT;.CMD', ComSpec: 'C:\\Windows\\system32\\cmd.exe' }, isFile: (p) => [...files].some((f) => f.toLowerCase() === p.toLowerCase()) }; // NTFS ignores case
@@ -33,4 +37,20 @@ test('Windows: not found stays as given, so the spawn fails with ENOENT ("not in
 test('run() spawns the resolved command', () => {
   const r = run('node', ['-e', 'process.stdout.write("ok")'], { encoding: 'utf8' });
   assert.equal(r.stdout, 'ok');
+});
+
+test('F eval stops on a claude .cmd shim it cannot pass its arguments to, instead of scoring every fixture "no-outcome"', () => {
+  const shim = { ...win, isFile: (p) => p.toLowerCase() === 'c:\\tools\\claude.cmd' };
+  assert.throws(() => evalCommand('eval/golden#1', shim), /claude\.cmd is a \.cmd shim/);
+  assert.equal(evalCommand('eval/golden#1', { platform: 'darwin' }).file, 'claude');
+});
+
+test('factory.mjs on a Node without type stripping prints an upgrade message, not ERR_UNKNOWN_FILE_EXTENSION', () => {
+  const entry = path.join(import.meta.dirname, '..', 'factory.mjs');
+  let err;
+  try { execFileSync(process.execPath, ['--no-experimental-strip-types', entry, 'state'], { encoding: 'utf8', stdio: 'pipe' }); } catch (e) { err = e; }
+  assert.equal(err?.status, 1);
+  assert.match(err.stderr, /F needs Node 24\.12 or newer/);
+  assert.doesNotMatch(err.stderr, /ERR_UNKNOWN_FILE_EXTENSION/);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'package.json'), 'utf8')).engines.node, '>=24.12');
 });

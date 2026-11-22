@@ -5,6 +5,7 @@
   "license": "Apache-2.0",
   "description": "Claude Code skill + zero-dependency CLI that takes a GitHub issue to a merged or escalated PR.",
   "type": "module",
+  "engines": { "node": ">=24.12" },
   "bin": { "factory": "./factory.mjs" },
   "scripts": {
     "test": "node factory.mjs test",
