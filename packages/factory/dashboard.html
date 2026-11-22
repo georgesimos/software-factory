@@ -603,16 +603,21 @@ const link = (url, text, cls) => (/^https:\/\//.test(url || '') ? el('a', { href
 const runHref = (id) => '#' + encodeURIComponent(id);
 const chip = (text, tone) => el('span', { class: 'chip' + (tone ? ' ' + tone : '') }, text);
 // Who did a step, when it wasn't the built-in brief. Text and title only; `short` drops the kind for the narrow pipeline track.
-// `fallback` is either the runner downgrade ({from, reason}) or the model's fallback chain (an array); `model` is the configured one.
-const runnerChip = (x, short, what = 'Run by') => {
+// The model that served most of a burn cell's tokens (transcripts first, reported usage as fallback), as an alias.
+const alias = (id) => (/^claude-([a-z]+)/.exec(String(id)) || [])[1] || String(id);
+const usedModel = (c) => { const m = Object.entries(obj(obj(c).models)).filter(([, n]) => num(n)).sort((a, b) => b[1] - a[1])[0]; return m ? alias(m[0]) : ''; };
+const capital = (m) => m.charAt(0).toUpperCase() + m.slice(1);
+// `fallback` is either the runner downgrade ({from, reason}) or the model's fallback chain (an array); `model` is the configured one, `used` what ran.
+const runnerChip = (x, short, what = 'Run by', used = '') => {
   x = obj(x);
   const down = !!x.fallback && !Array.isArray(x.fallback), fb = down ? obj(x.fallback) : {}, from = obj(fb.from), last = (n) => String(n).split(':').pop();
   const name = (y) => y.use === 'skill' ? 'skill: ' + y.name : y.use === 'brief' ? 'brief: ' + String(y.path || '').split('/').pop() : y.use === 'provider' ? [y.harness, y.name].filter(Boolean).join(': ') : null;
-  const base = down ? 'default · fallback' : name(x), model = typeof x.model === 'string' ? x.model : '';
-  if (!base && !model) return null;
+  const base = down ? 'default · fallback' : name(x), model = typeof x.model === 'string' ? x.model : '', fell = !!(used && model && used !== model);
+  const m = fell ? `${capital(model)} → ${capital(used)} (fallback)` : capital(used || model);
+  if (!base && !m) return null;
   const who = !base ? '' : !short || down ? base : x.use === 'brief' ? base.slice(7) : last(x.name || x.harness);
-  const text = [who, model + (model && !short && x.effort ? ' · ' + x.effort : '')].filter(Boolean).join(' · ');
-  const on = model ? ` on ${model}${x.effort ? ` (${x.effort} effort)` : ''}${Array.isArray(x.fallback) ? ', fallback ' + x.fallback.join(' → ') : ''}` : '';
+  const text = [who, m + (m && !short && x.effort ? ' · ' + x.effort : '')].filter(Boolean).join(' · ');
+  const on = m ? ` on ${used || model}${x.effort ? ` (${x.effort} effort)` : ''}${fell ? `; configured ${model}` : used ? '' : ' (configured; no usage yet)'}${Array.isArray(x.fallback) ? '; fallback chain ' + x.fallback.join(' → ') : ''}` : '';
   return el('span', { class: 'chip rn', title: down ? `Configured ${name(from) || 'runner'} was unavailable: ${fb.reason || 'no reason given'}` : `${what} ${base || 'the built-in brief'}${on}` }, text);
 };
 const dot = (tone, live) => el('span', { class: 'dot ' + tone + (live ? ' live' : ''), 'aria-hidden': 'true' });
@@ -634,7 +639,8 @@ const pct = (x) => (num(x) ? [String(Math.round(x * 100)), '%'] : null);
 const money = (x) => (num(x) ? '$' + (x >= 1000 ? Math.round(x).toLocaleString() : x.toFixed(2)) : null);
 const tokens = (x) => (!num(x) ? null : x >= 1e6 ? (x / 1e6).toFixed(1) + 'M' : x >= 1e3 ? Math.round(x / 1e3) + 'k' : String(x));
 const costTxt = (c) => (c.costUsd == null ? '—' : money(c.costUsd) + (c.unpriced ? '+' : '')); // "+": some tokens ran on a model with no price
-const cellN = (c) => (num(obj(c).tokens) ? { tokens: c.tokens, costUsd: num(c.costUsd) ? c.costUsd : null, unpriced: num(c.unpriced) ? c.unpriced : 0 } : null);
+const cellN = (c) => (num(obj(c).tokens) ? { tokens: c.tokens, costUsd: num(c.costUsd) ? c.costUsd : null, unpriced: num(c.unpriced) ? c.unpriced : 0,
+  models: Object.fromEntries(Object.entries(obj(c.models)).filter(([k, n]) => /^[\w.:[\]-]{1,64}$/.test(k) && num(n))) } : null);
 const cellsN = (m) => Object.fromEntries(Object.entries(obj(m)).map(([k, v]) => [k, cellN(v)]).filter(([, v]) => v));
 const burnN = (b) => (cellN(obj(b).total) ? { measured: b.measured === true, total: cellN(b.total), byStage: cellsN(b.byStage), byIteration: cellsN(b.byIteration), byAxis: cellsN(b.byAxis), reported: cellN(b.reported) } : null);
 
@@ -855,7 +861,7 @@ function track(r) {
   const t = el('ol', { class: 'track', style: 'list-style:none;margin:0;padding:0' }, STAGES.map((s, i) => {
     const [cls, sub] = stageState(r, s);
     return el('li', { class: ['st', cls, i === cur ? 'cur' : '', live && i > cur && cls ? 'stale' : ''].join(' '), 'aria-current': i === cur ? 'step' : null },
-      el('span', { class: 'n', 'aria-hidden': 'true' }), el('div', { class: 'nm' }, s), el('div', { class: 'sb' }, sub || ' '), runnerChip(obj(r.runners)[s], true, s === 'gate' ? 'Verifier run by' : undefined),
+      el('span', { class: 'n', 'aria-hidden': 'true' }), el('div', { class: 'nm' }, s), el('div', { class: 'sb' }, sub || ' '), runnerChip(obj(r.runners)[s], true, s === 'gate' ? 'Verifier run by' : undefined, s === 'review' ? '' : usedModel(s === 'gate' ? obj(obj(r.burn).byAxis).verifier : obj(obj(r.burn).byStage)[s])), // review: per axis, in the matrix
       el('span', { class: 'sr' }, cls ? `: ${cls === 'active' ? 'in progress' : cls === 'skip' ? 'skipped' : cls}` : ': not reached'));
   }));
   const routes = {};
@@ -884,8 +890,9 @@ function matrix(r) {
     el('tbody', {}, axes.map((a) => el('tr', {}, el('td', {}, a), iters.map((i) => {
       const v = (r.reviews[i] || {})[a];
       if (!v) return (r.axes[i] || []).includes(a) ? el('td', { class: 'v wait' }, '… pending') : el('td', { class: 'v na', 'aria-label': 'not reviewed' }, '·');
-      if (!failed(v)) return el('td', { class: 'v passed' }, '✓ pass', v.findings.length ? el('span', { style: 'color:var(--ink-3)' }, ` · ${v.findings.length}`) : null, runnerChip(v.runner));
-      return el('td', { class: 'v failed' }, `✕ ${v.findings.filter(blocking).length || 'fail'}`, runnerChip(v.runner));
+      const chip = runnerChip(v.runner, false, undefined, usedModel(ab[a]));
+      if (!failed(v)) return el('td', { class: 'v passed' }, '✓ pass', v.findings.length ? el('span', { style: 'color:var(--ink-3)' }, ` · ${v.findings.length}`) : null, chip);
+      return el('td', { class: 'v failed' }, `✕ ${v.findings.filter(blocking).length || 'fail'}`, chip);
     }), hasTok ? el('td', { class: 'tok', title: ab[a] ? costTxt(ab[a]) : null }, ab[a] ? tokens(ab[a].tokens) : '·') : null))));
   const extra = Object.entries(ab).filter(([k]) => !axes.includes(k));
   const finds = iters.slice().reverse().flatMap((i) => Object.entries(r.reviews[i] || {}).flatMap(([axis, v]) => v.findings.map((f, j) => {

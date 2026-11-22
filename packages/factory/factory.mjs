@@ -116,12 +116,13 @@ function validateUsage(p) {
 }
 
 // Burn cells: tokens, dollars where the model is priced, cache reads (cheap; left out of the token cap) and unpriced tokens.
-const cell = () => ({ tokens: 0, costUsd: 0, cacheRead: 0, unpriced: 0 });
+const cell = () => ({ tokens: 0, costUsd: 0, cacheRead: 0, unpriced: 0, models: {} }); // models: tokens per model id, i.e. what served the step
 const burnOf = () => ({ measured: false, total: cell(), byStage: {}, byIteration: {}, byAxis: {} });
-function addBurn(b, { stage, iteration, axis }, tokens, usd, cacheRead = 0) {
+function addBurn(b, { stage, iteration, axis }, tokens, usd, cacheRead = 0, model = null) {
   for (const c of [b.total, (b.byStage[stage] ??= cell()), (b.byIteration[iteration] ??= cell()), axis ? (b.byAxis[axis] ??= cell()) : null]) {
     if (!c) continue;
     c.tokens += tokens; c.cacheRead += cacheRead;
+    if (model) c.models[model] = (c.models[model] || 0) + tokens;
     if (usd == null) c.unpriced += tokens; else c.costUsd += usd;
   }
 }
@@ -174,7 +175,7 @@ export function derive(events) {
     if (e.tokens || e.costUsd) { // reported: what the orchestrator copied from a subagent result
       const u = e.usage || {};
       const usd = e.costUsd ?? (e.usage ? costOf(e.model, [u.input || 0, u.output || 0, u.cacheRead || 0, 0, u.cacheWrite || 0]) : null); // shortcut: reported cache writes priced at the 1h rate Claude Code uses
-      addBurn((r.burn ??= burnOf()), { stage: e.stage, iteration: r.iteration, axis: e.axis || e.role }, e.tokens || 0, usd, u.cacheRead || 0);
+      addBurn((r.burn ??= burnOf()), { stage: e.stage, iteration: r.iteration, axis: e.axis || e.role }, e.tokens || 0, usd, u.cacheRead || 0, e.model);
     }
     if (e.stage === 'build' && e.localChecks) r.localChecks = e.localChecks; // only "F checks" records it
     if (e.stage === 'review' && e.status === 'started') { r.axes = { ...r.axes, [r.iteration]: e.axes }; if (e.sha) r.reviewedSha = e.sha; }
@@ -317,7 +318,7 @@ export function withMeasured(runs, events, by = measure(events)) {
         const at = f.sub ? first : slot(list, Date.parse(ts));
         if (!at || !runs[at.run] || runs[at.run].imported) continue; // the factory did not drive an imported run: sync's events only close windows
         const t = rest.slice(0, 5);
-        addBurn((got[at.run] ||= burnOf()), { stage: at.stage, iteration: at.iteration, axis: f.sub ? f.axis : null }, t.reduce((s, n) => s + n, 0), costOf(model, t, rest[5]), t[2]);
+        addBurn((got[at.run] ||= burnOf()), { stage: at.stage, iteration: at.iteration, axis: f.sub ? f.axis : null }, t.reduce((s, n) => s + n, 0), costOf(model, t, rest[5]), t[2], model);
       }
     }
   }
@@ -1790,6 +1791,9 @@ function usageTest() {
   assert.deepEqual(Object.fromEntries(Object.entries(b.byIteration).map(([k, c]) => [k, c.tokens])), { 0: 1_100_000, 1: 2_321_000 });
   assert.deepEqual(Object.fromEntries(Object.entries(b.byAxis).map(([k, c]) => [k, c.tokens])), { code: 200_000, verifier: 10_000, other: 10_000 });
   assert.equal(b.reported.tokens, 5000);
+  // What served each step, per model id: the dashboard shows the top one next to the configured model.
+  assert.deepEqual(b.byStage.build.models, { 'claude-opus-5-5': 2_000_000, 'claude-mystery-9': 1000, 'claude-fable-5-2': 100_000 });
+  assert.deepEqual([b.byAxis.code.models, b.byAxis.verifier.models], [{ 'claude-sonnet-5-5': 200_000 }, { 'claude-sonnet-5-5': 10_000 }]);
   assert.equal(getRun(P).burn.total.tokens, 1000);
   assert.equal(getRun(I).burn, undefined);
   assert.ok(!fs.readFileSync(usageFile(), 'utf8').includes('secret prompt'));
@@ -1810,6 +1814,7 @@ function usageTest() {
   for (const [p, re] of [[{ usage: { input: -1 } }, /non-negative integer/], [{ usage: { input: 1.5 } }, /non-negative integer/], [{ usage: { prompt: 'x' } }, /unknown fields: prompt/],
     [{ usage: [1] }, /must be an object/], [{ model: 'x'.repeat(65) }, /short model id/], [{ model: 'a b' }, /short model id/], [{ tokens: '9' }, /tokens must be/]]) assert.throws(() => record(R, 'build', 'passed', p), re);
   record(R, 'review', 'passed', { role: 'verifier', tokens: 10, model: 'claude-sonnet-5-5' });
+  assert.deepEqual(derive(read())[R].burn.byAxis.verifier.models, { 'claude-sonnet-5-5': 10 }); // reported usage: the payload's model
   assert.throws(() => record(R, 'review', 'passed', { role: 'judge' }), /role must be/);
   assert.throws(() => record(R, 'review', 'passed', { role: 'verifier', findings: [] }), /unknown fields: findings/);
   assert.equal(derive(read())[R].burn.byAxis.verifier.tokens, 10);
