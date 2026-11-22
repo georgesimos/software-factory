@@ -1,0 +1,50 @@
+{
+  "id": "expo-mobile",
+  "name": "Expo mobile app",
+  "description": "Expo (React Native, TypeScript) with npm, jest-expo, ESLint (eslint-config-expo), and a CI workflow running the same checks.",
+  "notes": "Init flags are written from memory and were not executed when this template was added (2026-11-22). Run a real `F new` once and fix them if create-expo-app has changed.",
+  "init": [
+    [
+      "npx",
+      "--yes",
+      "create-expo-app@3",
+      ".",
+      "--template",
+      "blank-typescript"
+    ],
+    [
+      "npx",
+      "expo",
+      "install",
+      "jest-expo",
+      "jest",
+      "@types/jest",
+      "eslint",
+      "eslint-config-expo",
+      "--",
+      "--save-dev"
+    ],
+    [
+      "npm",
+      "pkg",
+      "set",
+      "scripts.test=jest",
+      "scripts.lint=expo lint",
+      "scripts.typecheck=tsc --noEmit",
+      "jest.preset=jest-expo"
+    ]
+  ],
+  "checks": [
+    "npm run lint",
+    "npm run typecheck",
+    "npm test -- --ci"
+  ],
+  "files": {
+    "eslint.config.js": "const { defineConfig } = require('eslint/config');\nconst expoConfig = require('eslint-config-expo/flat');\n\nmodule.exports = defineConfig([expoConfig, { ignores: ['dist/*'] }]);\n",
+    "smoke.test.ts": "test('the test runner works', () => {\n  expect(1 + 1).toBe(2);\n});\n",
+    ".github/workflows/ci.yml": "name: ci\non:\n  pull_request:\n  push:\n    branches: [main]\njobs:\n  checks:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 22\n          cache: npm\n      - run: npm ci\n      - run: npm run lint\n      - run: npm run typecheck\n      - run: npm test -- --ci\n",
+    "AGENTS.md": "# {{name}}\n\n{{idea}}\n\nThis repo was started by the Software Factory from an idea. `PLAN.md` holds the vision, MVP scope, non-goals, stack and milestones. Read it before changing anything.\n\n## Checks\n\nEvery change keeps these green. CI runs the same commands:\n\n{{checks}}\n\nRun the app locally with `npx expo start`.\n\n## Working rules\n\n- One issue, one small PR: at most 300 changed lines, tests included.\n- Every source change adds or changes a test.\n- No new dependencies without a human. A change to `package.json` or a lockfile always goes to a human for review.\n- Stay inside the MVP scope in `PLAN.md`. Its non-goals are out of scope.\n",
+    "CLAUDE.md": "@AGENTS.md\n",
+    "README.md": "# {{name}}\n\n{{idea}}\n\nStarted from the `{{stack}}` stack template by the Software Factory. The plan is in [PLAN.md](PLAN.md).\n\n## Develop\n\n```bash\nnpm install\nnpx expo start\n```\n\nChecks (CI runs the same):\n\n{{checks}}\n"
+  }
+}

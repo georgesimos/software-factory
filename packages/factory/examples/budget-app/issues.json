@@ -1,0 +1,173 @@
+{
+  "epic": {
+    "title": "Budget app MVP",
+    "body": "Tracks the MVP from PLAN.md: track transactions (M1), budget per category (M2), own your data (M3)."
+  },
+  "issues": [
+    {
+      "key": "amount-format",
+      "title": "Parse and format amounts as integer cents",
+      "body": "Add `src/lib/amount.ts` with `parseAmount(text)` (accepts `12`, `12.5`, `12,50`; rejects empty, negative and more than two decimals) returning integer cents, and `formatAmount(cents, currency)` using `Intl.NumberFormat`. Everything else stores and adds cents, never floats.",
+      "acceptance": [
+        "parseAmount(\"12,50\") returns 1250 and parseAmount(\"12.5\") returns 1250",
+        "parseAmount returns null for \"\", \"-3\", \"abc\" and \"1.234\"",
+        "formatAmount(1250, \"USD\") returns \"$12.50\" in the en-US locale",
+        "Unit tests cover every case above"
+      ],
+      "dependsOn": [],
+      "milestone": "M1 Track",
+      "files": ["src/lib/amount.ts", "src/lib/amount.test.ts"]
+    },
+    {
+      "key": "store",
+      "title": "Versioned localStorage store for budget data",
+      "body": "Add `src/lib/store.ts`: one JSON document `{version: 1, transactions: [], budgets: {}, settings: {currency: \"USD\"}}` under the key `budget-app`. `load()` returns the default document when the key is missing or unreadable; `save(doc)` writes it. Types for Transaction, Budgets and Settings live here.",
+      "acceptance": [
+        "load() returns the default document when localStorage is empty",
+        "load() returns the default document, without throwing, when the stored value is not valid JSON",
+        "save() then load() round-trips a document with two transactions",
+        "Tests run in jsdom and reset localStorage between cases"
+      ],
+      "dependsOn": [],
+      "milestone": "M1 Track",
+      "files": ["src/lib/store.ts", "src/lib/store.test.ts"]
+    },
+    {
+      "key": "categories",
+      "title": "Default categories",
+      "body": "Add `src/lib/categories.ts` with the default categories from PLAN.md, each `{id, name, kind: \"expense\" | \"income\"}`, and `categoryName(id)` that falls back to \"Other\" for an unknown id.",
+      "acceptance": [
+        "The six default categories from PLAN.md exist with stable ids",
+        "Exactly one default category is of kind income",
+        "categoryName returns \"Other\" for an unknown id"
+      ],
+      "dependsOn": ["store"],
+      "milestone": "M1 Track",
+      "files": ["src/lib/categories.ts", "src/lib/categories.test.ts"]
+    },
+    {
+      "key": "add-transaction",
+      "title": "Add an expense or income from a form",
+      "body": "Replace the starter home page with the app shell and a `TransactionForm`: amount, date (defaults to today), category and an optional note. Submitting validates with parseAmount, saves through the store and clears the form.",
+      "acceptance": [
+        "Submitting a valid amount adds one transaction to the store with today's date by default",
+        "An invalid amount shows an inline error and saves nothing",
+        "Every field has a visible label and the form works with the keyboard only",
+        "A Testing Library test covers the valid and the invalid submit"
+      ],
+      "dependsOn": ["amount-format", "store", "categories"],
+      "milestone": "M1 Track",
+      "files": ["src/app/page.tsx", "src/components/TransactionForm.tsx", "src/components/TransactionForm.test.tsx"]
+    },
+    {
+      "key": "transaction-list",
+      "title": "List the month's transactions, newest first",
+      "body": "Add a `TransactionList` under the form that shows the current month's transactions newest first: date, category, note and the formatted amount (income in the success colour). Show an empty state when there are none.",
+      "acceptance": [
+        "Only transactions from the current month are listed, newest first",
+        "Amounts use formatAmount with the settings currency",
+        "With no transactions the list shows \"Nothing yet this month\"",
+        "A test renders the list from a seeded store"
+      ],
+      "dependsOn": ["add-transaction"],
+      "milestone": "M1 Track",
+      "files": ["src/components/TransactionList.tsx", "src/components/TransactionList.test.tsx", "src/app/page.tsx"]
+    },
+    {
+      "key": "edit-delete",
+      "title": "Edit and delete a transaction",
+      "body": "Each list row gets Edit (reopens the form filled in, Save replaces the transaction) and Delete (asks for confirmation, then removes it).",
+      "acceptance": [
+        "Editing a transaction changes it in place and keeps its id",
+        "Delete asks for confirmation and removes only that transaction",
+        "Both actions are reachable by keyboard and have accessible names",
+        "Tests cover edit, delete and cancelled delete"
+      ],
+      "dependsOn": ["transaction-list"],
+      "milestone": "M1 Track",
+      "files": ["src/components/TransactionList.tsx", "src/components/TransactionForm.tsx", "src/components/TransactionList.test.tsx"]
+    },
+    {
+      "key": "month-switcher",
+      "title": "Switch between months",
+      "body": "Add previous and next month buttons with the month name (for example \"November 2026\") above the list. The list and, later, the budget summary follow the selected month.",
+      "acceptance": [
+        "Previous and next change the listed month by one",
+        "The heading shows the month and year from Intl.DateTimeFormat",
+        "A test moves back one month and sees only that month's transactions"
+      ],
+      "dependsOn": ["transaction-list"],
+      "milestone": "M2 Budget",
+      "files": ["src/components/MonthSwitcher.tsx", "src/components/MonthSwitcher.test.tsx", "src/app/page.tsx"]
+    },
+    {
+      "key": "category-budgets",
+      "title": "Set a monthly budget per category",
+      "body": "Add `src/lib/budgets.ts` (`setBudget(categoryId, cents)`, `budgetFor(categoryId)`) and a `BudgetEditor` listing each expense category with an amount field. Budgets apply to every month.",
+      "acceptance": [
+        "Setting a budget saves it through the store and survives a reload",
+        "An empty field removes that category's budget",
+        "Income categories have no budget field",
+        "Tests cover set, change and remove"
+      ],
+      "dependsOn": ["categories", "amount-format"],
+      "milestone": "M2 Budget",
+      "files": ["src/lib/budgets.ts", "src/lib/budgets.test.ts", "src/components/BudgetEditor.tsx", "src/components/BudgetEditor.test.tsx"]
+    },
+    {
+      "key": "budget-summary",
+      "title": "Show spent and remaining per category",
+      "body": "Add `src/lib/summary.ts` (`summarize(transactions, budgets, month)` returning spent and remaining cents per category) and a `BudgetSummary` above the list, for the selected month.",
+      "acceptance": [
+        "summarize adds only expenses of the given month, in cents",
+        "Remaining is budget minus spent; categories without a budget show spent only",
+        "The summary follows the month switcher",
+        "Unit tests for summarize and a render test for BudgetSummary"
+      ],
+      "dependsOn": ["category-budgets", "month-switcher"],
+      "milestone": "M2 Budget",
+      "files": ["src/lib/summary.ts", "src/lib/summary.test.ts", "src/components/BudgetSummary.tsx", "src/components/BudgetSummary.test.tsx"]
+    },
+    {
+      "key": "overspend-warning",
+      "title": "Warn when a category goes over budget",
+      "body": "In the summary, a category over its budget shows the overspent amount in the danger colour with the text \"Over by $X\", and the app title shows how many categories are over.",
+      "acceptance": [
+        "A category at 101% of its budget shows \"Over by\" with the overspent amount",
+        "The warning is text, not colour alone",
+        "A test covers under, exactly at, and over budget"
+      ],
+      "dependsOn": ["budget-summary"],
+      "milestone": "M2 Budget",
+      "files": ["src/components/BudgetSummary.tsx", "src/components/BudgetSummary.test.tsx"]
+    },
+    {
+      "key": "export-import",
+      "title": "Export and import all data as JSON",
+      "body": "Add `src/lib/backup.ts` (`exportDoc()`, `importDoc(text)` that validates version and shape before replacing anything) and Export and Import buttons in a footer. Import asks for confirmation because it replaces the current data.",
+      "acceptance": [
+        "Export downloads budget-app-YYYY-MM-DD.json containing the whole document",
+        "Importing an exported file restores the same transactions and budgets",
+        "A file with the wrong version or shape is rejected with a message and changes nothing",
+        "Tests cover round-trip and rejection"
+      ],
+      "dependsOn": ["store"],
+      "milestone": "M3 Own your data",
+      "files": ["src/lib/backup.ts", "src/lib/backup.test.ts", "src/components/Backup.tsx", "src/components/Backup.test.tsx"]
+    },
+    {
+      "key": "currency-setting",
+      "title": "Choose the display currency",
+      "body": "Add a Settings panel with a currency select (USD, EUR, GBP, JPY, CHF). It is stored in settings and every amount uses it. JPY formats with no decimals; stored cents are unchanged.",
+      "acceptance": [
+        "Changing the currency re-renders every amount in the new currency",
+        "The choice survives a reload",
+        "formatAmount handles a zero-decimal currency (JPY)",
+        "Tests cover the select and the JPY formatting"
+      ],
+      "dependsOn": ["amount-format", "store"],
+      "milestone": "M3 Own your data",
+      "files": ["src/components/Settings.tsx", "src/components/Settings.test.tsx", "src/lib/amount.ts", "src/lib/amount.test.ts"]
+    }
+  ]
+}

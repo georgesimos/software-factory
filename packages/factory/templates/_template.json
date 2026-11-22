@@ -1,0 +1,21 @@
+{
+  "id": "_template",
+  "name": "Short display name",
+  "description": "One line: framework, package manager, test runner, linter.",
+  "notes": "Copy to templates/<id>.json (the file name is the id). Data only: F runs init (argv lists, no shell) in the empty new repo, then writes files. Placeholders: {{name}} {{repo}} {{idea}} {{stack}} {{checks}}.",
+  "init": [
+    [
+      "npx",
+      "--yes",
+      "create-something@1",
+      "."
+    ]
+  ],
+  "checks": [
+    "npm test"
+  ],
+  "files": {
+    "AGENTS.md": "# {{name}}\n\n{{idea}}\n\n{{checks}}\n",
+    "CLAUDE.md": "@AGENTS.md\n"
+  }
+}
