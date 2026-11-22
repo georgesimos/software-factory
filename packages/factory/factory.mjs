@@ -202,7 +202,7 @@ const budgetWhy = (b) => `($${b.usd}, ${b.tokens} tokens, ${b.source})`;
 let PROJECTS = null; // demo and test point this at fixture transcripts
 const projectsRoot = () => PROJECTS || path.join(os.homedir(), '.claude', 'projects');
 const usageFile = () => path.join(DIR, 'usage.json');
-const SUB_AXIS = /^\s*(code|security|ux|ui|seo|docs)\b/i;
+const SUB_AXIS = /^\s*(code|security|ux|ui|seo|docs|[a-z][a-z0-9-]{0,30}(?=\s+review\b))\b/i; // built-ins, or any extra axis in "<axis> review RUN"
 
 // Only token counts, message ids, times and model ids are kept, never message text. Re-reads only bytes appended since last time.
 function scanFile(file, prev) {
@@ -1803,6 +1803,12 @@ function skillsTest(cli) {
   assert.equal(r.reviews[1].security.runner, undefined);
   assert.deepEqual(Object.values(r.reviews[1]).map((v) => v.verdict), ['passed', 'failed', 'failed', 'failed', 'failed']);
   assert.equal(r.tokens, 1200); // usage survives an invalid reply
+  // Usage flags go through record()'s usage checks; the reviewer's own text can't set them.
+  cli(['review', R, 'ui', '--tokens', '5', '--model', 'claude-sonnet-5-5', '--usage', '{"input":10,"output":20,"cacheRead":30,"cacheWrite":40}'], '{"axis":"ui","verdict":"passed","findings":[],"tokens":0,"usage":{"input":0}}');
+  assert.deepEqual([derive(read())[R].tokens, derive(read())[R].burn.byAxis.ui.tokens], [1300, 100]);
+  assert.throws(() => cli(['review', R, 'ui', '--usage', '{"prompt":1}'], '{}'), /usage has unknown fields: prompt/);
+  assert.throws(() => cli(['review', R, 'ui', '--model', 'a b'], '{}'), /short model id/);
+  assert.equal(SUB_AXIS.exec('a11y review acme/u#1')[1], 'a11y'); // extra axes get their subagent's measured burn
   set('acme/kit', 'verifier', { use: 'provider', harness: 'claude-code', name: 'pr-review-toolkit:code-reviewer' });
   assert.equal(JSON.parse(cli(['gate', R])).next, 'build');
   assert.equal(derive(read())[R].runners.gate.name, 'pr-review-toolkit:code-reviewer');
@@ -2026,11 +2032,15 @@ if (isMain) {
       }
       case 'review': { // raw reviewer output on stdin, from any runner; invalid output is recorded as a failed review
         const { status, payload } = reviewFromText(run, rest[0], fs.readFileSync(0, 'utf8'));
+        for (const k of ['tokens', 'costUsd', 'usage', 'model']) delete payload[k]; // usage comes from the orchestrator's flags, never the reviewer's own text
         for (const [flag, k] of [['--tokens', 'tokens'], ['--cost-usd', 'costUsd']]) { // the orchestrator's usage numbers, kept even when the reply is invalid
           const i = rest.indexOf(flag), v = i < 0 ? undefined : Number(rest[i + 1]);
           if (i >= 0 && !(v >= 0)) throw new Error(`${flag} needs a number`);
           if (i >= 0) payload[k] = v;
         }
+        const mi = rest.indexOf('--model'), ui = rest.indexOf('--usage'); // record() validates both, as for "F event"; usage replaces --tokens with its sum
+        if (mi >= 0) payload.model = rest[mi + 1];
+        if (ui >= 0) { try { payload.usage = JSON.parse(rest[ui + 1]); } catch { throw new Error('--usage needs JSON like {"input":1,"output":2,"cacheRead":3,"cacheWrite":4}'); } }
         record(run, 'review', status, payload, { fallback });
         out({ status, findings: payload.findings }); break;
       }
@@ -2116,7 +2126,7 @@ if (isMain) {
   worktree <run> [clone path]            create/reuse the run's git worktree (prints its path)
   deps   <run>                            cheapest node_modules for the worktree
   axes   <run> [changed files...]         pick + record review axes (default: worktree diff since last review)
-  review <run> <axis> [--tokens n] [--cost-usd x] [--fallback why]  record a reviewer's raw reply from stdin (invalid = failed review)
+  review <run> <axis> [--tokens n] [--cost-usd x] [--model id] [--usage json] [--fallback why]  record a reviewer's raw reply from stdin (invalid = failed review)
   skills <owner/repo>                     print who runs each step (default, skill, brief or provider)
   skills set <owner/repo|default> <step> <json>  configure one step (intake, spec, build, review.<axis>, verifier, postmerge, axes.extra)
   skills unset <owner/repo|default> <step>       drop a step's choice (a project then inherits the global one)
