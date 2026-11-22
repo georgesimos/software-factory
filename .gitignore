@@ -2,7 +2,7 @@ node_modules
 dist
 *.tsbuildinfo
 .DS_Store
-.nx
+.claude/
 .env*
 !.env.example
 # factory runtime state lives in ~/.claude/factory, never in the repo

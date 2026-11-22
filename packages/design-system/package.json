@@ -2,6 +2,7 @@
   "name": "@software-factory/design-system",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "description": "Tokens and React components for the Software Factory desktop app.",
   "exports": {
