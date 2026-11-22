@@ -94,3 +94,25 @@ $M packages/server/src/server.ts same,uiHandle,UI_ROUTES,ui,runRepos,render,runs
 ```bash
 $M packages/cli/src/main.ts main
 ```
+
+**S11** (#47). Seams first, in place: `test()` splits into `setup()` (FACTORY_TEST, temp `io.dir`, no outer session id) and `coreTest()`, and the `cli` helper spawns `path.join(HERE, 'factory.mjs')` instead of `import.meta.url`. Then:
+
+```bash
+$M packages/factory/test/setup.mjs setup
+$M packages/factory/test/core.test.mjs coreTest
+$M packages/factory/test/discover.test.mjs discoverTest
+$M packages/factory/test/usage.test.mjs usageTest
+$M packages/factory/test/cli.test.mjs cliTest,syncTest,worktreeTest,harnessTest,onboardTest,rulesTest,skillsTest
+```
+
+Then by hand:
+- Each `*.test.mjs` gets `setup();` and one `node:test` `test(…)` call. `project.test.mjs` is new and wraps `test/project.mjs`'s `projectTest`.
+- `cli.test.mjs` stays one test: its steps share a state dir and the `cli` closure, and `skillsTest` must run last. Making them independent is a follow-up.
+- `factory.mjs` becomes the thin entry from the plan, and `test()` is deleted.
+- `main.ts`'s `case 'test'` spawns `node --test` on every `packages/factory/test/*.test.mjs`. That is plain node, since the skill may have no pnpm.
+
+These are CLI integration tests (they spawn `factory.mjs`), so they live in `packages/factory/test`, not `core/test` as the plan sketched.
+
+Proof:
+- Static: `assert` count 509 before and after.
+- Dynamic: an `assert.fail('canary')` added to each of the five test functions gives `fail 5` and exit 1.

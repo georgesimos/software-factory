@@ -33,7 +33,7 @@ software-factory/
 ├── packages/
 │   ├── factory/              @software-factory/factory: the skill. ~/.claude/skills/software-factory symlinks here
 │   │   ├── SKILL.md          orchestration: modes, ground rules, stages 0–7, attach, evals, scheduling
-│   │   ├── factory.mjs       the F entry (SKILL.md calls this path): re-exports core, runs packages/cli's main(), holds the self-test
+│   │   ├── factory.mjs       the F entry (SKILL.md calls this path): re-exports core and server, runs packages/cli's main()
 │   │   ├── (project.mjs moved to packages/core/src/project.ts in S8)
 │   │   ├── templates/        stack templates, data only: next-web.json, expo-mobile.json, _template.json, README.md
 │   │   ├── examples/
@@ -42,12 +42,14 @@ software-factory/
 │   │   ├── references/
 │   │   │   └── reviewers.md  per-axis reviewer briefs (code, security, ux, ui, seo, docs) and the verifier brief
 │   │   ├── evals/golden/     1.json … 8.json: intake fixtures with the expected outcome (pass / needs-info / reject / split)
-│   │   ├── test/
+│   │   ├── test/             the self-test: `F test` runs every *.test.mjs with node --test, one process per file
+│   │   │   ├── setup.mjs     every test file calls setup() first: FACTORY_TEST, a temp state dir, no outer session id
+│   │   │   ├── core.test.mjs, discover.test.mjs, usage.test.mjs, cli.test.mjs, project.test.mjs
 │   │   │   ├── gh-stub.mjs   fake `gh` used by the self-test (FACTORY_GH)
 │   │   │   ├── git-stub.mjs  fake `git branch --no-merged` used by the sync test (FACTORY_GIT)
 │   │   │   ├── bin/          fake `claude` and `codex` for the harness contract test (one stub per harness)
 │   │   │   ├── gh-project-stub.mjs  stateful fake `gh` (repos, labels, issues) for the idea-to-app test
-│   │   │   ├── project.mjs   idea-to-app self-test: commands, idempotency, queue, loop stops, adapter contracts
+│   │   │   ├── project.mjs   idea-to-app checks (run by project.test.mjs): commands, idempotency, queue, loop stops, adapter contracts
 │   │   │   └── onboard.e2e.cjs  Playwright run of the setup wizard against F ui (375/1280 px, light/dark, static file)
 │   │   └── package.json      private; `test` = env -u CLAUDE_CODE_SESSION_ID node factory.mjs test
 │   ├── core/                 @software-factory/core: the logic moving out of factory.mjs (docs/plans/split.md). Run by Node directly

@@ -1,9 +1,9 @@
 // @ts-nocheck
 import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { COST_CAP } from '../../core/src/constants.ts';
-import { test } from '../../factory/factory.mjs'; // the self-test stays in the entry until S11
 import { approval, facts, intake, merge, postmerge, revert } from '../../core/src/github.ts';
 import { archive, io, read, record, runDir } from '../../core/src/log.ts';
 import { budget, budgetWhy, derive, getRun } from '../../core/src/derive.ts';
@@ -157,7 +157,12 @@ export async function main(argv) {
       case 'demo': // never pollute the real log with fixtures
         if (!process.env.FACTORY_DIR) io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-demo-'));
         console.log(demo()); break;
-      case 'test': await test(); break;
+      case 'test': { // node:test, one process per file under packages/factory/test; plain node, since the skill may have no pnpm
+        const dir = path.join(import.meta.dirname, '..', '..', 'factory', 'test');
+        const files = fs.readdirSync(dir).filter((f) => f.endsWith('.test.mjs')).sort().map((f) => path.join(dir, f));
+        process.exitCode = spawnSync(process.execPath, ['--test', ...files], { stdio: 'inherit' }).status ?? 1;
+        break;
+      }
       default:
         console.log(`usage: factory.mjs <command>
   discover [roots...]                     find local GitHub clones for onboarding (default: ~/Development, ~/code, ...)
