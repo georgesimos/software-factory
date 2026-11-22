@@ -359,6 +359,10 @@ The factory never imports its own `factory/*` branches. A sync only reads GitHub
 
 Run `F archive` now and then. It moves finished runs older than 14 days into compact summaries, which stay on the dashboard.
 
+`F retire owner/repo --reason "<why>"` hides an idea that never got a repo, such as a test fixture that leaked into the real log. It appends an owned `idea retired` event that `F project`, `F loop` and the dashboard skip, and it never rewrites the log. A later idea can then reuse the name. Run it only when the user asks for it in chat.
+
+Every test runs with `FACTORY_TEST` set and a temp `FACTORY_DIR`. Under `FACTORY_TEST`, `F` refuses the real `~/.claude/factory` for both reads and writes.
+
 ## Evals
 
 `F eval [fixture]` runs intake headlessly (`claude -p`) on each issue in `evals/golden/*.json` and prints a score against the expected outcome. It costs tokens, so run it only when the user asks or after changing intake rules. To add a case, add a fixture file.
