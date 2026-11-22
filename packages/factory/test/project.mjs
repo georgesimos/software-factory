@@ -239,6 +239,19 @@ export async function projectTest({ uiHandle, read, project: { validateIssues, v
   assert.deepEqual([ok.status, JSON.parse(ok.body)], [200, { run: 'acme/ui:project', next: '/software-factory new acme/ui' }]);
   post({}, idea);
   assert.deepEqual(read().filter((e) => e.run === 'acme/ui:project').map((e) => [e.stage, e.status, e.idea]), [['idea', 'started', idea.idea]]);
+  // ---- F retire: an idea that never got a repo is hidden by an appended event; the log keeps every line ----
+  assert.equal(cli(['new', 'a habit tracker', '--name', 'acme/gone', '--stack', 'mini', '--dry-run']).status, 'needs-plan');
+  assert.throws(() => run(['retire', 'acme/gone']), /--reason/);
+  assert.throws(() => run(['retire', 'acme/budget', '--reason', 'x']), /already has a repo/);
+  assert.throws(() => run(['event', 'acme/gone:project', 'idea', 'retired']), /recorded by "retire"/);
+  const lines = fs.readFileSync(path.join(dir, 'events.jsonl'), 'utf8').split('\n').length;
+  assert.equal(cli(['retire', 'acme/gone', '--reason', 'leaked test fixture']).status, 'retired');
+  assert.equal(fs.readFileSync(path.join(dir, 'events.jsonl'), 'utf8').split('\n').length, lines + 1);
+  assert.throws(() => run(['project', 'acme/gone']), /no project acme\/gone/);
+  assert.throws(() => run(['retire', 'acme/gone', '--reason', 'again']), /no project acme\/gone/);
+  assert.ok(!fs.readFileSync(path.join(dir, 'dashboard.html'), 'utf8').includes('acme/gone'));
+  assert.equal(cli(['new', 'a reading log', '--name', 'acme/gone', '--stack', 'mini', '--dry-run']).status, 'needs-plan'); // the name is free again
+  assert.equal(cli(['project', 'acme/gone']).idea, 'a reading log');
 }
 
 const stubStateOf = (s) => JSON.parse(fs.readFileSync(path.join(s, 'state.json'), 'utf8'));

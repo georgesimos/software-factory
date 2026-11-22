@@ -11,11 +11,17 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { harnesses } from './harnesses/index.mjs';
 import * as project from './project.mjs'; // also handed whole to the idea-to-app test
-import { PROJECT_EVENTS, newProject, issuesCreate, projectStatus, loop, queue, startIdea, ideas } from './project.mjs';
+import { PROJECT_EVENTS, newProject, issuesCreate, projectStatus, loop, queue, startIdea, retireIdea, ideas } from './project.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 let DIR = process.env.FACTORY_DIR || path.join(os.homedir(), '.claude', 'factory');
-const log = () => path.join(DIR, 'events.jsonl');
+const REAL_DIR = path.resolve(os.homedir(), '.claude', 'factory'); // at load: tests swap HOME in-process later
+// Every state-dir path goes through here, so no test (FACTORY_TEST) can read or write the real ~/.claude/factory.
+const stateDir = () => {
+  if (process.env.FACTORY_TEST && path.resolve(DIR) === REAL_DIR) throw new Error(`FACTORY_TEST is set: refusing the real state dir ${DIR}; set FACTORY_DIR to a temp dir`);
+  return DIR;
+};
+const log = () => path.join(stateDir(), 'events.jsonl');
 let GH = process.env.FACTORY_GH || 'gh'; // overridable only so the self-test can stub GitHub
 let GIT = process.env.FACTORY_GIT || 'git';
 
@@ -65,8 +71,8 @@ const FINDING_KEYS = ['severity', 'file', 'line', 'issue', 'route', 'dismissed']
 const blocking = (f) => BLOCKING.includes(f.severity) && !f.dismissed; // a verifier-dismissed finding never blocks
 
 export const isSensitive = (p) => SENSITIVE.test(p);
-export const factoryDir = () => DIR;
-export const runDir = (run) => path.join(DIR, run.replace(/[^a-z0-9]+/gi, '-'));
+export const factoryDir = () => stateDir();
+export const runDir = (run) => path.join(stateDir(), run.replace(/[^a-z0-9]+/gi, '-'));
 
 export function read() {
   try {
@@ -79,7 +85,7 @@ export function read() {
 
 export function record(run, stage, status, payload = {}, cli) { // cli: {fallback?} when the orchestrator reports a step; in-process records (sync, demo) get no runner
   if (!run) throw new Error('missing run id');
-  if (String(run).endsWith(':project')) throw new Error('project runs are recorded by "new", "issues create" and "loop", not by hand');
+  if (String(run).endsWith(':project')) throw new Error('project runs are recorded by "new", "issues create", "loop" and "retire", not by hand');
   if (!STAGES.includes(stage)) throw new Error(`unknown stage "${stage}" (${STAGES.join('|')})`);
   if (!STATUSES.includes(status)) throw new Error(`unknown status "${status}" (${STATUSES.join('|')})`);
   if (status === 'merged' && derive(read())[run]?.decision?.action !== 'merge') throw new Error('refusing "merged": the recorded decision is not merge');
@@ -92,7 +98,7 @@ export function record(run, stage, status, payload = {}, cli) { // cli: {fallbac
   payload = validateUsage(payload);
   const me = stage === 'ship' ? null : harnesses.find((h) => h.current?.()); // the harness F runs inside, if any; lets the UI link back to the driving session
   const ev = { ts: new Date().toISOString(), ...payload, ...(me ? { harness: me.id, sessionId: me.current(), cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback)), run, stage, status };
-  fs.mkdirSync(DIR, { recursive: true });
+  fs.mkdirSync(stateDir(), { recursive: true });
   fs.appendFileSync(log(), JSON.stringify(ev) + '\n');
   if (TERMINAL.includes(status) || status === 'needs-info') { // a finished (or parked) run gives back its worktree
     try { const c = cleanup(run); if (c.startsWith('kept')) console.error(`factory: ${c}`); } catch (e) { console.error(`factory: worktree cleanup failed: ${e.message}`); }
@@ -130,6 +136,14 @@ const finishBurn = (b) => {
   return b;
 };
 
+// A recorded verdict is final: only F's own "invalid" placeholder can be replaced, and nothing once the iteration is gated.
+const INVALID = 'reviewer output invalid: ';
+function assertReviewOpen(r, axis) {
+  if (r.events.findLast((e) => e.stage === 'gate' || (e.stage === 'build' && e.status === 'started'))?.stage === 'gate') throw new Error(`iteration ${r.iteration} is already gated; its reviews are frozen`);
+  const prev = r.reviews[r.iteration]?.[axis];
+  if (prev && !prev.findings.some((f) => f.issue?.startsWith(INVALID))) throw new Error(`a ${prev.verdict} "${axis}" review is already recorded for iteration ${r.iteration}; only an invalid one can be replaced`);
+}
+
 // Reviewer output is untrusted model text: reject anything outside the contract instead of storing it.
 function validateReview(run, p, status) {
   const extra = Object.keys(p).filter((k) => !REVIEW_KEYS.includes(k));
@@ -137,6 +151,7 @@ function validateReview(run, p, status) {
   const r = derive(read())[run];
   const axes = r?.axes?.[r.iteration] || [];
   if (!axes.includes(p.axis)) throw new Error(`axis "${p.axis}" is not one of this iteration's axes (${axes.join(', ') || 'none recorded'})`);
+  assertReviewOpen(r, p.axis);
   if (!Array.isArray(p.findings || [])) throw new Error('findings must be an array');
   for (const f of p.findings || []) {
     const bad = Object.keys(f).filter((k) => !FINDING_KEYS.includes(k));
@@ -227,7 +242,7 @@ const budgetWhy = (b) => `($${b.usd}, ${b.tokens} tokens, ${b.source})`;
 // ---------- measured burn: Claude Code transcripts of the sessions that recorded events ----------
 let PROJECTS = null; // demo and test point this at fixture transcripts
 const projectsRoot = () => PROJECTS || path.join(os.homedir(), '.claude', 'projects');
-const usageFile = () => path.join(DIR, 'usage.json');
+const usageFile = () => path.join(stateDir(), 'usage.json');
 const SUB_AXIS = /^\s*(code|security|ux|ui|seo|docs|[a-z][a-z0-9-]{0,30}(?=\s+review\b))\b/i; // built-ins, or any extra axis in "<axis> review RUN"
 
 // Only token counts, message ids, times and model ids are kept, never message text. Re-reads only bytes appended since last time.
@@ -290,7 +305,7 @@ export function measure(events) {
     out[sid] = s.files.map((f) => [f, (files[f] = scanFile(f, files[f]))]).filter(([, x]) => x).map(([f, x]) => ({ rows: x.rows, axis: x.axis, sub: f !== s.main }));
   }
   const text = JSON.stringify(cache);
-  if (text !== before) { fs.mkdirSync(DIR, { recursive: true }); fs.writeFileSync(usageFile(), text); }
+  if (text !== before) { fs.mkdirSync(stateDir(), { recursive: true }); fs.writeFileSync(usageFile(), text); }
   return out;
 }
 
@@ -441,7 +456,7 @@ export const REQUIRED_AXES = ['code', 'security']; // axesFor always selects the
 export const STEP_KEYS = ['intake', 'spec', 'build', ...BUILTIN_AXES.map((a) => `review.${a}`), 'verifier', 'postmerge'];
 const harnessIds = () => harnesses.map((h) => h.id);
 const NAME = /^[\w.-]+(:[\w.-]+)?$/; // skill, plugin:skill or agent type; it ends up in a command line
-const skillsFile = () => path.join(DIR, 'skills.json');
+const skillsFile = () => path.join(stateDir(), 'skills.json');
 
 function checkRunner(s, at, more = []) {
   if (!s || typeof s !== 'object' || Array.isArray(s)) throw new Error(`${at}: a runner must be a JSON object`);
@@ -498,7 +513,7 @@ export function skills(repo, cfg = readSkills()) {
 
 function writeSkills(cfg) {
   checkSkills(cfg);
-  fs.mkdirSync(DIR, { recursive: true });
+  fs.mkdirSync(stateDir(), { recursive: true });
   fs.writeFileSync(skillsFile() + '.tmp', JSON.stringify(cfg, null, 2));
   fs.renameSync(skillsFile() + '.tmp', skillsFile());
 }
@@ -558,9 +573,9 @@ function scanGlobal() {
   try { installed = JSON.parse(fs.readFileSync(path.join(claude, 'plugins', 'installed_plugins.json'), 'utf8')).plugins || {}; } catch { /* no plugins */ }
   for (const list of Object.values(installed)) for (const e of list) if (e.scope === 'user' && e.installPath) out.push(...pluginItems(e.installPath, 'global'));
   for (const b of dirs(path.join(claude, 'plugins', 'synced'))) for (const p of dirs(path.join(claude, 'plugins', 'synced', b))) out.push(...pluginItems(path.join(claude, 'plugins', 'synced', b, p), 'global'));
-  for (const f of ls(path.join(DIR, 'briefs')).filter((f) => f.endsWith('.md'))) {
-    const p = path.join(DIR, 'briefs', f);
-    if (/^[^'"\s]+$/.test(p)) out.push({ source: 'yours', group: tilde(path.join(DIR, 'briefs')), name: f, kind: 'brief', desc: front(p), runner: { use: 'brief', path: tilde(p) } });
+  for (const f of ls(path.join(stateDir(), 'briefs')).filter((f) => f.endsWith('.md'))) {
+    const p = path.join(stateDir(), 'briefs', f);
+    if (/^[^'"\s]+$/.test(p)) out.push({ source: 'yours', group: tilde(path.join(stateDir(), 'briefs')), name: f, kind: 'brief', desc: front(p), runner: { use: 'brief', path: tilde(p) } });
   }
   return out;
 }
@@ -604,14 +619,26 @@ export function uiHandle({ method, url, headers = {}, body = '' }, { token, port
     if (!same(u.searchParams.get('t'), token)) return reply(403, { error: 'open the URL that `F ui` printed' });
     return { status: 200, type: 'text/html; charset=utf-8', body: page({ ui: { token } }) };
   }
-  if (method === 'POST' && Object.hasOwn(UI_ROUTES, u.pathname)) { // every write (and the onboarding read) passes the same checks
+  const route = u.pathname.startsWith('/api/') ? u.pathname.slice(4) : u.pathname; // /api/<p> and the original <p> are one route
+  if (method === 'GET' && u.pathname.startsWith('/api/')) { // reads: same token; browsers omit Origin on same-origin GETs, so only a foreign one is refused
+    if (!same(headers['x-factory-token'], token)) return reply(403, { error: 'missing or wrong token' });
+    if (headers.origin !== undefined && !hosts.some((h) => headers.origin === `http://${h}`)) return reply(403, { error: 'cross-origin request' });
+    if (route === '/runs') return reply(200, { runs: runsData() });
+    const m = route.match(/^\/runs\/([^/]+)\/([^/]+)\/([^/]+)$/);
+    if (!m) return reply(404, { error: 'not found' });
+    const [, owner, repo, n] = m; // raw segments: the checks below admit no %-escapes
+    if (!LOGIN.test(owner) || !/^[\w.-]{1,100}$/.test(repo) || !/^\d{1,9}$/.test(n)) return reply(400, { error: 'expected /api/runs/<owner>/<repo>/<issue number>' });
+    const run = runsData().find((r) => r.id === `${owner}/${repo}#${n}`);
+    return run ? reply(200, { run }) : reply(404, { error: `no run ${owner}/${repo}#${n}` });
+  }
+  if (method === 'POST' && Object.hasOwn(UI_ROUTES, route)) { // every write (and the onboarding read) passes the same checks
     if (!same(headers['x-factory-token'], token)) return reply(403, { error: 'missing or wrong token' });
     if (!hosts.some((h) => headers.origin === `http://${h}`)) return reply(403, { error: 'cross-origin request' });
     if (!/^application\/json\b/.test(headers['content-type'] || '')) return reply(415, { error: 'expected application/json' });
     try {
       const x = JSON.parse(body || '{}');
       if (!x || typeof x !== 'object' || Array.isArray(x)) throw new Error('expected a JSON object');
-      return reply(200, UI_ROUTES[u.pathname](x));
+      return reply(200, UI_ROUTES[route](x));
     } catch (e) { return reply(400, { error: e.message }); }
   }
   return reply(404, { error: 'not found' });
@@ -733,7 +760,7 @@ const whoami = () => {
 
 // Rule changes are owned events in the log (stage "rules"), not run events: derive() skips them and F event refuses them.
 function audit(scope, status, e) {
-  fs.mkdirSync(DIR, { recursive: true });
+  fs.mkdirSync(stateDir(), { recursive: true });
   fs.appendFileSync(log(), JSON.stringify({ ts: new Date().toISOString(), ...e, run: scope, stage: 'rules', status }) + '\n');
   render();
 }
@@ -842,6 +869,7 @@ export function reviewFromText(run, axis, text) {
   const r = derive(read())[run];
   const axes = r?.axes?.[r.iteration] || [];
   if (!axes.includes(axis)) throw new Error(`axis "${axis}" is not one of this iteration's axes (${axes.join(', ') || 'none recorded'})`);
+  assertReviewOpen(r, axis); // before the catch: a frozen review is refused, not turned into an "invalid" one
   try {
     const p = JSON.parse(String(text).trim().replace(/^```(?:json)?\s*\n([^]*)\n```$/, '$1'));
     if (!p || typeof p !== 'object' || Array.isArray(p)) throw new Error('not a JSON object');
@@ -850,7 +878,7 @@ export function reviewFromText(run, axis, text) {
     validateReview(run, p, p.verdict);
     return { status: (p.findings || []).some(blocking) ? 'failed' : 'passed', payload: p };
   } catch (e) {
-    return { status: 'failed', payload: { axis, verdict: 'failed', findings: [{ severity: 'high', issue: `reviewer output invalid: ${e.message}`.slice(0, 300), route: 'build' }] } };
+    return { status: 'failed', payload: { axis, verdict: 'failed', findings: [{ severity: 'high', issue: `${INVALID}${e.message}`.slice(0, 300), route: 'build' }] } };
   }
 }
 
@@ -901,9 +929,9 @@ function intakeFixture(run, n) {
 const git = (...args) => execFileSync(GIT, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 export const adapterCtx = () => ({ gh, git }); // what host and tracker adapters get: the same stubbable gh and git
 const ls = (d) => { try { return fs.readdirSync(d); } catch { return []; } };
-const projectsFile = () => path.join(DIR, 'projects.json');
+const projectsFile = () => path.join(stateDir(), 'projects.json');
 export const projects = () => { try { return JSON.parse(fs.readFileSync(projectsFile(), 'utf8')); } catch { return {}; } };
-const saveProject = (repo, p) => { fs.mkdirSync(DIR, { recursive: true }); fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...projects()[repo], path: p, synced: projects()[repo]?.synced } }, null, 2)); };
+const saveProject = (repo, p) => { fs.mkdirSync(stateDir(), { recursive: true }); fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...projects()[repo], path: p, synced: projects()[repo]?.synced } }, null, 2)); };
 const wtFile = (run) => path.join(runDir(run), 'worktree.json');
 const wtInfo = (run) => { try { return JSON.parse(fs.readFileSync(wtFile(run), 'utf8')); } catch { return null; } };
 
@@ -1057,7 +1085,7 @@ function shipTrack(pairs) {
 export function sync(repo, repoPath) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo || '')) throw new Error(`repo must look like owner/repo, got "${repo}"`);
   repoPath = path.resolve(repoPath || projects()[repo]?.path || '.');
-  fs.mkdirSync(DIR, { recursive: true });
+  fs.mkdirSync(stateDir(), { recursive: true });
   fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...projects()[repo], path: repoPath, synced: new Date().toISOString() } }, null, 2));
   const runs = Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') || r.id.startsWith(repo + ':'));
   const byPr = new Map(runs.filter((r) => r.pr).map((r) => [r.pr, r]));
@@ -1243,8 +1271,8 @@ export function revert(run, reason) {
   }
 }
 
-const archiveFile = () => path.join(DIR, 'archive.jsonl');
-const sessionsFile = () => path.join(DIR, 'sessions.json');
+const archiveFile = () => path.join(stateDir(), 'archive.jsonl');
+const sessionsFile = () => path.join(stateDir(), 'sessions.json');
 const readArchive = () => { try { return fs.readFileSync(archiveFile(), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 
 // Moves finished runs older than `days` out of the live log into compact summaries, so derive/render stay fast.
@@ -1315,14 +1343,14 @@ export function metrics(runs) {
 const runRepos = () => [...new Set([...Object.keys(derive(read())), ...readArchive().map((a) => a.id)].map((id) => id.split(/[#:]/)[0]))];
 
 export function render() {
-  const out = path.join(DIR, 'dashboard.html');
-  fs.mkdirSync(DIR, { recursive: true });
+  const out = path.join(stateDir(), 'dashboard.html');
+  fs.mkdirSync(stateDir(), { recursive: true });
   fs.writeFileSync(out, page()); // never carries a ui token: that exists only in what `F ui` serves
   return out;
 }
 
-export function page(extra = {}) {
-  const events = read();
+// The run list the dashboard embeds and GET /api/runs returns: live + archived, linked sessions, worktree path.
+export function runsData(events = read()) {
   const live = Object.values(withMeasured(derive(events), events));
   const archived = readArchive().filter((a) => !live.some((r) => r.id === a.id));
   for (const a of archived) for (const c of a.children || []) { const child = live.find((r) => r.id === c); if (child) child.parent = a.id; }
@@ -1331,6 +1359,12 @@ export function page(extra = {}) {
   try { links = JSON.parse(fs.readFileSync(sessionsFile(), 'utf8')); } catch { /* no sync yet */ }
   for (const r of runs) if (links[r.id]) r.sessions = [...(r.sessions || []), ...links[r.id].filter((x) => !(r.sessions || []).some((y) => y.id === x.id))];
   for (const r of runs) { const w = wtInfo(r.id); if (w?.path) r.worktree = w.path; } // the dashboard's "Open in Claude" cwd
+  return runs;
+}
+
+export function page(extra = {}) {
+  const events = read();
+  const runs = runsData(events);
   const repoOf = (id) => id.split(/[#:]/)[0];
   const byProject = {};
   for (const p of new Set(runs.map((r) => repoOf(r.id)))) byProject[p] = metrics(runs.filter((r) => repoOf(r.id) === p));
@@ -1348,7 +1382,7 @@ export function page(extra = {}) {
 // when asked for, never in page(), which runs on every record().
 const F_CMD = 'node ~/.claude/skills/software-factory/factory.mjs';
 const shq = (x) => (/^[\w@%+=:,./~-]+$/.test(String(x)) ? String(x) : "'" + String(x).replace(/'/g, "'\\''") + "'");
-const onboardFile = () => path.join(DIR, 'onboard.json');
+const onboardFile = () => path.join(stateDir(), 'onboard.json');
 export const SHIP_KINDS = ['web', 'mobile', 'database'];
 export const readOnboard = () => { try { return JSON.parse(fs.readFileSync(onboardFile(), 'utf8')); } catch { return {}; } };
 
@@ -1358,7 +1392,7 @@ export function setShip(scope, kinds) {
   if (!Array.isArray(kinds) || !kinds.every((k) => SHIP_KINDS.includes(k))) throw new Error(`ship must be a list of ${SHIP_KINDS.join('|')}`);
   const o = readOnboard();
   o[scope] = { ...o[scope], ship: SHIP_KINDS.filter((k) => kinds.includes(k)) }; // canonical order, so a re-run writes the same file
-  fs.mkdirSync(DIR, { recursive: true });
+  fs.mkdirSync(stateDir(), { recursive: true });
   fs.writeFileSync(onboardFile() + '.tmp', JSON.stringify(o, null, 2));
   fs.renameSync(onboardFile() + '.tmp', onboardFile());
   render();
@@ -1433,7 +1467,7 @@ export function demo() {
   const S = { harness: 'claude-code', sessionId: 'demo-session', cwd: '/work/shop' }, MEASURED = ['acme/shop#43', 'acme/shop#45'];
   const ev = (run, stage, status, p = {}) => {
     const e = { ts: new Date((t += 97_000)).toISOString(), ...p, ...(MEASURED.includes(run) && stage !== 'ship' ? S : {}), run, stage, status };
-    fs.mkdirSync(DIR, { recursive: true });
+    fs.mkdirSync(stateDir(), { recursive: true });
     fs.appendFileSync(log(), JSON.stringify(e) + '\n');
   };
   const intake = (run, title, n, association = 'OWNER') =>
@@ -1576,7 +1610,7 @@ export function demo() {
 
 // Fake Claude Code transcripts for the demo session: an orchestrator message before each event, one subagent per review axis.
 function demoTranscripts(events) {
-  PROJECTS = path.join(DIR, 'claude-projects');
+  PROJECTS = path.join(stateDir(), 'claude-projects');
   const dir = path.join(PROJECTS, '-work-shop'), subs = path.join(dir, 'demo-session', 'subagents');
   fs.mkdirSync(subs, { recursive: true });
   const SIZE = { intake: [900, 5000], spec: [2600, 2500], build: [3200, 6000], review: [1200, 800], gate: [300, 200], approve: [700, 300] };
@@ -1601,6 +1635,7 @@ function demoTranscripts(events) {
 }
 
 async function test() {
+  process.env.FACTORY_TEST = '1'; // inherited by every F the tests spawn: none may touch the real state dir
   DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-test-'));
   demo();
   const runs = derive(read());
@@ -1825,6 +1860,11 @@ function cliTest() {
   const RUN = 'acme/shop#7';
   const cli = (args, input, env = {}) => execFileSync(process.execPath, [fileURLToPath(import.meta.url), ...args],
     { encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, FACTORY_DIR: DIR, FACTORY_GH: stub, ...env } });
+  // FACTORY_TEST: with no FACTORY_DIR, F refuses the home state dir (here a temp HOME's) for reads and writes alike (#20)
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-home-')), real = { HOME: home, FACTORY_TEST: '1', FACTORY_DIR: '' };
+  for (const args of [['rules', 'set', 'acme/x', 'ci', 'skip', '--reason', 'x'], ['skills', 'set', 'acme/x', 'spec', '{"use":"default"}'], ['render'], ['event', 'acme/x#1', 'intake', 'rejected'], ['new', 'an app', '--name', 'acme/x', '--dry-run']])
+    assert.throws(() => cli(args, '', real), /FACTORY_TEST is set: refusing the real state dir/, args.join(' '));
+  assert.ok(!fs.existsSync(path.join(home, '.claude', 'factory')));
   const issue = JSON.parse(cli(['intake', RUN]));
   assert.equal(issue.title, 'It\'s "odd" $(x)');
   assert.equal(issue.comments.length, 1);
@@ -1835,10 +1875,17 @@ function cliTest() {
   cli(['event', RUN, 'build', 'started']);
   cli(['event', RUN, 'build', 'passed', '-'], '{"pr":"https://github.com/acme/shop/pull/9","branch":"factory/issue-7"}');
   assert.deepEqual(JSON.parse(cli(['axes', RUN, 'src/a.ts'])).axes, ['code', 'security']);
-  cli(['event', RUN, 'review', 'passed', '-'], '{"axis":"code","findings":[]}');
+  cli(['review', RUN, 'code'], '{"axis":"code","verdict":"passed","findings":[]}');
   // Says "passed" but carries a medium finding: must count as failed.
-  cli(['event', RUN, 'review', 'passed', '-'], '{"axis":"security","findings":[{"severity":"medium","file":"src/a.ts","issue":"no validation","route":"build"}]}');
+  cli(['review', RUN, 'security'], '{"axis":"security","verdict":"passed","findings":[{"severity":"medium","file":"src/a.ts","issue":"no validation","route":"build"}]}');
+  // A recorded verdict is final: no fail→pass overwrite, through "review" or "event".
+  assert.throws(() => cli(['review', RUN, 'security'], '{"axis":"security","verdict":"passed","findings":[]}'), /failed "security" review is already recorded/);
+  assert.throws(() => record(RUN, 'review', 'passed', { axis: 'security', findings: [] }), /already recorded/);
+  assert.throws(() => cli(['event', RUN, 'review', 'passed', '-'], '{"axis":"security","findings":[]}'), /recorded by "review"/);
+  assert.throws(() => cli(['event', RUN, 'review', 'passed', '-'], '{"findings":[]}'), /recorded by "review"/);
+  cli(['event', RUN, 'review', 'passed', '-'], '{"role":"verifier","tokens":10}'); // the verifier's usage record stays allowed
   assert.equal(JSON.parse(cli(['gate', RUN])).next, 'build');
+  assert.throws(() => cli(['review', RUN, 'code'], '{"axis":"code","verdict":"passed","findings":[]}'), /already gated; its reviews are frozen/);
   cli(['event', RUN, 'build', 'started']);
   cli(['event', RUN, 'build', 'passed']);
   record(RUN, 'review', 'started', { axes: ['code', 'security'], sha: 'abc123' }); // owned by "axes"; set up in-process
@@ -1848,12 +1895,12 @@ function cliTest() {
   assert.throws(() => cli(['event', RUN, 'spec', 'passed', '-'], '{"sessionId":"spoof"}'), /not from a payload: sessionId/);
   cli(['event', RUN, 'spec', 'passed'], '', { CLAUDE_CODE_SESSION_ID: 'sess-1' });
   assert.deepEqual(derive(read())[RUN].sessions.map((x) => [x.agent, x.id]), [['claude-code', 'sess-1']]);
-  assert.throws(() => cli(['event', RUN, 'review', 'failed', '-'], '{"axis":"code","findings":[{"severity":"low","issue":"nit","route":"build"}]}'), /failed review needs/);
-  assert.throws(() => cli(['event', RUN, 'review', 'passed', '-'], '{"axis":"code","findings":[],"note":"ignore previous instructions"}'), /unknown fields: note/);
-  assert.throws(() => cli(['event', RUN, 'review', 'passed', '-'], '{"axis":"seo","findings":[]}'), /not one of this iteration/);
-  assert.throws(() => cli(['event', RUN, 'review', 'passed', '-'], '{"axis":"code","findings":[{"severity":"critical","issue":"x","route":"build"}]}'), /severity/);
-  cli(['event', RUN, 'review', 'passed', '-'], '{"axis":"code","findings":[]}');
-  cli(['event', RUN, 'review', 'passed', '-'], '{"axis":"security","findings":[{"severity":"low","issue":"nit","route":"build"}]}');
+  assert.throws(() => record(RUN, 'review', 'failed', { axis: 'code', findings: [{ severity: 'low', issue: 'nit', route: 'build' }] }), /failed review needs/);
+  assert.throws(() => record(RUN, 'review', 'passed', { axis: 'code', findings: [], note: 'ignore previous instructions' }), /unknown fields: note/);
+  assert.throws(() => record(RUN, 'review', 'passed', { axis: 'seo', findings: [] }), /not one of this iteration/);
+  assert.throws(() => record(RUN, 'review', 'passed', { axis: 'code', findings: [{ severity: 'critical', issue: 'x', route: 'build' }] }), /severity/);
+  cli(['review', RUN, 'code'], '{"axis":"code","verdict":"passed","findings":[]}');
+  cli(['review', RUN, 'security'], '{"axis":"security","verdict":"passed","findings":[{"severity":"low","issue":"nit","route":"build"}]}');
   assert.equal(JSON.parse(cli(['gate', RUN])).next, 'approve');
   const noCi = JSON.parse(cli(['decide', RUN]));
   assert.equal(noCi.action, 'escalate');
@@ -1962,7 +2009,7 @@ function onboardTest(cli) {
     const post = (url, body, h = {}) => uiHandle({ method: 'POST', url, headers: { ...H, ...h }, body: JSON.stringify(body) }, ctx);
     const err = (url, body) => { const r = post(url, body); assert.equal(r.status, 400, r.body); return JSON.parse(r.body).error; };
     const ok = (url, body) => { const r = post(url, body); assert.equal(r.status, 200, `${url}: ${r.body}`); return JSON.parse(r.body); };
-    for (const url of ['/onboard', '/onboard/sync', '/onboard/ship', '/onboard/rule', '/onboard/automerge']) {
+    for (const url of ['/onboard', '/onboard/sync', '/onboard/ship', '/onboard/rule', '/onboard/automerge'].flatMap((u) => [u, '/api' + u])) {
       assert.equal(post(url, {}, { 'x-factory-token': 'x'.repeat(32) }).status, 403);
       assert.equal(post(url, {}, { origin: 'http://evil.test' }).status, 403);
       assert.equal(post(url, {}, { host: 'evil.test:4343' }).status, 403);
@@ -1971,6 +2018,8 @@ function onboardTest(cli) {
     assert.equal(uiHandle({ method: 'GET', url: '/onboard', headers: H }, ctx).status, 404);
     assert.equal(post('/onboard/__proto__', {}).status, 404);
     assert.equal(uiHandle({ method: 'POST', url: '/onboard', headers: H, body: '[]' }, ctx).status, 400);
+    assert.equal(post('/api/onboard/__proto__', {}).status, 404);
+    assert.deepEqual(ok('/api/onboard', {}), ok('/onboard', {}));
     const s = ok('/onboard', {});
     assert.deepEqual(s.harnesses.map((h) => [h.id, h.installed, h.login.ok]), [['claude-code', true, true], ['codex', true, true]]);
     assert.deepEqual(s.repos.map((r) => [r.repo, r.path, r.attached]), [['acme/app', clone, false]]);
@@ -2137,6 +2186,7 @@ function rulesTest(cli) {
   assert.equal(gated.action, 'merge');
   assert.match(gated.reasons.join(), /preview ready: https:\/\/deploy-10\.example\.app \([\w-]+\)/);
   assert.equal(derive(read())[P10].deploys[0].state, 'ready');
+  record(P10, 'build', 'started'); // a new commit is a new iteration: the first one's reviews stay as recorded
   record(P10, 'review', 'started', { axes: ['code', 'security'], sha: 'e'.repeat(40) }); // a new commit with no preview
   record(P10, 'review', 'passed', { axis: 'code', findings: [] });
   record(P10, 'review', 'passed', { axis: 'security', findings: [] });
@@ -2250,8 +2300,9 @@ function skillsTest(cli) {
   // Usage flags go through record()'s usage checks; the reviewer's own text can't set them.
   cli(['review', R, 'ui', '--tokens', '5', '--model', 'claude-sonnet-5-5', '--usage', '{"input":10,"output":20,"cacheRead":30,"cacheWrite":40}'], '{"axis":"ui","verdict":"passed","findings":[],"tokens":0,"usage":{"input":0}}');
   assert.deepEqual([derive(read())[R].tokens, derive(read())[R].burn.byAxis.ui.tokens], [1300, 100]);
-  assert.throws(() => cli(['review', R, 'ui', '--usage', '{"prompt":1}'], '{}'), /usage has unknown fields: prompt/);
-  assert.throws(() => cli(['review', R, 'ui', '--model', 'a b'], '{}'), /short model id/);
+  assert.throws(() => cli(['review', R, 'ui'], '{"axis":"ui","verdict":"passed","findings":[]}'), /already recorded/); // invalid→valid once, then final
+  assert.throws(() => cli(['review', R, 'ux', '--usage', '{"prompt":1}'], '{}'), /usage has unknown fields: prompt/); // ux is still invalid, so replaceable
+  assert.throws(() => cli(['review', R, 'ux', '--model', 'a b'], '{}'), /short model id/);
   assert.equal(SUB_AXIS.exec('a11y review acme/u#1')[1], 'a11y'); // extra axes get their subagent's measured burn
   set('acme/kit', 'verifier', { use: 'provider', harness: 'claude-code', name: 'pr-review-toolkit:code-reviewer' });
   assert.equal(JSON.parse(cli(['gate', R])).next, 'build');
@@ -2309,6 +2360,31 @@ function skillsTest(cli) {
   assert.deepEqual(JSON.parse(post({}, { ...ui1, runner: null }).body).plans['acme/kit'].plan['review.ui'], { use: 'default' }); // unset -> inherits
   assert.equal(JSON.parse(cli(['skills', 'unset', 'acme/kit', 'build'])).build, undefined);
   assert.ok(!fs.readFileSync(render(), 'utf8').includes(tok), 'the written dashboard never carries the ui token');
+  // /api/*: the same routes and checks under one prefix, plus token-guarded reads of the run list.
+  assert.equal(post({}, ui1).body, uiHandle({ method: 'POST', url: '/api/skills', headers: { ...H, origin: 'http://127.0.0.1:4242', 'content-type': 'application/json', 'x-factory-token': tok }, body: JSON.stringify(ui1) }, ctx).body);
+  const get = (url, h = {}) => uiHandle({ method: 'GET', url, headers: { ...H, 'x-factory-token': tok, ...h } }, ctx);
+  const all = get('/api/runs');
+  assert.equal(all.status, 200);
+  assert.deepEqual(JSON.parse(all.body).runs.map((r) => r.id), runsData().map((r) => r.id));
+  const issueRun = runsData().find((r) => /^[\w-]+\/[\w.-]+#\d+$/.test(r.id));
+  assert.ok(issueRun, 'fixture has an issue run');
+  const [o, rp, n] = issueRun.id.split(/[/#]/);
+  const one = get(`/api/runs/${o}/${rp}/${n}`);
+  assert.equal(one.status, 200);
+  assert.equal(JSON.parse(one.body).run.id, issueRun.id);
+  for (const r of [all, one]) assert.ok(!r.body.includes(tok), 'API reads never carry the ui token');
+  assert.equal(get(`/api/runs/${o}/${rp}/999999`).status, 404);
+  assert.equal(get(`/api/runs/${o}/${rp}/x1`).status, 400);
+  assert.equal(get('/api/runs/-bad/repo/1').status, 400);
+  assert.equal(get('/api/runs/a/b/%zz').status, 400);
+  assert.equal(get('/api/nope').status, 404);
+  assert.equal(get('/api/runs', { 'x-factory-token': undefined }).status, 403);
+  assert.equal(get('/api/runs', { 'x-factory-token': 'u'.repeat(32) }).status, 403);
+  assert.equal(get('/api/runs', { origin: 'https://evil.test' }).status, 403);
+  assert.equal(get('/api/runs', { origin: 'http://127.0.0.1:4242' }).status, 200);
+  assert.equal(get('/api/runs', { host: 'evil.test:4242' }).status, 403);
+  assert.equal(get('/runs').status, 404, 'reads live only under /api');
+  assert.equal(uiHandle({ method: 'DELETE', url: '/api/runs', headers: { ...H, 'x-factory-token': tok } }, ctx).status, 404);
   // A hand-edited config is validated on every read, so it fails loudly instead of silently running defaults.
   fs.writeFileSync(path.join(DIR, 'skills.json'), '{"acme/kit":{"review.lint":{"use":"default"}}}');
   assert.throws(() => cli(['skills', 'acme/kit']), /unknown step "review.lint"/);
@@ -2425,8 +2501,8 @@ function worktreeTest(cli) {
   const a1 = JSON.parse(cli(['axes', R], '', env2));
   assert.deepEqual(a1.files, ['src/b.tsx']);
   assert.deepEqual(a1.axes, ['code', 'security', 'ux', 'ui']);
-  for (const ax of ['code', 'security', 'ux']) cli(['event', R, 'review', 'passed', '-'], `{"axis":"${ax}","findings":[]}`, env2);
-  cli(['event', R, 'review', 'failed', '-'], '{"axis":"ui","findings":[{"severity":"high","issue":"x","route":"build"}]}', env2);
+  for (const ax of ['code', 'security', 'ux']) cli(['review', R, ax], `{"axis":"${ax}","verdict":"passed","findings":[]}`, env2);
+  cli(['review', R, 'ui'], '{"axis":"ui","verdict":"failed","findings":[{"severity":"high","issue":"x","route":"build"}]}', env2);
   // Next iteration: only a non-UI file changes, but the failed ui axis must be re-run; passed ux is not.
   cli(['event', R, 'build', 'started'], '', env2);
   fs.writeFileSync(path.join(w.path, 'src', 'c.ts'), 'y'); g(w.path, 'add', '.'); g(w.path, 'commit', '-qm', 'c');
@@ -2481,9 +2557,10 @@ if (isMain) {
     switch (cmd) {
       case 'event': {
         const [stage, status] = rest, p = json(rest[2]);
-        const owned = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'approve:closed': 'sync' };
+        const owned = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'approve:closed': 'sync', 'idea:retired': 'retire' };
         const owner = owned[`${stage}:${status}`] || { gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop', ship: 'ship' }[stage];
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
+        if (stage === 'review' && p.role !== 'verifier') throw new Error('axis verdicts are recorded by "review", not by hand; "event" only takes the verifier usage record ({"role":"verifier",…})');
         if (stage === 'note') throw new Error('"note" is recorded by "note" and "notes", not by hand');
         const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'cwd', 'runner', 'localChecks',
           'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // the last row: set by ship connectors only
@@ -2586,6 +2663,7 @@ if (isMain) {
       }
       case 'project': { const s = projectStatus(run || ''); if (!s) throw new Error(`no project ${run}; start one with "new"`); out(s); break; }
       case 'loop': out(await loop(run)); break;
+      case 'retire': { const ri = rest.indexOf('--reason'); out(retireIdea(run, ri < 0 ? '' : rest[ri + 1])); break; }
       case 'archive': out(archive(run ? Number(run) : 14)); break;
       case 'eval': out(evals(run)); break;
       case 'state': out(getRun(run)); break;
@@ -2648,6 +2726,7 @@ if (isMain) {
                                           idea-to-app: record the idea, validate PLAN.md + issues.json, then (with --yes) create the private repo + scaffold
   issues create <owner/repo> <file.json> [--yes]  validate and preview an issue batch; with --yes create it (idempotent by key)
   project <owner/repo>                    idea-to-app status: plan, milestones, next issue, dependency order, burn, loop
+  retire <owner/repo> --reason "<why>"     hide an idea that never got a repo (a leaked fixture) with a recorded event; the log is never rewritten
   loop   <owner/repo>                     next issue to build, or stop (first escalation, project budget, session cap, empty queue)
   automerge <owner/repo> on|off           allow or forbid auto-merge for a project
   archive [days=14]                       compact finished runs older than N days
