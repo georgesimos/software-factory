@@ -7,3 +7,4 @@ export * from './gate.ts';
 export * from './skills.ts';
 export * from './rules.ts';
 export * from './review.ts';
+export * from './workspace.ts';

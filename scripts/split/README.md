@@ -50,3 +50,9 @@ for d in harnesses hosts trackers registry.mjs HARNESSES.md; do git mv packages/
 ```
 
 After the move, re-point the imports in `factory.mjs`, `project.mjs`, `test/project.mjs` and `core/src/*.ts`. The self-test's three `path.join(HERE, 'harnesses'…)` lines become `path.join(HERE, '..', 'adapters', 'harnesses'…)`. They are file paths, the same kind of change as an import path, and they are the only edits to the oracle.
+
+**S6** (#42):
+
+```bash
+$M packages/core/src/workspace.ts git,ls,projectsFile,projects,saveProject,wtFile,wtInfo,worktree,cleanup,gc,deps,localChecks
+```
