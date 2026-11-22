@@ -91,7 +91,7 @@ The skill never writes state itself. It runs `F` subcommands and acts on their J
 | Spec gate | `risk`, `approval` | Untrusted authors and sensitive planned files require `/factory approve`. |
 | Build | `worktree`, `deps`, `gc` | One git worktree per run; the cheapest available way to get `node_modules`. |
 | Review | `axes`, `review` | `axes` picks the review axes from the diff (plus configured extra axes) and records the reviewed commit SHA. `review` records one reviewer's raw output; anything outside the contract becomes a failed review. |
-| Runners | `skills`, `skills set` | Who does each step: the built-in brief, the user's skill or brief, or a Claude Code / Codex tool. See [§5.1](#51-runners). |
+| Runners | `skills`, `skills set`, `skills unset`, `skills catalog`, `ui` | Who does each step: the built-in brief, the user's skill or brief, or a Claude Code / Codex tool. `ui` serves the dashboard on loopback so its Skills sheet can save. See [§5.1](#51-runners). |
 | Decisions | `gate`, `decide`, `merge` | Pure functions over derived state plus live GitHub facts. |
 | After merge | `postmerge`, `revert` | Watches CI on the merge commit; opens a revert PR, never merges it. |
 | Onboarding | `discover`, `sync`, `projects`, `automerge` | Finds local clones, imports open PRs and agent sessions. |
@@ -320,7 +320,26 @@ Each step can be run by the built-in brief, a user skill or brief, or a harness 
 - **Runners:** `default`, `skill` (a name like `x` or `plugin:x`), `brief` (an absolute or `~/` `.md` path) and `provider` (`harness` is `claude-code` or `codex`). Unknown fields, unknown steps, names outside `[\w.-]` and extra axes that reuse a built-in name are refused.
 - **What can't be configured.** There is no runner that turns an axis off. `code` and `security` are always selected, and extra axes only add. `gate`, `decide`, `merge`, the caps, `TRUSTED` and `SENSITIVE` don't read the config.
 - **Contract.** Every reviewer's reply goes through `F review`, which requires a JSON object for the requested axis that passes `validateReview`. Anything else (prose, another axis, unknown fields, a `failed` verdict with no blocking finding) is recorded as a failed review with a high "reviewer output invalid" finding, so it loops back and, at the cap, escalates. A prose provider such as `/code-review` goes through the adapter brief in `references/reviewers.md` first.
-- **User-local only.** There is no in-repo `.factory/skills.json`. Even read from the base branch, one merged PR could change the reviewers and the verifier for every later run. Config is a per-user choice, like `automerge`.
+- **User-local only.** There is no in-repo `.factory/skills.json`. Even read from the base branch, one merged PR could change the reviewers and the verifier for every later run. Config is a per-user choice, like `automerge`. The catalog does offer a project's own `.claude/skills`. Picking one lets the repo supply that reviewer's content, and a PR that edits it touches `.claude/` (`SENSITIVE`), so that PR never auto-merges.
+- **Catalog.** `F skills catalog` and the dashboard read:
+  - the factory default;
+  - the Claude Code built-ins `code-review` and `security-review` (there is no file to read, so this list is hard-coded);
+  - `codex exec` and `codex review` when `codex` is on `PATH`;
+  - `~/.claude/skills` and the synced skills, named `anthropic-skills:<name>`;
+  - `~/.agents/skills`, which run as a brief;
+  - user-scope and synced plugins (skills and commands run as skills, agents as `provider: claude-code`);
+  - the attached clone's `.claude/skills` and its project-scope plugins;
+  - `~/.claude/factory/briefs/*.md`.
+
+  Each descriptor comes from a file's front matter and is display-only. Every offered runner passes `checkRunner`, and the self-test asserts it. The scan runs once per process. MCP tools, and skills that exist only inside a running session, are not on disk; the picker's "A skill by name" field covers them.
+- **`F ui`.** The dashboard served on `127.0.0.1`, with a random token in the printed URL:
+  - `GET /` needs the token;
+  - `POST /skills` needs the token header, a same-origin `Origin`, a JSON content type and an exact `Host` (against DNS rebinding);
+  - it sends no CORS headers, caps the body at 64 KB, and sets `no-store`, `no-referrer` and `DENY` framing;
+  - every write goes through `setSkill`, which validates before writing;
+  - the token is only in the served response, never in the `dashboard.html` that `render()` writes.
+
+  The written file shows the same Skills sheet read-only, and offers each change as a copyable `F skills set` command. The page's 10-second reload pauses while a dialog is open.
 - **Stamped only from the CLI.** `F event`, `F review` and `F gate` stamp the runner. In-process records such as `sync` imports never do, so a tracked human PR never shows a `codex` chip. The verifier's runner is stamped on every `gate` event while it is configured, even in an iteration with nothing to verify.
 - **Resolved per event.** The plan is read at each event, not frozen per run, so a config change mid-run applies from the next step.
 - **Not recorded.** `postmerge` runners leave no event of their own. They can only add a reason to `F revert`, which never merges.

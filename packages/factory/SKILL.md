@@ -203,6 +203,18 @@ Finally, report the outcome with its links, and give the dashboard path, `~/.cla
 
 ## Add your own skill
 
+The easiest way is the dashboard: run `F ui`, open the URL it prints, and click **Skills**. The sheet shows every step for **Global** or one project, with where each choice comes from. **Change** opens a searchable picker of every runner on this machine:
+
+- the factory default;
+- the Claude Code and Codex tools;
+- global skills, plugin skills, commands and agents;
+- the project's own `.claude/skills` and project plugins;
+- your briefs in `~/.claude/factory/briefs/`.
+
+A skill the page can't see can be typed by name. The plain `dashboard.html` file shows the same sheet read-only, and each change copies the `F skills set` command instead of saving. `F skills catalog [owner/repo]` prints the same list as JSON.
+
+To do it from the terminal instead:
+
 Example: an `a11y` review axis for every `.tsx` change, using your own brief.
 
 1. Write the brief, for example `~/.claude/factory/briefs/a11y.md`:
@@ -228,7 +240,9 @@ F skills set default build '{"use":"provider","harness":"codex"}'
 F skills set acme/app spec '{"use":"default"}'
 ```
 
-The config lives in `~/.claude/factory/skills.json`: `"default"` for every project, plus one key per `owner/repo`, which wins step by step. A repo can't ship its own config, so a PR can never pick its reviewers.
+The config lives in `~/.claude/factory/skills.json`: `"default"` for every project, plus one key per `owner/repo`, which wins step by step. `F skills unset <scope> <step>` makes a project inherit the global choice again.
+
+A repo can't ship its own config. If you pick one of the repo's own skills, a PR can change that skill's content, but such a PR touches `.claude/`, so it always escalates.
 
 ## Attach a project
 

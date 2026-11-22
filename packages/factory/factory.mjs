@@ -5,6 +5,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -252,14 +254,141 @@ export function skills(repo, cfg = readSkills()) {
   return { repo, plan, extra, required: REQUIRED_AXES };
 }
 
+// value === undefined removes the step from that scope, so a project inherits the global choice again.
 export function setSkill(scope, key, value) {
+  if (scope !== 'default' && !/^[\w.-]+\/[\w.-]+$/.test(scope || '')) throw new Error(`scope "${scope}" must be "default" or owner/repo`);
   const cfg = readSkills();
   cfg[scope] = { ...cfg[scope], [key]: value };
+  if (value === undefined) { if (!STEP_KEYS.includes(key) && key !== 'axes.extra') throw new Error(`unknown step "${key}"`); delete cfg[scope][key]; }
+  if (!Object.keys(cfg[scope]).length) delete cfg[scope];
   checkSkills(cfg);
   fs.mkdirSync(DIR, { recursive: true });
   fs.writeFileSync(skillsFile() + '.tmp', JSON.stringify(cfg, null, 2));
   fs.renameSync(skillsFile() + '.tmp', skillsFile());
-  return cfg[scope];
+  return cfg[scope] || {};
+}
+
+// Every runner the picker can offer, by where it comes from. Descriptions come from front matter and are display-only.
+const BUILTIN_TOOLS = [ // Claude Code ships these with no file on disk
+  { name: 'code-review', desc: 'Claude Code built-in /code-review: reviews the current diff. Replies in prose, so the adapter brief converts it.' },
+  { name: 'security-review', desc: 'Claude Code built-in /security-review: security review of the pending changes on the branch. Replies in prose.' },
+];
+const front = (file) => {
+  let t = '';
+  try { t = fs.readFileSync(file, 'utf8').slice(0, 6000); } catch { return ''; }
+  const m = /^---\r?\n([^]*?)\r?\n---/.exec(t);
+  const d = m && /^description:[ \t]*(.*(?:\r?\n[ \t]+.*)*)/m.exec(m[1]);
+  return d ? d[1].replace(/^[|>][-+]?\s*/, '').replace(/\s+/g, ' ').replace(/^(["'])(.*)\1$/, '$2').trim().slice(0, 240) : '';
+};
+const tilde = (p) => (p.startsWith(os.homedir() + path.sep) ? '~' + p.slice(os.homedir().length) : p);
+const dirs = (d) => { try { return fs.readdirSync(d, { withFileTypes: true }).filter((e) => e.isDirectory() || e.isSymbolicLink()).map((e) => e.name); } catch { return []; } };
+
+function pluginItems(dir, source, group) {
+  let name = path.basename(dir).replace(/~.*$/, '');
+  try { name = JSON.parse(fs.readFileSync(path.join(dir, '.claude-plugin', 'plugin.json'), 'utf8')).name || name; } catch { /* no manifest: folder name */ }
+  const out = [];
+  const add = (n, kind, file, runner) => NAME.test(`${name}:${n}`) && out.push({ source, group: group || `plugin: ${name}`, name: `${name}:${n}`, kind, desc: front(file), runner });
+  for (const s of dirs(path.join(dir, 'skills'))) { const f = path.join(dir, 'skills', s, 'SKILL.md'); if (fs.existsSync(f)) add(s, 'skill', f, { use: 'skill', name: `${name}:${s}` }); }
+  for (const c of ls(path.join(dir, 'commands')).filter((f) => f.endsWith('.md'))) add(c.slice(0, -3), 'command', path.join(dir, 'commands', c), { use: 'skill', name: `${name}:${c.slice(0, -3)}` });
+  for (const a of ls(path.join(dir, 'agents')).filter((f) => f.endsWith('.md'))) add(a.slice(0, -3), 'agent', path.join(dir, 'agents', a), { use: 'provider', harness: 'claude-code', name: `${name}:${a.slice(0, -3)}` });
+  return out;
+}
+
+let globalCatalog; // one disk scan per process: render() runs on every record()
+function scanGlobal() {
+  const home = os.homedir(), claude = path.join(home, '.claude'), out = [];
+  const skillDir = (root, source, group, runnerOf) => {
+    for (const n of dirs(root)) { const f = path.join(root, n, 'SKILL.md'); if (fs.existsSync(f) && n !== 'software-factory') { const runner = runnerOf(n, f); if (runner) out.push({ source, group, name: runner.name || n, kind: 'skill', desc: front(f), runner }); } }
+  };
+  out.push({ source: 'builtin', group: 'Software Factory', name: 'Factory default', kind: 'brief', desc: 'The built-in brief in SKILL.md or references/reviewers.md.', runner: { use: 'default' } });
+  for (const t of BUILTIN_TOOLS) out.push({ source: 'system', group: 'Claude Code', name: t.name, kind: 'tool', desc: t.desc, runner: { use: 'provider', harness: 'claude-code', name: t.name } });
+  let codex = false;
+  try { execFileSync('codex', ['--version'], { stdio: 'ignore', timeout: 5000 }); codex = true; } catch { /* not installed */ }
+  if (codex) out.push(
+    { source: 'system', group: 'Codex', name: 'codex exec', kind: 'tool', desc: 'Runs Codex headless in the run worktree with the step\'s brief; reviews return the JSON contract via --output-schema.', runner: { use: 'provider', harness: 'codex' } },
+    { source: 'system', group: 'Codex', name: 'codex review', kind: 'tool', desc: 'Codex\'s own reviewer against the base branch. Replies in prose, so the adapter brief converts it.', runner: { use: 'provider', harness: 'codex', name: 'review' } });
+  skillDir(path.join(claude, 'skills'), 'global', '~/.claude/skills', (n) => NAME.test(n) && { use: 'skill', name: n });
+  // shortcut: synced (org-provided) skills are named anthropic-skills:<name> in Claude Code; read the prefix from Claude Code if it ever varies.
+  for (const b of dirs(path.join(claude, 'skills', 'synced'))) skillDir(path.join(claude, 'skills', 'synced', b), 'global', 'Synced skills', (n) => NAME.test(`anthropic-skills:${n}`) && { use: 'skill', name: `anthropic-skills:${n}` });
+  const mine = new Set(out.map((x) => x.name));
+  skillDir(path.join(home, '.agents', 'skills'), 'global', '~/.agents/skills', (n, f) => !mine.has(n) && /^[^'"\s]+$/.test(f) && { use: 'brief', path: tilde(f) }); // other harnesses' skills run as a brief
+  let installed = {};
+  try { installed = JSON.parse(fs.readFileSync(path.join(claude, 'plugins', 'installed_plugins.json'), 'utf8')).plugins || {}; } catch { /* no plugins */ }
+  for (const list of Object.values(installed)) for (const e of list) if (e.scope === 'user' && e.installPath) out.push(...pluginItems(e.installPath, 'global'));
+  for (const b of dirs(path.join(claude, 'plugins', 'synced'))) for (const p of dirs(path.join(claude, 'plugins', 'synced', b))) out.push(...pluginItems(path.join(claude, 'plugins', 'synced', b, p), 'global'));
+  for (const f of ls(path.join(DIR, 'briefs')).filter((f) => f.endsWith('.md'))) {
+    const p = path.join(DIR, 'briefs', f);
+    if (/^[^'"\s]+$/.test(p)) out.push({ source: 'yours', group: tilde(path.join(DIR, 'briefs')), name: f, kind: 'brief', desc: front(p), runner: { use: 'brief', path: tilde(p) } });
+  }
+  return out;
+}
+
+// Project skills come from the attached clone's checkout. Picking one for a review lets the repo supply the reviewer;
+// a PR that changes it touches .claude/, which is SENSITIVE, so it can never auto-merge.
+function scanProject(repo) {
+  const clone = projects()[repo]?.path;
+  if (!clone) return [];
+  const out = [], root = path.join(clone, '.claude', 'skills');
+  for (const n of dirs(root)) { const f = path.join(root, n, 'SKILL.md'); if (fs.existsSync(f) && NAME.test(n)) out.push({ source: 'project', group: '.claude/skills', name: n, kind: 'skill', desc: front(f), runner: { use: 'skill', name: n } }); }
+  let installed = {};
+  try { installed = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json'), 'utf8')).plugins || {}; } catch { /* none */ }
+  for (const list of Object.values(installed)) for (const e of list) if (['project', 'local'].includes(e.scope) && e.projectPath === clone && e.installPath) out.push(...pluginItems(e.installPath, 'project'));
+  return out;
+}
+
+export function catalog(repos = []) {
+  globalCatalog ??= scanGlobal();
+  return { global: globalCatalog, projects: Object.fromEntries(repos.map((r) => [r, scanProject(r)])) };
+}
+
+// Everything the Skills sheet needs: raw config (to tell "set here" from "inherited"), resolved plans and the catalog.
+export function skillsData(repos = []) {
+  try {
+    const cfg = readSkills();
+    const scopes = [...new Set([...Object.keys(projects()), ...repos, ...Object.keys(cfg)])].filter((s) => s !== 'default').sort();
+    return { steps: STEP_KEYS, required: REQUIRED_AXES, config: cfg, scopes,
+      plans: Object.fromEntries(['default', ...scopes].map((s) => [s, skills(s === 'default' ? '' : s, cfg)])), catalog: catalog(scopes) };
+  } catch (e) { return { error: e.message }; } // a bad skills.json must not break rendering an event that was already appended
+}
+
+// `F ui`: the dashboard on a loopback port, where the Skills sheet can save. Pure, so the self-test can drive it.
+const same = (a, b) => typeof a === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+export function uiHandle({ method, url, headers = {}, body = '' }, { token, port }) {
+  const reply = (status, x) => ({ status, type: 'application/json', body: JSON.stringify(x) });
+  const hosts = [`127.0.0.1:${port}`, `localhost:${port}`];
+  if (!hosts.includes(headers.host)) return reply(403, { error: 'unexpected Host header' }); // DNS rebinding
+  const u = new URL(url, 'http://local');
+  if (method === 'GET' && u.pathname === '/') {
+    if (!same(u.searchParams.get('t'), token)) return reply(403, { error: 'open the URL that `F ui` printed' });
+    return { status: 200, type: 'text/html; charset=utf-8', body: page({ ui: { token } }) };
+  }
+  if (method === 'POST' && u.pathname === '/skills') {
+    if (!same(headers['x-factory-token'], token)) return reply(403, { error: 'missing or wrong token' });
+    if (!hosts.some((h) => headers.origin === `http://${h}`)) return reply(403, { error: 'cross-origin request' });
+    if (!/^application\/json\b/.test(headers['content-type'] || '')) return reply(415, { error: 'expected application/json' });
+    try {
+      const { scope, step, runner } = JSON.parse(body);
+      setSkill(scope, step, runner === null ? undefined : runner);
+      return reply(200, skillsData(runRepos()));
+    } catch (e) { return reply(400, { error: e.message }); }
+  }
+  return reply(404, { error: 'not found' });
+}
+
+export function ui(port = 0) {
+  const token = crypto.randomBytes(24).toString('base64url');
+  const server = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; if (body.length > 64 * 1024) req.destroy(); });
+    req.on('end', () => {
+      let r;
+      try { r = uiHandle({ method: req.method, url: req.url, headers: req.headers, body }, { token, port: server.address().port }); } catch (e) { r = { status: 500, type: 'application/json', body: JSON.stringify({ error: e.message }) }; }
+      res.writeHead(r.status, { 'content-type': r.type, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY' });
+      res.end(r.body);
+    });
+  });
+  server.listen(port, '127.0.0.1', () => console.log(`factory ui: http://127.0.0.1:${server.address().port}/?t=${token}\nOnly this URL can change skills.json. Ctrl-C to stop.`));
+  return server;
 }
 
 // F, not the payload, says who did the work. Default runners leave events unchanged; a fallback can only downgrade to default.
@@ -723,7 +852,16 @@ export function metrics(runs) {
   };
 }
 
+const runRepos = () => [...new Set([...Object.keys(derive(read())), ...readArchive().map((a) => a.id)].map((id) => id.split(/[#:]/)[0]))];
+
 export function render() {
+  const out = path.join(DIR, 'dashboard.html');
+  fs.mkdirSync(DIR, { recursive: true });
+  fs.writeFileSync(out, page()); // never carries a ui token: that exists only in what `F ui` serves
+  return out;
+}
+
+export function page(extra = {}) {
   const live = Object.values(derive(read()));
   const archived = readArchive().filter((a) => !live.some((r) => r.id === a.id));
   for (const a of archived) for (const c of a.children || []) { const child = live.find((r) => r.id === c); if (child) child.parent = a.id; }
@@ -734,12 +872,8 @@ export function render() {
   const repoOf = (id) => id.split(/[#:]/)[0];
   const byProject = {};
   for (const p of new Set(runs.map((r) => repoOf(r.id)))) byProject[p] = metrics(runs.filter((r) => repoOf(r.id) === p));
-  const data = JSON.stringify({ generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs }).replace(/</g, '\\u003c');
-  const html = fs.readFileSync(path.join(HERE, 'dashboard.html'), 'utf8').replace('__FACTORY_DATA__', () => data);
-  fs.mkdirSync(DIR, { recursive: true });
-  const out = path.join(DIR, 'dashboard.html');
-  fs.writeFileSync(out, html);
-  return out;
+  const data = JSON.stringify({ generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, skills: skillsData(Object.keys(byProject)), ...extra }).replace(/</g, '\\u003c');
+  return fs.readFileSync(path.join(HERE, 'dashboard.html'), 'utf8').replace('__FACTORY_DATA__', () => data);
 }
 
 // Fixture runs covering every outcome; used by `demo` and `test`.
@@ -1068,6 +1202,59 @@ function skillsTest(cli) {
   set('acme/kit', 'verifier', { use: 'provider', harness: 'claude-code', name: 'pr-review-toolkit:code-reviewer' });
   assert.equal(JSON.parse(cli(['gate', R])).next, 'build');
   assert.equal(derive(read())[R].runners.gate.name, 'pr-review-toolkit:code-reviewer');
+  // Catalog: every source the picker offers, and every runner it offers passes F's own validation.
+  const home = path.join(DIR, 'skhome'), clone = path.join(DIR, 'kitclone');
+  const put = (p, text) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
+  const md = (desc) => `---\nname: x\ndescription: ${desc}\n---\nbody`;
+  put(path.join(home, '.claude/skills/house-review/SKILL.md'), '---\nname: house-review\ndescription: |\n  Our house\n  review rules\n---\n');
+  put(path.join(home, '.claude/skills/synced/b1/xlsx/SKILL.md'), md('"Spreadsheets"'));
+  put(path.join(home, '.claude/plugins/installed_plugins.json'), JSON.stringify({ plugins: {
+    'tk@m': [{ scope: 'user', installPath: path.join(home, 'plug/tk') }],
+    'pj@m': [{ scope: 'project', projectPath: clone, installPath: path.join(home, 'plug/pj') }],
+    'other@m': [{ scope: 'project', projectPath: '/elsewhere', installPath: path.join(home, 'plug/other') }] } }));
+  put(path.join(home, 'plug/tk/.claude-plugin/plugin.json'), '{"name":"tk"}');
+  put(path.join(home, 'plug/tk/agents/hunter.md'), md('Hunts silent failures'));
+  put(path.join(home, 'plug/tk/commands/review-pr.md'), md('Reviews a PR'));
+  put(path.join(home, 'plug/pj/skills/pjs/SKILL.md'), md('Project plugin skill'));
+  put(path.join(home, 'plug/other/skills/nope/SKILL.md'), md('Another project'));
+  put(path.join(home, '.claude/plugins/synced/b1/design~g2/skills/accessibility-review/SKILL.md'), md('WCAG audit'));
+  put(path.join(home, '.agents/skills/find-skills/SKILL.md'), md('Finds skills'));
+  put(path.join(home, '.agents/skills/house-review/SKILL.md'), md('duplicate of the Claude skill'));
+  put(path.join(DIR, 'briefs/a11y.md'), md('Our a11y brief'));
+  put(path.join(clone, '.claude/skills/kit-review/SKILL.md'), md('Repo review'));
+  saveProject('acme/kit', clone);
+  const cat = JSON.parse(cli(['skills', 'catalog', 'acme/kit'], '', { HOME: home }));
+  const by = (n) => cat.global.find((e) => e.name === n);
+  assert.equal(by('house-review').desc, 'Our house review rules');
+  assert.equal(by('anthropic-skills:xlsx').desc, 'Spreadsheets');
+  assert.deepEqual(by('tk:hunter').runner, { use: 'provider', harness: 'claude-code', name: 'tk:hunter' });
+  assert.deepEqual(by('tk:review-pr').runner, { use: 'skill', name: 'tk:review-pr' });
+  assert.equal(by('design:accessibility-review').group, 'plugin: design');
+  assert.deepEqual(by('find-skills').runner, { use: 'brief', path: '~/.agents/skills/find-skills/SKILL.md' });
+  assert.equal(cat.global.filter((e) => e.name === 'house-review').length, 1);
+  assert.equal(cat.global.find((e) => e.source === 'yours').runner.path, path.join(DIR, 'briefs/a11y.md'));
+  assert.deepEqual(cat.projects['acme/kit'].map((e) => e.name).sort(), ['kit-review', 'pj:pjs']);
+  for (const e of [...cat.global, ...cat.projects['acme/kit']]) checkRunner(e.runner, e.name);
+  // F ui: only the printed URL reads the page, only a same-origin JSON POST with the token writes, and invalid writes change nothing.
+  const tok = 't'.repeat(32), ctx = { token: tok, port: 4242 }, H = { host: '127.0.0.1:4242' };
+  const post = (h, body) => uiHandle({ method: 'POST', url: '/skills', headers: { ...H, origin: 'http://127.0.0.1:4242', 'content-type': 'application/json', 'x-factory-token': tok, ...h }, body: JSON.stringify(body) }, ctx);
+  const ui1 = { scope: 'acme/kit', step: 'review.ui', runner: { use: 'skill', name: 'brand-review' } };
+  assert.equal(uiHandle({ method: 'GET', url: '/?t=' + tok, headers: { host: 'evil.test:4242' } }, ctx).status, 403);
+  assert.equal(uiHandle({ method: 'GET', url: '/', headers: H }, ctx).status, 403);
+  assert.ok(uiHandle({ method: 'GET', url: '/?t=' + tok, headers: H }, ctx).body.includes(tok));
+  const before = fs.readFileSync(path.join(DIR, 'skills.json'), 'utf8');
+  assert.equal(post({ 'x-factory-token': 'u'.repeat(32) }, ui1).status, 403);
+  assert.equal(post({ origin: 'https://evil.test' }, ui1).status, 403);
+  assert.equal(post({ 'content-type': 'text/plain' }, ui1).status, 415);
+  assert.equal(post({}, { ...ui1, step: 'review.lint' }).status, 400);
+  assert.equal(post({}, { ...ui1, scope: '__proto__' }).status, 400);
+  assert.equal(fs.readFileSync(path.join(DIR, 'skills.json'), 'utf8'), before);
+  const saved = post({}, ui1);
+  assert.equal(saved.status, 200);
+  assert.equal(JSON.parse(saved.body).plans['acme/kit'].plan['review.ui'].name, 'brand-review');
+  assert.deepEqual(JSON.parse(post({}, { ...ui1, runner: null }).body).plans['acme/kit'].plan['review.ui'], { use: 'default' }); // unset -> inherits
+  assert.equal(JSON.parse(cli(['skills', 'unset', 'acme/kit', 'build'])).build, undefined);
+  assert.ok(!fs.readFileSync(render(), 'utf8').includes(tok), 'the written dashboard never carries the ui token');
   // A hand-edited config is validated on every read, so it fails loudly instead of silently running defaults.
   fs.writeFileSync(path.join(DIR, 'skills.json'), '{"acme/kit":{"review.lint":{"use":"default"}}}');
   assert.throws(() => cli(['skills', 'acme/kit']), /unknown step "review.lint"/);
@@ -1222,7 +1409,9 @@ if (isMain) {
         record(run, 'review', status, payload, { fallback });
         out({ status, findings: payload.findings }); break;
       }
-      case 'skills': { // skills <owner/repo> | skills set <owner/repo|default> <step> <json>
+      case 'skills': { // skills <owner/repo> | skills set|unset <owner/repo|default> <step> [json] | skills catalog [owner/repo]
+        if (run === 'catalog') { out(catalog(rest)); break; }
+        if (run === 'unset') { out(setSkill(rest[0], rest[1], undefined)); break; }
         if (run !== 'set') { out(skills(run || '')); break; }
         const [scope, key, spec] = rest;
         if (!scope || !key || !spec) throw new Error('usage: skills set <owner/repo|default> <step> <json runner>');
@@ -1270,6 +1459,7 @@ if (isMain) {
       case 'state': out(getRun(run)); break;
       case 'dir': console.log(runDir(run)); break;
       case 'render': console.log(render()); break;
+      case 'ui': ui(Number(run) || 0); break;
       case 'demo': // never pollute the real log with fixtures
         if (!process.env.FACTORY_DIR) DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-demo-'));
         console.log(demo()); break;
@@ -1287,6 +1477,9 @@ if (isMain) {
   review <run> <axis> [--tokens n] [--cost-usd x] [--fallback why]  record a reviewer's raw reply from stdin (invalid = failed review)
   skills <owner/repo>                     print who runs each step (default, skill, brief or provider)
   skills set <owner/repo|default> <step> <json>  configure one step (intake, spec, build, review.<axis>, verifier, postmerge, axes.extra)
+  skills unset <owner/repo|default> <step>       drop a step's choice (a project then inherits the global one)
+  skills catalog [owner/repo...]          every runner on this machine: built-in, Claude Code / Codex, global, project, your briefs
+  ui     [port]                           serve the dashboard on 127.0.0.1 with a token, so the Skills sheet can save
   gc                                      remove worktrees of finished runs
   gate   <run>                            compute + record gate verdict
   decide <run>                            fetch CI + diff, compute + record merge/escalate

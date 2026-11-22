@@ -308,6 +308,78 @@ body.open .metric:last-child:nth-child(3n + 2) { grid-column: span 2; }
   .tl li { grid-template-columns: 50px 14px 1fr; }
   .tl time { white-space: normal; line-height: 1.35; padding-top: 3px; }
 }
+/* Skills sheet: who runs each step */
+.skills-btn { flex: none; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px; background: none; font-size: 13px; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
+.skills-btn:hover { color: var(--ink); border-color: var(--line-2); }
+dialog.sk { width: min(880px, calc(100vw - 24px)); max-height: calc(100vh - 40px); padding: 0; border: 1px solid var(--line-2); border-radius: 10px;
+  background: var(--surface); color: var(--ink); box-shadow: 0 24px 64px rgba(0, 0, 0, .22); overflow: auto; }
+dialog.sk::backdrop { background: color-mix(in srgb, #000 34%, transparent); }
+dialog.sk-pick { width: min(720px, calc(100vw - 24px)); height: min(760px, calc(100vh - 40px)); overflow: hidden; }
+dialog.sk-pick[open] { display: flex; flex-direction: column; }
+.sk-head { position: sticky; top: 0; z-index: 2; display: flex; align-items: flex-start; gap: 16px; padding: 20px 24px 14px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.sk-head h2, .sk-head h3 { margin: 0; font: 600 17px/1.3 var(--sans); letter-spacing: -.01em; }
+.sk-head p { margin: 4px 0 0; }
+.sk-body { padding: 16px 24px 24px; }
+.sk-live { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; font: 12px/1.45 var(--mono); color: var(--ink-3); }
+.sk-live code { color: var(--ink-2); }
+.sk-err { margin: 0 0 14px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent); border-radius: var(--r); color: var(--bad); font-size: 13px; }
+.sk-scope { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; margin-bottom: 4px; }
+.sk-scope .seg { max-width: 100%; }
+.sk-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.sk-table th, .sk-table td { padding: 10px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+.sk-table .sk-group th { padding: 22px 8px 8px; font: 500 10.5px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.sk-table th[scope="row"] { width: 28%; font: 500 13px/1.35 var(--sans); letter-spacing: 0; text-transform: none; color: var(--ink); white-space: nowrap; }
+.sk-table .sk-act { width: 1%; }
+.sk-req { margin-left: 6px; }
+.sk-run { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.sk-name { font: 500 12.5px/1.35 var(--mono); overflow-wrap: anywhere; }
+.sk-name.def { color: var(--ink-3); font-weight: 400; }
+.sk-from { font-size: 12px; color: var(--ink-3); }
+.sk-from.here { color: var(--accent); }
+.sk-act { text-align: right; white-space: nowrap; }
+.sk-act button + button { margin-left: 6px; }
+.sk-axes { margin-top: 28px; }
+.sk-axes h3 { margin: 0 0 4px; font: 600 14px var(--sans); }
+.sk-axes ul { margin: 12px 0; padding: 0; list-style: none; }
+.sk-axes li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.sk-axes li .sk-act { margin-left: auto; }
+.sk-glob { font: 11.5px var(--mono); color: var(--ink-2); }
+.sk-status { min-height: 1.4em; margin: 12px 0 0; font-size: 12.5px; color: var(--ink-2); overflow-wrap: anywhere; }
+.sk-status.bad { color: var(--bad); }
+.sk-status code { display: block; margin-top: 6px; padding: 8px 10px; border-radius: var(--r); background: var(--sunken); font: 11.5px/1.5 var(--mono); color: var(--ink); white-space: pre-wrap; user-select: all; }
+.sk-primary { padding: 6px 14px; border: 1px solid var(--ink); border-radius: 6px; background: var(--ink); color: var(--bg); font: 500 13px var(--sans); cursor: pointer; }
+.sk-primary:disabled { opacity: .45; cursor: default; }
+.sk-ghost { padding: 6px 12px; border: 1px solid var(--line); border-radius: 6px; background: none; font: 13px var(--sans); color: var(--ink-2); cursor: pointer; }
+.sk-input { width: 100%; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--bg); color: var(--ink); font: 13px var(--sans); }
+.sk-input.mono { font: 12.5px var(--mono); }
+.sk-field { display: grid; gap: 5px; font-size: 12px; color: var(--ink-2); }
+.sk-fields { display: grid; grid-template-columns: 1fr 2fr; gap: 10px; padding: 14px 24px 0; }
+.sk-tools { display: grid; gap: 10px; padding: 14px 24px 10px; border-bottom: 1px solid var(--line); }
+.sk-note { margin: 0; font-size: 12px; color: var(--ink-3); }
+.sk-list { flex: 1; overflow: auto; padding: 4px 16px 12px; }
+.sk-list fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.sk-list h4 { position: sticky; top: 0; z-index: 1; margin: 0; padding: 12px 8px 6px; background: var(--surface); font: 500 10.5px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3); }
+.sk-opt { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 2px 10px; padding: 9px 8px; border-radius: 6px; cursor: pointer; }
+.sk-opt:hover { background: var(--sunken); }
+.sk-opt:has(input:checked) { background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent); }
+.sk-opt input { margin: 3px 0 0; accent-color: var(--accent); }
+.sk-opt .t { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+.sk-opt .d { grid-column: 2; font-size: 12px; line-height: 1.45; color: var(--ink-3); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.sk-opt .w { grid-column: 2; font-size: 11.5px; color: var(--warn); }
+.sk-opt .sk-input { grid-column: 2; margin-top: 6px; }
+.sk-empty { padding: 24px 8px; color: var(--ink-3); font-size: 13px; }
+.sk-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 24px 16px; border-top: 1px solid var(--line); }
+.sk-foot .sk-status { flex: 1 1 260px; margin: 0; }
+.sk-foot .sk-ghost { margin-left: auto; }
+@media (max-width: 600px) {
+  .sk-head, .sk-body, .sk-tools, .sk-foot, .sk-fields { padding-left: 16px; padding-right: 16px; }
+  .sk-fields { grid-template-columns: 1fr; }
+  .sk-table, .sk-table tbody, .sk-table tr, .sk-table th, .sk-table td { display: block; width: auto; }
+  .sk-table tr.sk-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .sk-table tr.sk-row > * { padding: 0; border: 0; }
+  .sk-table tr.sk-row > .sk-runcell { grid-column: 1 / -1; grid-row: 2; }
+  .skills-btn { padding: 5px 8px; }
+}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
@@ -752,6 +824,229 @@ window.addEventListener('hashchange', () => {
 window.addEventListener('popstate', render);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !document.getElementById('detail').hidden) { e.preventDefault(); closeRun(); } });
 
+// ---- Skills: who runs each step. `F ui` serves this page with a token so changes save; a plain file offers the command instead.
+const SK = { token: obj(DATA.ui).token || null, scope: 'default' };
+const skData = () => obj(DATA.skills);
+const F_CMD = 'node ~/.claude/skills/software-factory/factory.mjs';
+const STEP_LABEL = { intake: 'Intake', spec: 'Spec', build: 'Build', verifier: 'Verifier', postmerge: 'Post-merge' };
+const stepLabel = (k) => STEP_LABEL[k] || (String(k).startsWith('review.') ? 'Review · ' + k.slice(7) : String(k));
+const SK_SOURCES = [['all', 'All'], ['builtin', 'Built-in'], ['system', 'Claude Code & Codex'], ['global', 'Global'], ['project', 'Project'], ['yours', 'Your briefs']];
+const runnerKey = (x) => { x = obj(x); return [x.use || 'default', x.harness || '', x.name || '', x.path || ''].join('|'); };
+const skEntries = (scope) => [...arr(obj(skData().catalog).global), ...(scope === 'default' ? [] : arr(obj(obj(skData().catalog).projects)[scope]))].map(obj);
+const findEntry = (runner, scope) => skEntries(scope).find((e) => runnerKey(e.runner) === runnerKey(runner));
+const runnerName = (x, scope) => {
+  x = obj(x);
+  if (!x.use || x.use === 'default') return 'Factory default';
+  const e = findEntry(x, scope);
+  return e ? e.name : x.use === 'brief' ? String(x.path || '') : x.use === 'provider' ? [x.harness, x.name].filter(Boolean).join(': ') : String(x.name || '');
+};
+const kindOf = (x, scope) => (findEntry(x, scope) || {}).kind || (obj(x).use === 'provider' ? 'tool' : obj(x).use || '');
+
+async function skSave(scope, step, runner) {
+  const res = await fetch('/skills', { method: 'POST', headers: { 'content-type': 'application/json', 'x-factory-token': SK.token }, body: JSON.stringify({ scope, step, runner }) });
+  const x = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(x.error || 'save failed (' + res.status + ')');
+  DATA.skills = x;
+}
+const skCommand = (scope, step, runner) => runner === null
+  ? `${F_CMD} skills unset ${shq(scope)} ${shq(step)}`
+  : `${F_CMD} skills set ${shq(scope)} ${shq(step)} ${shq(JSON.stringify(runner))}`;
+
+// Saves live, or (file mode) copies the equivalent command and shows it in `status`.
+async function skApply(scope, step, runner, status) {
+  if (SK.token) { await skSave(scope, step, runner); return 'Saved.'; }
+  const cmd = skCommand(scope, step, runner);
+  const ok = await copyText(cmd);
+  status.className = 'sk-status';
+  status.replaceChildren(ok ? 'Command copied. Run it in a terminal, or open this page with F ui to save directly:' : 'Run this in a terminal:', el('code', {}, cmd));
+  return null;
+}
+
+function skillsButton() {
+  if (!DATA.skills) return;
+  const b = el('button', { class: 'skills-btn', 'data-k': 'skills-btn', 'aria-haspopup': 'dialog', title: 'Who runs each step' }, 'Skills');
+  b.onclick = openSkills;
+  document.querySelector('.top').insertBefore(b, document.getElementById('theme'));
+}
+
+function openSkills() {
+  const d = el('dialog', { class: 'sk', 'aria-labelledby': 'sk-title' });
+  d.addEventListener('keydown', (e) => { if (e.key === 'Escape') e.stopPropagation(); }); // don't also close a run behind it
+  d.addEventListener('close', () => { d.remove(); restoreFocus('skills-btn'); });
+  document.body.append(d);
+  fillSkills(d);
+  d.showModal();
+}
+
+function fillSkills(d, msg) {
+  const S = skData(), cfg = obj(S.config), scopes = arr(S.scopes);
+  if (SK.scope !== 'default' && !scopes.includes(SK.scope)) SK.scope = 'default';
+  const scope = SK.scope, mine = obj(cfg[scope]), glob = obj(cfg.default), plan = obj(obj(obj(S.plans)[scope]).plan);
+  const status = el('p', { class: 'sk-status', role: 'status', 'aria-live': 'polite' }, msg || '');
+  const close = el('button', { class: 'close', 'aria-label': 'Close skills' }, 'Close', el('kbd', {}, 'Esc'));
+  close.onclick = () => d.close();
+  const head = el('div', { class: 'sk-head' }, el('div', {},
+    el('h2', { id: 'sk-title' }, 'Skills'),
+    el('p', { class: 'muted' }, 'Who runs each step: the factory’s built-in brief, a skill, an agent, a Claude Code or Codex tool, or your own brief.')), close);
+
+  const live = SK.token
+    ? el('p', { class: 'sk-live' }, dot('ok'), 'Live: changes save to ~/.claude/factory/skills.json')
+    : el('p', { class: 'sk-live' }, dot('idle'), el('span', {}, 'Read-only page. Run ', el('code', {}, 'F ui'), ' to edit here; until then, each change gives you the command to run.'));
+  if (S.error) {
+    d.replaceChildren(head, el('div', { class: 'sk-body' }, live, el('p', { class: 'sk-err' }, 'skills.json is invalid: ' + S.error + '. Fix the file, then reload.')));
+    return;
+  }
+
+  const seg = el('nav', { class: 'seg', 'aria-label': 'Scope' }, ['default', ...scopes].map((s) => {
+    const b = el('button', { 'aria-pressed': String(s === scope), 'data-k': 'sk-scope:' + s }, s === 'default' ? 'Global' : s);
+    b.onclick = () => { SK.scope = s; fillSkills(d); restoreFocus('sk-scope:' + s); };
+    return b;
+  }));
+  const scopeNote = el('p', { class: 'muted' }, scope === 'default' ? 'Applies to every project unless the project picks its own.' : `Overrides the global choice for ${scope}, step by step.`);
+
+  const act = async (step, runner, k) => {
+    try { const m = await skApply(scope, step, runner, status); if (m) fillSkills(d, m); restoreFocus(k); }
+    catch (e) { status.className = 'sk-status bad'; status.textContent = e.message; }
+  };
+  const row = (step) => {
+    const here = step in mine, inherited = scope !== 'default' && !here && step in glob;
+    const r = plan[step] || { use: 'default' };
+    const isDef = !obj(r).use || r.use === 'default';
+    const label = stepLabel(step), axis = step.startsWith('review.') ? step.slice(7) : null;
+    const change = el('button', { class: 'copy', 'data-k': 'sk-change:' + step, 'aria-label': 'Change runner for ' + label }, 'Change');
+    change.onclick = async () => {
+      const picked = await pickRunner({ title: label, step, scope, current: r });
+      if (picked) await act(step, picked.runner, 'sk-change:' + step);
+    };
+    const reset = here ? el('button', { class: 'copy', 'data-k': 'sk-reset:' + step, 'aria-label': (scope === 'default' ? 'Reset ' : 'Use the global runner for ') + label }, scope === 'default' ? 'Reset' : 'Use global') : null;
+    if (reset) reset.onclick = () => act(step, null, 'sk-change:' + step);
+    return el('tr', { class: 'sk-row' },
+      el('th', { scope: 'row' }, label, axis && arr(S.required).includes(axis) ? chip('required', 'quiet sk-req') : null),
+      el('td', { class: 'sk-runcell' }, el('div', { class: 'sk-run' },
+        el('span', { class: 'sk-name' + (isDef ? ' def' : '') }, runnerName(r, scope)),
+        isDef ? null : chip(kindOf(r, scope)),
+        el('span', { class: 'sk-from' + (here ? ' here' : '') }, here ? (scope === 'default' ? 'set globally' : 'set for this project') : inherited ? 'from global' : 'built-in'))),
+      el('td', { class: 'sk-act' }, change, reset));
+  };
+  const steps = arr(S.steps);
+  const groups = [['Pipeline', steps.filter((k) => ['intake', 'spec', 'build'].includes(k))], ['Review axes', steps.filter((k) => k.startsWith('review.'))], ['After review', steps.filter((k) => ['verifier', 'postmerge'].includes(k))]];
+  const table = el('table', { class: 'sk-table' }, el('caption', { class: 'sr' }, 'Runner per step for ' + (scope === 'default' ? 'all projects' : scope)),
+    groups.map(([g, ks]) => el('tbody', {}, el('tr', { class: 'sk-group' }, el('th', { colspan: '3', scope: 'colgroup' }, g)), ks.map(row))));
+
+  // Extra axes: a scope's list is saved whole. Under a project, global axes show read-only.
+  const own = arr(mine['axes.extra']).map(obj), fromGlobal = scope === 'default' ? [] : arr(glob['axes.extra']).map(obj).filter((x) => !own.some((y) => y.axis === x.axis));
+  const saveAxes = (list, k) => act('axes.extra', list.length ? list : null, k);
+  const axisItem = (x, editable) => {
+    const items = [chip(x.axis), el('span', { class: 'sk-glob' }, arr(x.when).join(', ')), el('span', { class: 'sk-name' }, runnerName(x, scope)), editable ? null : el('span', { class: 'sk-from' }, 'from global')];
+    if (editable) {
+      const edit = el('button', { class: 'copy', 'data-k': 'sk-axis:' + x.axis, 'aria-label': 'Edit the ' + x.axis + ' axis' }, 'Edit');
+      edit.onclick = async () => {
+        const { axis: _a, when: _w, ...runner } = x;
+        const p = await pickRunner({ title: 'Review · ' + x.axis, step: 'axes.extra', scope, current: runner, axis: x });
+        if (p) await saveAxes(own.map((y) => (y.axis === x.axis ? { axis: p.axis, when: p.when, ...p.runner } : y)), 'sk-axis:' + p.axis);
+      };
+      const rm = el('button', { class: 'copy', 'aria-label': 'Remove the ' + x.axis + ' axis' }, 'Remove');
+      rm.onclick = () => saveAxes(own.filter((y) => y.axis !== x.axis), 'sk-add-axis');
+      items.push(el('span', { class: 'sk-act' }, edit, rm));
+    }
+    return el('li', {}, items);
+  };
+  const add = el('button', { class: 'sk-ghost', 'data-k': 'sk-add-axis' }, '+ Add axis');
+  add.onclick = async () => {
+    const p = await pickRunner({ title: 'New review axis', step: 'axes.extra', scope, current: null, axis: { axis: '', when: [] } });
+    if (p) await saveAxes([...own.filter((y) => y.axis !== p.axis), { axis: p.axis, when: p.when, ...p.runner }], 'sk-axis:' + p.axis);
+  };
+  const axes = el('section', { class: 'sk-axes', 'aria-labelledby': 'sk-axes-t' },
+    el('h3', { id: 'sk-axes-t' }, 'Extra review axes'),
+    el('p', { class: 'muted' }, 'Reviewed next to the built-in axes whenever a changed file matches. They add to code and security, never replace them.'),
+    own.length || fromGlobal.length ? el('ul', {}, [...fromGlobal.map((x) => axisItem(x, false)), ...own.map((x) => axisItem(x, true))]) : null, add);
+
+  d.replaceChildren(head, el('div', { class: 'sk-body' }, live, el('div', { class: 'sk-scope' }, seg), scopeNote, table, axes, status));
+}
+
+// Resolves to {runner, axis?, when?} or null. Every catalog entry is offered for every step.
+function pickRunner({ title, step, scope, current, axis }) {
+  return new Promise((resolve) => {
+    const entries = skEntries(scope);
+    const globalNames = new Set(entries.filter((e) => e.source === 'global').map((e) => obj(e.runner).name));
+    const isReview = step.startsWith('review.') || step === 'axes.extra' || step === 'verifier';
+    const d = el('dialog', { class: 'sk sk-pick', 'aria-labelledby': 'pk-title' });
+    let filter = 'all', result = null;
+    const q = el('input', { class: 'sk-input', type: 'search', placeholder: `Search ${entries.length} skills, agents and tools`, 'aria-label': 'Search runners', 'aria-controls': 'pk-list' });
+    const list = el('div', { class: 'sk-list', id: 'pk-list' });
+    const msg = el('p', { class: 'sk-status', role: 'status', 'aria-live': 'polite' });
+    const skillName = el('input', { class: 'sk-input mono', placeholder: 'skill or plugin:skill', 'aria-label': 'Skill name' });
+    const briefPath = el('input', { class: 'sk-input mono', placeholder: '~/.claude/factory/briefs/my-review.md', 'aria-label': 'Brief file path' });
+    const axisName = axis ? el('input', { class: 'sk-input mono', value: axis.axis || '', placeholder: 'a11y', 'aria-label': 'Axis name', pattern: '[a-z][a-z0-9-]*' }) : null;
+    const globs = axis ? el('input', { class: 'sk-input mono', value: arr(axis.when).join(', '), placeholder: '**/*.tsx, **/*.jsx', 'aria-label': 'Files that select this axis' }) : null;
+    const cur = current ? runnerKey(current) : null;
+    if (current && !findEntry(current, scope)) { if (obj(current).use === 'skill') skillName.value = current.name || ''; if (obj(current).use === 'brief') briefPath.value = current.path || ''; }
+
+    const filters = el('nav', { class: 'seg', 'aria-label': 'Source' });
+    const counts = Object.fromEntries(SK_SOURCES.map(([k]) => [k, k === 'all' ? entries.length : entries.filter((e) => e.source === k).length]));
+    const drawFilters = () => filters.replaceChildren(...SK_SOURCES.filter(([k]) => counts[k] || k === 'all').map(([k, label]) => {
+      const b = el('button', { type: 'button', 'aria-pressed': String(k === filter) }, label, el('span', { class: 'own' }, ' ' + counts[k]));
+      b.onclick = () => { filter = k; drawFilters(); draw(); };
+      return b;
+    }));
+    const opt = (value, checked, title, extra) => el('label', { class: 'sk-opt' }, el('input', { type: 'radio', name: 'pk', value, checked: checked ? '' : null }), title, ...extra);
+    const draw = () => {
+      const words = q.value.toLowerCase().split(/\s+/).filter(Boolean);
+      const shown = entries.map((e, i) => [e, i]).filter(([e]) => (filter === 'all' || e.source === filter) &&
+        words.every((w) => [e.name, e.desc, e.group, e.kind].join(' ').toLowerCase().includes(w)));
+      const byGroup = new Map();
+      for (const [e, i] of shown) { const g = (e.source === 'project' ? 'Project · ' : '') + e.group; if (!byGroup.has(g)) byGroup.set(g, []); byGroup.get(g).push([e, i]); }
+      const groups = [...byGroup].map(([g, items]) => el('div', { role: 'group', 'aria-label': g }, el('h4', {}, g), items.map(([e, i]) => opt(String(i), runnerKey(e.runner) === cur,
+        el('span', { class: 't' }, el('span', { class: 'sk-name' }, e.name), chip(e.kind)),
+        [e.desc ? el('span', { class: 'd' }, e.desc) : null,
+          e.source === 'project' && isReview ? el('span', { class: 'w' }, 'Comes from the repo: a PR that edits it touches .claude/, so it can never auto-merge.') : null,
+          e.source === 'project' && globalNames.has(obj(e.runner).name) ? el('span', { class: 'w' }, 'A global skill has the same name; the config stores only the name.') : null]))));
+      const custom = el('div', { role: 'group', 'aria-label': 'Not listed' }, el('h4', {}, 'Not listed'),
+        opt('custom-skill', !!skillName.value, el('span', { class: 't' }, el('span', { class: 'sk-name' }, 'A skill by name'), chip('skill')), [el('span', { class: 'd' }, 'Any skill Claude Code can invoke, including ones this page can’t see.'), skillName]),
+        opt('custom-brief', !!briefPath.value, el('span', { class: 't' }, el('span', { class: 'sk-name' }, 'A markdown brief'), chip('brief')), [el('span', { class: 'd' }, 'An absolute or ~/ path to a .md file, outside any repo.'), briefPath]));
+      list.replaceChildren(el('fieldset', {}, el('legend', { class: 'sr' }, 'Runner for ' + title), groups.length ? groups : el('p', { class: 'sk-empty' }, 'Nothing matches. Try another word, or name a skill below.'), custom));
+    };
+    for (const inp of [skillName, briefPath]) inp.addEventListener('input', () => { const r = list.querySelector(`input[value="${inp === skillName ? 'custom-skill' : 'custom-brief'}"]`); if (r) r.checked = true; });
+    q.addEventListener('input', draw);
+
+    const done = el('button', { class: 'sk-primary', type: 'button' }, SK.token ? 'Save' : 'Copy command');
+    const cancel = el('button', { class: 'sk-ghost', type: 'button' }, 'Cancel');
+    cancel.onclick = () => d.close();
+    done.onclick = () => {
+      const v = list.querySelector('input[name="pk"]:checked')?.value;
+      let runner = null;
+      if (v === 'custom-skill') runner = skillName.value.trim() ? { use: 'skill', name: skillName.value.trim() } : null;
+      else if (v === 'custom-brief') runner = briefPath.value.trim() ? { use: 'brief', path: briefPath.value.trim() } : null;
+      else if (v != null) runner = entries[Number(v)].runner;
+      const fail = (t) => { msg.className = 'sk-status bad'; msg.textContent = t; };
+      if (!runner) return fail('Pick a runner, or fill in the name or path you chose.');
+      if (axis) {
+        const name = axisName.value.trim(), when = globs.value.split(',').map((g) => g.trim()).filter(Boolean);
+        if (!/^[a-z][a-z0-9-]{0,30}$/.test(name)) return fail('Axis name: lowercase letters, digits and dashes, starting with a letter.');
+        if (!when.length) return fail('Add at least one file pattern, such as **/*.tsx.');
+        if (runner.use === 'default') return fail('An extra axis has no built-in brief: pick a skill, agent, tool or brief.');
+        result = { runner, axis: name, when };
+      } else result = { runner };
+      d.close();
+    };
+    d.addEventListener('keydown', (e) => { if (e.key === 'Escape') e.stopPropagation(); });
+    d.addEventListener('close', () => { d.remove(); resolve(result); });
+
+    const head = el('div', { class: 'sk-head' }, el('div', {}, el('h3', { id: 'pk-title' }, 'Runner for ' + title),
+      el('p', { class: 'muted' }, scope === 'default' ? 'Global choice' : 'For ' + scope)));
+    const fields = axis ? el('div', { class: 'sk-fields' }, el('label', { class: 'sk-field' }, 'Axis name', axisName), el('label', { class: 'sk-field' }, 'Review it when a changed file matches', globs)) : null;
+    const tools = el('div', { class: 'sk-tools' }, q, filters,
+      isReview ? el('p', { class: 'sk-note' }, 'A reviewer must reply with the review JSON. Prose tools go through the adapter brief; any other reply fails the axis.') : null);
+    d.append(head, ...(fields ? [fields] : []), tools, list, el('div', { class: 'sk-foot' }, msg, cancel, done));
+    drawFilters(); draw();
+    document.body.append(d);
+    d.showModal();
+    (axisName && !axisName.value ? axisName : q).focus();
+  });
+}
+
+skillsButton();
+
 // file:// can't fetch, so the factory rewrites this file on every event and the page reloads to pick it up.
 // Keep scroll and keyboard focus across that reload so it is invisible to the reader.
 history.scrollRestoration = 'manual';
@@ -773,7 +1068,8 @@ window.addEventListener('pagehide', () => {
   session('factory.view', JSON.stringify({ x: wrap ? wrap.scrollLeft : 0, y: window.scrollY, d: document.getElementById('detail').scrollTop,
     k: document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.k : null }));
 });
-setTimeout(() => location.reload(), 10000);
+const tick = () => (document.querySelector('dialog[open]') ? setTimeout(tick, 10000) : location.reload()); // never reload under an open dialog
+setTimeout(tick, 10000);
 </script>
 </body>
 </html>
