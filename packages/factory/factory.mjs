@@ -1909,7 +1909,7 @@ function onboardTest(cli) {
     const s = ok('/onboard', {});
     assert.deepEqual(s.harnesses.map((h) => [h.id, h.installed, h.login.ok]), [['claude-code', true, true], ['codex', true, true]]);
     assert.deepEqual(s.repos.map((r) => [r.repo, r.path, r.attached]), [['acme/app', clone, false]]);
-    assert.deepEqual([s.hooks.create, s.hooks.connectors], [false, null]); // the idea-to-app and ship hooks stay off until those land
+    assert.deepEqual([s.hooks.create, s.hooks.connectors], [hooks().create, null]); // connectors are listed only when the CLI loaded packages/ship (F onboard, F ui)
     // Writes: invalid input is refused and changes nothing.
     assert.match(err('/onboard/sync', { repo: 'acme/app', path: 'Development/app' }), /absolute path of a local clone/);
     assert.match(err('/onboard/sync', { repo: 'acme/app', path: home }), /local clone/);
@@ -1939,7 +1939,7 @@ function onboardTest(cli) {
     assert.equal(again.projects['acme/app'].autoMerge, false); // ...and keeps the project's settings
     assert.equal(again.rules['acme/app'].policy.ci.value, 'skip');
     const txt = cli(['onboard'], '', { FACTORY_DIR: DIR, HOME: home, PATH: process.env.PATH });
-    for (const re of [/✓ acme\/app {2}/, /acme\/app: web, database/, /acme\/app: ci="skip", checks\.commands=\["pnpm test"\] {3}auto-merge off/, /Create from an idea: coming soon/]) assert.match(txt, re);
+    for (const re of [/✓ acme\/app {2}/, /acme\/app: web, database/, /acme\/app: ci="skip", checks\.commands=\["pnpm test"\] {3}auto-merge off/, hooks().create ? /Create from an idea: .*factory\.mjs new/ : /Create from an idea: coming soon/]) assert.match(txt, re);
     assert.deepEqual(JSON.parse(cli(['onboard', 'ship', 'default', 'mobile'], '', { FACTORY_DIR: DIR })), { ship: ['mobile'] });
     assert.throws(() => cli(['onboard', 'ship', 'default', 'tv'], '', { FACTORY_DIR: DIR }), /web\|mobile\|database/);
     // The static page carries the wizard's cheap data, never the slow or private parts.

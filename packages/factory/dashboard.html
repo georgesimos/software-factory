@@ -1174,7 +1174,7 @@ const skData = () => obj(DATA.skills);
 const F_CMD = 'node ~/.claude/skills/software-factory/factory.mjs';
 const STEP_LABEL = { intake: 'Intake', spec: 'Spec', build: 'Build', verifier: 'Verifier', postmerge: 'Post-merge' };
 const stepLabel = (k) => STEP_LABEL[k] || (String(k).startsWith('review.') ? 'Review · ' + k.slice(7) : String(k));
-const SK_SOURCES = [['all', 'All'], ['builtin', 'Built-in'], ['system', 'Claude Code & Codex'], ['global', 'Global'], ['project', 'Project'], ['yours', 'Your briefs']];
+const SK_SOURCES = [['all', 'All'], ['builtin', 'Built-in'], ['system', 'Harness tools'], ['global', 'Global'], ['project', 'Project'], ['yours', 'Your briefs']];
 const runnerKey = (x) => { x = obj(x); return [x.use || 'default', x.harness || '', x.name || '', x.path || ''].join('|'); };
 const skEntries = (scope) => [...arr(obj(skData().catalog).global), ...(scope === 'default' ? [] : arr(obj(obj(skData().catalog).projects)[scope]))].map(obj);
 const findEntry = (runner, scope) => skEntries(scope).find((e) => runnerKey(e.runner) === runnerKey(runner));
@@ -1231,7 +1231,7 @@ function fillSkills(d, msg) {
   close.onclick = () => d.close();
   const head = el('div', { class: 'sk-head' }, el('div', {},
     el('h2', { id: 'sk-title' }, 'Skills'),
-    el('p', { class: 'muted' }, 'Who runs each step: the factory’s built-in brief, a skill, an agent, a Claude Code or Codex tool, or your own brief.')), close);
+    el('p', { class: 'muted' }, 'Who runs each step: the factory’s built-in brief, a skill, an agent, a harness tool (' + (arr(DATA.harnesses).map((h) => obj(h).label).filter(Boolean).join(', ') || 'none registered') + '), or your own brief.')), close);
 
   const live = SK.token
     ? el('p', { class: 'sk-live' }, dot('ok'), 'Live: changes save to ~/.claude/factory/skills.json')
@@ -1426,7 +1426,8 @@ function openWizard() {
   const d = el('dialog', { class: 'ob', 'aria-labelledby': 'ob-title' });
   d.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') e.stopPropagation(); // don't also close a run behind it
-    if (e.altKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft') && e.target.closest('dialog') === d) { e.preventDefault(); obGo(d, (Number(obSaved().step) || 0) + (e.key === 'ArrowRight' ? 1 : -1)); }
+    // Alt+Arrow moves between steps, except in a field, where Option+Arrow is word navigation.
+    if (e.altKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft') && e.target.closest('dialog') === d && !/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName)) { e.preventDefault(); obGo(d, (Number(obSaved().step) || 0) + (e.key === 'ArrowRight' ? 1 : -1)); }
   });
   d.addEventListener('close', () => { session('factory.onboardClosed', '1'); d.remove(); restoreFocus('ob-btn'); });
   document.body.append(d);
@@ -1449,6 +1450,7 @@ function obGo(d, i) {
 
 function drawWizard(d, focusHead) {
   const step = Math.max(0, Math.min(OB_STEPS.length - 1, Number(obSaved().step) || 0)), [key, title] = OB_STEPS[step];
+  OB.dirty = false; // only the step being drawn can have unsaved input
   const status = el('p', { class: 'sk-status', role: 'status', 'aria-live': 'polite' });
   const redraw = (msg) => { drawWizard(d); if (msg) d.querySelector('.ob-foot .sk-status').textContent = msg; };
   const fail = (e) => { status.className = 'sk-status bad'; status.textContent = e.message || String(e); };
@@ -1470,7 +1472,10 @@ function drawWizard(d, focusHead) {
   back.onclick = () => obGo(d, step - 1);
   const last = step === OB_STEPS.length - 1;
   const next = el('button', { class: 'sk-primary', type: 'button', 'data-k': 'ob-next' }, last ? 'Finish' : 'Next');
-  next.onclick = () => { if (last) { obKeep({ done: true }); d.close(); } else obGo(d, step + 1); };
+  next.onclick = () => {
+    if (OB.dirty && obLive()) { OB.dirty = false; status.className = 'sk-status bad'; status.textContent = 'Unsaved rule changes: save them, or press Next again to leave them.'; return; }
+    if (last) { obKeep({ done: true }); d.close(); } else obGo(d, step + 1);
+  };
   d.replaceChildren(top, rail, el('main', { class: 'ob-main' }, el('section', { class: 'ob-step', 'aria-labelledby': 'ob-h' }, head, body)), el('footer', { class: 'ob-foot' }, status, back, next));
   if (focusHead || !d.contains(document.activeElement)) head.focus({ preventScroll: true }); // a redraw must never drop focus out of the dialog
 }
@@ -1538,7 +1543,7 @@ const OB_BODY = {
     const scope = obScope(), cur = obShipOf(scope), conns = obHooks().connectors;
     const lead = el('p', { class: 'ob-lead' }, 'What this project ships. Only the choice is stored for now; deploy, store and database connectors read it once they are installed.');
     const boxes = OB_SHIP.map(([k, t, desc]) => {
-      const input = el('input', { type: 'checkbox', value: k, checked: cur.includes(k) ? '' : null, 'aria-label': t });
+      const input = el('input', { type: 'checkbox', value: k, checked: cur.includes(k) ? '' : null, 'aria-label': t, 'data-k': 'ob-ship:' + k });
       const mine = Array.isArray(conns) ? conns.map(obj).filter((c) => String(c.kind).startsWith(k) || k === 'mobile' && c.kind === 'store') : null;
       return el('label', { class: 'ob-card ob-pick', 'data-ship': k }, input, el('h4', {}, el('span', { class: 'ob-box', 'aria-hidden': 'true' }, '✓'), t),
         el('span', { class: 'ob-row' }, desc),
@@ -1547,11 +1552,13 @@ const OB_BODY = {
     const picked = () => boxes.map((b) => b.querySelector('input')).filter((i) => i.checked).map((i) => i.value);
     const cmd = el('div', {});
     const drawCmd = () => cmd.replaceChildren(obLive() ? '' : cmdBlock(`${F_CMD} onboard ship ${shq(scope)} ${picked().join(',') || '""'}`));
-    for (const b of boxes) b.querySelector('input').addEventListener('change', drawCmd);
+    // Live: every toggle saves, so Next never drops a choice.
+    for (const b of boxes) b.querySelector('input').addEventListener('change', async (e) => {
+      if (!obLive()) return drawCmd();
+      try { await obPost('/onboard/ship', { scope, ship: picked() }); redraw('Saved: ' + (picked().join(', ') || 'nothing') + ' for ' + (scope === 'default' ? 'all projects' : scope) + '.'); restoreFocus(e.target.dataset.k); } catch (err) { fail(err); }
+    });
     drawCmd();
-    const save = obLive() ? el('button', { class: 'sk-primary', type: 'button', 'data-k': 'ob-ship-save' }, 'Save choice') : null;
-    if (save) save.onclick = async () => { try { await obPost('/onboard/ship', { scope, ship: picked() }); redraw('Saved: ' + (picked().join(', ') || 'nothing') + ' for ' + (scope === 'default' ? 'all projects' : scope) + '.'); restoreFocus('ob-ship-save'); } catch (e) { fail(e); } };
-    return [lead, obScopePicker(redraw), el('div', { class: 'ob-grid', role: 'group', 'aria-label': 'Targets' }, boxes), el('div', { class: 'ob-sect' }, save, cmd),
+    return [lead, obScopePicker(redraw), el('div', { class: 'ob-grid', role: 'group', 'aria-label': 'Targets' }, boxes), el('div', { class: 'ob-sect' }, cmd),
       conns && conns.error ? el('p', { class: 'sk-err' }, 'Ship connectors failed to load: ' + conns.error) : null];
   },
 
@@ -1601,6 +1608,8 @@ const OB_BODY = {
     const cmdOf = (c) => c.unset ? `${F_CMD} rules unset ${shq(scope)} ${shq(c.key)}` + (reason.value.trim() ? ` --reason ${shq(reason.value.trim())}` : '')
       : `${F_CMD} rules set ${shq(scope)} ${shq(c.key)} ${shq(c.value)}` + (c.guide ? '' : ` --reason ${shq(reason.value.trim() || '…')}`) + (until.value && !c.guide ? ` --until ${until.value}` : '');
     const out = el('div', {});
+    OB.dirty = false;
+    for (const n of [ci, checks, merge, guide]) n.addEventListener('change', () => { OB.dirty = true; });
     const save = el('button', { class: 'sk-primary', type: 'button', 'data-k': 'ob-rules-save' }, obLive() ? 'Save rules' : 'Show commands');
     save.onclick = async () => {
       const cs = changes(), amChanged = proj && merge.checked !== am;

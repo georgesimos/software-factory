@@ -61,13 +61,13 @@ let server, browser, last;
     await card.locator('button', { hasText: 'Attach' }).click();
     await card.locator('.chip', { hasText: 'attached' }).waitFor();
     assert.match(await status(page).innerText(), /Attached acme\/app/);
-    assert.match(await wiz(page).locator('.ob-card.off').innerText(), /Create from an idea[^]*coming soon/);
+    assert.match(await wiz(page).innerText(), /Create from an idea/); // enabled or "coming soon", depending on whether F new exists
     await shot(page, '1280-light-2-repo');
     await next(page);
     assert.equal(await wiz(page).locator('[data-k="ob-scope:acme/app"]').getAttribute('aria-pressed'), 'true');
     await wiz(page).locator('[data-ship="web"]').click();
+    await status(page).filter({ hasText: 'Saved: web for acme/app' }).waitFor(); // each toggle saves
     await wiz(page).locator('[data-ship="database"]').click();
-    await wiz(page).locator('[data-k="ob-ship-save"]').click();
     await status(page).filter({ hasText: 'Saved: web, database for acme/app' }).waitFor();
     assert.match(await wiz(page).locator('[data-ship="web"]').innerText(), /github-deployments/); // from packages/ship's registry
     assert.match(await wiz(page).locator('[data-ship="mobile"]').innerText(), /no connector yet/);
@@ -84,6 +84,8 @@ let server, browser, last;
     await wiz(page).locator('select[aria-label="CI"]').selectOption('skip');
     await wiz(page).locator('textarea[aria-label^="Local check"]').fill('pnpm test\npnpm lint');
     await wiz(page).locator('.ob-check input').uncheck();
+    await next(page);
+    assert.match(await status(page).innerText(), /Unsaved rule changes/); // Next doesn't drop typed rules silently
     await wiz(page).locator('[data-k="ob-rules-save"]').click();
     assert.match(await status(page).innerText(), /A reason is required/);
     assert.ok(!fs.readFileSync(path.join(DIR, 'skills.json'), 'utf8').includes('"rules"'), 'nothing saved without a reason');
@@ -119,10 +121,16 @@ let server, browser, last;
     for (let i = 0; i < 6; i++) {
       if (i) await page.keyboard.press('Alt+ArrowRight');
       await wiz(page).locator(`.ob-rail li:nth-child(${i + 1}) button[aria-current="step"]`).waitFor();
-      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), `${width}px: no horizontal scroll`);
+      assert.ok(await page.evaluate(() => [document.documentElement, document.querySelector('.ob-main')].every((n) => n.scrollWidth <= n.clientWidth)), `${width}px: no horizontal scroll`);
       await shot(page, `${width}-${scheme}-${i + 1}`);
     }
     await page.keyboard.press('Alt+ArrowLeft');
+    await wiz(page).locator('.ob-rail li:nth-child(5) button[aria-current="step"]').waitFor();
+    await wiz(page).locator('input[aria-label^="Reason"]').fill('typing');
+    await page.keyboard.press('Alt+ArrowLeft'); // word navigation inside a field, not a step change
+    assert.equal(await wiz(page).locator('input[aria-label^="Reason"]').inputValue(), 'typing');
+    await page.reload(); // resumes where it was left
+    await page.locator('[data-k="ob-btn"]').click();
     await wiz(page).locator('.ob-rail li:nth-child(5) button[aria-current="step"]').waitFor();
     await page.keyboard.press('Escape');
     await wiz(page).waitFor({ state: 'detached' });
@@ -139,7 +147,7 @@ let server, browser, last;
     await wiz(page).locator('[data-k="ob-step:ship"]').click();
     await wiz(page).locator('[data-ship="mobile"]').click();
     assert.match(await wiz(page).locator('.ob-cmd code').first().innerText(), /onboard ship 'acme\/app' web,mobile,database$/);
-    assert.equal(await wiz(page).locator('[data-k="ob-ship-save"]').count(), 0);
+    assert.equal(fs.readFileSync(path.join(DIR, 'onboard.json'), 'utf8').includes('mobile'), false); // the static page never writes
     await shot(page, '1280-light-static-3');
     await ctx.close();
   }

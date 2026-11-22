@@ -204,6 +204,7 @@ The CLI never rewrites the log, with one exception: `archive` rewrites it by wri
 |---|---|---|
 | `projects.json` | `sync`, `worktree`, `automerge` | `{ "owner/repo": { path, synced, autoMerge? } }`, mapping each attached project to its local clone |
 | `skills.json` | `skills set`, `rules set/unset`, or by hand | `{ "default": {step: runner}, "owner/repo": {step: runner, "axes.extra": [...], "rules": {key: {value, reason, setBy, setAt, until?}}, "guide": {step: text}} }`. Validated on every read. See [§5.1](#51-runners) and [§5.2](#52-rules). |
+| `onboard.json` | `onboard ship`, the setup wizard | `{ "default" \| "owner/repo": { ship: ["web", "mobile", "database"] } }`: what a project ships. The choice only; connectors come from `packages/ship` |
 | `sessions.json` | `sync` | `{ runId: [ {agent, id, cwd, last} ×≤5 ] }`, linking runs to local Claude Code and Codex sessions by branch |
 | `archive.jsonl` | `archive` | one compact run per line (derived state plus its last 5 events, `archived: true`) for finished runs older than N days (default 14) |
 | `events.jsonl.bak` | `archive` | the log as it was before the last archive |

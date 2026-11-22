@@ -34,8 +34,9 @@ export default {
     const ok = r.code === 0 && s.loggedIn !== false;
     return { ok, hint: ok ? s.authMethod || 'signed in' : 'claude auth login' };
   },
-  headless: () => ({ cmd: 'claude', args: ['-p', '<prompt>', '--output-format', 'json', '--permission-mode', 'auto', '--permission-prompts', 'none'],
-    note: 'Say whether --bare is used. Without it, -p runs the repo\'s hooks and MCP servers with no trust prompt, so never in an untrusted checkout.' }),
+  // Display only: the real flags are pinned by `F headless-args RUN [--review|--write]` (read-only manual mode unless --write).
+  headless: () => ({ cmd: 'claude', args: ['-p', '<prompt>', '$(F headless-args <run> [--review|--write])'],
+    note: 'Flags pinned by F headless-args: --output-format json, --setting-sources user, --strict-mcp-config, --permission-mode manual (auto only with --write), --permission-prompts none.' }),
   providerTools: () => TOOLS,
   notes() {
     const label = 'claude-cli:// links ("Open in Claude")', hint = 'Run claude and send one message in an interactive session; that registers the link handler.';
