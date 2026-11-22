@@ -69,7 +69,8 @@ export function posixShell({ platform = process.platform, env = process.env, isF
 export function opener(target: string, platform: NodeJS.Platform = process.platform): Command {
   let url: URL;
   try { url = new URL(target); } catch { throw new Error(`not a URL: ${target}`); }
-  if (!['https:', 'file:', 'claude-cli:'].includes(url.protocol)) throw new Error(`refusing to open ${url.protocol} URLs; only https:, file: and claude-cli:`);
+  const desktop = /^claude:\/\/claude\.ai\/epitaxy\/local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(target); // one session link, nothing else under claude:
+  if (!desktop && !['https:', 'file:', 'claude-cli:'].includes(url.protocol)) throw new Error(`refusing to open ${url.protocol} URLs; only https:, file: and claude-cli:`);
   if (url.protocol === 'file:' && !/\.html?$/i.test(url.pathname)) throw new Error(`refusing to open ${url.pathname}: file: URLs must be .html pages`);
   const href = url.href;
   if (platform === 'darwin') return { file: 'open', args: [href] };

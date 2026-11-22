@@ -3,4 +3,11 @@
 const a = process.argv.slice(2).join(' '), out = !!process.env.STUB_LOGGED_OUT;
 if (a === '--version') process.stdout.write('2.1.304 (Claude Code)\n');
 else if (a === 'auth status') { process.stdout.write(JSON.stringify({ loggedIn: !out, authMethod: out ? 'none' : 'claude.ai' }, null, 2) + '\n'); process.exit(out ? 1 : 0); }
+else if (process.argv.includes('-p') && a.includes('--output-format stream-json --verbose')) { // headless launch: NDJSON events
+  const ev = (x) => process.stdout.write(JSON.stringify(x) + '\n');
+  ev({ type: 'system', subtype: 'init', session_id: 'stub-session', cwd: process.cwd() });
+  ev({ type: 'assistant', message: { content: [{ type: 'text', text: 'prompt: ' + process.argv[process.argv.indexOf('-p') + 1] }] } });
+  process.stdout.write('not json\n'); process.stderr.write('a warning\n');
+  ev({ type: 'result', subtype: 'success', total_cost_usd: 0 });
+}
 else { process.stderr.write('claude-stub unexpected: ' + a); process.exit(2); }

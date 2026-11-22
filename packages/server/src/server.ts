@@ -3,10 +3,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import { CAP, COST_CAP, TOKEN_CAP } from '../../core/src/constants.ts';
+import { CAP, COST_CAP, TERMINAL, TOKEN_CAP } from '../../core/src/constants.ts';
 import { hooks } from '../../core/src/ship.ts';
 import { LOGIN, rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
-import { derive } from '../../core/src/derive.ts';
+import { budget, budgetWhy, derive } from '../../core/src/derive.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { ideas, startIdea } from '../../core/src/project.ts';
 import { metrics } from '../../core/src/gate.ts';
@@ -16,6 +16,8 @@ import { dashboard, read, readArchive, sessionsFile, stateDir } from '../../core
 import { readSkills, setSkill, skillsData } from '../../core/src/skills.ts';
 import { sync } from '../../core/src/sync.ts';
 import { withMeasured } from '../../core/src/burn.ts';
+import { open } from '../../core/src/platform.ts';
+import { getSession, listSessions, startSession, subscribe } from '../../adapters/sessions.mjs';
 
 // `F ui`: the dashboard on a loopback port, where the Skills sheet can save. Pure, so the self-test can drive it.
 export const same = (a, b) => typeof a === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -33,6 +35,12 @@ export function uiHandle({ method, url, headers = {}, body = '' }, { token, port
     if (!same(headers['x-factory-token'], token)) return reply(403, { error: 'missing or wrong token' });
     if (headers.origin !== undefined && !hosts.some((h) => headers.origin === `http://${h}`)) return reply(403, { error: 'cross-origin request' });
     if (route === '/runs') return reply(200, { runs: runsData() });
+    if (route === '/sessions') return reply(200, { sessions: listSessions() });
+    const ev = route.match(/^\/sessions\/([0-9a-f-]{36})\/events$/);
+    if (ev) { // server-sent events; ui() writes the stream. EventSource can't send x-factory-token, so clients read it with fetch.
+      const s = getSession(ev[1]);
+      return s ? { status: 200, type: 'text/event-stream', stream: s, from: Number(headers['last-event-id']) + 1 || 0 } : reply(404, { error: `no session ${ev[1]}` });
+    }
     const m = route.match(/^\/runs\/([^/]+)\/([^/]+)\/([^/]+)$/);
     if (!m) return reply(404, { error: 'not found' });
     const [, owner, repo, n] = m; // raw segments: the checks below admit no %-escapes
@@ -72,7 +80,35 @@ export const UI_ROUTES = {
     return onboardConfig();
   },
   '/onboard/automerge': ({ repo, on }) => { setAutoMerge(repo, on); return onboardConfig(); },
+  '/sessions': (x) => ({ session: launchSession(x).id }),
+  '/sessions/open': ({ harness = 'claude-code', id }) => { // the desktop app's own link for a session, when the harness has one
+    const h = harnesses.find((y) => y.id === harness), url = h?.openDesktop?.(id);
+    if (!url) throw new Error(`no desktop link for ${String(id).slice(0, 60)}: run claude --resume <id> in a terminal instead`);
+    return { opened: open(url) };
+  },
 };
+// POST /api/sessions: start the factory on one issue in an attached clone (#25's checks). The request names a repo and an
+// issue only; the folder comes from projects() and the prompt is built here, so no request text reaches the harness.
+export function launchSession({ harness = 'claude-code', mode = 'headless', repo, issue }, env = process.env) {
+  const h = harnesses.find((y) => y.id === harness);
+  if (!h?.launch) throw new Error(`harness ${String(harness).slice(0, 40)} cannot launch sessions`);
+  if (!(h.modes || []).includes(mode)) throw new Error(`${h.id} modes are ${(h.modes || []).join(', ')}`);
+  const [owner, name, extra] = typeof repo === 'string' ? repo.split('/') : [];
+  if (extra !== undefined || !LOGIN.test(owner || '') || !/^(?!\.\.?$)[\w.-]{1,100}$/.test(name || '')) throw new Error('repo must be owner/repo');
+  const cwd = projects()[repo]?.path;
+  if (!cwd || !fs.existsSync(cwd)) throw new Error(`${repo} is not attached: F sync ${repo} <path> first`);
+  if (!Number.isInteger(issue) || issue < 1 || issue > 1e9) throw new Error('issue must be a positive issue number');
+  const id = `${repo}#${issue}`, r = derive(read())[id];
+  if (r?.imported) throw new Error(`${id} is imported: never run claude -p in its checkout`);
+  if (r && !TERMINAL.includes(r.outcome)) throw new Error(`${id} already has an active run (${r.outcome || r.stage})`);
+  const b = r ? budget(r) : null;
+  if (b?.over) throw new Error(`run budget exceeded ${budgetWhy(b)}`);
+  const d = h.detect();
+  if (!d.installed) throw new Error(`${h.label} is not installed: ${h.install}`);
+  if (!h.login().ok) throw new Error(`${h.label} is not signed in: ${h.login().hint}`);
+  return startSession(h, { mode, prompt: `/software-factory ${id}`, budget: COST_CAP - (b?.usd || 0), write: true }, { cwd, env, label: id });
+}
+
 export function ui(port = 0) {
   const token = crypto.randomBytes(24).toString('base64url');
   const server = http.createServer((req, res) => {
@@ -82,7 +118,10 @@ export function ui(port = 0) {
       let r;
       try { r = uiHandle({ method: req.method, url: req.url, headers: req.headers, body }, { token, port: server.address().port }); } catch (e) { r = { status: 500, type: 'application/json', body: JSON.stringify({ error: e.message }) }; }
       res.writeHead(r.status, { 'content-type': r.type, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY' });
-      res.end(r.body);
+      if (!r.stream) return res.end(r.body);
+      const stop = subscribe(r.stream, (e) => { res.write(`id: ${e.n}\ndata: ${JSON.stringify(e)}\n\n`); if (e.type === 'exit') res.end(); }, r.from);
+      if (r.stream.state !== 'running') res.end();
+      res.on('close', stop); // not req: its close fires once the request body is read
     });
   });
   server.listen(port, '127.0.0.1', () => console.log(`factory ui: http://127.0.0.1:${server.address().port}/?t=${token}\nOnly this URL can change settings (skills.json, rules, projects). Ctrl-C to stop.`));
