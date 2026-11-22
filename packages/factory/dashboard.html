@@ -317,6 +317,8 @@ a.kid:hover { border-color: var(--line-2); }
 .copy { padding: 4px 9px; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; font: 11.5px var(--mono); color: var(--ink-2); white-space: nowrap; }
 .copy:hover { color: var(--ink); border-color: var(--line-2); }
 .copy.done { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+a.copy { display: inline-block; text-decoration: none; }
+.open-claude { margin: 0 0 10px; }
 .tl { margin: 0; padding: 0; list-style: none; }
 .tl li { display: grid; grid-template-columns: 92px 14px 1fr; gap: 0 8px; }
 .tl time { font: 11.5px/20px var(--mono); color: var(--ink-3); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
@@ -841,9 +843,22 @@ async function copyText(text) {
   t.remove();
   return ok;
 }
+// claude-cli://open: a new Claude Code terminal in the run's worktree (else the latest session's cwd), prompt pre-filled, not sent.
+// The handler refuses relative paths, "..", network paths and control/bidi characters; refuse them here too.
+const deepCwd = (p) => typeof p === 'string' && /^\/(?!\/)/.test(p) && !p.includes('..') && !/[\p{Cc}\p{Cf}]/u.test(p);
+function openInClaude(r) {
+  const cwd = [r.worktree, ...r.sessions.map((s) => s.cwd)].find(deepCwd);
+  if (!cwd || !/^[\w.-]+\/[\w.-]+(#\d+|:[\w.\/-]+)$/.test(r.id)) return null; // owner/repo#N or an import's owner/repo:branch; it goes into a prompt that runs F
+  const q = `Continue factory run ${r.id}. Run F state '${r.id}' first.`;
+  const query = Object.entries({ cwd, q }).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
+  if (encodeURIComponent(q).length >= 5000) return null;
+  return el('a', { class: 'copy', href: 'claude-cli://open?' + query, 'data-k': 'open-claude',
+    title: 'Opens a new Claude Code terminal here (prompt pre-filled, not sent). Requires the claude-cli handler: send one message in any interactive claude session first.' }, 'Open in Claude');
+}
 function sessions(r) {
-  if (!r.sessions.length) return null;
-  return section('Sessions', el('ul', { class: 'sess' }, r.sessions.map((s) => {
+  const open = openInClaude(r);
+  if (!r.sessions.length && !open) return null;
+  return section('Sessions', open && el('p', { class: 'open-claude' }, open), el('ul', { class: 'sess' }, r.sessions.map((s) => {
     const cmd = resumeCmd(s);
     const base = s.cwd ? String(s.cwd).replace(/[\\/]+$/, '').split(/[\\/]/).pop() : '';
     let btn = null;

@@ -122,6 +122,7 @@ Then run `F risk RUN <files to touch…>`.
    - Iterate with only the affected tests.
    - Then run the project's lint, typecheck, full test suite and build once.
    - Write `DIR/checks.json` as `{"lint":"pass|fail","typecheck":…,"tests":…,"build":…,"notes":"…"}`. Reviewers read this file instead of re-running the checks. It is your note for them, never a substitute for CI.
+   - When the build runs as a [headless Claude Code step](#headless-claude-code-runs), bound it with a goal, such as `/goal "<the project's test command> exits 0, lint is clean, only files from the spec changed, or stop after 20 turns"`. The goal's judge runs no commands, so the condition must be visible in the output. The factory's gate still decides.
 5. Commit and push: `git -C WT push -u origin factory/issue-N`.
    - **If `policy["checks.commands"]` is set,** run `F checks RUN` after every push. `F` runs those commands itself in WT on the committed HEAD and records the result; it refuses a dirty tree. On `"state":"fail"`, fix it from the printed `tail`, commit, push and run it again. Still failing after 2 fixes: record `F event RUN build failed -` with `{"reasons":[…]}` and go to Approve, which escalates.
 6. On the first iteration, open the PR: `gh pr create -R OWNER/REPO --draft --base BASE --head factory/issue-N --title "<issue title>" --body-file <file containing "Closes #N" plus the spec>`.
@@ -198,7 +199,7 @@ Finally, report the outcome with its links, and give the dashboard path, `~/.cla
 | `{"use":"default"}` | The built-in brief in this file or in reviewers.md. |
 | `{"use":"skill","name":"x"}` | Invoke the Skill `x` in a fresh subagent, giving it the step's inputs and its output contract. |
 | `{"use":"brief","path":"…md"}` | Spawn a fresh subagent with that file as its brief, in place of the built-in one. |
-| `{"use":"provider","harness":"claude-code","name":"x"}` | If `x` is one of your Agent subagent types (such as `pr-review-toolkit:code-reviewer`), spawn that agent. Otherwise run the skill headless in WT: `(cd WT && claude -p "/x" --setting-sources user --allowedTools "Bash(git diff:*)" "Bash(git log:*)" Read Grep Glob --output-format json)`, which keeps it read-only and reports `total_cost_usd` for the payload's `costUsd`. |
+| `{"use":"provider","harness":"claude-code","name":"x"}` | If `x` is one of your Agent subagent types (such as `pr-review-toolkit:code-reviewer`), spawn that agent. Otherwise run the skill headless in WT with pinned flags: `(cd WT && claude -p "/x" <args>)`, where `<args>` is the JSON array from `F headless-args RUN [--review|--write]`, each element single-quoted as one shell word. See [Headless Claude Code runs](#headless-claude-code-runs). |
 | `{"use":"provider","harness":"codex"}` | Run Codex headless in WT. Review and verifier steps use `-s read-only` and build uses `-s workspace-write`; never pass `--dangerously-bypass-approvals-and-sandbox`. Review: `codex exec -C WT -s read-only --output-schema ~/.claude/skills/software-factory/references/review.schema.json -o DIR/<axis>.json "<brief>"`. With `"name":"review"`, run `codex review --base BASE` in WT and pass its prose through the adapter. Any other `name` is ignored. |
 
 - **Same contract as the default.**
@@ -208,7 +209,22 @@ Finally, report the outcome with its links, and give the dashboard path, `~/.cla
   - reviews go through `F review`. When a provider replies in prose (`/code-review`, `/security-review`, `codex review`), pass the reply through the [adapter](references/reviewers.md#adapter) first.
 - **F records the runner.** Every `F event`, `F review` and `F gate` gets `runner` from the plan, and the dashboard shows it as a chip. You can't set it in a payload.
 - **Fallback.** Use the default only when the configured runner can't run: the skill isn't listed, the brief file is missing, or `codex` isn't installed or logged in. Then add `--fallback "<why>"` to that step's `F event`, `F review` or `F gate` call. A runner that ran and failed is not a fallback: record its result.
-- **What config can't change.** `code` and `security` are always reviewed, and extra axes only add to the selection. `F gate`, `F decide`, `F merge`, the caps, the trusted associations and the sensitive paths are the same whoever runs a step. A diff touching `.claude/` or `.codex/` is a sensitive path, because headless runners in WT load that branch's agent config.
+- **What config can't change.** `code` and `security` are always reviewed, and extra axes only add to the selection. `F gate`, `F decide`, `F merge`, the caps, the trusted associations and the sensitive paths are the same whoever runs a step. A diff touching `.claude/**`, `.codex/` or `.mcp.json` is a sensitive path, because headless runners in WT load that branch's agent config, and `claude -p` runs its hooks and MCP servers with no trust prompt.
+
+### Headless Claude Code runs
+
+`F headless-args RUN [--review|--write]` prints the flags as a JSON array. They are pinned, so a run never depends on `-p`'s defaults:
+- `--output-format json`, plus `--json-schema <review.schema.json>` with `--review`.
+- `--permission-prompts none`. With `--write` (build only): `--permission-mode auto`. Every other step is read-only: `--permission-mode manual` with a `git diff`/`git log`/Read/Grep/Glob allowlist, so anything else is denied (auto mode's classifier could approve other commands).
+- **No `--bare`, on purpose.** It would skip the `/x` skill being run and needs `ANTHROPIC_API_KEY`. The repo's hooks and `.mcp.json` servers are cut by `--setting-sources user` and `--strict-mcp-config` instead.
+- `--max-budget-usd` set to what is left of the run's $5 budget. `F` refuses when the budget is spent; go to Approve, which escalates.
+
+Never run `claude -p` in an imported or untrusted checkout, only in this run's own WT; `F headless-args` refuses imported runs.
+
+Read the JSON reply:
+- **`structured_output`** (reviews) is the reviewer JSON: pipe it to `F review RUN <axis> --cost-usd <step cost> -`. When it is absent the run produced no valid review: pipe the raw `result` instead, which `F review` records as a failed review. Never write a passing review yourself.
+- **`total_cost_usd`** is the conversation total and is cumulative on `--resume`, so a step's cost is the difference from the previous step's total in that session. It goes in `--cost-usd` for `F review`, or in the step's `F event` payload as `costUsd`.
+- **`session_id`** is only for `claude --resume <id>` to continue the step. `F event` refuses `sessionId` in payloads.
 
 ## Rules: CI off, local checks and guidance
 
