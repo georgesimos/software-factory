@@ -26,13 +26,13 @@ All line numbers are from commit `b9f4e87` (`main`). They will drift as the spli
 
 On Windows, `execFileSync('x')` with no shell finds only `x.exe`.
 
-Since the April 2024 security releases (CVE-2024-27980), Node refuses to spawn a `.cmd` or `.bat` file without `shell: true`. The error is `EINVAL`. npm, pnpm, yarn and npx are `.cmd` shims on Windows, and so is any CLI installed with `npm i -g`.
+Since the April 2024 security releases (CVE-2024-27980; Node 18.20.2, 20.12.2 and 21.7.3), `spawn` of a `.cmd` or `.bat` file without a shell throws `EINVAL`, and `execFile` cannot launch one at all. npm, pnpm, yarn and npx are `.cmd` shims on Windows, and so is any CLI installed with `npm i -g` (Codex included).
 
 | Where | What | Rating |
 |---|---|---|
 | `factory.mjs:919` (`deps` → `sh()`) | `pnpm`, `npm` and `yarn` are spawned bare. | Breaks: `F deps` cannot install on Windows. |
 | `project.mjs:156` (`sh()`) and `templates/next-web.json:8` | Runs the stack template's `init` argv (`npx --yes create-next-app@15 …`) with no shell. | Breaks: `F new` cannot scaffold on Windows. |
-| `factory.mjs:1235` (`evals`) | `claude -p …` is spawned bare. | OK with Claude Code's native installer (`claude.exe`). Breaks with an npm-installed `claude.cmd`. |
+| `factory.mjs:1235` (`evals`) | `claude -p …` is spawned bare. | OK with Claude Code's native installer (`install.ps1` installs `%USERPROFILE%\.local\bin\claude.exe`). Breaks with an npm-installed `claude.cmd`. |
 | `harnesses/claude-code.mjs:9`, `harnesses/codex.mjs:9`, `harnesses/_template.mjs:9` | `spawnSync('claude' \| 'codex' \| BIN)` detects installs and logins. | Degrades: a `.cmd` install reports as "not installed". `codex` from `npm i -g @openai/codex` is a `.cmd` shim. |
 | `packages/ship/ship.mjs:14` (`exec`) | A connector's CLI is spawned bare. | Breaks for any npm-installed provider CLI, such as `vercel` or `eas`. `gh` is a `.exe`, so it is OK. |
 | `factory.mjs:814`, `:858` (`gh`, `git`) | Spawned bare. | OK: both are `.exe`. |
@@ -41,7 +41,8 @@ Since the April 2024 security releases (CVE-2024-27980), Node refuses to spawn a
 - Add one `platform.exec()` that every caller uses. It still uses no shell.
 - On Windows it resolves the command through `PATH` and `PATHEXT`:
   - an `.exe` runs directly;
-  - a `.cmd` shim runs only when every argument passes a strict metacharacter-free check, and otherwise fails with a clear message.
+  - a `.cmd` shim runs through `cmd.exe /d /s /c` only when every argument passes a strict metacharacter-free check, and otherwise fails with a clear message;
+  - never `shell: true`, which is deprecated with arguments (DEP0190).
 - Do not hand-roll `cmd.exe` escaping. Mistakes there are command injection, and prompts and JSON schemas are passed as arguments.
 
 ## 2. Shells and shell syntax
@@ -53,7 +54,7 @@ Since the April 2024 security releases (CVE-2024-27980), Node refuses to spawn a
 | `package.json:10` (`packages/factory`) | `"test": "env -u CLAUDE_CODE_SESSION_ID node factory.mjs test"`. | Breaks: `pnpm test` on Windows runs scripts in `cmd.exe`, which has no `env`. |
 | `scripts/scrub-factory.sh` | A POSIX `sh` script. | Degrades. It is a one-off maintenance script, so it is fine to leave POSIX-only and say so. |
 | `README.md:19` | `FACTORY_DIR=$(mktemp -d) node … demo`. | Degrades: this is POSIX shell syntax. `F demo` already makes its own temp directory when `FACTORY_DIR` is unset (`factory.mjs:2521`), so drop the prefix. |
-| `SKILL.md` (heredocs `<<'JSON'`, `$(F dir RUN)`, `\| tail -n 80`, `for l in …; do …`) | The orchestrator's shell snippets. | OK while Claude Code is the host. Its Bash tool is a POSIX shell on every OS (Git Bash on Windows; see the ADR for the current requirement). This would matter only if another host ran `SKILL.md` through PowerShell. |
+| `SKILL.md` (heredocs `<<'JSON'`, `$(F dir RUN)`, `\| tail -n 80`, `for l in …; do …`) | The orchestrator's shell snippets. | OK on macOS and Linux. On Windows they need Git Bash: Claude Code uses it when Git for Windows is installed, and otherwise falls back to a PowerShell tool, where these snippets break. The ADR makes Git for Windows a requirement, and `F onboard` should check for it. |
 | zsh | No zsh syntax or zsh assumptions were found in code or docs. | None found. |
 
 **Fix shape:**
@@ -104,9 +105,9 @@ Document it as the one install step. **Never copy** the skill folder: the [split
 | Where | What | Rating |
 |---|---|---|
 | `SKILL.md:199` | "On the first run, open the dashboard with `open`." | Breaks on Windows (`start`) and Linux (`xdg-open`). |
-| `harnesses/claude-code.mjs:59–60` (`notes`) | The `claude-cli://` handler check runs on macOS only (`~/Applications/Claude Code URL Handler.app`). Elsewhere it returns `ok: null`. | Degrades, but fails safely ("unknown"). |
-| `harnesses/claude-code.mjs:40` | The install hint is `curl … install.sh \| bash`. | Degrades: Windows needs the PowerShell installer line (see the ADR). |
-| `harnesses/codex.mjs:17` | The install hint is `npm install -g @openai/codex`. | OK, though it installs a `.cmd` shim on Windows (see §1). |
+| `harnesses/claude-code.mjs:59–60` (`notes`) | The `claude-cli://` handler check runs on macOS only (`~/Applications/Claude Code URL Handler.app`). Elsewhere it returns `ok: null`. | Degrades, but fails safely ("unknown"). The handler is documented on Windows and Linux too, so add their checks. |
+| `harnesses/claude-code.mjs:40` | The install hint is `curl … install.sh \| bash`. | Degrades: Windows needs `irm https://claude.ai/install.ps1 \| iex`. |
+| `harnesses/codex.mjs:17` | The install hint is `npm install -g @openai/codex`. | Degrades: on Windows it installs a `.cmd` shim (see §1). Codex's PowerShell installer is the better hint there. |
 
 **Fix shape:**
 - Add `F open [dashboard|url]`, backed by `platform.open()`:

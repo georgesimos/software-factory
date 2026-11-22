@@ -133,8 +133,8 @@ Each fix is a behaviour change, so it comes after the moves. Each lands on one m
 
 | Step | What |
 |---|---|
-| **X0 CI matrix** | GitHub Actions on `ubuntu-latest`, `macos-latest` and `windows-latest` with Node 24 runs `pnpm install && pnpm test`. The Windows job is `continue-on-error` until X3 lands. It touches `.github/workflows`, which is `SENSITIVE`, so a human merges it. It does not depend on the split. |
-| **X1 Spawning** | `core/src/platform.ts` gets `exec()`. It uses no shell on any OS. On Windows it resolves `PATHEXT`: an `.exe` runs directly, and a `.cmd` shim runs only when its arguments contain no shell metacharacters. Every bare spawn in audit §1 goes through it. |
+| **X0 CI matrix** | GitHub Actions on `ubuntu-latest`, `macos-latest` and `windows-latest` with Node 24 and Node 26 runs `pnpm install && pnpm test`. The Windows job is `continue-on-error` until X3 lands. It touches `.github/workflows`, which is `SENSITIVE`, so a human merges it. It does not depend on the split. |
+| **X1 Spawning** | `core/src/platform.ts` gets `exec()`. It uses no shell on any OS. On Windows it resolves `PATHEXT`. An `.exe` runs directly. A `.cmd` shim runs through `cmd.exe /d /s /c`, and only when its arguments contain no shell metacharacters. It never uses `shell: true`, which is deprecated with arguments (DEP0190). Every bare spawn in audit §1 goes through it. |
 | **X2 Shells, paths, open, install** | Audit §2–§5: <ul><li>`localChecks` runs through Git Bash on Windows, or refuses;</li><li>`deps` copies with `fs.cpSync` and `COPYFILE_FICLONE`;</li><li>brief paths accept a drive path and `~\`, and paths with spaces;</li><li>`F_CMD` prints the real path;</li><li>`deepCwd` accepts a drive path;</li><li>`SKIP_DIRS` adds `AppData`;</li><li>`relPath` rejects `\` and drive letters;</li><li>`F open` and `F install-skill` are added;</li><li>install hints are per-OS;</li><li>`SKILL.md` says `F open dashboard`.</li></ul> |
 | **X3 Windows-safe tests** | The tests use `path.delimiter`, set `USERPROFILE` as well as `HOME`, and give each stub executable a `.cmd` twin. Then the Windows CI job becomes required. |
 | **T1 Type the moved code** | One module per PR: drop `// @ts-nocheck` and add types. `packages/design-system/src/factory/model.ts` becomes the source of the `Run`/`Metrics` shapes, or `core` exports them and design-system imports them. Settle that in the first T1 PR. Adapters convert to `.ts` here. |
@@ -146,7 +146,7 @@ Each fix is a behaviour change, so it comes after the moves. Each lands on one m
 | **W1 Web app** | `apps/web`: Vite with React 19 and `@software-factory/design-system`, showing the board and run detail. It reads the same JSON that `page()` injects today (`__FACTORY_DATA__`), so it works before the server split. When served, it also reads `GET /api/runs`. `apps/playground`'s `Board` and `RunDetail` are the starting point. No dependency. |
 | **W2 Web parity** | It reaches `dashboard.html`'s features: the Skills sheet, rules, onboarding wizard, sessions, theme, panel width, collapse and focus, and the actions from #27. It runs through `/api/*` when a server is present and is read-only when it is not. Needs S9. |
 | **W3 One build, three hosts** | A single-file build (inlined JS, CSS and fonts) with the data injected: <ul><li>`F render` writes it in place of `dashboard.html`;</li><li>the private Artifact (#18) is published from it;</li><li>`F ui` and Electron serve the normal build.</li></ul> `dashboard.html` is then deleted. Whether the file must still open as `file://` is an [open question](#6-open-questions-for-the-owner). |
-| **D1 Desktop shell** | `apps/desktop`: Electron, where the main process imports `@software-factory/server` in-process and loads the web build with the loopback token. It is packaged for macOS, Windows and Linux. Needs S9 and W1. |
+| **D1 Desktop shell** | `apps/desktop`: Electron, where the main process imports `@software-factory/server` in-process and loads the web build with the loopback token. The main process is bundled with Vite: a packaged app puts packages under `node_modules`, where Node does not strip types. It is packaged for macOS, Windows and Linux. Needs S9 and W1. |
 | **H1 Harness launch contract, Claude Code** | An optional `launch()` in the harness adapter contract with three modes: <ul><li>`terminal`: interactive, through `node-pty`;</li><li>`headless`: a stream of events;</li><li>`sdk`: the Agent SDK.</li></ul> Plus `openDesktop`, which opens the Claude desktop session link. It is exposed as `/api/sessions`. It generalises #25 (headless start) and #26 (open/resume) rather than duplicating them. Needs S5 and S9. |
 | **D2 Terminal pane** | An xterm.js view in Electron over H1's `terminal` mode, with a session list next to the runs. Needs D1 and H1. |
 | **H2 Codex** | The same contract for Codex: `codex exec --json` for headless, `codex app-server` (JSON-RPC over stdio) for a long-lived session, and the Codex TS SDK. Needs H1. |
@@ -163,12 +163,13 @@ Each fix is a behaviour change, so it comes after the moves. Each lands on one m
     "lib": ["ES2024"], "types": ["node"],                // no DOM in Node packages
     "erasableSyntaxOnly": true,                          // rejects enum, namespace, parameter properties
     "verbatimModuleSyntax": true,                        // type-only imports must say `import type`
-    "allowImportingTsExtensions": true, "noEmit": true   // `import './x.ts'`, as Node requires
+    "allowImportingTsExtensions": true, "noEmit": true,  // `import './x.ts'`, as Node requires
+    "target": "esnext"
   }
 }
 ```
 
-Each Node package gets `"engines": { "node": ">=24.11" }`, matching the minimum version in the ADR. `apps/web` and `apps/desktop`'s renderer keep the bundler settings from `tsconfig.base.json`.
+Each Node package gets `"engines": { "node": ">=24.12" }`, matching the minimum version in the ADR. `apps/web` and `apps/desktop`'s renderer keep the bundler settings from `tsconfig.base.json`.
 
 ## 5. Issues
 
