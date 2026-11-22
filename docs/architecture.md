@@ -53,7 +53,7 @@ software-factory/
 │       ├── test/             Vitest + Testing Library tests
 │       └── scripts/contrast.ts  WCAG AA contrast check over every token pair (`pnpm contrast`)
 └── apps/
-    └── playground/           (in progress, not yet committed) Vite playground for the design system (`pnpm dev`)
+    └── playground/           Vite playground: tokens, components, onboarding, board and run-detail mocks (`pnpm dev`)
 ```
 
 **Monorepo tooling.** The repo uses pnpm workspaces. An Nx package-based setup has been decided but is not wired up yet: there is no `nx.json` and no Nx dependency. Root `pnpm test` runs the contrast check, then `pnpm -r test` across every package, which includes the factory self-test.

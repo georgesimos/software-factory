@@ -6,7 +6,7 @@ A Claude Code skill that takes a GitHub issue through intake, spec, build, a mul
 |---|---|
 | [`packages/factory`](packages/factory) | The skill (`SKILL.md`) and its zero-dependency CLI, `factory.mjs` |
 | [`packages/design-system`](packages/design-system) | Design tokens and React components for the planned desktop app |
-| `apps/playground` | Component playground for the design system (in progress) |
+| [`apps/playground`](apps/playground) | Vite playground for the design system, with board and run-detail mocks |
 | [`docs/architecture.md`](docs/architecture.md) | Folder structure, components, data model, flows, CLI examples |
 | [`docs/research`](docs/research) | Background research reports |
 
