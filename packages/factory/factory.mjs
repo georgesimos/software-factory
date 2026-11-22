@@ -12,227 +12,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { harnesses } from './harnesses/index.mjs';
 import * as project from './project.mjs'; // also handed whole to the idea-to-app test
 import { PROJECT_EVENTS, newProject, issuesCreate, projectStatus, loop, queue, startIdea, retireIdea, ideas } from './project.mjs';
+import { CAP, COST_CAP, DOCS, FINDING_KEYS, MAX_DIFF, MAX_ISSUES_PER_SESSION, OUTCOMES, PROJECT_BUDGET_USD, REVIEW_KEYS, SEO, SEVERITIES, SOURCE, STAGES, STATUSES, TERMINAL, TEST, TOKEN_CAP, TRUSTED, UI, USAGE_KEYS, VERIFIER_KEYS, blocking, costOf, isSensitive, sensitive } from '../core/src/constants.ts';
+import { archive, factoryDir, io, log, read, record, runDir, stateDir } from '../core/src/log.ts';
+import { INVALID, addBurn, allRuns, assertReviewOpen, budget, budgetWhy, burnOf, derive, finishBurn, getRun, validateReview, validateUsage } from '../core/src/derive.ts';
+export { allRuns, budget, derive, validateReview, validateUsage };
+export { archive, factoryDir, io, read, record, runDir };
+export { CAP, COST_CAP, MAX_DIFF, MAX_ISSUES_PER_SESSION, PROJECT_BUDGET_USD, TOKEN_CAP, costOf, isSensitive };
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-// One mutable object, not `let`s: once code moves into packages, an importer cannot reassign a binding (docs/plans/split.md S1): where F reads and writes, and which binaries it runs.
-// gh/git are overridable only so the self-test can stub GitHub; projects: demo and test point it at fixture transcripts.
-export const io = { dir: process.env.FACTORY_DIR || path.join(os.homedir(), '.claude', 'factory'), gh: process.env.FACTORY_GH || 'gh', git: process.env.FACTORY_GIT || 'git', projects: null };
 // render() lives with the server after the split; code bound for core calls dashboard.render().
 export const dashboard = { render: () => render() };
-const REAL_DIR = path.resolve(os.homedir(), '.claude', 'factory'); // at load: tests swap HOME in-process later
-// Every state-dir path goes through here, so no test (FACTORY_TEST) can read or write the real ~/.claude/factory.
-const stateDir = () => {
-  if (process.env.FACTORY_TEST && path.resolve(io.dir) === REAL_DIR) throw new Error(`FACTORY_TEST is set: refusing the real state dir ${io.dir}; set FACTORY_DIR to a temp dir`);
-  return io.dir;
-};
-const log = () => path.join(stateDir(), 'events.jsonl');
-
-export const CAP = 3;          // max build iterations before escalating
-export const MAX_DIFF = 300;   // added + deleted lines allowed for auto-merge
-export const COST_CAP = 5;     // USD per run; over it, the run stops looping and escalates
-export const TOKEN_CAP = 3_000_000; // same, for runs that record tokens but not dollars (cache reads not counted when known)
-export const PROJECT_BUDGET_USD = 50; // per idea-to-app project, over all its issue runs; rule project.budgetUsd can only lower it
-export const MAX_ISSUES_PER_SESSION = 10; // issues one `F loop` session picks before it stops; rule project.maxIssuesPerSession can only lower it
-// $ per million tokens: [input, output, cache read, cache write 5m, cache write 1h]. Fast mode bills 2x.
-// shortcut: hand-copied from Anthropic's pricing pages in 2026-11 (Fable 5.2 input/output checked against Claude Code's own cost-state
-// lines; its cache read is 0.025x and its writes 1.25x / 2x, per docs/research/model-routing.md §6.1); keep them current. Unknown models get no cost, only tokens.
-const PRICES = {
-  'claude-opus-5-5': [4, 20, 0.2, 5, 8],
-  'claude-sonnet-5-5': [2, 10, 0.1, 2.5, 4],
-  'claude-haiku-5-5': [0.1, 0.5, 0.01, 0.125, 0.2], // shortcut: the prompts-up-to-100K tier; longer prompts bill 5x
-  'claude-fable-5-2': [8, 40, 0.2, 10, 16],
-  'claude-opus-5': [5, 25, 0.5, 6.25, 10],
-  'claude-opus-4-7': [5, 25, 0.5, 6.25, 10], 'claude-opus-4-6': [5, 25, 0.5, 6.25, 10], 'claude-opus-4-5': [5, 25, 0.5, 6.25, 10],
-  'claude-sonnet-4-6': [3, 15, 0.3, 3.75, 6], 'claude-sonnet-4-5': [3, 15, 0.3, 3.75, 6],
-  'claude-haiku-4-5': [1, 5, 0.1, 1.25, 2],
-};
-// t = [input, output, cacheRead, cacheWrite5m, cacheWrite1h]; null when the model has no price.
-export const costOf = (model, t, fast) => {
-  const p = PRICES[String(model || '').replace(/\[.*\]$/, '').replace(/-\d{8}$/, '')];
-  return p ? (t.reduce((s, n, i) => s + n * p[i], 0) / 1e6) * (fast ? 2 : 1) : null;
-};
-const USAGE_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite'];
-const TRUSTED = ['OWNER', 'MEMBER', 'COLLABORATOR'];
-const OUTCOMES = ['rejected', 'needs-info', 'merged', 'escalated', 'closed', 'awaiting-approval', 'split'];
-const TERMINAL = ['rejected', 'merged', 'escalated', 'closed', 'split']; // needs-info / awaiting-approval resume later
-const STAGES = ['intake', 'spec', 'build', 'review', 'gate', 'approve', 'ship']; // ship: deploy observations, recorded only by packages/ship's track()
-const STATUSES = ['started', 'passed', 'failed', 'decided', 'reverted', ...OUTCOMES];
-const BLOCKING = ['high', 'medium'];
-const SENSITIVE = /(^|\/)(auth|login|session|oauth|payments?|billing|money|migrations?)(\/|\.|$)|^\.github\/workflows\/|(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|Gemfile(\.lock)?|go\.(mod|sum)|Cargo\.(toml|lock))$|(^|\/)\.env|(^|\/)\.(claude|codex)\/|(^|\/)\.mcp\.json$/i; // .claude/** (settings, hooks, skills, agents), .codex/ and .mcp.json: `claude -p` in the worktree runs repo hooks and MCP servers with no trust prompt
-// A harness adapter can name its own repo config folder (configDirs); that only ever adds sensitive paths.
-const sensitive = (p) => SENSITIVE.test(p) || harnesses.some((h) => (h.configDirs || []).some((d) => ('/' + p).includes('/' + d + '/')));
-const UI = /\.(tsx|jsx|vue|svelte|astro|html|css|scss|sass|less)$/i;
-const SEO = /(^|\/)(page|layout|head|metadata|sitemap|robots|opengraph-image)\.[a-z]+$|(^|\/)pages\/|\.html$/i;
-const DOCS = /\.mdx?$|(^|\/)\.env\.example$|(^|\/)(app\/api|pages\/api|routes|cli|bin)\//i; // docs, env and public API surface
-const SOURCE = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rb|rs|java|kt|swift|php|cs|vue|svelte)$/i;
-const TEST = /(\.|_)(test|spec)\.[a-z]+$|(^|\/)(__tests__|tests?|e2e|spec)\//i;
-const SEVERITIES = ['high', 'medium', 'low'];
-const REVIEW_KEYS = ['axis', 'verdict', 'findings', 'costUsd', 'tokens', 'usage', 'model'];
-const VERIFIER_KEYS = ['role', 'costUsd', 'tokens', 'usage', 'model'];
-const FINDING_KEYS = ['severity', 'file', 'line', 'issue', 'route', 'dismissed'];
-const blocking = (f) => BLOCKING.includes(f.severity) && !f.dismissed; // a verifier-dismissed finding never blocks
-
-export const isSensitive = (p) => SENSITIVE.test(p);
-export const factoryDir = () => stateDir();
-export const runDir = (run) => path.join(stateDir(), run.replace(/[^a-z0-9]+/gi, '-'));
-
-export function read() {
-  try {
-    return fs.readFileSync(log(), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-  } catch (e) {
-    if (e.code === 'ENOENT') return [];
-    throw e;
-  }
-}
-
-export function record(run, stage, status, payload = {}, cli) { // cli: {fallback?} when the orchestrator reports a step; in-process records (sync, demo) get no runner
-  if (!run) throw new Error('missing run id');
-  if (String(run).endsWith(':project')) throw new Error('project runs are recorded by "new", "issues create", "loop" and "retire", not by hand');
-  if (!STAGES.includes(stage)) throw new Error(`unknown stage "${stage}" (${STAGES.join('|')})`);
-  if (!STATUSES.includes(status)) throw new Error(`unknown status "${status}" (${STATUSES.join('|')})`);
-  if (status === 'merged' && derive(read())[run]?.decision?.action !== 'merge') throw new Error('refusing "merged": the recorded decision is not merge');
-  if (stage === 'review' && payload.axis !== undefined) validateReview(run, payload, status);
-  if (stage === 'review' && payload.role !== undefined) {
-    if (payload.role !== 'verifier' || payload.axis !== undefined) throw new Error('role must be "verifier", without an axis');
-    const extra = Object.keys(payload).filter((k) => !VERIFIER_KEYS.includes(k));
-    if (extra.length) throw new Error(`verifier payload has unknown fields: ${extra.join(', ')}`);
-  }
-  payload = validateUsage(payload);
-  const me = stage === 'ship' ? null : harnesses.find((h) => h.current?.()); // the harness F runs inside, if any; lets the UI link back to the driving session
-  const ev = { ts: new Date().toISOString(), ...payload, ...(me ? { harness: me.id, sessionId: me.current(), cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback)), run, stage, status };
-  fs.mkdirSync(stateDir(), { recursive: true });
-  fs.appendFileSync(log(), JSON.stringify(ev) + '\n');
-  if (TERMINAL.includes(status) || status === 'needs-info') { // a finished (or parked) run gives back its worktree
-    try { const c = cleanup(run); if (c.startsWith('kept')) console.error(`factory: ${c}`); } catch (e) { console.error(`factory: worktree cleanup failed: ${e.message}`); }
-  }
-  dashboard.render();
-  return ev;
-}
-
-// Token numbers come from model-typed payloads: only non-negative numbers and a short model id get stored. `tokens` becomes the usage sum.
-function validateUsage(p) {
-  const u = p.usage;
-  if (u !== undefined) {
-    if (!u || typeof u !== 'object' || Array.isArray(u)) throw new Error('usage must be an object');
-    const bad = Object.keys(u).filter((k) => !USAGE_KEYS.includes(k));
-    if (bad.length) throw new Error(`usage has unknown fields: ${bad.join(', ')} (${USAGE_KEYS.join('|')})`);
-    for (const [k, v] of Object.entries(u)) if (!Number.isSafeInteger(v) || v < 0) throw new Error(`usage.${k} must be a non-negative integer`);
-  }
-  if (p.model !== undefined && !(typeof p.model === 'string' && /^[\w.:[\]-]{1,64}$/.test(p.model))) throw new Error('model must be a short model id');
-  for (const k of ['tokens', 'costUsd']) if (p[k] !== undefined && !(typeof p[k] === 'number' && Number.isFinite(p[k]) && p[k] >= 0)) throw new Error(`${k} must be a non-negative number`);
-  return u ? { ...p, tokens: Object.values(u).reduce((s, n) => s + n, 0) } : p;
-}
-
-// Burn cells: tokens, dollars where the model is priced, cache reads (cheap; left out of the token cap) and unpriced tokens.
-const cell = () => ({ tokens: 0, costUsd: 0, cacheRead: 0, unpriced: 0 });
-const burnOf = () => ({ measured: false, total: cell(), byStage: {}, byIteration: {}, byAxis: {} });
-function addBurn(b, { stage, iteration, axis }, tokens, usd, cacheRead = 0) {
-  for (const c of [b.total, (b.byStage[stage] ??= cell()), (b.byIteration[iteration] ??= cell()), axis ? (b.byAxis[axis] ??= cell()) : null]) {
-    if (!c) continue;
-    c.tokens += tokens; c.cacheRead += cacheRead;
-    if (usd == null) c.unpriced += tokens; else c.costUsd += usd;
-  }
-}
-const finishBurn = (b) => {
-  for (const c of [b.total, ...[b.byStage, b.byIteration, b.byAxis].flatMap(Object.values)]) c.costUsd = c.unpriced && !c.costUsd ? null : +c.costUsd.toFixed(4);
-  return b;
-};
-
-// A recorded verdict is final: only F's own "invalid" placeholder can be replaced, and nothing once the iteration is gated.
-const INVALID = 'reviewer output invalid: ';
-function assertReviewOpen(r, axis) {
-  if (r.events.findLast((e) => e.stage === 'gate' || (e.stage === 'build' && e.status === 'started'))?.stage === 'gate') throw new Error(`iteration ${r.iteration} is already gated; its reviews are frozen`);
-  const prev = r.reviews[r.iteration]?.[axis];
-  if (prev && !prev.findings.some((f) => f.issue?.startsWith(INVALID))) throw new Error(`a ${prev.verdict} "${axis}" review is already recorded for iteration ${r.iteration}; only an invalid one can be replaced`);
-}
-
-// Reviewer output is untrusted model text: reject anything outside the contract instead of storing it.
-function validateReview(run, p, status) {
-  const extra = Object.keys(p).filter((k) => !REVIEW_KEYS.includes(k));
-  if (extra.length) throw new Error(`review payload has unknown fields: ${extra.join(', ')}`);
-  const r = derive(read())[run];
-  const axes = r?.axes?.[r.iteration] || [];
-  if (!axes.includes(p.axis)) throw new Error(`axis "${p.axis}" is not one of this iteration's axes (${axes.join(', ') || 'none recorded'})`);
-  assertReviewOpen(r, p.axis);
-  if (!Array.isArray(p.findings || [])) throw new Error('findings must be an array');
-  for (const f of p.findings || []) {
-    const bad = Object.keys(f).filter((k) => !FINDING_KEYS.includes(k));
-    if (bad.length) throw new Error(`finding has unknown fields: ${bad.join(', ')}`);
-    if (!SEVERITIES.includes(f.severity)) throw new Error(`finding severity must be ${SEVERITIES.join('|')}`);
-    if (!['spec', 'build'].includes(f.route)) throw new Error('finding route must be spec|build');
-    if (typeof f.issue !== 'string' || !f.issue) throw new Error('finding needs an issue sentence');
-  }
-  if (status === 'failed' && !(p.findings || []).some(blocking)) throw new Error('a failed review needs at least one undismissed high or medium finding (record "passed" if the verifier dismissed them all)');
-}
-
-export function derive(events) {
-  const runs = {};
-  for (const e of events) {
-    if (e.stage === 'rules' || PROJECT_EVENTS[e.stage]) continue; // rule changes (an audit trail) and idea-to-app project events: not runs
-    if (e.stage === 'ship') { // deploy state, typed by a connector: the latest per connector and env. Never moves the run's stage, url, clock or outcome.
-      const r = runs[e.run];
-      if (r) (r.deploys ??= {})[`${e.connector}/${e.env}`] = { connector: e.connector, kind: e.kind, env: e.env, state: e.state, status: e.status, url: e.url, sha: e.sha, at: e.at, detail: e.detail, creator: e.creator, ts: e.ts };
-      continue;
-    }
-    const r = (runs[e.run] ??= { id: e.run, iteration: 0, reviews: {}, loopbacks: [], events: [], outcome: 'in-progress' });
-    r.events.push(e);
-    Object.assign(r, { stage: e.stage, status: e.status, updated: e.ts });
-    r.started ??= e.ts;
-    for (const k of ['title', 'url', ...(e.status === 'reverted' ? [] : ['pr']), 'branch', 'spec', 'issues', 'children']) if (e[k]) r[k] = e[k];
-    if (e.stage === 'intake' && e.status === 'started') for (const k of ['author', 'association', 'source', 'imported', 'origin', 'originAssociation']) if (e[k]) r[k] = e[k];
-    if (e.sessionId && !(r.sessions ||= []).some((x) => x.id === e.sessionId)) r.sessions.push({ agent: e.harness, id: e.sessionId, cwd: e.cwd, last: e.ts });
-    else if (e.sessionId) r.sessions.find((x) => x.id === e.sessionId).last = e.ts;
-    if (e.costUsd) r.costUsd = +((r.costUsd || 0) + e.costUsd).toFixed(4);
-    if (e.tokens) r.tokens = (r.tokens || 0) + e.tokens;
-    if (e.stage === 'intake' && e.status === 'started') r.outcome = 'in-progress'; // resume after needs-info
-    if (r.outcome === 'awaiting-approval' && !OUTCOMES.includes(e.status)) r.outcome = 'in-progress'; // spec approved
-    if (e.status === 'reverted') r.reverted = { pr: e.pr, reason: e.reason };
-    if (e.stage === 'build' && e.status === 'started') r.iteration++;
-    if (e.tokens || e.costUsd) { // reported: what the orchestrator copied from a subagent result
-      const u = e.usage || {};
-      const usd = e.costUsd ?? (e.usage ? costOf(e.model, [u.input || 0, u.output || 0, u.cacheRead || 0, 0, u.cacheWrite || 0]) : null); // shortcut: reported cache writes priced at the 1h rate Claude Code uses
-      addBurn((r.burn ??= burnOf()), { stage: e.stage, iteration: r.iteration, axis: e.axis || e.role }, e.tokens || 0, usd, u.cacheRead || 0);
-    }
-    if (e.stage === 'build' && e.localChecks) r.localChecks = e.localChecks; // only "F checks" records it
-    if (e.stage === 'review' && e.status === 'started') { r.axes = { ...r.axes, [r.iteration]: e.axes }; if (e.sha) r.reviewedSha = e.sha; }
-    if (e.stage === 'review' && e.axis) {
-      const findings = e.findings || [];
-      const verdict = findings.some(blocking) ? 'failed' : 'passed'; // findings outrank the verdict word
-      (r.reviews[r.iteration] ??= {})[e.axis] = { verdict, findings, ...(e.runner && { runner: e.runner }) };
-    }
-    if (e.stage !== 'review' && (e.runner || r.runners?.[e.stage])) (r.runners ??= {})[e.stage] = e.runner; // latest event of the stage wins
-    if (e.stage === 'gate' && ['spec', 'build'].includes(e.next)) r.loopbacks.push({ iteration: r.iteration, route: e.next, reasons: e.reasons, ts: e.ts });
-    if (e.stage === 'approve' && e.status === 'decided') r.decision = { action: e.action, reasons: e.reasons };
-    if (OUTCOMES.includes(e.status)) r.outcome = e.status;
-  }
-  for (const r of Object.values(runs)) {
-    r.durationMs = Date.parse(r.updated) - Date.parse(r.started);
-    if (r.burn) finishBurn(r.burn);
-    if (r.deploys) r.deploys = Object.values(r.deploys);
-    for (const c of r.children || []) if (runs[c]) runs[c].parent = r.id;
-  }
-  return runs;
-}
-
-// Live runs (with measured burn) over archived summaries, by id.
-export const allRuns = (events = read()) => ({ ...Object.fromEntries(readArchive().map((a) => [a.id, a])), ...withMeasured(derive(events), events) });
-
-const getRun = (run) => {
-  const events = read();
-  const r = withMeasured(derive(events), events)[run] || readArchive().find((a) => a.id === run);
-  if (!r) throw new Error(`no run ${run}`);
-  return r;
-};
-
-// Measured dollars, when known, are the whole budget; otherwise the old rule on reported dollars and non-cache-read tokens.
-export function budget(r) {
-  const m = r.burn?.measured ? r.burn.total : null;
-  const priced = m?.costUsd != null;
-  const usd = priced ? m.costUsd : r.costUsd || 0;
-  const tokens = m ? m.tokens - m.cacheRead : r.tokens || 0;
-  return { over: usd > COST_CAP || (!priced && tokens > TOKEN_CAP), usd: +usd.toFixed(2), tokens, source: m ? 'measured' : 'reported' };
-}
-const budgetWhy = (b) => `($${b.usd}, ${b.tokens} tokens, ${b.source})`;
 
 // ---------- measured burn: Claude Code transcripts of the sessions that recorded events ----------
 const projectsRoot = () => io.projects || path.join(os.homedir(), '.claude', 'projects');
@@ -813,7 +602,7 @@ export function headlessArgs({ share = 1, ...opts } = {}) {
 }
 
 // F, not the payload, says who did the work. Default runners leave events unchanged; a fallback can only downgrade to default.
-function runnerStamp(run, stage, axis, fallback) {
+export function runnerStamp(run, stage, axis, fallback) {
   const key = stage === 'review' ? (axis && `review.${axis}`) : stage === 'gate' ? 'verifier' : ['intake', 'spec', 'build'].includes(stage) ? stage : null;
   if (!key) return {};
   const { plan, extra } = skills(run.split(/[#:]/)[0]);
@@ -891,7 +680,7 @@ const projectsFile = () => path.join(stateDir(), 'projects.json');
 export const projects = () => { try { return JSON.parse(fs.readFileSync(projectsFile(), 'utf8')); } catch { return {}; } };
 const saveProject = (repo, p) => { fs.mkdirSync(stateDir(), { recursive: true }); fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...projects()[repo], path: p, synced: projects()[repo]?.synced } }, null, 2)); };
 const wtFile = (run) => path.join(runDir(run), 'worktree.json');
-const wtInfo = (run) => { try { return JSON.parse(fs.readFileSync(wtFile(run), 'utf8')); } catch { return null; } };
+export const wtInfo = (run) => { try { return JSON.parse(fs.readFileSync(wtFile(run), 'utf8')); } catch { return null; } };
 
 // One git worktree per run, sharing the clone's object store (not a second clone). A resume recreates it from the pushed branch.
 export function worktree(run, repoPath) {
@@ -1229,27 +1018,9 @@ export function revert(run, reason) {
   }
 }
 
-const archiveFile = () => path.join(stateDir(), 'archive.jsonl');
+export const archiveFile = () => path.join(stateDir(), 'archive.jsonl');
 const sessionsFile = () => path.join(stateDir(), 'sessions.json');
-const readArchive = () => { try { return fs.readFileSync(archiveFile(), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
-
-// Moves finished runs older than `days` out of the live log into compact summaries, so derive/render stay fast.
-export function archive(days = 14) {
-  const cutoff = new Date(Date.now() - days * 864e5).toISOString();
-  const events = read();
-  const runs = withMeasured(derive(events), events); // measured burn is kept in the summary: the archive drops most events
-  const old = Object.values(runs).filter((r) => TERMINAL.includes(r.outcome) && r.updated < cutoff && !wtInfo(r.id));
-  if (!old.length) return { archived: 0 };
-  const ids = new Set(old.map((r) => r.id));
-  const sessionEvents = (r) => r.events.filter((e) => e.sessionId).map((e) => ({ ts: e.ts, stage: e.stage, status: e.status, sessionId: e.sessionId }));
-  fs.appendFileSync(archiveFile(), old.map((r) => JSON.stringify({ ...r, events: r.events.slice(-5), sessionEvents: sessionEvents(r), archived: true })).join('\n') + '\n');
-  const tmp = log() + '.tmp'; // write-then-rename so a crash never leaves a half log
-  fs.writeFileSync(tmp, events.filter((e) => !ids.has(e.run)).map((e) => JSON.stringify(e)).join('\n') + (events.length > ids.size ? '\n' : ''));
-  fs.copyFileSync(log(), log() + '.bak');
-  fs.renameSync(tmp, log());
-  dashboard.render();
-  return { archived: old.length };
-}
+export const readArchive = () => { try { return fs.readFileSync(archiveFile(), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 
 // Runs intake on each golden fixture with a headless Claude session (costs tokens; user-triggered) and scores the outcome.
 export function evals(only) {
