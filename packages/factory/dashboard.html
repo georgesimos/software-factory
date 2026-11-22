@@ -263,6 +263,8 @@ td.v.passed { color: var(--ok); } td.v.failed { color: var(--bad); } td.v.wait {
 .burn-iters li { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border-top: 1px dashed var(--line); }
 td.tok, .axis-burn { font: 11.5px var(--mono); color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .axis-burn { margin: 8px 0 0; }
+/* A lone 7th metric (Tokens / merge) fills its row in the 3-column layouts */
+@container (max-width: 820px) { .metric:last-child:nth-child(3n + 1) { grid-column: 1 / -1; } }
 
 .kids { display: grid; gap: 6px; }
 .kid { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; text-decoration: none; font-size: 13px; }
@@ -297,7 +299,6 @@ a.kid:hover { border-color: var(--line-2); }
 body.open .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 body.open .metric:nth-child(3n + 1) { padding-left: 0; }
 body.open .metric:last-child:nth-child(3n + 2) { grid-column: span 2; }
-body.open .metric:last-child:nth-child(3n + 1) { grid-column: 1 / -1; }
 @media (max-width: 1100px) {
   :root { --gut: 20px; }
   .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
