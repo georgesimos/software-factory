@@ -9,12 +9,13 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { harnesses } from './harnesses/index.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 let DIR = process.env.FACTORY_DIR || path.join(os.homedir(), '.claude', 'factory');
 const log = () => path.join(DIR, 'events.jsonl');
-const GH = process.env.FACTORY_GH || 'gh'; // overridable only so the self-test can stub GitHub
-const GIT = process.env.FACTORY_GIT || 'git';
+let GH = process.env.FACTORY_GH || 'gh'; // overridable only so the self-test can stub GitHub
+let GIT = process.env.FACTORY_GIT || 'git';
 
 export const CAP = 3;          // max build iterations before escalating
 export const MAX_DIFF = 300;   // added + deleted lines allowed for auto-merge
@@ -46,6 +47,8 @@ const STAGES = ['intake', 'spec', 'build', 'review', 'gate', 'approve'];
 const STATUSES = ['started', 'passed', 'failed', 'decided', 'reverted', ...OUTCOMES];
 const BLOCKING = ['high', 'medium'];
 const SENSITIVE = /(^|\/)(auth|login|session|oauth|payments?|billing|money|migrations?)(\/|\.|$)|^\.github\/workflows\/|(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|Gemfile(\.lock)?|go\.(mod|sum)|Cargo\.(toml|lock))$|(^|\/)\.env|(^|\/)\.(claude|codex)\//i; // .claude/.codex: a branch's own agent skills, hooks and settings
+// A harness adapter can name its own repo config folder (configDirs); that only ever adds sensitive paths.
+const sensitive = (p) => SENSITIVE.test(p) || harnesses.some((h) => (h.configDirs || []).some((d) => ('/' + p).includes('/' + d + '/')));
 const UI = /\.(tsx|jsx|vue|svelte|astro|html|css|scss|sass|less)$/i;
 const SEO = /(^|\/)(page|layout|head|metadata|sitemap|robots|opengraph-image)\.[a-z]+$|(^|\/)pages\/|\.html$/i;
 const DOCS = /\.mdx?$|(^|\/)\.env\.example$|(^|\/)(app\/api|pages\/api|routes|cli|bin)\//i; // docs, env and public API surface
@@ -80,8 +83,8 @@ export function record(run, stage, status, payload = {}, cli) { // cli: {fallbac
     if (extra.length) throw new Error(`verifier payload has unknown fields: ${extra.join(', ')}`);
   }
   payload = validateUsage(payload);
-  const sessionId = process.env.CLAUDE_CODE_SESSION_ID; // set by Claude Code; lets the UI link back to the driving session
-  const ev = { ts: new Date().toISOString(), ...payload, ...(sessionId ? { harness: 'claude-code', sessionId, cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback)), run, stage, status };
+  const me = harnesses.find((h) => h.current?.()); // the harness F runs inside, if any; lets the UI link back to the driving session
+  const ev = { ts: new Date().toISOString(), ...payload, ...(me ? { harness: me.id, sessionId: me.current(), cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback)), run, stage, status };
   fs.mkdirSync(DIR, { recursive: true });
   fs.appendFileSync(log(), JSON.stringify(ev) + '\n');
   if (TERMINAL.includes(status) || status === 'needs-info') { // a finished (or parked) run gives back its worktree
@@ -376,7 +379,7 @@ export function decide(r, f) {
   if (local && !local.ok) why.push(ciLine);
   const lines = (f.additions || 0) + (f.deletions || 0), cap = Math.min(MAX_DIFF, pol.diffCap?.value ?? MAX_DIFF);
   if (lines > cap) why.push(`diff is ${lines} lines (max ${cap}${cap < MAX_DIFF ? ` by rule diffCap, ${by(pol.diffCap)}` : ''})`);
-  const sens = (f.files || []).filter((p) => SENSITIVE.test(p));
+  const sens = (f.files || []).filter(sensitive);
   if (sens.length) why.push(`touches sensitive paths: ${sens.join(', ')}`);
   if (r.iteration > CAP) why.push(`iteration ${r.iteration} exceeds cap ${CAP}`);
   const b = budget(r);
@@ -396,7 +399,7 @@ export function risk(r, plannedFiles) {
   const reasons = [];
   if (!TRUSTED.includes(r.association)) reasons.push(`author association "${r.association || 'unknown'}" is not trusted`);
   if (r.originAssociation && !TRUSTED.includes(r.originAssociation)) reasons.push(`split from ${r.origin}, whose author is not trusted`);
-  const sens = plannedFiles.filter((p) => SENSITIVE.test(p));
+  const sens = plannedFiles.filter(sensitive);
   if (sens.length) reasons.push(`plans to touch sensitive paths: ${sens.join(', ')}`);
   return { risky: reasons.length > 0, reasons };
 }
@@ -406,7 +409,7 @@ export function risk(r, plannedFiles) {
 const BUILTIN_AXES = ['code', 'security', 'ux', 'ui', 'seo', 'docs'];
 export const REQUIRED_AXES = ['code', 'security']; // axesFor always selects them; config can swap who reviews, never drop them
 export const STEP_KEYS = ['intake', 'spec', 'build', ...BUILTIN_AXES.map((a) => `review.${a}`), 'verifier', 'postmerge'];
-const HARNESSES = ['claude-code', 'codex'];
+const harnessIds = () => harnesses.map((h) => h.id);
 const NAME = /^[\w.-]+(:[\w.-]+)?$/; // skill, plugin:skill or agent type; it ends up in a command line
 const skillsFile = () => path.join(DIR, 'skills.json');
 
@@ -417,8 +420,8 @@ function checkRunner(s, at, more = []) {
   const ok = s.use === 'default' && !s.name && !s.path && !s.harness
     || s.use === 'skill' && NAME.test(s.name || '') && !s.path && !s.harness
     || s.use === 'brief' && /^(\/|~\/).*\.md$/.test(s.path || '') && !s.name && !s.harness // outside any worktree, so a branch can't supply it
-    || s.use === 'provider' && HARNESSES.includes(s.harness) && (s.name === undefined || NAME.test(s.name)) && !s.path;
-  if (!ok) throw new Error(`${at}: expected {"use":"default"}, {"use":"skill","name"}, {"use":"brief","path":"/abs/or/~/….md"} or {"use":"provider","harness":"${HARNESSES.join('|')}","name"?}`);
+    || s.use === 'provider' && harnessIds().includes(s.harness) && (s.name === undefined || NAME.test(s.name)) && !s.path;
+  if (!ok) throw new Error(`${at}: expected {"use":"default"}, {"use":"skill","name"}, {"use":"brief","path":"/abs/or/~/….md"} or {"use":"provider","harness":"${harnessIds().join('|')}","name"?}`);
 }
 
 function checkStep(key, v, at) {
@@ -483,10 +486,6 @@ export function setSkill(scope, key, value) {
 }
 
 // Every runner the picker can offer, by where it comes from. Descriptions come from front matter and are display-only.
-const BUILTIN_TOOLS = [ // Claude Code ships these with no file on disk
-  { name: 'code-review', desc: 'Claude Code built-in /code-review: reviews the current diff. Replies in prose, so the adapter brief converts it.' },
-  { name: 'security-review', desc: 'Claude Code built-in /security-review: security review of the pending changes on the branch. Replies in prose.' },
-];
 const front = (file) => {
   let t = '';
   try { t = fs.readFileSync(file, 'utf8').slice(0, 6000); } catch { return ''; }
@@ -504,7 +503,8 @@ function pluginItems(dir, source, group) {
   const add = (n, kind, file, runner) => NAME.test(`${name}:${n}`) && out.push({ source, group: group || `plugin: ${name}`, name: `${name}:${n}`, kind, desc: front(file), runner });
   for (const s of dirs(path.join(dir, 'skills'))) { const f = path.join(dir, 'skills', s, 'SKILL.md'); if (fs.existsSync(f)) add(s, 'skill', f, { use: 'skill', name: `${name}:${s}` }); }
   for (const c of ls(path.join(dir, 'commands')).filter((f) => f.endsWith('.md'))) add(c.slice(0, -3), 'command', path.join(dir, 'commands', c), { use: 'skill', name: `${name}:${c.slice(0, -3)}` });
-  for (const a of ls(path.join(dir, 'agents')).filter((f) => f.endsWith('.md'))) add(a.slice(0, -3), 'agent', path.join(dir, 'agents', a), { use: 'provider', harness: 'claude-code', name: `${name}:${a.slice(0, -3)}` });
+  const host = harnesses.find((h) => h.host)?.id; // plugin agents run on the harness that hosts this skill
+  if (host) for (const a of ls(path.join(dir, 'agents')).filter((f) => f.endsWith('.md'))) add(a.slice(0, -3), 'agent', path.join(dir, 'agents', a), { use: 'provider', harness: host, name: `${name}:${a.slice(0, -3)}` });
   return out;
 }
 
@@ -515,12 +515,10 @@ function scanGlobal() {
     for (const n of dirs(root)) { const f = path.join(root, n, 'SKILL.md'); if (fs.existsSync(f) && n !== 'software-factory') { const runner = runnerOf(n, f); if (runner) out.push({ source, group, name: runner.name || n, kind: 'skill', desc: front(f), runner }); } }
   };
   out.push({ source: 'builtin', group: 'Software Factory', name: 'Factory default', kind: 'brief', desc: 'The built-in brief in SKILL.md or references/reviewers.md.', runner: { use: 'default' } });
-  for (const t of BUILTIN_TOOLS) out.push({ source: 'system', group: 'Claude Code', name: t.name, kind: 'tool', desc: t.desc, runner: { use: 'provider', harness: 'claude-code', name: t.name } });
-  let codex = false;
-  try { execFileSync('codex', ['--version'], { stdio: 'ignore', timeout: 5000 }); codex = true; } catch { /* not installed */ }
-  if (codex) out.push(
-    { source: 'system', group: 'Codex', name: 'codex exec', kind: 'tool', desc: 'Runs Codex headless in the run worktree with the step\'s brief; reviews return the JSON contract via --output-schema.', runner: { use: 'provider', harness: 'codex' } },
-    { source: 'system', group: 'Codex', name: 'codex review', kind: 'tool', desc: 'Codex\'s own reviewer against the base branch. Replies in prose, so the adapter brief converts it.', runner: { use: 'provider', harness: 'codex', name: 'review' } });
+  for (const h of harnesses) for (const t of h.providerTools?.() || []) { // the runner is built here, so a harness can only offer itself
+    const runner = { use: 'provider', harness: h.id, ...(t.tool !== undefined && { name: t.tool }) };
+    if (t.tool === undefined || NAME.test(t.tool)) out.push({ source: 'system', group: h.label, name: String(t.name), kind: 'tool', desc: String(t.desc || '').slice(0, 240), runner });
+  }
   skillDir(path.join(claude, 'skills'), 'global', '~/.claude/skills', (n) => NAME.test(n) && { use: 'skill', name: n });
   // shortcut: synced (org-provided) skills are named anthropic-skills:<name> in Claude Code; read the prefix from Claude Code if it ever varies.
   for (const b of dirs(path.join(claude, 'skills', 'synced'))) skillDir(path.join(claude, 'skills', 'synced', b), 'global', 'Synced skills', (n) => NAME.test(`anthropic-skills:${n}`) && { use: 'skill', name: `anthropic-skills:${n}` });
@@ -576,18 +574,37 @@ export function uiHandle({ method, url, headers = {}, body = '' }, { token, port
     if (!same(u.searchParams.get('t'), token)) return reply(403, { error: 'open the URL that `F ui` printed' });
     return { status: 200, type: 'text/html; charset=utf-8', body: page({ ui: { token } }) };
   }
-  if (method === 'POST' && u.pathname === '/skills') {
+  if (method === 'POST' && Object.hasOwn(UI_ROUTES, u.pathname)) { // every write (and the onboarding read) passes the same checks
     if (!same(headers['x-factory-token'], token)) return reply(403, { error: 'missing or wrong token' });
     if (!hosts.some((h) => headers.origin === `http://${h}`)) return reply(403, { error: 'cross-origin request' });
     if (!/^application\/json\b/.test(headers['content-type'] || '')) return reply(415, { error: 'expected application/json' });
     try {
-      const { scope, step, runner } = JSON.parse(body);
-      setSkill(scope, step, runner === null ? undefined : runner);
-      return reply(200, skillsData(runRepos()));
+      const x = JSON.parse(body || '{}');
+      if (!x || typeof x !== 'object' || Array.isArray(x)) throw new Error('expected a JSON object');
+      return reply(200, UI_ROUTES[u.pathname](x));
     } catch (e) { return reply(400, { error: e.message }); }
   }
   return reply(404, { error: 'not found' });
 }
+
+// Each route calls the same validated function as its CLI command.
+const UI_ROUTES = {
+  '/skills': ({ scope, step, runner }) => { setSkill(scope, step, runner === null ? undefined : runner); return skillsData(runRepos()); },
+  '/onboard': () => onboardState(),
+  '/onboard/sync': ({ repo, path: p }) => {
+    if (typeof p !== 'string' || !path.isAbsolute(p) || !fs.existsSync(path.join(p, '.git'))) throw new Error('path must be the absolute path of a local clone');
+    sync(repo, p);
+    return onboardConfig();
+  },
+  '/onboard/ship': ({ scope, ship }) => { setShip(scope, ship); return onboardConfig(); },
+  '/onboard/rule': ({ scope, key, value, reason, until, unset }) => {
+    if (typeof key !== 'string') throw new Error('key must be a string');
+    if (unset) unsetRule(scope, key, { reason });
+    else setRule(scope, key, typeof value === 'string' ? value : JSON.stringify(value), { reason, until: until || undefined });
+    return onboardConfig();
+  },
+  '/onboard/automerge': ({ repo, on }) => { setAutoMerge(repo, on); return onboardConfig(); },
+};
 
 export function ui(port = 0) {
   const token = crypto.randomBytes(24).toString('base64url');
@@ -601,8 +618,16 @@ export function ui(port = 0) {
       res.end(r.body);
     });
   });
-  server.listen(port, '127.0.0.1', () => console.log(`factory ui: http://127.0.0.1:${server.address().port}/?t=${token}\nOnly this URL can change skills.json. Ctrl-C to stop.`));
+  server.listen(port, '127.0.0.1', () => console.log(`factory ui: http://127.0.0.1:${server.address().port}/?t=${token}\nOnly this URL can change settings (skills.json, rules, projects). Ctrl-C to stop.`));
   return server;
+}
+
+export function setAutoMerge(repo, on) {
+  if (!projects()[repo]) throw new Error(`${repo} is not attached; run sync first`);
+  if (typeof on !== 'boolean') throw new Error('auto-merge must be on or off');
+  fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...projects()[repo], autoMerge: on } }, null, 2));
+  render();
+  return projects()[repo];
 }
 
 // Policy rules: a closed set of typed switches that F enforces. They can only make the factory stricter, or swap a
@@ -677,7 +702,10 @@ function audit(scope, status, e) {
   render();
 }
 
+const checkScope = (scope) => { if (scope !== 'default' && !/^[\w.-]+\/[\w.-]+$/.test(scope || '')) throw new Error(`scope "${scope}" must be "default" or owner/repo`); };
+
 export function setRule(scope, key, raw, { reason, until } = {}) {
+  checkScope(scope);
   const cfg = readSkills(), s = { ...cfg[scope] }, step = key.startsWith('guide.') ? key.slice(6) : null;
   let value = raw;
   if (step !== null) s.guide = { ...s.guide, [step]: String(raw ?? '') };
@@ -696,6 +724,7 @@ export function setRule(scope, key, raw, { reason, until } = {}) {
 }
 
 export function unsetRule(scope, key, { reason } = {}) {
+  checkScope(scope);
   const cfg = readSkills(), s = { ...cfg[scope] }, step = key.startsWith('guide.') ? key.slice(6) : null;
   const bag = step !== null ? 'guide' : 'rules', k = step ?? key;
   if (!s[bag] || !(k in s[bag])) throw new Error(`no ${bag === 'guide' ? 'guidance' : 'rule'} "${key}" set for ${scope}`);
@@ -870,41 +899,15 @@ export function openPRs(repo) {
   return { base: r.defaultBranchRef.name, prs: r.pullRequests.nodes, doneBranches: (r.done?.nodes || []).map((x) => x.headRefName) };
 }
 
-// branch -> { agents, last } from local Claude Code and Codex logs. Reads branch names and file times only, never prompt text.
+// branch -> { agents, last, sessions } from each harness's local logs (adapter sessions()). Branch names and file times only, never prompt text.
 export function sessionsByBranch(repo, repoPath) {
   const out = {};
-  const add = (branch, agent, ts, id, cwd) => {
-    if (!branch || branch === 'HEAD') return;
+  for (const h of harnesses) for (const { branch, id, cwd, last } of h.sessions?.(repoPath, `https://github.com/${repo}.git`) || []) {
+    if (!branch || branch === 'HEAD') continue;
     const s = (out[branch] ??= { agents: [], last: '', sessions: [] });
-    if (!s.agents.includes(agent)) s.agents.push(agent);
-    if (ts > s.last) s.last = ts;
-    if (id && !s.sessions.some((x) => x.id === id)) s.sessions.push({ agent, id, cwd, last: ts });
-  };
-  const mtime = (f) => fs.statSync(f).mtime.toISOString();
-  const claude = path.join(os.homedir(), '.claude', 'projects');
-  const prefix = repoPath.replace(/[^a-zA-Z0-9]/g, '-'); // Claude Code's project-folder naming
-  for (const d of ls(claude).filter((d) => d === prefix || d.startsWith(prefix + '-'))) {
-    for (const f of ls(path.join(claude, d)).filter((f) => f.endsWith('.jsonl'))) {
-      const file = path.join(claude, d, f);
-      const text = fs.readFileSync(file, 'utf8');
-      const cwd = /"cwd":"((?:[^"\\]|\\.)*)"/.exec(text)?.[1]; // first cwd = where the session was started
-      for (const b of new Set([...text.matchAll(/"gitBranch":"([^"]*)"/g)].map((m) => m[1]))) add(b, 'claude-code', mtime(file), f.slice(0, -6), cwd);
-    }
-  }
-  const codex = path.join(os.homedir(), '.codex', 'sessions');
-  const sameRepo = new RegExp(`[:/]${repo.replace(/[.]/g, '\\.')}(\\.git)?$`, 'i');
-  for (const f of ls(codex).length ? fs.readdirSync(codex, { recursive: true }) : []) {
-    if (!String(f).endsWith('.jsonl')) continue;
-    const file = path.join(codex, String(f));
-    const fd = fs.openSync(file, 'r');
-    const buf = Buffer.alloc(8192);
-    const first = buf.subarray(0, fs.readSync(fd, buf, 0, buf.length, 0)).toString('utf8').split('\n')[0];
-    fs.closeSync(fd);
-    try {
-      const meta = JSON.parse(first).payload;
-      const g = meta?.git;
-      if (g && sameRepo.test(g.repository_url || '')) add(g.branch, 'codex', mtime(file), meta.id, meta.cwd);
-    } catch { /* first line cut off or not session_meta: skip */ }
+    if (!s.agents.includes(h.id)) s.agents.push(h.id);
+    if (last > s.last) s.last = last;
+    if (id && !s.sessions.some((x) => x.id === id)) s.sessions.push({ agent: h.id, id, cwd, last });
   }
   return out;
 }
@@ -952,7 +955,7 @@ export function sync(repo, repoPath) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo || '')) throw new Error(`repo must look like owner/repo, got "${repo}"`);
   repoPath = path.resolve(repoPath || projects()[repo]?.path || '.');
   fs.mkdirSync(DIR, { recursive: true });
-  fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { path: repoPath, synced: new Date().toISOString() } }, null, 2));
+  fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...projects()[repo], path: repoPath, synced: new Date().toISOString() } }, null, 2));
   const runs = Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') || r.id.startsWith(repo + ':'));
   const byPr = new Map(runs.filter((r) => r.pr).map((r) => [r.pr, r]));
   const byBranch = new Map(runs.filter((r) => r.branch).map((r) => [r.branch, r]));
@@ -1233,8 +1236,98 @@ export function page(extra = {}) {
   const ruleData = { rules: {}, ruleHistory: read().filter((e) => e.stage === 'rules').slice(-100) };
   try { const cfg = readSkills(); for (const p of new Set([...Object.keys(byProject), ...Object.keys(projects())])) ruleData.rules[p] = rules(p, cfg); }
   catch (e) { ruleData.rulesError = e.message; } // render runs after every record(): a bad config must not half-fail the event
-  const data = JSON.stringify({ generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)), ...extra }).replace(/</g, '\\u003c');
+  const data = JSON.stringify({ generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)),
+    harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), ...extra }).replace(/</g, '\\u003c');
   return fs.readFileSync(path.join(HERE, 'dashboard.html'), 'utf8').replace('__FACTORY_DATA__', () => data);
+}
+
+// ---- Onboarding: the wizard (dashboard, via `F ui`) and `F onboard`. What spawns CLIs or walks the disk runs only
+// when asked for, never in page(), which runs on every record().
+const F_CMD = 'node ~/.claude/skills/software-factory/factory.mjs';
+const shq = (x) => (/^[\w@%+=:,./~-]+$/.test(String(x)) ? String(x) : "'" + String(x).replace(/'/g, "'\\''") + "'");
+const onboardFile = () => path.join(DIR, 'onboard.json');
+export const SHIP_KINDS = ['web', 'mobile', 'database'];
+export const readOnboard = () => { try { return JSON.parse(fs.readFileSync(onboardFile(), 'utf8')); } catch { return {}; } };
+
+// "What you ship" is only stored for now; packages/ship reads it once it exists.
+export function setShip(scope, kinds) {
+  checkScope(scope);
+  if (!Array.isArray(kinds) || !kinds.every((k) => SHIP_KINDS.includes(k))) throw new Error(`ship must be a list of ${SHIP_KINDS.join('|')}`);
+  const o = readOnboard();
+  o[scope] = { ...o[scope], ship: SHIP_KINDS.filter((k) => kinds.includes(k)) }; // canonical order, so a re-run writes the same file
+  fs.mkdirSync(DIR, { recursive: true });
+  fs.writeFileSync(onboardFile() + '.tmp', JSON.stringify(o, null, 2));
+  fs.renameSync(onboardFile() + '.tmp', onboardFile());
+  return o[scope];
+}
+
+// Hooks for parallel work: "Create from an idea" turns on once F has a `new` command; the ship step lists
+// packages/ship's connectors once that package exists.
+// shortcut: `new` is detected by its CLI case in this file; switch to an exported function once idea-to-app lands.
+const SHIP_DIR = path.join(HERE, '..', 'ship', 'connectors');
+let hasNew;
+const hooks = () => ({ create: (hasNew ??= /^\s+case 'new':/m.test(fs.readFileSync(fileURLToPath(import.meta.url), 'utf8'))), ship: fs.existsSync(SHIP_DIR) });
+
+// One connector per file in packages/ship/connectors ("_" and index.mjs skipped), the same convention as harnesses/.
+// Read in a child process, so a connector that imports factory.mjs can't form an import cycle with it.
+function shipConnectors() {
+  if (!fs.existsSync(SHIP_DIR)) return null;
+  const js = "const fs=await import('node:fs'),p=await import('node:path'),u=await import('node:url');const d=process.argv.at(-1),out=[];"
+    + "for(const f of fs.readdirSync(d).filter((f)=>f.endsWith('.mjs')&&!f.startsWith('_')&&f!=='index.mjs').sort()){const c=(await import(u.pathToFileURL(p.join(d,f)).href)).default||{};"
+    + "out.push({id:String(c.id||f.slice(0,-4)),kind:String(c.kind||''),label:String(c.label||c.id||f.slice(0,-4))})}console.log(JSON.stringify(out))";
+  try { return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', js, SHIP_DIR], { encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] })); }
+  catch (e) { return { error: String(e.stderr || e.message).split('\n')[0].slice(0, 200) }; }
+}
+
+// The cheap part, returned after every wizard write.
+export function onboardConfig() {
+  const ps = projects(), scopes = ['default', ...Object.keys(ps)];
+  let ruleMap = {}, rulesError;
+  try { const cfg = readSkills(); ruleMap = Object.fromEntries(scopes.map((s) => [s, rules(s, cfg)])); } catch (e) { rulesError = e.message; }
+  return { projects: ps, ship: readOnboard(), skills: skillsData(Object.keys(ps)), rules: ruleMap, ...(rulesError && { rulesError }) };
+}
+
+export function onboardState() {
+  const hs = harnesses.map((h) => {
+    const d = h.detect() || {};
+    return { id: h.id, label: h.label, install: h.install, installed: !!d.installed, version: d.version || null,
+      login: d.installed ? h.login() : null, notes: d.installed ? h.notes?.() || [] : [], headless: h.headless?.() || null };
+  });
+  return { harnesses: hs, repos: discover(), hooks: { ...hooks(), connectors: shipConnectors() }, ...onboardConfig() };
+}
+
+export function onboardText(s) {
+  const mark = (b) => (b ? '✓' : b === null || b === undefined ? '?' : '✗'), L = [], scopes = ['default', ...Object.keys(s.projects)];
+  L.push('1. Local AI');
+  for (const h of s.harnesses) {
+    L.push(`   ${mark(h.installed)} ${h.label}${h.version ? ' ' + h.version : ''}${h.installed ? '' : `   install: ${h.install}`}`);
+    if (h.login) L.push(`     ${mark(h.login.ok)} login: ${h.login.hint}`);
+    for (const n of h.notes) L.push(`     ${mark(n.ok)} ${n.label}: ${n.hint}`);
+  }
+  L.push('', '2. Repo');
+  for (const [r, p] of Object.entries(s.projects)) L.push(`   ✓ ${r}  ${p.path}`);
+  for (const r of s.repos.filter((r) => !r.attached)) L.push(`   · ${r.repo}   ${F_CMD} sync ${r.repo} ${shq(r.path)}`);
+  if (!s.repos.length && !Object.keys(s.projects).length) L.push(`   no GitHub clones found: ${F_CMD} discover <folder>`);
+  L.push(`   ${s.hooks.create ? '·' : '-'} Create from an idea: ${s.hooks.create ? F_CMD + ' new' : 'coming soon'}`);
+  L.push('', '3. What you ship');
+  for (const sc of scopes) L.push(`   ${sc}: ${(s.ship[sc]?.ship || []).join(', ') || 'not chosen'}   ${F_CMD} onboard ship ${sc} web,mobile,database`);
+  const c = s.hooks.connectors;
+  L.push(`   connectors: ${Array.isArray(c) ? c.map((x) => `${x.label} (${x.kind})`).join(', ') || 'none yet' : c?.error ? 'error: ' + c.error : 'coming soon'}`);
+  L.push('', '4. Workflow');
+  for (const sc of scopes) {
+    const plan = s.skills.plans?.[sc]?.plan || {}, set = Object.entries(plan).filter(([, r]) => r.use !== 'default');
+    L.push(`   ${sc}: ${set.map(([k, r]) => `${k}=${r.name || r.harness || r.path}`).join(', ') || 'factory defaults'}`);
+  }
+  L.push(`   ${F_CMD} skills set <scope> <step> '{"use":"provider","harness":"${s.harnesses[0]?.id || '<harness>'}"}'   (catalog: ${F_CMD} skills catalog)`);
+  L.push('', '5. Rules');
+  for (const sc of scopes) {
+    const pol = Object.entries(s.rules[sc]?.policy || {}).filter(([, x]) => x.scope === sc);
+    const am = sc === 'default' ? '' : `   auto-merge ${s.projects[sc]?.autoMerge === false ? 'off' : 'on'}`;
+    L.push(`   ${sc}: ${pol.map(([k, x]) => `${k}=${JSON.stringify(x.value)}`).join(', ') || 'built-in'}${am}`);
+  }
+  L.push(`   ${F_CMD} rules set <scope> ci required|advisory|skip --reason "…"   ·   ${F_CMD} automerge <owner/repo> on|off`);
+  L.push('', '6. Start', '   In Claude Code: /software-factory <owner/repo>#<issue>', `   What's ready: ${F_CMD} queue <owner/repo>   ·   Live setup: ${F_CMD} ui`);
+  return L.join('\n');
 }
 
 // Fixture runs covering every outcome; used by `demo` and `test`.
@@ -1640,8 +1733,139 @@ function cliTest() {
   assert.equal(st.iteration, 2);
   syncTest(cli);
   worktreeTest(cli);
+  harnessTest(cli);
+  onboardTest(cli);
   rulesTest(cli);
   skillsTest(cli); // last: it ends by corrupting skills.json
+}
+
+// The shared harness contract, run against every adapter in the registry with its stub binary from test/bin; then a fake
+// third harness, added as one file in a temp registry, flows through the real CLI with no core change.
+function harnessTest(cli) {
+  const bin = path.join(HERE, 'test', 'bin'), node = path.dirname(process.execPath), empty = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-nobin-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-hhome-'));
+  const saved = { PATH: process.env.PATH, HOME: process.env.HOME, STUB_LOGGED_OUT: process.env.STUB_LOGGED_OUT };
+  const withEnv = (env, fn) => { Object.assign(process.env, env); try { return fn(); } finally { for (const [k, v] of Object.entries(saved)) v === undefined ? delete process.env[k] : (process.env[k] = v); } };
+  const files = ls(path.join(HERE, 'harnesses')).filter((f) => f.endsWith('.mjs') && !f.startsWith('_') && f !== 'index.mjs').sort();
+  assert.deepEqual(harnesses.map((h) => h.id + '.mjs'), files); // auto-loaded, template skipped, id = file name
+  for (const h of harnesses) {
+    const at = (m) => `${h.id}: ${m}`;
+    withEnv({ PATH: `${bin}:${node}`, HOME: home }, () => {
+      const d = h.detect();
+      assert.equal(d.installed, true, at('needs a stub binary in test/bin'));
+      assert.match(d.version, /^\d+\.\d+/, at('version'));
+      const l = h.login();
+      assert.deepEqual([l.ok, typeof l.hint], [true, 'string'], at('login'));
+      for (const t of h.providerTools?.() || []) {
+        assert.ok(typeof t.name === 'string' && typeof t.desc === 'string', at('tool needs name and desc'));
+        checkRunner({ use: 'provider', harness: h.id, ...(t.tool !== undefined && { name: t.tool }) }, at(t.name));
+      }
+      assert.deepEqual(h.sessions?.('/no/such/clone', 'https://github.com/acme/none.git') || [], [], at('sessions on an empty HOME'));
+      for (const n of h.notes?.() || []) assert.ok(typeof n.label === 'string' && [true, false, null].includes(n.ok) && typeof n.hint === 'string', at('note shape'));
+      const hl = h.headless?.();
+      if (hl) assert.ok(typeof hl.cmd === 'string' && Array.isArray(hl.args), at('headless shape'));
+    });
+    withEnv({ PATH: `${bin}:${node}`, STUB_LOGGED_OUT: '1' }, () => {
+      const l = h.login();
+      assert.equal(l.ok, false, at('logged out'));
+      assert.ok(l.hint.length > 0, at('a logged-out hint is the login command'));
+    });
+    withEnv({ PATH: empty }, () => { // not installed: no throw, nothing claimed
+      assert.deepEqual(h.detect(), { installed: false, version: null }, at('missing binary'));
+      assert.equal(h.login().ok, false, at('login without binary'));
+    });
+  }
+  // A third harness: one file plus its stub binary, in a temp registry dir next to copies of the real adapters.
+  const reg = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-reg-')), fbin = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-fbin-'));
+  for (const f of ls(path.join(HERE, 'harnesses')).filter((f) => f !== 'index.mjs')) fs.copyFileSync(path.join(HERE, 'harnesses', f), path.join(reg, f));
+  const tpl = fs.readFileSync(path.join(HERE, 'harnesses', '_template.mjs'), 'utf8');
+  fs.writeFileSync(path.join(reg, 'fake-agent.mjs'), tpl.replaceAll('my-agent', 'fake-agent').replaceAll('My Agent', 'Fake Agent')
+    .replace('current: () => null', 'current: () => process.env.FAKE_SESSION || null')
+    .replace('sessions: (repoPath, remoteUrl) => []', "sessions: (repoPath, remoteUrl) => remoteUrl.endsWith('/acme/app.git') ? [{ branch: 'dev/feat-a', id: 'fk-1', cwd: repoPath, last: new Date().toISOString() }] : []"));
+  fs.writeFileSync(path.join(fbin, 'fake-agent'), "#!/usr/bin/env node\nconst a = process.argv.slice(2).join(' ');\nif (a === '--version') console.log('fake-agent 0.0.1');\nelse if (a === 'auth status') console.log('ok');\nelse process.exit(2);\n", { mode: 0o755 });
+  const fdir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-fake-'));
+  const env = { FACTORY_DIR: fdir, FACTORY_HARNESSES: reg, PATH: `${fbin}:${bin}:${node}`, HOME: home, FACTORY_GIT: path.join(HERE, 'test', 'git-stub.mjs') };
+  const st = JSON.parse(cli(['onboard', '--json'], '', env));
+  assert.deepEqual(st.harnesses.map((h) => [h.id, h.installed, h.login?.ok]), [['claude-code', true, true], ['codex', true, true], ['fake-agent', true, true]]);
+  assert.match(cli(['onboard'], '', env), /✓ Fake Agent 0\.0\.1/);
+  assert.deepEqual(JSON.parse(cli(['skills', 'catalog'], '', env)).global.find((e) => e.group === 'Fake Agent').runner, { use: 'provider', harness: 'fake-agent' });
+  assert.throws(() => cli(['skills', 'set', 'acme/fk', 'build', '{"use":"provider","harness":"fake-agent"}'], '', { FACTORY_DIR: fdir }), /claude-code\|codex"/); // unknown without its file
+  assert.equal(JSON.parse(cli(['skills', 'set', 'acme/fk', 'build', '{"use":"provider","harness":"fake-agent"}'], '', env)).build.harness, 'fake-agent');
+  cli(['sync', 'acme/app', '/work/app'], '', env);
+  assert.equal(derive(JSON.parse(`[${fs.readFileSync(path.join(fdir, 'events.jsonl'), 'utf8').trim().split('\n').join(',')}]`))['acme/app#10'].source, 'fake-agent');
+  cli(['event', 'acme/app#10', 'spec', 'passed'], '', { ...env, FAKE_SESSION: 'fs-1' });
+  assert.deepEqual(JSON.parse(cli(['state', 'acme/app#10'], '', env)).sessions.map((x) => [x.agent, x.id]), [['fake-agent', 'fs-1']]);
+  cli(['event', 'acme/fk#2', 'spec', 'passed'], '', env);
+  assert.match(JSON.parse(cli(['risk', 'acme/fk#2', '.fake-agent/rules.md'], '', env)).reasons.join(), /sensitive paths: \.fake-agent\/rules\.md/); // its configDirs join the sensitive paths
+}
+
+// Onboarding endpoints: the same checks as /skills, the same validated functions as the CLI, and a re-run that changes nothing.
+function onboardTest(cli) {
+  const prevDir = DIR, prev = { GH, GIT, PATH: process.env.PATH, HOME: process.env.HOME };
+  DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-onboard-'));
+  const home = path.join(DIR, 'home'), clone = path.join(home, 'Development', 'app');
+  fs.mkdirSync(path.join(clone, '.git'), { recursive: true });
+  fs.writeFileSync(path.join(clone, '.git', 'config'), '[remote "origin"]\n\turl = git@github.com:acme/app.git\n');
+  GH = path.join(HERE, 'test', 'gh-stub.mjs'); GIT = path.join(HERE, 'test', 'git-stub.mjs');
+  Object.assign(process.env, { PATH: `${path.join(HERE, 'test', 'bin')}:${path.dirname(process.execPath)}`, HOME: home });
+  try {
+    const tok = 'o'.repeat(32), ctx = { token: tok, port: 4343 }, H = { host: 'localhost:4343', origin: 'http://localhost:4343', 'content-type': 'application/json', 'x-factory-token': tok };
+    const post = (url, body, h = {}) => uiHandle({ method: 'POST', url, headers: { ...H, ...h }, body: JSON.stringify(body) }, ctx);
+    const err = (url, body) => { const r = post(url, body); assert.equal(r.status, 400, r.body); return JSON.parse(r.body).error; };
+    const ok = (url, body) => { const r = post(url, body); assert.equal(r.status, 200, `${url}: ${r.body}`); return JSON.parse(r.body); };
+    for (const url of ['/onboard', '/onboard/sync', '/onboard/ship', '/onboard/rule', '/onboard/automerge']) {
+      assert.equal(post(url, {}, { 'x-factory-token': 'x'.repeat(32) }).status, 403);
+      assert.equal(post(url, {}, { origin: 'http://evil.test' }).status, 403);
+      assert.equal(post(url, {}, { host: 'evil.test:4343' }).status, 403);
+      assert.equal(post(url, {}, { 'content-type': 'text/plain' }).status, 415);
+    }
+    assert.equal(uiHandle({ method: 'GET', url: '/onboard', headers: H }, ctx).status, 404);
+    assert.equal(post('/onboard/__proto__', {}).status, 404);
+    assert.equal(uiHandle({ method: 'POST', url: '/onboard', headers: H, body: '[]' }, ctx).status, 400);
+    const s = ok('/onboard', {});
+    assert.deepEqual(s.harnesses.map((h) => [h.id, h.installed, h.login.ok]), [['claude-code', true, true], ['codex', true, true]]);
+    assert.deepEqual(s.repos.map((r) => [r.repo, r.path, r.attached]), [['acme/app', clone, false]]);
+    assert.deepEqual([s.hooks.create, s.hooks.connectors], [false, null]); // the idea-to-app and ship hooks stay off until those land
+    // Writes: invalid input is refused and changes nothing.
+    assert.match(err('/onboard/sync', { repo: 'acme/app', path: 'Development/app' }), /absolute path of a local clone/);
+    assert.match(err('/onboard/sync', { repo: 'acme/app', path: home }), /local clone/);
+    assert.match(err('/onboard/sync', { repo: 'acme', path: clone }), /owner\/repo/);
+    assert.match(err('/onboard/ship', { scope: 'acme/app', ship: ['web', 'desktop'] }), /web\|mobile\|database/);
+    assert.match(err('/onboard/ship', { scope: '__proto__', ship: [] }), /scope/);
+    assert.match(err('/onboard/rule', { scope: 'acme/app', key: 'ci', value: 'skip' }), /needs a reason/);
+    assert.match(err('/onboard/rule', { scope: '__proto__', key: 'ci', value: 'skip', reason: 'x' }), /scope "__proto__"/);
+    assert.match(err('/onboard/rule', { scope: 'acme/app', key: 'trusted', value: '[]', reason: 'x' }), /unknown rule/);
+    assert.match(err('/onboard/automerge', { repo: 'acme/app', on: false }), /not attached/);
+    assert.deepEqual([fs.existsSync(path.join(DIR, 'skills.json')), fs.existsSync(path.join(DIR, 'onboard.json')), read().length], [false, false, 0]);
+    // The wizard's happy path, then the same again.
+    const run = () => {
+      ok('/onboard/sync', { repo: 'acme/app', path: clone });
+      ok('/onboard/ship', { scope: 'acme/app', ship: ['database', 'web', 'web'] });
+      ok('/onboard/rule', { scope: 'acme/app', key: 'ci', value: 'skip', reason: 'Actions billing is failing' });
+      ok('/onboard/rule', { scope: 'acme/app', key: 'checks.commands', value: ['pnpm test'], reason: 'the CI stand-in' });
+      return ok('/onboard/automerge', { repo: 'acme/app', on: false });
+    };
+    const first = run(), ship1 = fs.readFileSync(path.join(DIR, 'onboard.json'), 'utf8'), runs1 = Object.keys(derive(read())).sort();
+    assert.deepEqual(first.ship['acme/app'].ship, ['web', 'database']);
+    assert.deepEqual([first.rules['acme/app'].policy.ci.value, first.rules['acme/app'].policy.ci.setBy, first.rules['acme/app'].policy['checks.commands'].value], ['skip', 'stub-user', ['pnpm test']]);
+    assert.equal(first.projects['acme/app'].autoMerge, false);
+    const again = run();
+    assert.equal(fs.readFileSync(path.join(DIR, 'onboard.json'), 'utf8'), ship1);
+    assert.deepEqual(Object.keys(derive(read())).sort(), runs1); // re-sync imports nothing new
+    assert.equal(again.projects['acme/app'].autoMerge, false); // ...and keeps the project's settings
+    assert.equal(again.rules['acme/app'].policy.ci.value, 'skip');
+    const txt = cli(['onboard'], '', { FACTORY_DIR: DIR, HOME: home, PATH: process.env.PATH });
+    for (const re of [/✓ acme\/app {2}/, /acme\/app: web, database/, /acme\/app: ci="skip", checks\.commands=\["pnpm test"\] {3}auto-merge off/, /Create from an idea: coming soon/]) assert.match(txt, re);
+    assert.deepEqual(JSON.parse(cli(['onboard', 'ship', 'default', 'mobile'], '', { FACTORY_DIR: DIR })), { ship: ['mobile'] });
+    assert.throws(() => cli(['onboard', 'ship', 'default', 'tv'], '', { FACTORY_DIR: DIR }), /web\|mobile\|database/);
+    // The static page carries the wizard's cheap data, never the slow or private parts.
+    const pg = page();
+    assert.match(pg, /"harnesses":\[\{"id":"claude-code","label":"Claude Code","install":/);
+    assert.ok(!pg.includes('"repos":') && !pg.includes('Development/app"'), 'discover results are served only to F ui');
+    assert.equal(pg.split('__FACTORY_DATA__').length, 1);
+  } finally {
+    DIR = prevDir; GH = prev.GH; GIT = prev.GIT; process.env.PATH = prev.PATH; process.env.HOME = prev.HOME;
+  }
 }
 
 // Policy rules and guidance: resolution, required reasons, expiry, CI replaced by local checks, and the stricter-only guards.
@@ -2065,9 +2289,7 @@ if (isMain) {
       case 'checks': out(localChecks(run)); break;
       case 'automerge': { // per-project switch; decide() escalates everything when off
         if (!['on', 'off'].includes(rest[0])) throw new Error('usage: automerge <owner/repo> on|off');
-        if (!projects()[run]) throw new Error(`${run} is not attached; run sync first`);
-        fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [run]: { ...projects()[run], autoMerge: rest[0] === 'on' } }, null, 2));
-        out(projects()[run]); break;
+        out(setAutoMerge(run, rest[0] === 'on')); break;
       }
       case 'axes': { // no files: diff the run's worktree since the last reviewed commit (or the base branch)
         const r = getRun(run), w = wtInfo(run);
@@ -2092,6 +2314,12 @@ if (isMain) {
         out(list.map(([k, p]) => sync(k, p))); break;
       }
       case 'projects': out(projects()); break;
+      case 'onboard': { // onboard [--json] | onboard ship <owner/repo|default> web,mobile,database
+        if (run === 'ship') { out(setShip(rest[0], (rest[1] || '').split(',').map((k) => k.trim()).filter(Boolean))); break; }
+        const st = onboardState();
+        if (run === '--json') out(st); else console.log(onboardText(st));
+        break;
+      }
       case 'discover': out(discover([run, ...rest].filter(Boolean))); break;
       case 'decide': { const r = getRun(run); const f = r.imported ? {} : facts(r); const d = decide(r, f); record(run, 'approve', 'decided', { ...d, facts: f }); out({ ...d, facts: f }); break; }
       case 'merge': out(merge(run)); break;
@@ -2121,6 +2349,8 @@ if (isMain) {
   discover [roots...]                     find local GitHub clones for onboarding (default: ~/Development, ~/code, ...)
   sync   [owner/repo] [local clone path]  attach a project and import open PRs + agent sessions (no args: all)
   projects                                list attached projects
+  onboard [--json]                        setup state, step by step, with the command for each fix (the wizard: F ui)
+  onboard ship <owner/repo|default> <web,mobile,database>  store what the project ships
   intake <run>                            fetch issue, record intake start, print issue + trusted comments
   event  <run> <stage> <status> [json|-] [--fallback why]  record an event ("-" = JSON on stdin)
   worktree <run> [clone path]            create/reuse the run's git worktree (prints its path)
@@ -2130,8 +2360,8 @@ if (isMain) {
   skills <owner/repo>                     print who runs each step (default, skill, brief or provider)
   skills set <owner/repo|default> <step> <json>  configure one step (intake, spec, build, review.<axis>, verifier, postmerge, axes.extra)
   skills unset <owner/repo|default> <step>       drop a step's choice (a project then inherits the global one)
-  skills catalog [owner/repo...]          every runner on this machine: built-in, Claude Code / Codex, global, project, your briefs
-  ui     [port]                           serve the dashboard on 127.0.0.1 with a token, so the Skills sheet can save
+  skills catalog [owner/repo...]          every runner on this machine: built-in, harness tools, global, project, your briefs
+  ui     [port]                           serve the dashboard on 127.0.0.1 with a token, so the Skills sheet and setup wizard can save
   rules  <owner/repo>                     print the policy rules, warnings and per-step guidance that apply
   rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, guide.<step> "text"
   rules unset <owner/repo|default> <key> [--reason "…"]  remove one (back to the global rule, or the built-in)

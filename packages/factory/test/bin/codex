@@ -1,0 +1,6 @@
+#!/usr/bin/env node
+// Fake `codex` for the harness contract test and the wizard e2e. STUB_LOGGED_OUT=1 simulates a signed-out CLI.
+const a = process.argv.slice(2).join(' '), out = !!process.env.STUB_LOGGED_OUT;
+if (a === '--version') process.stdout.write('codex-cli 0.141.0\n');
+else if (a === 'login status') { process.stderr.write(out ? 'Not logged in\n' : 'Logged in using ChatGPT\n'); process.exit(out ? 1 : 0); }
+else { process.stderr.write('codex-stub unexpected: ' + a); process.exit(2); }

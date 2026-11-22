@@ -1,0 +1,6 @@
+#!/usr/bin/env node
+// Fake `claude` for the harness contract test and the wizard e2e. STUB_LOGGED_OUT=1 simulates a signed-out CLI.
+const a = process.argv.slice(2).join(' '), out = !!process.env.STUB_LOGGED_OUT;
+if (a === '--version') process.stdout.write('2.1.304 (Claude Code)\n');
+else if (a === 'auth status') { process.stdout.write(JSON.stringify({ loggedIn: !out, authMethod: out ? 'none' : 'claude.ai' }, null, 2) + '\n'); process.exit(out ? 1 : 0); }
+else { process.stderr.write('claude-stub unexpected: ' + a); process.exit(2); }
