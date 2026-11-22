@@ -8,6 +8,7 @@
   "bin": { "factory": "./factory.mjs" },
   "scripts": {
     "test": "env -u CLAUDE_CODE_SESSION_ID node factory.mjs test",
-    "demo": "node factory.mjs demo"
+    "demo": "node factory.mjs demo",
+    "e2e": "node test/onboard.e2e.cjs"
   }
 }

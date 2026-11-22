@@ -342,6 +342,8 @@ Claude writes the plan and the issues; `F` validates them, executes them and rec
 
 ## Attach a project
 
+First-time setup: `F onboard` prints each step (AI harnesses and logins, repos, what you ship, runners, rules) with the command that fixes it. The same steps are a wizard in `F ui` (**Set up**).
+
 Run `F sync owner/repo <local clone path>`. Running `F sync` with no arguments later re-syncs every attached project. A sync:
 
 - **Registers the project.** `F projects` lists attached projects, and the dashboard can filter by project.
