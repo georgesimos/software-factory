@@ -14,16 +14,18 @@ import * as project from './project.mjs'; // also handed whole to the idea-to-ap
 import { PROJECT_EVENTS, newProject, issuesCreate, projectStatus, loop, queue, startIdea, retireIdea, ideas } from './project.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-let DIR = process.env.FACTORY_DIR || path.join(os.homedir(), '.claude', 'factory');
+// One mutable object, not `let`s: once code moves into packages, an importer cannot reassign a binding (docs/plans/split.md S1): where F reads and writes, and which binaries it runs.
+// gh/git are overridable only so the self-test can stub GitHub; projects: demo and test point it at fixture transcripts.
+export const io = { dir: process.env.FACTORY_DIR || path.join(os.homedir(), '.claude', 'factory'), gh: process.env.FACTORY_GH || 'gh', git: process.env.FACTORY_GIT || 'git', projects: null };
+// render() lives with the server after the split; code bound for core calls dashboard.render().
+export const dashboard = { render: () => render() };
 const REAL_DIR = path.resolve(os.homedir(), '.claude', 'factory'); // at load: tests swap HOME in-process later
 // Every state-dir path goes through here, so no test (FACTORY_TEST) can read or write the real ~/.claude/factory.
 const stateDir = () => {
-  if (process.env.FACTORY_TEST && path.resolve(DIR) === REAL_DIR) throw new Error(`FACTORY_TEST is set: refusing the real state dir ${DIR}; set FACTORY_DIR to a temp dir`);
-  return DIR;
+  if (process.env.FACTORY_TEST && path.resolve(io.dir) === REAL_DIR) throw new Error(`FACTORY_TEST is set: refusing the real state dir ${io.dir}; set FACTORY_DIR to a temp dir`);
+  return io.dir;
 };
 const log = () => path.join(stateDir(), 'events.jsonl');
-let GH = process.env.FACTORY_GH || 'gh'; // overridable only so the self-test can stub GitHub
-let GIT = process.env.FACTORY_GIT || 'git';
 
 export const CAP = 3;          // max build iterations before escalating
 export const MAX_DIFF = 300;   // added + deleted lines allowed for auto-merge
@@ -33,12 +35,12 @@ export const PROJECT_BUDGET_USD = 50; // per idea-to-app project, over all its i
 export const MAX_ISSUES_PER_SESSION = 10; // issues one `F loop` session picks before it stops; rule project.maxIssuesPerSession can only lower it
 // $ per million tokens: [input, output, cache read, cache write 5m, cache write 1h]. Fast mode bills 2x.
 // shortcut: hand-copied from Anthropic's pricing pages in 2026-11 (Fable 5.2 input/output checked against Claude Code's own cost-state
-// lines; its cache rates are assumed at the usual 0.1x / 1.25x / 2x); keep them current. Unknown models get no cost, only tokens.
+// lines; its cache read is 0.025x and its writes 1.25x / 2x, per docs/research/model-routing.md §6.1); keep them current. Unknown models get no cost, only tokens.
 const PRICES = {
   'claude-opus-5-5': [4, 20, 0.2, 5, 8],
   'claude-sonnet-5-5': [2, 10, 0.1, 2.5, 4],
   'claude-haiku-5-5': [0.1, 0.5, 0.01, 0.125, 0.2], // shortcut: the prompts-up-to-100K tier; longer prompts bill 5x
-  'claude-fable-5-2': [8, 40, 0.8, 10, 16],
+  'claude-fable-5-2': [8, 40, 0.2, 10, 16],
   'claude-opus-5': [5, 25, 0.5, 6.25, 10],
   'claude-opus-4-7': [5, 25, 0.5, 6.25, 10], 'claude-opus-4-6': [5, 25, 0.5, 6.25, 10], 'claude-opus-4-5': [5, 25, 0.5, 6.25, 10],
   'claude-sonnet-4-6': [3, 15, 0.3, 3.75, 6], 'claude-sonnet-4-5': [3, 15, 0.3, 3.75, 6],
@@ -103,7 +105,7 @@ export function record(run, stage, status, payload = {}, cli) { // cli: {fallbac
   if (TERMINAL.includes(status) || status === 'needs-info') { // a finished (or parked) run gives back its worktree
     try { const c = cleanup(run); if (c.startsWith('kept')) console.error(`factory: ${c}`); } catch (e) { console.error(`factory: worktree cleanup failed: ${e.message}`); }
   }
-  render();
+  dashboard.render();
   return ev;
 }
 
@@ -233,8 +235,7 @@ export function budget(r) {
 const budgetWhy = (b) => `($${b.usd}, ${b.tokens} tokens, ${b.source})`;
 
 // ---------- measured burn: Claude Code transcripts of the sessions that recorded events ----------
-let PROJECTS = null; // demo and test point this at fixture transcripts
-const projectsRoot = () => PROJECTS || path.join(os.homedir(), '.claude', 'projects');
+const projectsRoot = () => io.projects || path.join(os.homedir(), '.claude', 'projects');
 const usageFile = () => path.join(stateDir(), 'usage.json');
 const SUB_AXIS = /^\s*(code|security|ux|ui|seo|docs|[a-z][a-z0-9-]{0,30}(?=\s+review\b))\b/i; // built-ins, or any extra axis in "<axis> review RUN"
 
@@ -443,7 +444,7 @@ export function risk(r, plannedFiles) {
 }
 
 // Who does each step: the built-in brief, the user's own skill or brief, or a harness's tool.
-// User-local only (DIR/skills.json): a repo, and so a PR, can never pick its own reviewers.
+// User-local only (io.dir/skills.json): a repo, and so a PR, can never pick its own reviewers.
 const BUILTIN_AXES = ['code', 'security', 'ux', 'ui', 'seo', 'docs'];
 export const REQUIRED_AXES = ['code', 'security']; // axesFor always selects them; config can swap who reviews, never drop them
 export const STEP_KEYS = ['intake', 'spec', 'build', ...BUILTIN_AXES.map((a) => `review.${a}`), 'verifier', 'postmerge'];
@@ -679,7 +680,7 @@ export function setAutoMerge(repo, on) {
   if (!projects()[repo]) throw new Error(`${repo} is not attached; run sync first`);
   if (typeof on !== 'boolean') throw new Error('auto-merge must be on or off');
   fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...projects()[repo], autoMerge: on } }, null, 2));
-  render();
+  dashboard.render();
   return projects()[repo];
 }
 
@@ -757,7 +758,7 @@ const whoami = () => {
 function audit(scope, status, e) {
   fs.mkdirSync(stateDir(), { recursive: true });
   fs.appendFileSync(log(), JSON.stringify({ ts: new Date().toISOString(), ...e, run: scope, stage: 'rules', status }) + '\n');
-  render();
+  dashboard.render();
 }
 
 const checkScope = (scope) => { if (scope !== 'default' && !/^[\w.-]+\/[\w.-]+$/.test(scope || '')) throw new Error(`scope "${scope}" must be "default" or owner/repo`); };
@@ -841,7 +842,7 @@ export function reviewFromText(run, axis, text) {
   }
 }
 
-const gh = (...args) => execFileSync(GH, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+const gh = (...args) => execFileSync(io.gh, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const parseRun = (run) => {
   const m = /^([\w.-]+)\/([\w.-]+)#(\d+)$/.exec(run || '');
   if (!m) throw new Error(`run must look like owner/repo#N, got "${run}"`);
@@ -885,7 +886,7 @@ function intakeFixture(run, n) {
   return { ...meta, state: 'open', body: fx.issue.body, mentions: [], comments: fx.comments || [], ignoredComments: 0, dryRun: true };
 }
 
-const git = (...args) => execFileSync(GIT, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+const git = (...args) => execFileSync(io.git, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 export const adapterCtx = () => ({ gh, git }); // what host and tracker adapters get: the same stubbable gh and git
 const ls = (d) => { try { return fs.readdirSync(d); } catch { return []; } };
 const projectsFile = () => path.join(stateDir(), 'projects.json');
@@ -1106,7 +1107,7 @@ export function sync(repo, repoPath) {
   fs.writeFileSync(links, JSON.stringify(prev, null, 2));
   const head = new Map(prs.map((p) => [p.url, p.headRefOid])); // deploy state of each in-progress run's PR head (finished runs aren't polled)
   const ship = shipTrack(Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') && r.outcome === 'in-progress' && head.get(r.pr)).map((r) => ({ run: r.id, repo, sha: head.get(r.pr), path: repoPath })));
-  render();
+  dashboard.render();
   return { repo, path: repoPath, added, attached, closed, ...(ship && { ship }) };
 }
 
@@ -1248,7 +1249,7 @@ export function archive(days = 14) {
   fs.writeFileSync(tmp, events.filter((e) => !ids.has(e.run)).map((e) => JSON.stringify(e)).join('\n') + (events.length > ids.size ? '\n' : ''));
   fs.copyFileSync(log(), log() + '.bak');
   fs.renameSync(tmp, log());
-  render();
+  dashboard.render();
   return { archived: old.length };
 }
 
@@ -1265,9 +1266,9 @@ export function evals(only) {
       execFileSync('claude', ['-p', `/software-factory ${run} --dry-run --intake-only`, '--allowedTools', 'Bash(node:*)', 'Read', 'Grep', 'Glob'],
         { env: { ...process.env, FACTORY_DIR: tmp, FACTORY_FIXTURES: dir }, stdio: 'ignore', timeout: 600_000 });
     } catch { /* scored below from whatever was recorded */ }
-    const prevDir = DIR; DIR = tmp;
+    const prevDir = io.dir; io.dir = tmp;
     const r = derive(read())[run];
-    DIR = prevDir;
+    io.dir = prevDir;
     const last = r?.events.filter((e) => e.stage === 'intake' || e.status === 'split').pop()?.status;
     const got = { passed: 'pass', 'needs-info': 'needs-info', rejected: 'reject', split: 'split' }[last] || 'no-outcome';
     results.push({ fixture: n, expect: fx.expect, got, ok: got === fx.expect });
@@ -1371,7 +1372,7 @@ export function setShip(scope, kinds) {
   fs.mkdirSync(stateDir(), { recursive: true });
   fs.writeFileSync(onboardFile() + '.tmp', JSON.stringify(o, null, 2));
   fs.renameSync(onboardFile() + '.tmp', onboardFile());
-  render();
+  dashboard.render();
   return o[scope];
 }
 
@@ -1581,13 +1582,13 @@ export function demo() {
   dep('acme/shop#45', 'preview', 'ready', 'passed', 'c0ffee12ab34', 'https://shop-pr-92.preview.example', 'Deployment has completed');
   dep('acme/shop#44', 'preview', 'error', 'failed', 'd15ea5e0b1a2', 'https://shop-pr-91.preview.example', 'Build failed: Type error in lib/auth/github.ts');
   demoTranscripts(read().filter((e) => e.sessionId === S.sessionId));
-  return render();
+  return dashboard.render();
 }
 
 // Fake Claude Code transcripts for the demo session: an orchestrator message before each event, one subagent per review axis.
 function demoTranscripts(events) {
-  PROJECTS = path.join(stateDir(), 'claude-projects');
-  const dir = path.join(PROJECTS, '-work-shop'), subs = path.join(dir, 'demo-session', 'subagents');
+  io.projects = path.join(stateDir(), 'claude-projects');
+  const dir = path.join(io.projects, '-work-shop'), subs = path.join(dir, 'demo-session', 'subagents');
   fs.mkdirSync(subs, { recursive: true });
   const SIZE = { intake: [900, 5000], spec: [2600, 2500], build: [3200, 6000], review: [1200, 800], gate: [300, 200], approve: [700, 300] };
   let n = 0;
@@ -1611,8 +1612,9 @@ function demoTranscripts(events) {
 }
 
 async function test() {
+  delete process.env.CLAUDE_CODE_SESSION_ID; // in-process record() would stamp the outer session's id
   process.env.FACTORY_TEST = '1'; // inherited by every F the tests spawn: none may touch the real state dir
-  DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-test-'));
+  io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-test-'));
   demo();
   const runs = derive(read());
   assert.equal(runs['acme/shop#41'].outcome, 'rejected');
@@ -1712,7 +1714,7 @@ async function test() {
   assert.equal(readArchive().find((a) => a.id === 'acme/shop#43').burn.measured, true); // survives losing its events
   assert.deepEqual(Object.keys(derive(read())).sort(), ['acme/shop#42', 'acme/shop#45', 'acme/shop#47', 'acme/shop#48', 'acme/shop#49', 'eval/golden#4']);
   assert.equal(read().filter((e) => e.stage === 'rules').length, 5); // the rule audit trail survives archiving
-  const page = fs.readFileSync(path.join(DIR, 'dashboard.html'), 'utf8');
+  const page = fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8');
   assert.match(page, /"merged":3,/); // metrics.all counts the archived merges
   assert.equal(page.split('__FACTORY_DATA__').length, 1);
   assert.match(page, /"ruleHistory":\[\{[^\]]*"key":"ci","value":"skip"/);
@@ -1724,20 +1726,20 @@ async function test() {
   assert.deepEqual(axesFor(['app/blog/page.tsx']), ['code', 'security', 'ux', 'ui', 'seo']);
   // Dashboard must not break out of its JSON script tag.
   record('evil/x#1', 'intake', 'started', { title: '</script><script>alert(1)</script>' });
-  const html = fs.readFileSync(path.join(DIR, 'dashboard.html'), 'utf8');
+  const html = fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8');
   assert.ok(!html.includes('</script><script>alert'));
   artifactTest();
   discoverTest();
   usageTest();
   cliTest();
   await (await import('./test/project.mjs')).projectTest({ uiHandle, read, project }); // idea-to-app: new, issues create, queue, loop, adapter contracts
-  console.log(`ok - all checks passed (${DIR})`);
+  console.log(`ok - all checks passed (${io.dir})`);
 }
 
 // Measured burn from a fake transcript: attribution windows, dedupe, subagent axes, unknown model, cache, bad usage.
 function usageTest() {
-  DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-usage-'));
-  PROJECTS = path.join(DIR, 'projects');
+  io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-usage-'));
+  io.projects = path.join(io.dir, 'projects');
   const sid = 'sess-u', R = 'acme/u#1', t0 = Date.parse('2026-11-21T10:00:00Z');
   const at = (s) => new Date(t0 + s * 1000).toISOString();
   const P = 'acme/u#0', I = 'acme/u:dev/x'; // an earlier in-progress run, and an imported run synced after R ended
@@ -1748,7 +1750,7 @@ function usageTest() {
   const u = (input, output, read = 0, w1 = 0) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: read, cache_creation_input_tokens: w1, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: w1 } });
   const msg = (s, id, model, usage) => JSON.stringify({ type: 'assistant', timestamp: at(s), message: { id, model, content: [{ type: 'text', text: 'secret prompt' }], usage } }) + '\n';
   const put = (p, text) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
-  const main = path.join(PROJECTS, '-w-u', `${sid}.jsonl`), subs = path.join(PROJECTS, '-w-u', sid, 'subagents');
+  const main = path.join(io.projects, '-w-u', `${sid}.jsonl`), subs = path.join(io.projects, '-w-u', sid, 'subagents');
   put(main, [
     msg(-300, 'mx', 'claude-opus-5-5', u(4242, 0)), // before the session's first event: not factory work
     msg(-50, 'm0', 'claude-opus-5-5', u(1000, 0)), // after P's "intake started": P
@@ -1783,6 +1785,8 @@ function usageTest() {
   // Appended lines are read incrementally; a deleted transcript keeps its measured rows.
   fs.appendFileSync(main, '{"type":"assistant","usage":1}\n' + msg(380, 'm7', 'claude-opus-5-5', u(0, 50_000)));
   assert.equal(getRun(R).burn.byStage.build.costUsd, 10);
+  assert.equal(costOf('claude-fable-5-2', [0, 0, 1e6, 0, 0]), 0.2); // Fable cache reads list at $0.20/MTok (#15)
+  assert.equal(costOf('claude-fable-5-2', [1e6, 1e6, 1e6, 1e6, 1e6]).toFixed(2), '74.20'); // 8 + 40 + 0.2 + 10 + 16
   fs.rmSync(main);
   assert.equal(getRun(R).burn.total.tokens, 3_471_000);
   // Caps: measured dollars win over tokens; without a price, cache reads don't count toward the token cap.
@@ -1802,7 +1806,7 @@ function usageTest() {
   assert.equal(archive(0).archived, 1);
   assert.equal(getRun(P).burn.total.tokens, 1000);
   assert.equal(getRun(R).burn.total.tokens, 3_471_000); // from the archive summary
-  PROJECTS = null;
+  io.projects = null;
 }
 
 function discoverTest() {
@@ -1832,11 +1836,11 @@ function discoverTest() {
 
 // Drives the real CLI exactly as SKILL.md does, against a stubbed gh.
 function cliTest() {
-  DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-cli-'));
+  io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-cli-'));
   const stub = path.join(HERE, 'test', 'gh-stub.mjs');
   const RUN = 'acme/shop#7';
   const cli = (args, input, env = {}) => execFileSync(process.execPath, [fileURLToPath(import.meta.url), ...args],
-    { encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, FACTORY_DIR: DIR, FACTORY_GH: stub, ...env } });
+    { encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, FACTORY_DIR: io.dir, FACTORY_GH: stub, ...env } });
   // FACTORY_TEST: with no FACTORY_DIR, F refuses the home state dir (here a temp HOME's) for reads and writes alike (#20)
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-home-')), real = { HOME: home, FACTORY_TEST: '1', FACTORY_DIR: '' };
   for (const args of [['rules', 'set', 'acme/x', 'ci', 'skip', '--reason', 'x'], ['skills', 'set', 'acme/x', 'spec', '{"use":"default"}'], ['render'], ['event', 'acme/x#1', 'intake', 'rejected'], ['new', 'an app', '--name', 'acme/x', '--dry-run']])
@@ -1973,12 +1977,12 @@ function harnessTest(cli) {
 
 // Onboarding endpoints: the same checks as /skills, the same validated functions as the CLI, and a re-run that changes nothing.
 function onboardTest(cli) {
-  const prevDir = DIR, prev = { GH, GIT, PATH: process.env.PATH, HOME: process.env.HOME };
-  DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-onboard-'));
-  const home = path.join(DIR, 'home'), clone = path.join(home, 'Development', 'app');
+  const prevDir = io.dir, prev = { GH: io.gh, GIT: io.git, PATH: process.env.PATH, HOME: process.env.HOME };
+  io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-onboard-'));
+  const home = path.join(io.dir, 'home'), clone = path.join(home, 'Development', 'app');
   fs.mkdirSync(path.join(clone, '.git'), { recursive: true });
   fs.writeFileSync(path.join(clone, '.git', 'config'), '[remote "origin"]\n\turl = git@github.com:acme/app.git\n');
-  GH = path.join(HERE, 'test', 'gh-stub.mjs'); GIT = path.join(HERE, 'test', 'git-stub.mjs');
+  io.gh = path.join(HERE, 'test', 'gh-stub.mjs'); io.git = path.join(HERE, 'test', 'git-stub.mjs');
   Object.assign(process.env, { PATH: `${path.join(HERE, 'test', 'bin')}:${path.dirname(process.execPath)}`, HOME: home });
   try {
     const tok = 'o'.repeat(32), ctx = { token: tok, port: 4343 }, H = { host: 'localhost:4343', origin: 'http://localhost:4343', 'content-type': 'application/json', 'x-factory-token': tok };
@@ -2010,7 +2014,7 @@ function onboardTest(cli) {
     assert.match(err('/onboard/rule', { scope: '__proto__', key: 'ci', value: 'skip', reason: 'x' }), /scope "__proto__"/);
     assert.match(err('/onboard/rule', { scope: 'acme/app', key: 'trusted', value: '[]', reason: 'x' }), /unknown rule/);
     assert.match(err('/onboard/automerge', { repo: 'acme/app', on: false }), /not attached/);
-    assert.deepEqual([fs.existsSync(path.join(DIR, 'skills.json')), fs.existsSync(path.join(DIR, 'onboard.json')), read().length], [false, false, 0]);
+    assert.deepEqual([fs.existsSync(path.join(io.dir, 'skills.json')), fs.existsSync(path.join(io.dir, 'onboard.json')), read().length], [false, false, 0]);
     // The wizard's happy path, then the same again.
     const run = () => {
       ok('/onboard/sync', { repo: 'acme/app', path: clone });
@@ -2019,35 +2023,35 @@ function onboardTest(cli) {
       ok('/onboard/rule', { scope: 'acme/app', key: 'checks.commands', value: ['pnpm test'], reason: 'the CI stand-in' });
       return ok('/onboard/automerge', { repo: 'acme/app', on: false });
     };
-    const first = run(), ship1 = fs.readFileSync(path.join(DIR, 'onboard.json'), 'utf8'), runs1 = Object.keys(derive(read())).sort();
+    const first = run(), ship1 = fs.readFileSync(path.join(io.dir, 'onboard.json'), 'utf8'), runs1 = Object.keys(derive(read())).sort();
     assert.deepEqual(first.ship['acme/app'].ship, ['web', 'database']);
     assert.deepEqual([first.rules['acme/app'].policy.ci.value, first.rules['acme/app'].policy.ci.setBy, first.rules['acme/app'].policy['checks.commands'].value], ['skip', 'stub-user', ['pnpm test']]);
     assert.equal(first.projects['acme/app'].autoMerge, false);
     const again = run();
-    assert.equal(fs.readFileSync(path.join(DIR, 'onboard.json'), 'utf8'), ship1);
+    assert.equal(fs.readFileSync(path.join(io.dir, 'onboard.json'), 'utf8'), ship1);
     assert.deepEqual(Object.keys(derive(read())).sort(), runs1); // re-sync imports nothing new
     assert.equal(again.projects['acme/app'].autoMerge, false); // ...and keeps the project's settings
     assert.equal(again.rules['acme/app'].policy.ci.value, 'skip');
-    const txt = cli(['onboard'], '', { FACTORY_DIR: DIR, HOME: home, PATH: process.env.PATH });
+    const txt = cli(['onboard'], '', { FACTORY_DIR: io.dir, HOME: home, PATH: process.env.PATH });
     for (const re of [/✓ acme\/app {2}/, /acme\/app: web, database/, /acme\/app: ci="skip", checks\.commands=\["pnpm test"\] {3}auto-merge off/, hooks().create ? /Create from an idea: .*factory\.mjs new/ : /Create from an idea: coming soon/]) assert.match(txt, re);
-    assert.deepEqual(JSON.parse(cli(['onboard', 'ship', 'default', 'mobile'], '', { FACTORY_DIR: DIR })), { ship: ['mobile'] });
-    assert.throws(() => cli(['onboard', 'ship', 'default', 'tv'], '', { FACTORY_DIR: DIR }), /web\|mobile\|database/);
+    assert.deepEqual(JSON.parse(cli(['onboard', 'ship', 'default', 'mobile'], '', { FACTORY_DIR: io.dir })), { ship: ['mobile'] });
+    assert.throws(() => cli(['onboard', 'ship', 'default', 'tv'], '', { FACTORY_DIR: io.dir }), /web\|mobile\|database/);
     // The static page carries the wizard's cheap data, never the slow or private parts.
     const pg = page();
     assert.match(pg, /"harnesses":\[\{"id":"claude-code","label":"Claude Code","install":/);
     assert.ok(!pg.includes('"repos":') && !pg.includes('Development/app"'), 'discover results are served only to F ui');
     assert.equal(pg.split('__FACTORY_DATA__').length, 1);
   } finally {
-    DIR = prevDir; GH = prev.GH; GIT = prev.GIT; process.env.PATH = prev.PATH; process.env.HOME = prev.HOME;
+    io.dir = prevDir; io.gh = prev.GH; io.git = prev.GIT; process.env.PATH = prev.PATH; process.env.HOME = prev.HOME;
   }
 }
 
 // The claude.ai Artifact page (#18): no skeleton, no reload timer, no fixture projects, nothing dashboard.html doesn't carry, never a token.
 function artifactTest() {
   const dataOf = (h) => JSON.parse(h.match(/<script type="application\/json" id="data">([^<]*)<\/script>/)[1]);
-  const before = fs.readFileSync(path.join(DIR, 'dashboard.html'), 'utf8'), out = path.join(DIR, 'artifact.html');
-  const line = execFileSync(process.execPath, [fileURLToPath(import.meta.url), 'render', '--artifact', out], { env: { ...process.env, FACTORY_DIR: DIR }, encoding: 'utf8' });
-  assert.equal(fs.readFileSync(path.join(DIR, 'dashboard.html'), 'utf8'), before); // the local dashboard is left alone
+  const before = fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), out = path.join(io.dir, 'artifact.html');
+  const line = execFileSync(process.execPath, [fileURLToPath(import.meta.url), 'render', '--artifact', out], { env: { ...process.env, FACTORY_DIR: io.dir }, encoding: 'utf8' });
+  assert.equal(fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), before); // the local dashboard is left alone
   const art = fs.readFileSync(out, 'utf8'), a = dataOf(art), full = dataOf(page());
   assert.match(line, /artifact\.html: \d+ bytes, 2 runs/);
   assert.ok(!/<!doctype|<html|<head>|<\/head>|<body|<\/body>|<\/html>|<meta charset|<meta name="viewport"|setTimeout\(tick, 10000\);/i.test(art));
@@ -2193,11 +2197,11 @@ function rulesTest(cli) {
   assert.match(JSON.parse(cli(['decide', P10], '', { STUB_CHECKS: '1', STUB_DEPLOY_FAIL: '1' })).action, /escalate/); // lookup down: escalate, never crash
   cli(['rules', 'unset', 'acme/app', 'deploy.preview']);
   // A hand-edited rule without a reason fails loudly, and the dashboard says so instead of failing every event.
-  fs.writeFileSync(path.join(DIR, 'skills.json'), '{"acme/rr":{"rules":{"ci":{"value":"skip","setBy":"me","setAt":"2026-01-01"}}}}');
+  fs.writeFileSync(path.join(io.dir, 'skills.json'), '{"acme/rr":{"rules":{"ci":{"value":"skip","setBy":"me","setAt":"2026-01-01"}}}}');
   assert.throws(() => cli(['rules', 'acme/rr']), /needs a reason/);
   record('acme/rr#2', 'intake', 'started', { title: 't' });
-  assert.match(fs.readFileSync(path.join(DIR, 'dashboard.html'), 'utf8'), /"rulesError":"skills.json acme\/rr.rules.ci: needs a reason/);
-  fs.rmSync(path.join(DIR, 'skills.json'));
+  assert.match(fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), /"rulesError":"skills.json acme\/rr.rules.ci: needs a reason/);
+  fs.rmSync(path.join(io.dir, 'skills.json'));
   assert.equal(set('acme/rr', 'artifact', 'https://claude.ai/artifact/FEMb-sU_9', '--reason', 'phone view').policy.artifact.value, 'https://claude.ai/artifact/FEMb-sU_9'); // opt-in per repo
   cli(['rules', 'unset', 'acme/rr', 'artifact']);
 }
@@ -2270,7 +2274,7 @@ function skillsTest(cli) {
   assert.equal(JSON.parse(cli(['gate', R])).next, 'build');
   assert.equal(derive(read())[R].runners.gate.name, 'pr-review-toolkit:code-reviewer');
   // Catalog: every source the picker offers, and every runner it offers passes F's own validation.
-  const home = path.join(DIR, 'skhome'), clone = path.join(DIR, 'kitclone');
+  const home = path.join(io.dir, 'skhome'), clone = path.join(io.dir, 'kitclone');
   const put = (p, text) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
   const md = (desc) => `---\nname: x\ndescription: ${desc}\n---\nbody`;
   put(path.join(home, '.claude/skills/house-review/SKILL.md'), '---\nname: house-review\ndescription: |\n  Our house\n  review rules\n---\n');
@@ -2287,7 +2291,7 @@ function skillsTest(cli) {
   put(path.join(home, '.claude/plugins/synced/b1/design~g2/skills/accessibility-review/SKILL.md'), md('WCAG audit'));
   put(path.join(home, '.agents/skills/find-skills/SKILL.md'), md('Finds skills'));
   put(path.join(home, '.agents/skills/house-review/SKILL.md'), md('duplicate of the Claude skill'));
-  put(path.join(DIR, 'briefs/a11y.md'), md('Our a11y brief'));
+  put(path.join(io.dir, 'briefs/a11y.md'), md('Our a11y brief'));
   put(path.join(clone, '.claude/skills/kit-review/SKILL.md'), md('Repo review'));
   saveProject('acme/kit', clone);
   const cat = JSON.parse(cli(['skills', 'catalog', 'acme/kit'], '', { HOME: home }));
@@ -2299,7 +2303,7 @@ function skillsTest(cli) {
   assert.equal(by('design:accessibility-review').group, 'plugin: design');
   assert.deepEqual(by('find-skills').runner, { use: 'brief', path: '~/.agents/skills/find-skills/SKILL.md' });
   assert.equal(cat.global.filter((e) => e.name === 'house-review').length, 1);
-  assert.equal(cat.global.find((e) => e.source === 'yours').runner.path, path.join(DIR, 'briefs/a11y.md'));
+  assert.equal(cat.global.find((e) => e.source === 'yours').runner.path, path.join(io.dir, 'briefs/a11y.md'));
   assert.deepEqual(cat.projects['acme/kit'].map((e) => e.name).sort(), ['kit-review', 'pj:pjs']);
   for (const e of [...cat.global, ...cat.projects['acme/kit']]) checkRunner(e.runner, e.name);
   // F ui: only the printed URL reads the page, only a same-origin JSON POST with the token writes, and invalid writes change nothing.
@@ -2309,13 +2313,13 @@ function skillsTest(cli) {
   assert.equal(uiHandle({ method: 'GET', url: '/?t=' + tok, headers: { host: 'evil.test:4242' } }, ctx).status, 403);
   assert.equal(uiHandle({ method: 'GET', url: '/', headers: H }, ctx).status, 403);
   assert.ok(uiHandle({ method: 'GET', url: '/?t=' + tok, headers: H }, ctx).body.includes(tok));
-  const before = fs.readFileSync(path.join(DIR, 'skills.json'), 'utf8');
+  const before = fs.readFileSync(path.join(io.dir, 'skills.json'), 'utf8');
   assert.equal(post({ 'x-factory-token': 'u'.repeat(32) }, ui1).status, 403);
   assert.equal(post({ origin: 'https://evil.test' }, ui1).status, 403);
   assert.equal(post({ 'content-type': 'text/plain' }, ui1).status, 415);
   assert.equal(post({}, { ...ui1, step: 'review.lint' }).status, 400);
   assert.equal(post({}, { ...ui1, scope: '__proto__' }).status, 400);
-  assert.equal(fs.readFileSync(path.join(DIR, 'skills.json'), 'utf8'), before);
+  assert.equal(fs.readFileSync(path.join(io.dir, 'skills.json'), 'utf8'), before);
   const saved = post({}, ui1);
   assert.equal(saved.status, 200);
   assert.equal(JSON.parse(saved.body).plans['acme/kit'].plan['review.ui'].name, 'brand-review');
@@ -2348,13 +2352,13 @@ function skillsTest(cli) {
   assert.equal(get('/runs').status, 404, 'reads live only under /api');
   assert.equal(uiHandle({ method: 'DELETE', url: '/api/runs', headers: { ...H, 'x-factory-token': tok } }, ctx).status, 404);
   // A hand-edited config is validated on every read, so it fails loudly instead of silently running defaults.
-  fs.writeFileSync(path.join(DIR, 'skills.json'), '{"acme/kit":{"review.lint":{"use":"default"}}}');
+  fs.writeFileSync(path.join(io.dir, 'skills.json'), '{"acme/kit":{"review.lint":{"use":"default"}}}');
   assert.throws(() => cli(['skills', 'acme/kit']), /unknown step "review.lint"/);
 }
 
 // Fake HOME with Claude Code + Codex logs, then sync / re-sync / close-elsewhere against the gh + git stubs.
 function syncTest(cli) {
-  const home = path.join(DIR, 'home'), repoPath = '/work/app';
+  const home = path.join(io.dir, 'home'), repoPath = '/work/app';
   const enc = repoPath.replace(/[^a-zA-Z0-9]/g, '-');
   const put = (p, text) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
   put(path.join(home, '.claude/projects', enc, 'a.jsonl'), '{"gitBranch":"dev/feat-a","message":"secret prompt"}\n{"gitBranch":"HEAD"}\n');
@@ -2374,7 +2378,7 @@ function syncTest(cli) {
   assert.equal(runs['acme/app#11'].source, 'none');
   assert.equal(runs['acme/app#12'].source, 'codex');
   assert.ok(!JSON.stringify(read()).includes('secret prompt'));
-  const links = JSON.parse(fs.readFileSync(path.join(DIR, 'sessions.json'), 'utf8'));
+  const links = JSON.parse(fs.readFileSync(path.join(io.dir, 'sessions.json'), 'utf8'));
   assert.deepEqual(links['acme/app#10'].map((x) => [x.agent, x.id]), [['claude-code', 'a']]);
   assert.deepEqual(links['acme/app#12'].map((x) => [x.agent, x.id]), [['codex', 'cx-1']]);
   assert.equal(JSON.parse(cli(['decide', 'acme/app#11'], '', env)).action, 'escalate');
@@ -2648,7 +2652,7 @@ if (isMain) {
       }
       case 'ui': ui(Number(run) || 0); break;
       case 'demo': // never pollute the real log with fixtures
-        if (!process.env.FACTORY_DIR) DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-demo-'));
+        if (!process.env.FACTORY_DIR) io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-demo-'));
         console.log(demo()); break;
       case 'test': await test(); break;
       default:

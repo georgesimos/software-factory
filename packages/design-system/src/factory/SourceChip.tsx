@@ -8,10 +8,11 @@ const GLYPH: Record<string, string> = { factory: '◆', 'claude-code': '●', co
 export const sourceLabel = (s: Source) => s.split('+').map((x) => SOURCE_LABEL[x] ?? x).join(' + ');
 
 /** Where a run's work came from. Imported runs pass `prefix="Tracked"`. Unknown sources render as their raw name. */
-export function SourceChip({ source = 'factory', prefix }: { source?: Source; prefix?: string }) {
+export function SourceChip({ source = 'factory', prefix, title }: { source?: Source; prefix?: string; title?: string }) {
   const parts = source.split('+');
   return (
-    <Badge quiet={source !== 'factory'} tone={source === 'factory' ? 'run' : 'neutral'} className="sf-source" data-source={source}>
+    <Badge quiet={source !== 'factory'} tone={source === 'factory' ? 'run' : 'neutral'} className="sf-source" data-source={source} title={title}>
+      {title ? <span className="sf-sr-only">Tracked: </span> : null}
       <span className="sf-source-glyphs" aria-hidden="true">{parts.map((p) => <i key={p}>{GLYPH[p] ?? '◇'}</i>)}</span>
       {prefix ? `${prefix} · ` : ''}{sourceLabel(source)}
     </Badge>

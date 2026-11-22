@@ -6,7 +6,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { read, render, runDir, factoryDir, rules, setRule, adapterCtx, allRuns, budget, isSensitive, PROJECT_BUDGET_USD, MAX_ISSUES_PER_SESSION } from './factory.mjs';
+import { read, dashboard, runDir, factoryDir, rules, setRule, adapterCtx, allRuns, budget, isSensitive, PROJECT_BUDGET_USD, MAX_ISSUES_PER_SESSION } from './factory.mjs';
 import * as hosts from './hosts/index.mjs';
 import * as trackers from './trackers/index.mjs';
 
@@ -25,7 +25,7 @@ function emit(repo, stage, status, payload = {}) {
   const ev = { ts: new Date().toISOString(), ...payload, ...(sid ? { harness: 'claude-code', sessionId: sid, cwd: process.cwd() } : {}), run: projectId(repo), stage, status };
   fs.mkdirSync(factoryDir(), { recursive: true });
   fs.appendFileSync(path.join(factoryDir(), 'events.jsonl'), JSON.stringify(ev) + '\n');
-  render();
+  dashboard.render();
   return ev;
 }
 

@@ -10,7 +10,7 @@
 @keyframes sf-fade-in { from { opacity: 0; } }
 
 .sf-dialog[data-variant="sheet"] {
-  margin: 0 0 0 auto; height: 100dvh; max-height: none; width: min(600px, 100vw);
+  margin: 0 0 0 auto; height: 100dvh; max-height: none; max-width: none; width: min(600px, 100vw);
   border-width: 0 0 0 1px; border-radius: 0; box-shadow: var(--sf-shadow-panel);
 }
 .sf-dialog[data-variant="sheet"][open] { animation-name: sf-sheet-in; }

@@ -17,10 +17,12 @@
 .sf-st[data-current][data-state="done"] .sf-st-n, .sf-st[data-current][data-state="idle"] .sf-st-n { outline-color: color-mix(in srgb, var(--sf-stage-done) 14%, transparent); }
 .sf-st[data-current][data-state="failed"] .sf-st-n { outline-color: color-mix(in srgb, var(--sf-stage-failed) 14%, transparent); }
 .sf-st[data-current][data-state="warn"] .sf-st-n { outline-color: color-mix(in srgb, var(--sf-stage-warn) 16%, transparent); }
-.sf-st[data-stale] { opacity: 0.45; }
+/* Stale = a later stage from an earlier iteration. Dim the node only: the label must keep its AA contrast. */
+.sf-st[data-stale] .sf-st-n { opacity: 0.45; }
 .sf-st-nm { margin-top: var(--sf-space-2-5); font: var(--sf-weight-medium) var(--sf-text-2xs) var(--sf-font-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--sf-color-ink-3); overflow: hidden; text-overflow: ellipsis; }
 .sf-st[data-current] .sf-st-nm { color: var(--sf-color-ink); }
-.sf-st-sb { margin-top: 2px; font: var(--sf-text-xs) / 1.3 var(--sf-font-mono); color: var(--sf-color-ink-3); overflow-wrap: anywhere; }
+.sf-st-sb { margin-top: 2px; font: var(--sf-text-xs) / 1.3 var(--sf-font-mono); color: var(--sf-color-ink-3); overflow-wrap: break-word; }
+@media (max-width: 640px) { .sf-st-nm { letter-spacing: 0.02em; } }
 .sf-arcs { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); margin-top: var(--sf-space-1-5); }
 .sf-arc {
   grid-row: 1; position: relative; height: var(--h); margin-inline: calc(50% / var(--span)); margin-bottom: 22px;
