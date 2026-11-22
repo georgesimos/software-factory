@@ -103,3 +103,7 @@ test('factory.mjs on a Node without type stripping prints an upgrade message, no
   assert.doesNotMatch(err.stderr, /ERR_UNKNOWN_FILE_EXTENSION/);
   assert.equal(JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'package.json'), 'utf8')).engines.node, '>=24.12');
 });
+
+test('a script override (FACTORY_GH=stub.mjs) runs under this node on every OS', () => {
+  for (const platform of ['win32', 'darwin']) assert.deepEqual(command('C:\\t\\gh-stub.mjs', ['pr', 'a b'], { ...win, platform }), { file: process.execPath, args: ['C:\\t\\gh-stub.mjs', 'pr', 'a b'] });
+});

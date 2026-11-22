@@ -153,6 +153,15 @@ Document it as the one install step. **Never copy** the skill folder: the [split
 
 **There is no CI**, so none of this can be caught today: the repo has no `.github/workflows`. The first fix step adds a Linux, macOS and Windows matrix, which makes this audit enforceable.
 
+**Done in X3 (#51):**
+- Test `PATH`s use `path.delimiter`, and the e2e appends `/usr/bin:/bin` only on POSIX.
+- Every fake home sets `USERPROFILE` as well as `HOME`.
+- Script stubs need no shebang. `platform.command()` runs any `.mjs`/`.cjs`/`.js` command under the current `node` on every OS, which covers `FACTORY_GH`, `FACTORY_GIT` and ship's `FACTORY_<CMD>`.
+
+**Still open:**
+- `harnessTest` is skipped on Windows. The adapters spawn with `spawnSync`, and `test/bin/claude` and `codex` and the written `fake-agent` are shebang scripts. H1 hands harnesses `platform.run()`, and then the stubs get `.cmd` twins.
+- Nothing here has run on Windows yet. Keep the Windows CI job `continue-on-error` until a green Windows run.
+
 ## 7. Already portable
 
 - Every spawn uses `execFileSync` or `spawnSync` with an argv array. The only shell is the deliberate `/bin/sh` in `localChecks`.

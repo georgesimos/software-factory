@@ -51,7 +51,7 @@ export async function projectTest({ uiHandle, read, project: { validateIssues, v
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-project-'));
   const dir = path.join(root, 'state'), stub = path.join(root, 'gh'), home = path.join(root, 'home');
   for (const d of [dir, stub, home]) fs.mkdirSync(d);
-  const env = { ...process.env, ...GIT_ENV, HOME: home, FACTORY_DIR: dir, FACTORY_GH: STUB, STUB_STATE: stub };
+  const env = { ...process.env, ...GIT_ENV, HOME: home, USERPROFILE: home, FACTORY_DIR: dir, FACTORY_GH: STUB, STUB_STATE: stub };
   for (const k of ['CLAUDE_CODE_SESSION_ID', 'FACTORY_GIT', 'FACTORY_HOSTS', 'FACTORY_TRACKERS', 'FACTORY_TEMPLATES']) delete env[k];
   const put = (p, text) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
   const run = (args, extra = {}) => execFileSync(process.execPath, [F, ...args], { encoding: 'utf8', env: { ...env, ...extra }, stdio: ['ignore', 'pipe', 'pipe'] });
