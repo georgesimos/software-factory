@@ -3,8 +3,6 @@
 Tokens and React components for the Software Factory desktop app (Electron + Vite + React). Extracted from the factory's
 redesigned `dashboard.html`, so the app looks like the dashboard people already use.
 
-Builds and tests run through Nx in its package-based mode: the scripts below are this package's own, and Nx caches them.
-
 ```bash
 pnpm dev            # playground at http://localhost:5199 (?theme=light|dark)
 pnpm test           # contrast check + Vitest
