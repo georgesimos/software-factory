@@ -20,6 +20,8 @@ import { onboardState, onboardText, setShip } from '../../core/src/onboard.ts';
 import { render, ui } from '../../server/src/server.ts';
 import { rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
 import { withMeasured } from '../../core/src/burn.ts';
+import { linkSkill, open } from '../../core/src/platform.ts';
+import { pathToFileURL } from 'node:url';
 
 export async function main(argv) {
   const [cmd, run, ...rest] = argv;
@@ -153,6 +155,12 @@ export async function main(argv) {
       }
       case 'dir': console.log(runDir(run)); break;
       case 'render': console.log(render()); break;
+      case 'open': { // open [dashboard|<https:|file:|claude-cli: URL>]: the OS opener, never a shell
+        const target = !run || run === 'dashboard' ? pathToFileURL(render()).href : run;
+        out({ opened: open(target) }); break;
+      }
+      case 'install-skill': // the one install step: ~/.claude/skills/software-factory -> this checkout's packages/factory
+        out(linkSkill(path.join(import.meta.dirname, '..', '..', 'factory'), path.join(os.homedir(), '.claude', 'skills', 'software-factory'))); break;
       case 'ui': ui(Number(run) || 0); break;
       case 'demo': // never pollute the real log with fixtures
         if (!process.env.FACTORY_DIR) io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-demo-'));
@@ -208,6 +216,8 @@ export async function main(argv) {
   usage  [run]                            token burn by stage, iteration and axis: measured from transcripts, else reported
   headless-args <run> [--review|--write] [--share N]  pinned claude -p flags (read-only unless --write) for a provider runner, with the run's remaining budget split N ways (JSON array)
   dir    <run>                            print the run's artifact folder
+  open   [dashboard|url]                  open the dashboard (default) or an https:, file: or claude-cli: URL with the OS opener
+  install-skill                          link ~/.claude/skills/software-factory to this checkout (a junction on Windows)
   render | demo | test`);
         process.exitCode = cmd ? 1 : 0;
     }

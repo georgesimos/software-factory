@@ -2,9 +2,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { command, run } from '../../core/src/platform.ts';
+import { command, linkSkill, opener, posixShell, run } from '../../core/src/platform.ts';
+import { checkRunner } from '../../core/src/skills.ts';
 import { evalCommand } from '../../core/src/eval.ts';
 
 const files = new Set(['C:\\bin\\gh.exe', 'C:\\Program Files\\nodejs\\npm.cmd', 'C:\\Program Files\\nodejs\\node.exe', 'C:\\tools\\x.bat']);
@@ -37,6 +39,37 @@ test('Windows: not found stays as given, so the spawn fails with ENOENT ("not in
 test('run() spawns the resolved command', () => {
   const r = run('node', ['-e', 'process.stdout.write("ok")'], { encoding: 'utf8' });
   assert.equal(r.stdout, 'ok');
+});
+
+test('posixShell: /bin/sh on POSIX; Git Bash on Windows (env override, else beside git.exe); refuses without one', () => {
+  assert.equal(posixShell({ platform: 'linux' }), '/bin/sh');
+  const git = new Set(['C:\\Program Files\\Git\\cmd\\git.exe', 'C:\\Program Files\\Git\\bin\\bash.exe', 'D:\\g\\bash.exe']);
+  const isFile = (p) => git.has(p);
+  assert.equal(posixShell({ platform: 'win32', env: { PATH: 'C:\\Program Files\\Git\\cmd' }, isFile }), 'C:\\Program Files\\Git\\bin\\bash.exe');
+  assert.equal(posixShell({ platform: 'win32', env: { PATH: '', CLAUDE_CODE_GIT_BASH_PATH: 'D:\\g\\bash.exe' }, isFile }), 'D:\\g\\bash.exe');
+  assert.throws(() => posixShell({ platform: 'win32', env: { PATH: 'C:\\Windows' }, isFile }), /Git for Windows/);
+});
+
+test('opener: https, file and claude-cli URLs only, through the OS opener with no shell', () => {
+  assert.deepEqual(opener('https://x.test/a?b=1&c=2', 'win32'), { file: 'explorer.exe', args: ['https://x.test/a?b=1&c=2'] });
+  assert.deepEqual(opener('file:///tmp/d.html', 'darwin'), { file: 'open', args: ['file:///tmp/d.html'] });
+  assert.equal(opener('claude-cli://open', 'linux').file, 'xdg-open');
+  for (const bad of ['javascript:alert(1)', 'http://x.test', '/etc/passwd', 'ms-settings:']) assert.throws(() => opener(bad, 'win32'), /refusing|not a URL/, bad);
+});
+
+test('linkSkill: links once, is idempotent, and never overwrites a real folder', () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-link-')), target = path.join(d, 'factory'), link = path.join(d, 'skills', 'software-factory');
+  fs.mkdirSync(target);
+  assert.equal(linkSkill(target, link).created, true);
+  assert.equal(fs.realpathSync(link), fs.realpathSync(target));
+  assert.equal(linkSkill(target, link).created, false);
+  const other = path.join(d, 'skills', 'other'); fs.mkdirSync(other);
+  assert.throws(() => linkSkill(target, other), /already exists/);
+});
+
+test('brief runners accept Windows paths', () => {
+  for (const p of ['C:\\Users\\Jane Doe\\b.md', '~\\briefs\\b.md', '~/b.md', '/x/b.md']) checkRunner({ use: 'brief', path: p }, 't');
+  assert.throws(() => checkRunner({ use: 'brief', path: 'b.md' }, 't'));
 });
 
 test('F eval stops on a claude .cmd shim it cannot pass its arguments to, instead of scoring every fixture "no-outcome"', () => {

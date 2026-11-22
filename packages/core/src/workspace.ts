@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { derive } from './derive.ts';
 import { execFileSync } from 'node:child_process';
-import { exec } from './platform.ts';
+import { exec, posixShell } from './platform.ts';
 import { gh, parseRun } from './github.ts';
 import { io, read, record, runDir, stateDir } from './log.ts';
 import { rules } from './rules.ts';
@@ -78,7 +78,8 @@ export function deps(run) {
     fs.readFileSync(path.join(w.path, lock)).equals(fs.readFileSync(path.join(w.repoPath, lock)));
   if (same) {
     try { // copy-on-write clone: near-instant, no extra disk until a file changes. Never a symlink into the main checkout.
-      execFileSync('cp', [process.platform === 'darwin' ? '-cR' : '-R', ...(process.platform === 'darwin' ? [] : ['--reflink=auto']), path.join(w.repoPath, 'node_modules'), path.join(w.path, 'node_modules')], { stdio: 'pipe' });
+      if (process.platform === 'win32') throw new Error('no reflink on NTFS: a full copy is slower than an install'); // shortcut: ReFS Dev Drives can clone; add them if Windows runs get slow
+      fs.cpSync(path.join(w.repoPath, 'node_modules'), path.join(w.path, 'node_modules'), { recursive: true, verbatimSymlinks: true, mode: fs.constants.COPYFILE_FICLONE_FORCE }); // APFS, btrfs, XFS; fails where it can't clone
       return 'node_modules cloned copy-on-write from the main checkout (same lockfile)';
     } catch { fs.rmSync(path.join(w.path, 'node_modules'), { recursive: true, force: true }); /* no CoW here: install below */ }
   }
@@ -98,13 +99,14 @@ export function localChecks(run) {
   if (!cmds) throw new Error(`no checks.commands rule for ${repo}; the user can set one: rules set ${repo} checks.commands '["pnpm test"]' --reason "…"`);
   if (git('-C', w.path, 'status', '--porcelain').trim()) throw new Error('the worktree has uncommitted changes; commit first, so the checks cover the commit that gets reviewed');
   const sha = git('-C', w.path, 'rev-parse', 'HEAD').trim();
+  const shell = posixShell(); // before the log opens: no shell, no run
   const file = path.join(runDir(run), 'local-checks.log'), fd = fs.openSync(file, 'w'), commands = [];
   try {
     for (const cmd of cmds) {
       fs.writeSync(fd, `$ ${cmd}\n`);
       const t = Date.now();
       let exit = 0;
-      try { execFileSync('/bin/sh', ['-c', cmd], { cwd: w.path, env: { ...process.env, CI: '1' }, stdio: ['ignore', fd, fd], timeout: 30 * 60e3 }); } // to a file: no maxBuffer limit
+      try { execFileSync(shell, ['-c', cmd], { cwd: w.path, env: { ...process.env, CI: '1' }, stdio: ['ignore', fd, fd], timeout: 30 * 60e3 }); } // to a file: no maxBuffer limit
       catch (e) { exit = e.status ?? (e.signal ? 'timeout' : 1); }
       commands.push({ cmd, exit, ms: Date.now() - t });
     }
