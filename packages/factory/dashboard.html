@@ -307,6 +307,9 @@ a.kid:hover { border-color: var(--line-2); }
 .kid .mono { font-size: 11.5px; color: var(--ink-3); flex: none; }
 .kid .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kid .chip { margin-left: auto; flex: none; }
+.dep a { flex: none; font-size: 12px; }
+.dep { min-width: 0; } /* a grid item: let the detail text ellipsize instead of widening the row */
+.dep .t { flex: 1 1 auto; color: var(--ink-3); }
 
 .sess { margin: 0; padding: 0; list-style: none; }
 .ses { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 4px 10px; padding: 10px 0; border-top: 1px dashed var(--line); }
@@ -317,6 +320,8 @@ a.kid:hover { border-color: var(--line-2); }
 .copy { padding: 4px 9px; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; font: 11.5px var(--mono); color: var(--ink-2); white-space: nowrap; }
 .copy:hover { color: var(--ink); border-color: var(--line-2); }
 .copy.done { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+a.copy { display: inline-block; text-decoration: none; }
+.open-claude { margin: 0 0 10px; }
 .tl { margin: 0; padding: 0; list-style: none; }
 .tl li { display: grid; grid-template-columns: 92px 14px 1fr; gap: 0 8px; }
 .tl time { font: 11.5px/20px var(--mono); color: var(--ink-3); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
@@ -572,6 +577,8 @@ const norm = (r) => {
   for (const [i, list] of Object.entries(obj(r.axes))) axes[i] = arr(list);
   return { ...r, id: String(r.id), events: arr(r.events).map(obj), reviews, axes, loopbacks: arr(r.loopbacks).map(obj),
     issues: arr(r.issues), children: arr(r.children), burn: burnN(r.burn),
+    deploys: arr(r.deploys).map(obj).filter((d) => d.connector != null && d.env != null).map((d) => ({ connector: String(d.connector), kind: String(d.kind || ''), env: String(d.env),
+      state: String(d.state || '?'), status: String(d.status || ''), url: d.url, sha: typeof d.sha === 'string' ? d.sha : '', at: d.at || d.ts, detail: typeof d.detail === 'string' ? d.detail : '' })),
     sessions: arr(r.sessions).map(obj).filter((x) => x.id != null).sort((a, b) => (Date.parse(b.last) || 0) - (Date.parse(a.last) || 0)), iteration: num(r.iteration) ? r.iteration : 0,
     outcome: TONE[r.outcome] ? r.outcome : 'in-progress', stage: STAGES.includes(r.stage) ? r.stage : 'intake',
     decision: r.decision ? { ...obj(r.decision), reasons: arr(obj(r.decision).reasons) } : null };
@@ -582,6 +589,10 @@ const BYID = new Map(RUNS.map((r) => [r.id, r]));
 const isDone = (r) => TERMINAL.includes(r.outcome) || !!r.archived;
 const blocking = (f) => ['high', 'medium'].includes(f.severity) && !f.dismissed;
 const failed = (v) => v.verdict !== 'passed' && !(v.findings.length && !v.findings.some(blocking)); // dismissed findings never block
+// Deploys come in the connector-normalized shape (env, state, status passed|failed|started, url): no provider is named here.
+const previewOf = (r) => r.deploys.find((d) => d.env === 'preview' && d.status === 'passed' && /^https:\/\//.test(d.url || ''));
+const deployFailed = (r) => r.deploys.find((d) => d.status === 'failed');
+const DEP_TONE = { passed: 'ok', failed: 'bad' };
 
 function stageState(r, s) {
   const i = STAGES.indexOf(s), at = STAGES.indexOf(r.stage);
@@ -627,6 +638,9 @@ function card(r, selected) {
   if (!done && r.loopbacks.length) foot.push(el('span', { class: 'loops', title: 'Loop-backs' }, '↺' + r.loopbacks.length));
   if (r.imported) foot.push(chip('Tracked' + (r.source ? ' · ' + (SRC[r.source] || r.source) : ''), 'quiet'));
   if (r.children.length) foot.push(chip(`${r.children.length} runs`, 'quiet'));
+  const bad = deployFailed(r), pv = previewOf(r); // a plain chip: the card is itself a link, so the real one is in the run's Deploy section
+  if (bad) { const c = chip('Deploy failed', 'bad'); c.title = `${bad.connector} · ${bad.env}: ${bad.state}${bad.detail ? ' · ' + bad.detail : ''}`; foot.push(c); }
+  else if (pv) { const c = chip('Preview ↗', 'ok'); c.title = 'Preview ready: ' + pv.url; foot.push(c); }
   if (r.sessions.length) foot.push(chip(`${r.sessions.length} session${r.sessions.length > 1 ? 's' : ''}`, 'quiet'));
   if (r.burn && r.burn.total.tokens) {
     const c = chip(tokens(r.burn.total.tokens) + ' tok', 'quiet');
@@ -689,7 +703,8 @@ function board(runs, selected) {
 // Policy rules in force for the shown project(s), from `F rules set`. Quiet unless expired or ending within 3 days.
 const RULE_LABEL = { ci: (v) => ({ skip: 'CI skipped', advisory: 'CI advisory', required: 'CI required' })[v] || 'CI ' + v,
   'checks.commands': (v) => 'Local checks ×' + arr(v).length, diffCap: (v) => 'Diff cap ' + v,
-  'project.budgetUsd': (v) => 'Project budget $' + v, 'project.maxIssuesPerSession': (v) => v + ' issues / session' };
+  'project.budgetUsd': (v) => 'Project budget $' + v, 'project.maxIssuesPerSession': (v) => v + ' issues / session',
+  'deploy.preview': (v) => ({ required: 'Preview required', advisory: 'Preview advisory', off: 'Preview off' })[v] || 'Preview ' + v };
 const dayNow = () => new Date().toISOString().slice(0, 10);
 function ruleChips() {
   const seen = new Set(), out = [], today = dayNow();
@@ -883,6 +898,18 @@ function family(r) {
   return parts.length ? section('Epic', parts) : null;
 }
 
+// Environments per connector: the latest state of each, newest first.
+function deploys(r) {
+  if (!r.deploys.length) return null;
+  const by = new Map();
+  for (const d of r.deploys.slice().sort((a, b) => (Date.parse(b.at) || 0) - (Date.parse(a.at) || 0))) { if (!by.has(d.connector)) by.set(d.connector, []); by.get(d.connector).push(d); }
+  return section('Deploy', [...by].map(([name, list], i) => [el('div', { class: 'label', style: `margin:${i ? 16 : 0}px 0 8px` }, name),
+    el('div', { class: 'kids' }, list.map((d) => el('div', { class: 'kid dep' }, el('span', { class: 'mono' }, d.env),
+      el('span', { class: 't', title: d.detail || null }, d.detail || (d.at ? ago(d.at) : '')),
+      d.sha ? el('span', { class: 'mono', title: d.sha }, d.sha.slice(0, 7)) : null, link(d.url, 'Open'),
+      chip(d.state, DEP_TONE[d.status] || '')))) ]));
+}
+
 // Shell-quote for a POSIX shell: single quotes, so $, `, \ and ! stay literal.
 const shq = (x) => "'" + String(x).replace(/'/g, "'\\''") + "'";
 const AGENT = { 'claude-code': 'Claude Code', codex: 'Codex' };
@@ -902,9 +929,22 @@ async function copyText(text) {
   t.remove();
   return ok;
 }
+// claude-cli://open: a new Claude Code terminal in the run's worktree (else the latest session's cwd), prompt pre-filled, not sent.
+// The handler refuses relative paths, "..", network paths and control/bidi characters; refuse them here too.
+const deepCwd = (p) => typeof p === 'string' && /^\/(?!\/)/.test(p) && !p.includes('..') && !/[\p{Cc}\p{Cf}]/u.test(p);
+function openInClaude(r) {
+  const cwd = [r.worktree, ...r.sessions.map((s) => s.cwd)].find(deepCwd);
+  if (!cwd || !/^[\w.-]+\/[\w.-]+(#\d+|:[\w.\/-]+)$/.test(r.id)) return null; // owner/repo#N or an import's owner/repo:branch; it goes into a prompt that runs F
+  const q = `Continue factory run ${r.id}. Run F state '${r.id}' first.`;
+  const query = Object.entries({ cwd, q }).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
+  if (encodeURIComponent(q).length >= 5000) return null;
+  return el('a', { class: 'copy', href: 'claude-cli://open?' + query, 'data-k': 'open-claude',
+    title: 'Opens a new Claude Code terminal here (prompt pre-filled, not sent). Requires the claude-cli handler: send one message in any interactive claude session first.' }, 'Open in Claude');
+}
 function sessions(r) {
-  if (!r.sessions.length) return null;
-  return section('Sessions', el('ul', { class: 'sess' }, r.sessions.map((s) => {
+  const open = openInClaude(r);
+  if (!r.sessions.length && !open) return null;
+  return section('Sessions', open && el('p', { class: 'open-claude' }, open), el('ul', { class: 'sess' }, r.sessions.map((s) => {
     const cmd = resumeCmd(s);
     const base = s.cwd ? String(s.cwd).replace(/[\\/]+$/, '').split(/[\\/]/).pop() : '';
     let btn = null;
@@ -948,7 +988,7 @@ function detail(r) {
   const focus = el('button', { class: 'act focus', 'data-k': 'focus', 'aria-pressed': String(store('factory.panelFocus') === '1'), title: 'Widen the panel to most of the screen' }, 'Focus');
   focus.onclick = () => { store('factory.panelFocus', store('factory.panelFocus') === '1' ? '0' : '1'); render(); restoreFocus('focus'); };
   const issueLinks = /^[\w.-]+\/[\w.-]+$/.test(repo) ? r.issues.filter((n) => Number.isInteger(n) && n > 0).map((n) => link(`https://github.com/${repo}/issues/${n}`, `Closes #${n}`)) : [];
-  const links = [r.imported ? null : link(r.url, 'Issue'), link(r.pr, 'Pull request'), issueLinks].flat().filter(Boolean);
+  const links = [r.imported ? null : link(r.url, 'Issue'), link(r.pr, 'Pull request'), previewOf(r) ? link(previewOf(r).url, 'Preview') : null, issueLinks].flat().filter(Boolean);
   links.forEach((a, i) => a.setAttribute('data-k', 'link:' + i));
   return el('div', { class: 'd-in' },
     el('div', { class: 'd-bar' }, el('span', { class: 'id' }, r.id), el('span', { class: 'd-bar-t', 'aria-hidden': 'true' }, r.title || r.branch || r.id),
@@ -967,6 +1007,7 @@ function detail(r) {
     decision(r),
     section('Run', facts(r)),
     burn(r),
+    deploys(r),
     family(r),
     sessions(r),
     timeline(r));

@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as project from './project.mjs'; // also handed whole to the idea-to-app test
 import { PROJECT_EVENTS, newProject, issuesCreate, projectStatus, loop, queue, startIdea, ideas } from './project.mjs';
 
@@ -46,10 +46,10 @@ const USAGE_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite'];
 const TRUSTED = ['OWNER', 'MEMBER', 'COLLABORATOR'];
 const OUTCOMES = ['rejected', 'needs-info', 'merged', 'escalated', 'closed', 'awaiting-approval', 'split'];
 const TERMINAL = ['rejected', 'merged', 'escalated', 'closed', 'split']; // needs-info / awaiting-approval resume later
-const STAGES = ['intake', 'spec', 'build', 'review', 'gate', 'approve'];
+const STAGES = ['intake', 'spec', 'build', 'review', 'gate', 'approve', 'ship']; // ship: deploy observations, recorded only by packages/ship's track()
 const STATUSES = ['started', 'passed', 'failed', 'decided', 'reverted', ...OUTCOMES];
 const BLOCKING = ['high', 'medium'];
-const SENSITIVE = /(^|\/)(auth|login|session|oauth|payments?|billing|money|migrations?)(\/|\.|$)|^\.github\/workflows\/|(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|Gemfile(\.lock)?|go\.(mod|sum)|Cargo\.(toml|lock))$|(^|\/)\.env|(^|\/)\.(claude|codex)\//i; // .claude/.codex: a branch's own agent skills, hooks and settings
+const SENSITIVE = /(^|\/)(auth|login|session|oauth|payments?|billing|money|migrations?)(\/|\.|$)|^\.github\/workflows\/|(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|Gemfile(\.lock)?|go\.(mod|sum)|Cargo\.(toml|lock))$|(^|\/)\.env|(^|\/)\.(claude|codex)\/|(^|\/)\.mcp\.json$/i; // .claude/** (settings, hooks, skills, agents), .codex/ and .mcp.json: `claude -p` in the worktree runs repo hooks and MCP servers with no trust prompt
 const UI = /\.(tsx|jsx|vue|svelte|astro|html|css|scss|sass|less)$/i;
 const SEO = /(^|\/)(page|layout|head|metadata|sitemap|robots|opengraph-image)\.[a-z]+$|(^|\/)pages\/|\.html$/i;
 const DOCS = /\.mdx?$|(^|\/)\.env\.example$|(^|\/)(app\/api|pages\/api|routes|cli|bin)\//i; // docs, env and public API surface
@@ -88,7 +88,7 @@ export function record(run, stage, status, payload = {}, cli) { // cli: {fallbac
   }
   payload = validateUsage(payload);
   const sessionId = process.env.CLAUDE_CODE_SESSION_ID; // set by Claude Code; lets the UI link back to the driving session
-  const ev = { ts: new Date().toISOString(), ...payload, ...(sessionId ? { harness: 'claude-code', sessionId, cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback)), run, stage, status };
+  const ev = { ts: new Date().toISOString(), ...payload, ...(sessionId && stage !== 'ship' ? { harness: 'claude-code', sessionId, cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback)), run, stage, status };
   fs.mkdirSync(DIR, { recursive: true });
   fs.appendFileSync(log(), JSON.stringify(ev) + '\n');
   if (TERMINAL.includes(status) || status === 'needs-info') { // a finished (or parked) run gives back its worktree
@@ -148,7 +148,12 @@ function validateReview(run, p, status) {
 export function derive(events) {
   const runs = {};
   for (const e of events) {
-    if (e.stage === 'rules' || PROJECT_EVENTS[e.stage]) continue; // rule changes and idea-to-app projects: not runs
+    if (e.stage === 'rules' || PROJECT_EVENTS[e.stage]) continue; // rule changes (an audit trail) and idea-to-app project events: not runs
+    if (e.stage === 'ship') { // deploy state, typed by a connector: the latest per connector and env. Never moves the run's stage, url, clock or outcome.
+      const r = runs[e.run];
+      if (r) (r.deploys ??= {})[`${e.connector}/${e.env}`] = { connector: e.connector, kind: e.kind, env: e.env, state: e.state, status: e.status, url: e.url, sha: e.sha, at: e.at, detail: e.detail, creator: e.creator, ts: e.ts };
+      continue;
+    }
     const r = (runs[e.run] ??= { id: e.run, iteration: 0, reviews: {}, loopbacks: [], events: [], outcome: 'in-progress' });
     r.events.push(e);
     Object.assign(r, { stage: e.stage, status: e.status, updated: e.ts });
@@ -183,6 +188,7 @@ export function derive(events) {
   for (const r of Object.values(runs)) {
     r.durationMs = Date.parse(r.updated) - Date.parse(r.started);
     if (r.burn) finishBurn(r.burn);
+    if (r.deploys) r.deploys = Object.values(r.deploys);
     for (const c of r.children || []) if (runs[c]) runs[c].parent = r.id;
   }
   return runs;
@@ -395,10 +401,17 @@ export function decide(r, f) {
   if (src.length && !(f.files || []).some((p) => TEST.test(p))) why.push(`source changed (${src.length} file(s)) with no test change`);
   if (!r.pr) why.push('no PR recorded');
   if (ciLine && local?.ok && why.length) why.push(ciLine); // context: this escalation happened under a CI rule
+  // Rule deploy.preview: a ready preview of the reviewed commit from any web-deploy connector (only the normalized fields count).
+  const pv = pol['deploy.preview']?.value || 'off', notes = [];
+  if (pv !== 'off') {
+    const sha = r.reviewedSha, hit = sha && (f.deploys ?? r.deploys ?? []).find((d) => d.kind === 'web-deploy' && d.env === 'preview' && d.state === 'ready' && d.sha === sha && /^https:\/\//.test(d.url || ''));
+    const line = hit ? `preview ready: ${hit.url} (${hit.connector})` : `no ready preview deploy for the reviewed commit ${String(sha || 'none').slice(0, 7)} (rule deploy.preview=${pv}, ${by(pol['deploy.preview'])})`;
+    (!hit && pv === 'required' ? why : notes).push(line); // advisory: shown, never blocking
+  }
   return why.length
-    ? { action: 'escalate', reasons: why }
-    : ciLine ? { action: 'merge', reasons: [`trusted author, all axes passed, tests changed, ${lines}-line diff, no sensitive paths`, ...(ci === 'required' ? ['CI green'] : []), ciLine] }
-    : { action: 'merge', reasons: [`trusted author, all axes passed, CI green, tests changed, ${lines}-line diff, no sensitive paths`] };
+    ? { action: 'escalate', reasons: [...why, ...notes] }
+    : ciLine ? { action: 'merge', reasons: [`trusted author, all axes passed, tests changed, ${lines}-line diff, no sensitive paths`, ...(ci === 'required' ? ['CI green'] : []), ciLine, ...notes] }
+    : { action: 'merge', reasons: [`trusted author, all axes passed, CI green, tests changed, ${lines}-line diff, no sensitive paths`, ...notes] };
 }
 
 // Before building: untrusted authors and sensitive planned files need a human to approve the spec.
@@ -629,6 +642,7 @@ const RULES = {
   diffCap: [(v) => Number.isInteger(v) && v >= 1 && v <= MAX_DIFF, `an integer 1-${MAX_DIFF} (it can only lower the cap)`],
   'project.budgetUsd': [(v) => typeof v === 'number' && v > 0 && v <= PROJECT_BUDGET_USD, `dollars, above 0 and at most ${PROJECT_BUDGET_USD} (it can only lower the cap)`],
   'project.maxIssuesPerSession': [(v) => Number.isInteger(v) && v >= 1 && v <= MAX_ISSUES_PER_SESSION, `an integer 1-${MAX_ISSUES_PER_SESSION} (it can only lower the cap)`],
+  'deploy.preview': [(v) => ['required', 'advisory', 'off'].includes(v), 'required|advisory|off (off is the built-in; required adds a merge condition)'],
 };
 const RULE_FIELDS = ['value', 'reason', 'setBy', 'setAt', 'until'];
 const LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
@@ -724,6 +738,23 @@ export function unsetRule(scope, key, { reason } = {}) {
   writeSkills(cfg);
   audit(scope, 'unset', { key, ...(reason && { reason }), setBy });
   return rules(scope);
+}
+
+// Pinned flags for a `claude -p` provider runner, so its behaviour never rides on -p's defaults.
+// Never --bare: it would skip the `/x` skill being run and needs ANTHROPIC_API_KEY. Repo hooks and .mcp.json are cut by
+// --setting-sources user and --strict-mcp-config instead. Read-only unless `write` (build): manual mode with prompts
+// none denies anything outside the allowlist, where auto mode's classifier could approve other Bash. A schema adds the
+// structured-output contract (reviews). Budget: unknown -> no flag, spent -> refuse.
+export function headlessArgs({ schema, budget, write = false } = {}) {
+  const usd = budget == null ? null : Math.floor(Number(budget) * 100) / 100; // whole cents, rounded down
+  if (usd != null && !(usd > 0)) throw new Error(`no run budget left (${budget}); escalate instead of running`); // 0, negative and NaN alike
+  return [
+    '--output-format', 'json', '--setting-sources', 'user', '--strict-mcp-config',
+    '--permission-mode', write ? 'auto' : 'manual', '--permission-prompts', 'none',
+    ...(usd != null ? ['--max-budget-usd', String(usd)] : []),
+    ...(schema ? ['--json-schema', typeof schema === 'string' ? schema : JSON.stringify(schema)] : []),
+    ...(write ? [] : ['--allowedTools', 'Bash(git diff:*)', 'Bash(git log:*)', 'Read', 'Grep', 'Glob']), // variadic: keep last
+  ];
 }
 
 // F, not the payload, says who did the work. Default runners leave events unchanged; a fallback can only downgrade to default.
@@ -883,7 +914,7 @@ export function deps(run) {
 
 export function openPRs(repo) {
   const [o, n] = repo.split('/');
-  const q = 'query($o:String!,$n:String!){repository(owner:$o,name:$n){defaultBranchRef{name} pullRequests(states:OPEN,first:100){nodes{number url title headRefName authorAssociation author{login} closingIssuesReferences(first:20){nodes{number}}}} done: pullRequests(states:[MERGED,CLOSED],last:100){nodes{headRefName}}}}';
+  const q = 'query($o:String!,$n:String!){repository(owner:$o,name:$n){defaultBranchRef{name} pullRequests(states:OPEN,first:100){nodes{number url title headRefName headRefOid authorAssociation author{login} closingIssuesReferences(first:20){nodes{number}}}} done: pullRequests(states:[MERGED,CLOSED],last:100){nodes{headRefName}}}}';
   const r = JSON.parse(gh('api', 'graphql', '-f', `query=${q}`, '-f', `o=${o}`, '-f', `n=${n}`)).data.repository;
   return { base: r.defaultBranchRef.name, prs: r.pullRequests.nodes, doneBranches: (r.done?.nodes || []).map((x) => x.headRefName) };
 }
@@ -964,6 +995,19 @@ export function discover(roots, maxDepth = 5) {
   }).sort((a, b) => (b.lastCommit || '').localeCompare(a.lastCommit || ''));
 }
 
+// packages/ship, when it sits next to the factory (the repo layout). Optional: without it F works, and deploy.preview=required escalates.
+let SHIP = null;
+async function loadShip() {
+  const file = path.join(HERE, '..', 'ship', 'ship.mjs');
+  if (!fs.existsSync(file)) return null;
+  try { const m = await import(pathToFileURL(file).href); await m.ready(); return m; } catch (e) { console.error(`factory: ship harness failed to load: ${e.message}`); return null; }
+}
+// Records deploy state through record(). A failed lookup is reported in the result, never thrown: it must not break sync or merge.
+function shipTrack(pairs) {
+  if (!SHIP || !pairs.length) return undefined;
+  try { return SHIP.track(pairs, { runs: derive(read()), record }); } catch (e) { return { recorded: [], errors: [{ error: e.message }] }; }
+}
+
 // Registers the repo and imports work already in flight: open PRs, plus recent agent sessions on unmerged branches.
 // Imported runs are tracked, never driven: decide() always escalates them.
 export function sync(repo, repoPath) {
@@ -1029,8 +1073,10 @@ export function sync(repo, repoPath) {
     if (r.branch && sessions[r.branch]) prev[r.id] = sessions[r.branch].sessions.sort((a, b) => b.last.localeCompare(a.last)).slice(0, 5);
   }
   fs.writeFileSync(links, JSON.stringify(prev, null, 2));
+  const head = new Map(prs.map((p) => [p.url, p.headRefOid])); // deploy state of each in-progress run's PR head (finished runs aren't polled)
+  const ship = shipTrack(Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') && r.outcome === 'in-progress' && head.get(r.pr)).map((r) => ({ run: r.id, repo, sha: head.get(r.pr), path: repoPath })));
   render();
-  return { repo, path: repoPath, added, attached, closed };
+  return { repo, path: repoPath, added, attached, closed, ...(ship && { ship }) };
 }
 
 // Reads CI + diff facts from GitHub so the merge decision never depends on typed-in numbers.
@@ -1039,7 +1085,12 @@ export function facts(r) {
   const association = gh('api', `repos/${repo}/issues/${n}`, '--jq', '.author_association').trim();
   const autoMerge = projects()[repo]?.autoMerge !== false;
   const policy = rules(repo).policy; // a broken config throws here, so decide/merge fail and the run escalates
-  if (!r.pr) return { association, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy };
+  const pv = policy['deploy.preview']?.value, dep = {};
+  if (pv && pv !== 'off') { // live, like CI: record the reviewed commit's deploy state now, then decide on what the log says
+    shipTrack([{ run: r.id, repo, sha: r.reviewedSha, path: projects()[repo]?.path }]);
+    dep.deploys = derive(read())[r.id]?.deploys || [];
+  }
+  if (!r.pr) return { association, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy, ...dep };
   const diff = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'additions,deletions,files'));
   let checks = 'skipped'; // ci=skip: GitHub CI isn't even read
   if (policy.ci?.value !== 'skip') try {
@@ -1049,7 +1100,7 @@ export function facts(r) {
     if (!/no checks reported/i.test(String(e.stderr))) throw e;
     checks = 'none';
   }
-  return { association, autoMerge, checks, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), rules: policy };
+  return { association, autoMerge, checks, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), rules: policy, ...dep };
 }
 
 // Stand-in for CI that F runs itself: the checks.commands rule (never repo or model text) in the run's worktree, on a clean commit.
@@ -1115,12 +1166,13 @@ export function postmerge(run) {
   const { repo } = parseRun(run);
   const sha = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'mergeCommit')).mergeCommit?.oid;
   if (!sha) return { state: 'not-merged' };
+  const ship = shipTrack([{ run, repo, sha, path: projects()[repo]?.path }]), deploys = ship?.recorded.length ? { deploys: ship.recorded } : {}; // production deploy of the merge commit, when a connector reports one
   const ci = rules(repo).policy.ci?.value;
-  if (ci === 'skip') return { sha, state: 'skipped', reason: 'rule ci=skip: CI on the base branch is not watched, so it never triggers a revert' };
+  if (ci === 'skip') return { sha, state: 'skipped', reason: 'rule ci=skip: CI on the base branch is not watched, so it never triggers a revert', ...deploys };
   const runs = JSON.parse(gh('run', 'list', '-R', repo, '--commit', sha, '--json', 'status,conclusion,name,url'));
   const failed = runs.filter((x) => ['failure', 'cancelled', 'timed_out'].includes(x.conclusion)).map((x) => x.url);
   const state = !runs.length ? 'none' : failed.length ? 'fail' : runs.some((x) => x.status !== 'completed') ? 'pending' : 'pass';
-  return { sha, state, failed, ...(ci === 'advisory' && { advisory: true }) }; // advisory: report red, don't revert on it
+  return { sha, state, failed, ...(ci === 'advisory' && { advisory: true }), ...deploys }; // advisory: report red, don't revert on it
 }
 
 // Opens (never merges) a revert PR for a merged run whose main CI went red.
@@ -1234,6 +1286,7 @@ export function page(extra = {}) {
   let links = {};
   try { links = JSON.parse(fs.readFileSync(sessionsFile(), 'utf8')); } catch { /* no sync yet */ }
   for (const r of runs) if (links[r.id]) r.sessions = [...(r.sessions || []), ...links[r.id].filter((x) => !(r.sessions || []).some((y) => y.id === x.id))];
+  for (const r of runs) { const w = wtInfo(r.id); if (w?.path) r.worktree = w.path; } // the dashboard's "Open in Claude" cwd
   const repoOf = (id) => id.split(/[#:]/)[0];
   const byProject = {};
   for (const p of new Set(runs.map((r) => repoOf(r.id)))) byProject[p] = metrics(runs.filter((r) => repoOf(r.id) === p));
@@ -1251,7 +1304,7 @@ export function demo() {
   let t = Date.parse('2026-11-20T09:00:00Z');
   const S = { harness: 'claude-code', sessionId: 'demo-session', cwd: '/work/shop' }, MEASURED = ['acme/shop#43', 'acme/shop#45'];
   const ev = (run, stage, status, p = {}) => {
-    const e = { ts: new Date((t += 97_000)).toISOString(), ...p, ...(MEASURED.includes(run) ? S : {}), run, stage, status };
+    const e = { ts: new Date((t += 97_000)).toISOString(), ...p, ...(MEASURED.includes(run) && stage !== 'ship' ? S : {}), run, stage, status };
     fs.mkdirSync(DIR, { recursive: true });
     fs.appendFileSync(log(), JSON.stringify(e) + '\n');
   };
@@ -1383,6 +1436,12 @@ export function demo() {
   g(R);
   d(R, { checks: 'skipped', additions: 58, deletions: 4, files: files51, rules: rules('acme/shop').policy });
   ev(R, 'approve', 'merged');
+  // Deploy state, as a packages/ship connector records it: a preview per PR head, production for a merge.
+  const dep = (run, env, state, status, sha, url, detail) => ev(run, 'ship', status, { connector: 'demo-host', kind: 'web-deploy', env, state, url, sha, at: new Date(t).toISOString(), detail, creator: 'deploy-bot' });
+  dep('acme/shop#51', 'preview', 'ready', 'passed', sha, 'https://shop-pr-95.preview.example', 'Deployment has completed');
+  dep('acme/shop#51', 'production', 'ready', 'passed', '9a7c41d2e0b8', 'https://shop.acme.dev', 'Deployment has completed');
+  dep('acme/shop#45', 'preview', 'ready', 'passed', 'c0ffee12ab34', 'https://shop-pr-92.preview.example', 'Deployment has completed');
+  dep('acme/shop#44', 'preview', 'error', 'failed', 'd15ea5e0b1a2', 'https://shop-pr-91.preview.example', 'Build failed: Type error in lib/auth/github.ts');
   demoTranscripts(read().filter((e) => e.sessionId === S.sessionId));
   return render();
 }
@@ -1447,6 +1506,22 @@ async function test() {
   assert.match(decide(ok, { ...facts, association: 'NONE' }).reasons.join(), /not trusted/); // live value wins
   assert.match(decide(ok, { ...facts, autoMerge: false }).reasons.join(), /auto-merge is turned off/);
   assert.match(decide(ok, { ...facts, files: ['.claude/skills/review/SKILL.md', 'src/a.test.ts'] }).reasons.join(), /sensitive paths/); // a branch's own agent config
+  for (const f of ['.mcp.json', 'pkg/.mcp.json', '.claude/settings.json', '.claude/settings.local.json', '.claude/hooks/pre.sh', '.claude/agents/x.md']) // claude -p runs these untrusted
+    assert.equal(decide(ok, { ...facts, files: [f, 'src/a.test.ts'] }).action, 'escalate', f);
+  assert.equal(decide(ok, { ...facts, files: ['docs/mcp.json.md', 'src/a.test.ts'] }).action, 'merge');
+  // Headless runner flags: pinned, never --bare, read-only for reviews, budget in whole cents, a spent budget refuses.
+  const ha = headlessArgs({ budget: 3.456, write: true });
+  assert.deepEqual(ha.slice(ha.indexOf('--permission-mode'), ha.indexOf('--permission-mode') + 4), ['--permission-mode', 'auto', '--permission-prompts', 'none']);
+  for (const f of [['--output-format', 'json'], ['--max-budget-usd', '3.45'], ['--setting-sources', 'user']]) assert.equal(ha[ha.indexOf(f[0]) + 1], f[1]);
+  assert.ok(ha.includes('--strict-mcp-config') && !ha.includes('--bare') && !ha.includes('--json-schema') && !ha.includes('--allowedTools'));
+  const ro = headlessArgs(); // verifier, intake, spec: read-only by default
+  assert.equal(ro[ro.indexOf('--permission-mode') + 1], 'manual');
+  assert.deepEqual(ro.slice(ro.indexOf('--allowedTools')), ['--allowedTools', 'Bash(git diff:*)', 'Bash(git log:*)', 'Read', 'Grep', 'Glob']);
+  assert.ok(!headlessArgs().includes('--max-budget-usd')); // unknown budget: no flag
+  const hr = headlessArgs({ schema: { type: 'object' } });
+  assert.equal(hr[hr.indexOf('--json-schema') + 1], '{"type":"object"}');
+  assert.equal(hr[hr.indexOf('--permission-mode') + 1], 'manual');
+  for (const b of [0, -1, 0.004, NaN, 'x']) assert.throws(() => headlessArgs({ budget: b }), /no run budget left/);
   // Demo run 50: custom/provider runners are stamped, and prose from a custom reviewer fails the axis instead of passing.
   const r50 = runs['acme/shop#50'];
   assert.equal(r50.outcome, 'merged');
@@ -1458,6 +1533,8 @@ async function test() {
   assert.equal(runs['acme/shop#51'].decision.action, 'merge');
   assert.match(runs['acme/shop#51'].decision.reasons.join(' | '), /CI not required by rule ci=skip, set by acme on 2026-11-20: GitHub Actions billing is failing\. Local checks: pass \(pnpm test, pnpm lint\)/);
   assert.equal(runs['acme/shop'], undefined); // rule events are not runs
+  assert.deepEqual(runs['acme/shop#51'].deploys.map((d) => [d.env, d.state]), [['preview', 'ready'], ['production', 'ready']]); // latest per connector and env
+  assert.deepEqual([runs['acme/shop#44'].outcome, runs['acme/shop#44'].stage, runs['acme/shop#44'].url], ['escalated', 'approve', 'https://github.com/acme/shop/issues/44']); // deploys move nothing
   assert.deepEqual(rules('acme/shop').expired.map((x) => x.key), ['diffCap']);
   // Verifier-dismissed findings don't block; the cost cap stops looping.
   const dis = { iteration: 1, axes: { 1: ['code'] }, reviews: { 1: { code: { verdict: 'passed', findings: [{ severity: 'high', route: 'build', dismissed: 'not reachable' }] } } } };
@@ -1491,6 +1568,9 @@ async function test() {
   assert.equal(page.split('__FACTORY_DATA__').length, 1);
   assert.match(page, /"ruleHistory":\[\{[^\]]*"key":"ci","value":"skip"/);
   assert.match(page, /"id":"acme\/shop#47"[^]*?"parent":"acme\/shop#46"/); // parent survives archiving
+  fs.mkdirSync(runDir('acme/shop#45'), { recursive: true });
+  fs.writeFileSync(wtFile('acme/shop#45'), JSON.stringify({ path: '/w/shop-45', branch: 'factory/issue-45' }));
+  assert.match(fs.readFileSync(render(), 'utf8'), /"id":"acme\/shop#45"[^]*?"worktree":"\/w\/shop-45"/); // the "Open in Claude" cwd
   assert.deepEqual(axesFor(['lib/x.ts']), ['code', 'security']);
   assert.deepEqual(axesFor(['app/blog/page.tsx']), ['code', 'security', 'ux', 'ui', 'seo']);
   // Dashboard must not break out of its JSON script tag.
@@ -1643,11 +1723,20 @@ function cliTest() {
   assert.throws(() => cli(['event', RUN, 'approve', 'merged']), /recorded by "merge"/);
   assert.throws(() => record(RUN, 'approve', 'merged'), /decision is not merge/); // and record() itself still refuses
   assert.throws(() => cli(['event', RUN, 'deploy', 'passed']), /unknown stage/);
+  assert.throws(() => cli(['event', RUN, 'ship', 'passed', '-'], '{"connector":"x","env":"preview","state":"ready"}'), /recorded by "ship"/);
+  for (const k of ['connector', 'kind', 'env', 'state', 'url', 'sha']) assert.throws(() => cli(['event', RUN, 'build', 'passed', '-'], JSON.stringify({ [k]: 'https://evil.example' })), new RegExp(`not from a payload: ${k}`));
   assert.equal(JSON.parse(cli(['merge', RUN], '', { STUB_CHECKS: '1' })).merged, true); // stub fails unless --match-head-commit abc123
   const st = JSON.parse(cli(['state', RUN]));
   assert.equal(st.outcome, 'merged');
   assert.equal(st.spec, nasty);
   assert.equal(st.iteration, 2);
+  const hl = JSON.parse(cli(['headless-args', RUN, '--review']));
+  assert.equal(hl[hl.indexOf('--max-budget-usd') + 1], String(COST_CAP)); // nothing spent yet
+  assert.deepEqual(JSON.parse(hl[hl.indexOf('--json-schema') + 1]), JSON.parse(fs.readFileSync(path.join(HERE, 'references', 'review.schema.json'), 'utf8')));
+  assert.ok(hl.every((a) => !a.includes("'"))); // SKILL.md single-quotes every element
+  assert.equal((x => x[x.indexOf('--permission-mode') + 1])(JSON.parse(cli(['headless-args', RUN, '--write']))), 'auto');
+  record('acme/hl#1', 'intake', 'started', { imported: true });
+  assert.throws(() => cli(['headless-args', 'acme/hl#1']), /imported/);
   syncTest(cli);
   worktreeTest(cli);
   rulesTest(cli);
@@ -1668,6 +1757,7 @@ function rulesTest(cli) {
     ['review.security', 'off', /unknown rule/], ['matchHeadCommit', 'off', /unknown rule/], ['imported', 'merge', /unknown rule/],
     ['ci', 'off', /required\|advisory\|skip/], ['diffCap', '400', /can only lower/], ['diffCap', '0', /can only lower/],
     ['checks.commands', '[]', /1-10/], ['checks.commands', '["a\\nb"]', /1-10/], ['guide.deploy', 'x', /unknown step "deploy"/],
+    ['deploy.preview', 'maybe', /required\|advisory\|off/], ['deploy.production', 'required', /unknown rule/],
   ]) assert.throws(() => set('acme/rr', k, v, '--reason', 'x'), re);
   assert.throws(() => set('acme/rr', 'ci', 'skip', '--reason', 'x', '--until', '2020-01-01'), /--until/);
   assert.throws(() => set('acme/rr', 'ci', 'skip', '--reason', 'x', '--until', '2026-13-40'), /--until/);
@@ -1720,6 +1810,19 @@ function rulesTest(cli) {
   assert.match(D(green, { rules: skip, files: ['lib/auth/x.ts', 'lib/auth/x.test.ts'] }).reasons.join(), /sensitive paths/);
   assert.match(D({ ...green, imported: true }, { rules: skip }).reasons.join(), /imported/);
   assert.match(D(green, { rules: { ...skip, diffCap: rule(50) }, additions: 60 }).reasons.join(), /max 50 by rule diffCap/);
+  // deploy.preview: required needs a ready https preview of the reviewed commit from any web-deploy connector; advisory only notes it.
+  const S1 = 's1', dp = (x) => ({ connector: 'any-host', kind: 'web-deploy', env: 'preview', state: 'ready', sha: S1, url: 'https://p.example', ...x });
+  const P = (v, deploys, r = ok) => D(r, { checks: 'pass', rules: { 'deploy.preview': rule(v) }, deploys });
+  assert.deepEqual(D(ok, { checks: 'pass' }), D(ok, { checks: 'pass', rules: { 'deploy.preview': rule('off') } })); // off = built-in
+  assert.equal(P('required', [dp()]).action, 'merge');
+  assert.match(P('required', [dp()]).reasons.join(), /preview ready: https:\/\/p\.example \(any-host\)/);
+  for (const bad of [[], [dp({ sha: 's0' })], [dp({ state: 'building' })], [dp({ env: 'neon-audit' })], [dp({ kind: 'database' })], [dp({ url: 'http://p.example' })]]) {
+    const x = P('required', bad);
+    assert.deepEqual([x.action, /no ready preview deploy for the reviewed commit s1 \(rule deploy.preview=required, set by acme/.test(x.reasons.join())], ['escalate', true]);
+  }
+  assert.equal(P('required', undefined, { ...ok, deploys: [dp()] }).action, 'merge'); // from the run's recorded deploys when facts carry none
+  assert.deepEqual([P('advisory', []).action, /no ready preview.*advisory/.test(P('advisory', []).reasons.join())], ['merge', true]);
+  assert.match(P('required', [dp()], { ...ok, association: 'NONE' }).reasons.join(), /not trusted/); // a ready preview never loosens a guard
   // End to end on acme/shop: the model's checks.json never stands in for CI; F's own check does, and merge still pins the reviewed commit.
   set('acme/shop', 'ci', 'skip', '--reason', 'Actions billing');
   set('acme/shop', 'checks.commands', '["pnpm test"]', '--reason', 'stands in for CI');
@@ -1748,6 +1851,24 @@ function rulesTest(cli) {
   assert.throws(() => cli(['rules', 'unset', 'acme/shop', 'ci']), /no rule "ci"/);
   assert.match(cli(['rules', 'unset', 'acme/rr', 'guide.build']), /"guide"/);
   assert.deepEqual(read().filter((e) => e.stage === 'rules' && e.status === 'unset' && e.run === 'acme/shop').map((e) => [e.run, e.key, e.reason]).slice(0, 1), [['acme/shop', 'ci', 'billing fixed']]);
+  // End to end: under deploy.preview=required, F decide asks the ship harness for the reviewed commit's deploys, records them, then decides.
+  set('acme/app', 'deploy.preview', 'required', '--reason', 'reviewers look at the running app');
+  const P10 = 'acme/app#60', head10 = '10'.padStart(40, '0');
+  record(P10, 'intake', 'started', { title: 't', association: 'OWNER' });
+  record(P10, 'build', 'passed', { pr: 'https://github.com/acme/app/pull/60' });
+  record(P10, 'review', 'started', { axes: ['code', 'security'], sha: head10 });
+  record(P10, 'review', 'passed', { axis: 'code', findings: [] });
+  record(P10, 'review', 'passed', { axis: 'security', findings: [] });
+  const gated = JSON.parse(cli(['decide', P10], '', { STUB_CHECKS: '1' }));
+  assert.equal(gated.action, 'merge');
+  assert.match(gated.reasons.join(), /preview ready: https:\/\/deploy-10\.example\.app \([\w-]+\)/);
+  assert.equal(derive(read())[P10].deploys[0].state, 'ready');
+  record(P10, 'review', 'started', { axes: ['code', 'security'], sha: 'e'.repeat(40) }); // a new commit with no preview
+  record(P10, 'review', 'passed', { axis: 'code', findings: [] });
+  record(P10, 'review', 'passed', { axis: 'security', findings: [] });
+  assert.match(JSON.parse(cli(['decide', P10], '', { STUB_CHECKS: '1' })).reasons.join(), /no ready preview deploy for the reviewed commit eeeeeee/);
+  assert.match(JSON.parse(cli(['decide', P10], '', { STUB_CHECKS: '1', STUB_DEPLOY_FAIL: '1' })).action, /escalate/); // lookup down: escalate, never crash
+  cli(['rules', 'unset', 'acme/app', 'deploy.preview']);
   // A hand-edited rule without a reason fails loudly, and the dashboard says so instead of failing every event.
   fs.writeFileSync(path.join(DIR, 'skills.json'), '{"acme/rr":{"rules":{"ci":{"value":"skip","setBy":"me","setAt":"2026-01-01"}}}}');
   assert.throws(() => cli(['rules', 'acme/rr']), /needs a reason/);
@@ -1906,7 +2027,16 @@ function syncTest(cli) {
   assert.deepEqual(links['acme/app#10'].map((x) => [x.agent, x.id]), [['claude-code', 'a']]);
   assert.deepEqual(links['acme/app#12'].map((x) => [x.agent, x.id]), [['codex', 'cx-1']]);
   assert.equal(JSON.parse(cli(['decide', 'acme/app#11'], '', env)).action, 'escalate');
+  // Ship: sync records each in-progress PR head's deploy state through record(); only PR 10's head has a preview.
+  assert.deepEqual(first.ship.recorded.map((x) => [x.run, x.env, x.state, x.url]), [['acme/app#10', 'preview', 'ready', 'https://deploy-10.example.app']]);
+  assert.deepEqual(first.ship.errors, []);
+  assert.deepEqual(derive(read())['acme/app#10'].deploys.map((d) => [d.env, d.sha]), [['preview', '10'.padStart(40, '0')]]);
+  assert.equal(derive(read())['acme/app#10'].url, 'https://github.com/acme/app/pull/10');
+  const failing = JSON.parse(cli(['sync', 'acme/app'], '', { ...env, STUB_DEPLOY_FAIL: '1' }))[0]; // a failed lookup never breaks sync
+  assert.match(failing.ship.errors[0].error, /HTTP 502/);
+  assert.deepEqual(failing.added, []);
   assert.deepEqual(JSON.parse(cli(['sync'], '', env))[0].added, []); // re-sync is idempotent and remembers the path
+  assert.equal(read().filter((e) => e.stage === 'ship').length, 1); // the same state for the same sha is recorded once
   const [later] = JSON.parse(cli(['sync', 'acme/app'], '', { ...env, STUB_CLOSED: '10', STUB_WIP_PR: '1' }));
   assert.deepEqual(later.closed, ['acme/app#10']);
   assert.deepEqual(later.attached, ['acme/app:dev/wip-9']); // session-only run picks up its new PR
@@ -2008,7 +2138,10 @@ function worktreeTest(cli) {
   cli(['event', R, 'build', 'passed', '-'], '{"pr":"https://github.com/acme/wt/pull/3"}', env2);
   const env3 = { ...env2, STUB_MERGE_SHA: sha };
   cli(['rules', 'set', 'acme/wt', 'ci', 'skip', '--reason', 'Actions billing'], '', env3);
-  assert.equal(JSON.parse(cli(['postmerge', R], '', env3)).state, 'skipped'); // a billing-red main must not trigger reverts
+  const skipped = JSON.parse(cli(['postmerge', R], '', env3));
+  assert.equal(skipped.state, 'skipped'); // a billing-red main must not trigger reverts
+  assert.deepEqual(skipped.deploys.map((d) => [d.env, d.state, d.sha, d.url]), [['production', 'ready', sha, 'https://deploy-11.example.app']]); // the merge commit's deploy, recorded
+  assert.deepEqual(derive(read())[R].deploys.map((d) => [d.env, d.sha]), [['production', sha]]);
   cli(['rules', 'set', 'acme/wt', 'ci', 'advisory', '--reason', 'Actions flaky'], '', env3);
   assert.deepEqual(JSON.parse(cli(['postmerge', R], '', env3)), { sha, state: 'fail', failed: ['https://github.com/acme/wt/actions/runs/1'], advisory: true }); // shown, never reverted on
   cli(['rules', 'unset', 'acme/wt', 'ci'], '', env3);
@@ -2030,14 +2163,16 @@ if (isMain) {
   const json = (s) => (s === '-' ? JSON.parse(fs.readFileSync(0, 'utf8')) : s ? JSON.parse(s) : {});
   const out = (x) => console.log(JSON.stringify(x, null, 2));
   try {
+    if (['sync', 'postmerge', 'revert', 'decide', 'merge', 'ship'].includes(cmd)) SHIP = await loadShip();
     switch (cmd) {
       case 'event': {
         const [stage, status] = rest, p = json(rest[2]);
         const owned = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'approve:closed': 'sync' };
-        const owner = owned[`${stage}:${status}`] || { gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop' }[stage];
+        const owner = owned[`${stage}:${status}`] || { gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop', ship: 'ship' }[stage];
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
-        const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'cwd', 'runner', 'localChecks'].filter((k) => k in p);
-        if (typed.length) throw new Error(`these fields come from GitHub or git, not from a payload: ${typed.join(', ')}`);
+        const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'cwd', 'runner', 'localChecks',
+          'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // the last row: set by ship connectors only
+        if (typed.length) throw new Error(`these fields come from GitHub, git or a ship connector, not from a payload: ${typed.join(', ')}`);
         record(run, stage, status, p, { fallback }); break;
       }
       case 'review': { // raw reviewer output on stdin, from any runner; invalid output is recorded as a failed review
@@ -2069,7 +2204,7 @@ if (isMain) {
         if (run === 'set' && scope && key && value !== undefined) out(setRule(scope, key, value, { reason, until }));
         else if (run === 'unset' && scope && key) out(unsetRule(scope, key, { reason }));
         else if (run && run !== 'set' && run !== 'unset') out(rules(run));
-        else throw new Error('usage: rules <owner/repo|default> | rules set <owner/repo|default> <ci|checks.commands|diffCap|project.budgetUsd|project.maxIssuesPerSession|guide.<step>> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <owner/repo|default> <key> [--reason "…"]');
+        else throw new Error('usage: rules <owner/repo|default> | rules set <owner/repo|default> <ci|checks.commands|diffCap|deploy.preview|project.budgetUsd|project.maxIssuesPerSession|guide.<step>> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <owner/repo|default> <key> [--reason "…"]');
         break;
       }
       case 'checks': out(localChecks(run)); break;
@@ -2102,6 +2237,10 @@ if (isMain) {
         out(list.map(([k, p]) => sync(k, p))); break;
       }
       case 'projects': out(projects()); break;
+      case 'ship': { // thin alias: ship.mjs connectors | detect <owner/repo> | status <owner/repo> [sha]  (reads only)
+        if (!SHIP) throw new Error('the ship harness (packages/ship) is not installed next to the factory');
+        out(await SHIP.main([run, ...rest].filter(Boolean), { path: projects()[rest[0]]?.path })); break;
+      }
       case 'discover': out(discover([run, ...rest].filter(Boolean))); break;
       case 'decide': { const r = getRun(run); const f = r.imported ? {} : facts(r); const d = decide(r, f); record(run, 'approve', 'decided', { ...d, facts: f }); out({ ...d, facts: f }); break; }
       case 'merge': out(merge(run)); break;
@@ -2132,6 +2271,13 @@ if (isMain) {
         out(Object.fromEntries(Object.values(withMeasured(derive(events), events)).filter((r) => r.burn).map((r) => [r.id, { measured: r.burn.measured, ...r.burn.total }])));
         break;
       }
+      case 'headless-args': { // the run's remaining budget; an imported checkout is someone else's code, so never -p there
+        const r = getRun(run), b = budget(r);
+        if (r.imported) throw new Error(`${run} is imported: never run claude -p in its checkout`);
+        if (b.over) throw new Error(`run budget exceeded ${budgetWhy(b)}`);
+        out(headlessArgs({ schema: rest.includes('--review') ? JSON.parse(fs.readFileSync(path.join(HERE, 'references', 'review.schema.json'), 'utf8')) : undefined, budget: COST_CAP - b.usd, write: rest.includes('--write') }));
+        break;
+      }
       case 'dir': console.log(runDir(run)); break;
       case 'render': console.log(render()); break;
       case 'ui': ui(Number(run) || 0); break;
@@ -2144,6 +2290,7 @@ if (isMain) {
   discover [roots...]                     find local GitHub clones for onboarding (default: ~/Development, ~/code, ...)
   sync   [owner/repo] [local clone path]  attach a project and import open PRs + agent sessions (no args: all)
   projects                                list attached projects
+  ship   connectors | detect <owner/repo> | status <owner/repo> [sha]   deploy state from packages/ship connectors (read only)
   intake <run>                            fetch issue, record intake start, print issue + trusted comments
   event  <run> <stage> <status> [json|-] [--fallback why]  record an event ("-" = JSON on stdin)
   worktree <run> [clone path]            create/reuse the run's git worktree (prints its path)
@@ -2156,7 +2303,7 @@ if (isMain) {
   skills catalog [owner/repo...]          every runner on this machine: built-in, Claude Code / Codex, global, project, your briefs
   ui     [port]                           serve the dashboard on 127.0.0.1 with a token, so the Skills sheet can save
   rules  <owner/repo>                     print the policy rules, warnings and per-step guidance that apply
-  rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, project.budgetUsd x, project.maxIssuesPerSession n, guide.<step> "text"
+  rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, deploy.preview required|advisory|off, project.budgetUsd x, project.maxIssuesPerSession n, guide.<step> "text"
   rules unset <owner/repo|default> <key> [--reason "…"]  remove one (back to the global rule, or the built-in)
   checks <run>                            run the checks.commands rule in the worktree on its HEAD commit (the CI stand-in)
   gc                                      remove worktrees of finished runs
@@ -2178,6 +2325,7 @@ if (isMain) {
   eval   [fixture]                        score intake on evals/golden with headless claude (costs tokens)
   state  <run>                            print derived run state
   usage  [run]                            token burn by stage, iteration and axis: measured from transcripts, else reported
+  headless-args <run> [--review|--write]  pinned claude -p flags (read-only unless --write) for a provider runner, with the run's remaining budget (JSON array)
   dir    <run>                            print the run's artifact folder
   render | demo | test`);
         process.exitCode = cmd ? 1 : 0;
