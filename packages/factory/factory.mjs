@@ -2633,6 +2633,8 @@ if (isMain) {
   rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, deploy.preview required|advisory|off, project.budgetUsd x, project.maxIssuesPerSession n, guide.<step> "text"
   rules unset <owner/repo|default> <key> [--reason "…"]  remove one (back to the global rule, or the built-in)
   checks <run>                            run the checks.commands rule in the worktree on its HEAD commit (the CI stand-in)
+  note   <run> <step|next> -              record the user's one-shot note for a step (text on stdin; only from the user's own chat or the F ui box)
+  notes  <run> <step...>                  hand out pending notes for the steps starting now, once (put under "User instructions" after guide)
   gc                                      remove worktrees of finished runs
   gate   <run>                            compute + record gate verdict
   decide <run>                            fetch CI + diff, compute + record merge/escalate
