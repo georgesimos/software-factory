@@ -1,6 +1,6 @@
 import { tokens, type Theme } from '@software-factory/design-system';
 
-const { color, text, space, radius, shadow, motion, z, status, cssVar } = tokens;
+const { color, font, text, weight, leading, tracking, space, radius, shadow, motion, z, status, cssVar } = tokens;
 const px = (v: string) => parseFloat(v) || 0;
 
 function Palette({ theme }: { theme: Theme }) {
@@ -43,6 +43,18 @@ export function Tokens() {
         {Object.entries(text).map(([k, v]) => (
           <div key={k} className="pg-row"><code>{cssVar('text', k)}</code><span className="pg-hex">{v}</span>
             <span style={{ fontSize: `var(${cssVar('text', k)})`, letterSpacing: k === 'display' ? '-0.035em' : undefined, lineHeight: 1.2 }}>{k === 'display' ? '82%' : 'Debounce product search'}</span></div>
+        ))}
+        {Object.entries(font).map(([k, v]) => (
+          <div key={k} className="pg-row"><code>{cssVar('font', k)}</code><span className="pg-hex">{v.split(',')[0]}</span><span style={{ fontFamily: `var(${cssVar('font', k)})` }}>Ship the factory · 0123456789</span></div>
+        ))}
+        {Object.entries(weight).map(([k, v]) => (
+          <div key={k} className="pg-row"><code>{cssVar('weight', k)}</code><span className="pg-hex">{v}</span><span style={{ fontWeight: `var(${cssVar('weight', k)})` as never }}>Add newsletter signup</span></div>
+        ))}
+        {Object.entries(leading).map(([k, v]) => (
+          <div key={k} className="pg-row"><code>{cssVar('leading', k)}</code><span className="pg-hex">{v}</span><span className="pg-hex">line-height</span></div>
+        ))}
+        {Object.entries(tracking).map(([k, v]) => (
+          <div key={k} className="pg-row"><code>{cssVar('tracking', k)}</code><span className="pg-hex">{v}</span><span style={{ letterSpacing: `var(${cssVar('tracking', k)})` }}>Median cycle</span></div>
         ))}
         <div className="pg-row"><code>.sf-label</code><span className="pg-hex">mono 11 / 0.08em</span><span className="sf-label">Median cycle</span></div>
         <div className="pg-row"><code>--sf-font-mono</code><span className="pg-hex">Geist Mono</span><span className="sf-mono" style={{ fontSize: 12 }}>acme/shop#43 · iter 2 · $0.75</span></div>
