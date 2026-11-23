@@ -64,7 +64,16 @@ try {
   await live.getByRole('combobox', { name: 'Repo' }).selectOption('acme/shop');
   await live.getByRole('button', { name: 'New terminal' }).click();
   const screenText = live.locator('.xterm-rows');
-  await screenText.getByText('stub terminal').waitFor();
+  // The banner's pid, once a terminal other than `not` shows it: the pane switches sessions after the start returns.
+  const pidOn = async (not) => {
+    for (let i = 0; i < 150; i++) {
+      const m = ((await screenText.textContent()) ?? '').match(/stub\s+terminal\s+pid\s+(\d+)/); // xterm may draw spaces as U+00A0
+      if (m && Number(m[1]) !== not) return Number(m[1]);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    throw new Error('no terminal banner');
+  };
+  const firstPid = await pidOn(0);
   await win.keyboard.type('hello');
   await win.keyboard.press('Enter');
   await screenText.getByText('you said: hello').waitFor();
@@ -72,8 +81,7 @@ try {
   await live.getByRole('listitem').filter({ hasText: 'acme/shop' }).first().getByRole('button', { name: 'Stop' }).click();
   await live.getByText(/exited stopped/).first().waitFor();
   await live.getByRole('button', { name: 'New terminal' }).click(); // left running: quitting must stop it
-  await screenText.getByText(/stub terminal pid \d+/).waitFor();
-  leftPid = Number((await screenText.textContent()).match(/stub terminal pid (\d+)/)[1]);
+  leftPid = await pidOn(firstPid);
   await live.getByRole('button', { name: 'Close' }).first().click(); // the sheet's own close: Escape would go to xterm
   await live.waitFor({ state: 'hidden' });
 
