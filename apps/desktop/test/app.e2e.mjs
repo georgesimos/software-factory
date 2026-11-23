@@ -36,7 +36,10 @@ try {
   assert.match(url.search, /^\?t=[\w-]{32}$/, 'loaded with the loopback token');
 
   // Runs, then a run's sessions, both from the server in the main process.
-  const state = await (await fetch(`${origin}/api/state`, { headers: { 'x-factory-token': url.searchParams.get('t') } })).json();
+  const t = url.searchParams.get('t');
+  const state = await (await fetch(`${origin}/api/state`, { headers: { 'x-factory-token': t } })).json();
+  const onboard = await (await fetch(`${origin}/api/onboard`, { method: 'POST', headers: { 'x-factory-token': t, origin, 'content-type': 'application/json' }, body: '{}' })).json();
+  assert.deepEqual(onboard.hooks.connectors.map((c) => c.id), ['github-deployments'], 'ship.mjs and its connectors load in the Electron main');
   const run = state.runs.find((r) => r.sessions?.length && !r.archived);
   assert.ok(run, 'the demo data has a run with sessions');
   await win.getByRole('tab', { name: /All/ }).waitFor();

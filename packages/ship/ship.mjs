@@ -82,6 +82,6 @@ export async function main(argv, opts = {}) {
   return { repo, ...(sha && { sha }), ...lookup(connectors, project, sha, ctx) };
 }
 
-if (process.argv[1] && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && fs.existsSync(process.argv[1]) && fs.realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main(process.argv.slice(2)).then((x) => console.log(JSON.stringify(x, null, 2)), (e) => { console.error(e.message.startsWith('usage') ? e.message : `ship: ${e.message}`); process.exitCode = 1; });
 }
