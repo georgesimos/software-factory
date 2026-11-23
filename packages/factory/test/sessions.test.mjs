@@ -107,22 +107,27 @@ test('a session killed by a signal ends: exit carries the signal, and stop() is 
 });
 
 test('Windows: stop() ends the whole tree with taskkill, since kill() would end only cmd.exe; never pid 0', () => {
-  const calls = [], run = (...a) => { calls.push(a.slice(0, 2)); return { on: () => {} }; }, groups = [], kill = (pid, sig) => { groups.push([pid, sig]); };
-  let killed = 0; const child = { pid: 4242, kill: () => { killed++; } };
-  killTree(child, 'win32', run, kill);
-  const TK = 'C:\\Windows\\System32\\taskkill.exe'; // by full path, never a taskkill.exe in the worktree (#97)
-  assert.deepEqual([calls, killed], [[[TK, ['/pid', '4242', '/T', '/F']]], 0]);
-  killTree(child, 'darwin', run, kill);
-  assert.deepEqual(groups, [[-4242, 'SIGTERM']], 'POSIX: the whole process group');
-  killTree(child, 'linux', run, () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
-  killTree({ pid: 0, kill: () => { killed += 10; } }, 'darwin', run, kill); killTree({ pid: 0 }, 'win32', run, kill);
-  assert.deepEqual([calls.length, groups.length, killed], [1, 1, 1], 'never pid 0; the child alone when its group is gone');
-  const waited = []; // quit: spawnSync's shape (no .on), bounded so quit can't hang
-  killTree(child, 'win32', (...a) => { waited.push(a); return { status: 0 }; }, kill, true);
-  assert.deepEqual(waited, [[TK, ['/pid', '4242', '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5000 }]]);
-  const root = process.env.SystemRoot; process.env.SystemRoot = 'D:\\WINNT';
-  try { killTree(child, 'win32', run, kill); } finally { if (root === undefined) delete process.env.SystemRoot; else process.env.SystemRoot = root; }
-  assert.equal(calls.at(-1)[0], 'D:\\WINNT\\System32\\taskkill.exe', 'under %SystemRoot%');
+  const root = process.env.SystemRoot; // pinned: real Windows has its own (often C:\\WINDOWS)
+  const pin = (v) => { if (v === undefined) delete process.env.SystemRoot; else process.env.SystemRoot = v; };
+  try {
+    pin('C:\\Windows');
+    const calls = [], run = (...a) => { calls.push(a.slice(0, 2)); return { on: () => {} }; }, groups = [], kill = (pid, sig) => { groups.push([pid, sig]); };
+    let killed = 0; const child = { pid: 4242, kill: () => { killed++; } };
+    killTree(child, 'win32', run, kill);
+    const TK = 'C:\\Windows\\System32\\taskkill.exe'; // by full path, never a taskkill.exe in the worktree (#97)
+    assert.deepEqual([calls, killed], [[[TK, ['/pid', '4242', '/T', '/F']]], 0]);
+    killTree(child, 'darwin', run, kill);
+    assert.deepEqual(groups, [[-4242, 'SIGTERM']], 'POSIX: the whole process group');
+    killTree(child, 'linux', run, () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
+    killTree({ pid: 0, kill: () => { killed += 10; } }, 'darwin', run, kill); killTree({ pid: 0 }, 'win32', run, kill);
+    assert.deepEqual([calls.length, groups.length, killed], [1, 1, 1], 'never pid 0; the child alone when its group is gone');
+    const waited = []; // quit: spawnSync's shape (no .on), bounded so quit can't hang
+    killTree(child, 'win32', (...a) => { waited.push(a); return { status: 0 }; }, kill, true);
+    assert.deepEqual(waited, [[TK, ['/pid', '4242', '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5000 }]]);
+    pin('D:\\WINNT');
+    killTree(child, 'win32', run, kill);
+    assert.equal(calls.at(-1)[0], 'D:\\WINNT\\System32\\taskkill.exe', 'under %SystemRoot%');
+  } finally { pin(root); }
 });
 
 test('the command is found on the PATH and PATHEXT the session gets, not this process\'s', () => {
