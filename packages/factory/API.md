@@ -1,6 +1,6 @@
 # Factory local API
 
-`F ui [port]` serves the dashboard and a JSON API on `127.0.0.1` (`F` is `node ~/.claude/skills/software-factory/factory.mjs`). It prints one URL:
+`F ui [port]` serves the dashboard and a JSON API on `127.0.0.1` (`F` is `node <skill folder>/factory.mjs`: `~/.claude/skills/software-factory` for a linked install, or the plugin's `packages/factory`). It prints one URL:
 
 ```
 factory ui: http://127.0.0.1:<port>/?t=<token>
