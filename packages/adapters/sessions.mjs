@@ -30,8 +30,9 @@ export function subscribe(s, fn, from = 0) {
   return () => s.listeners.delete(fn);
 }
 
-// h: the harness adapter; opts go to h.launch(); cwd and env are the host's, never the request's.
-export function startSession(h, opts, { cwd, env = process.env, label = '', modules = {} }) {
+// h: the harness adapter; opts go to h.launch(); cwd and env are the host's, never the request's. resolve is for tests:
+// command()'s platform, env and file lookup (core/src/platform.ts).
+export function startSession(h, opts, { cwd, env = process.env, label = '', modules = {}, resolve }) {
   if (typeof h.launch !== 'function' || !(h.modes || []).includes(opts.mode)) throw new Error(`${h.id} cannot launch in ${opts.mode} mode`);
   const spec = h.launch(opts);
   const s = { id: crypto.randomUUID(), harness: h.id, mode: opts.mode, label, state: 'running', exit: null, started: new Date().toISOString(), events: [], next: 0, listeners: new Set(), stop: () => {} };
@@ -45,10 +46,10 @@ export function startSession(h, opts, { cwd, env = process.env, label = '', modu
     for (const x of old.slice(0, -KEEP_EXITED)) sessions.delete(x.id);
   };
   const fail = (e) => { emit(s, { type: 'error', message: e.message }); done(null); };
-  if (opts.mode === 'terminal') { terminal(s, spec, { cwd, env, modules, done }).catch(fail); return s; }
-  if (opts.mode === 'sdk') { sdk(s, spec, { cwd, modules, done }).catch(fail); return s; }
+  if (opts.mode === 'terminal') { terminal(s, spec, { cwd, env, modules, resolve, done }).catch(fail); return s; }
+  if (opts.mode === 'sdk') { sdk(s, spec, { cwd, env, modules, done }).catch(fail); return s; }
   let c;
-  try { c = command(spec.cmd, spec.args); } catch (e) { fail(e); return s; }
+  try { c = command(spec.cmd, spec.args, resolve); } catch (e) { fail(e); return s; }
   // spec.stdin carries the prompt: as an argument its space and # would need cmd.exe quoting, which a .cmd shim can't get
   const child = spawn(c.file, c.args, { cwd, env, stdio: [spec.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], windowsVerbatimArguments: !!c.windowsVerbatimArguments });
   if (spec.stdin !== undefined) child.stdin.on('error', () => { /* exited before reading it: reported by close */ }).end(spec.stdin);
@@ -66,15 +67,22 @@ export function startSession(h, opts, { cwd, env = process.env, label = '', modu
 
 const load = async (given, name, what) => {
   if (given) return given;
-  try { return await import(name); } catch { throw new Error(`${what} needs ${name}, which is not installed here`); }
+  try { return await import(name); } catch (e) {
+    if (['ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND'].includes(e.code)) throw new Error(`${what} needs ${name}, which is not installed here`);
+    throw new Error(`${what}: loading ${name} failed: ${e.message}`);
+  }
 };
 
 // An interactive harness in a pseudo-terminal (ConPTY on Windows). Output is raw terminal data for xterm.js; input and
 // resize come back through write() and resize().
-async function terminal(s, spec, { cwd, env, modules, done }) {
+async function terminal(s, spec, { cwd, env, modules, resolve, done }) {
+  let stopped = false;
+  s.stop = () => { stopped = true; }; // a stop while node-pty loads
   const pty = await load(modules.pty, 'node-pty', 'terminal mode');
-  const c = command(spec.cmd, spec.args);
-  const p = pty.spawn(c.file, c.args, { name: 'xterm-256color', cols: 120, rows: 32, cwd, env });
+  if (stopped) return done('stopped');
+  const c = command(spec.cmd, spec.args, resolve);
+  // A .cmd shim's cmd.exe line goes to node-pty as one string: given an array, node-pty quotes each argument again.
+  const p = pty.spawn(c.file, c.windowsVerbatimArguments ? c.args.join(' ') : c.args, { name: 'xterm-256color', cols: 120, rows: 32, cwd, env });
   s.write = (data) => p.write(data);
   s.resize = (cols, rows) => p.resize(cols, rows);
   s.stop = () => p.kill();
@@ -82,11 +90,17 @@ async function terminal(s, spec, { cwd, env, modules, done }) {
   p.onExit(({ exitCode }) => done(exitCode));
 }
 
-// The harness's SDK in this process (it runs its own CLI binary as a child). Each SDK message is one event.
-async function sdk(s, spec, { cwd, modules, done }) {
-  const mod = await load(modules.sdk, spec.module, 'sdk mode');
+// The harness's SDK in this process (it runs its own CLI binary as a child, with the host's env). Each SDK message is one
+// event. The exit code comes from the last result message: 0 for a success, 1 for an error subtype, is_error, or none.
+async function sdk(s, spec, { cwd, env, modules, done }) {
   const abortController = new AbortController();
-  s.stop = () => abortController.abort();
-  for await (const m of mod.query({ prompt: spec.prompt, options: { ...spec.options, cwd, abortController } })) emit(s, { type: 'event', data: m });
-  done(0);
+  s.stop = () => abortController.abort(); // before the await, so a stop while the SDK loads is kept
+  const mod = await load(modules.sdk, spec.module, 'sdk mode');
+  if (abortController.signal.aborted) return done('stopped');
+  let result;
+  for await (const m of mod.query({ prompt: spec.prompt, options: { ...spec.options, cwd, env, abortController } })) {
+    if (m?.type === 'result') result = m;
+    emit(s, { type: 'event', data: m });
+  }
+  done(result?.subtype === 'success' && !result.is_error ? 0 : 1);
 }

@@ -158,7 +158,7 @@ function fakePty() {
     return { onData: (f) => { data = f; }, onExit: (f) => { exit = f; }, write: (x) => { data(`echo:${x}`); if (x === 'exit\r') exit({ exitCode: 0 }); }, resize: (c, r) => { rec.size = [c, r]; }, kill: () => exit({ exitCode: null }) };
   } };
 }
-const fakeSdk = (fail) => ({ rec: {}, async *query(q) { this.rec.q = q; yield { type: 'system', subtype: 'init', session_id: 'sdk-1' }; if (fail) throw new Error('boom'); yield { type: 'result', subtype: 'success' }; } });
+const fakeSdk = (fail, result = { type: 'result', subtype: 'success' }) => ({ rec: {}, async *query(q) { this.rec.q = q; yield { type: 'system', subtype: 'init', session_id: 'sdk-1' }; if (fail) throw new Error('boom'); if (result) yield result; } });
 
 test('terminal mode: a pseudo-terminal from the host, with input and resize through /api/sessions/input', async () => {
   const pty = fakePty();
@@ -170,6 +170,10 @@ test('terminal mode: a pseudo-terminal from the host, with input and resize thro
   assert.equal(input({ id: s.id, cols: 100, rows: 30 }).status, 200);
   assert.deepEqual(pty.rec.size, [100, 30]);
   for (const bad of [{ id: s.id, data: 7 }, { id: s.id, cols: 0, rows: 5 }, { id: 'nope', data: 'x' }]) assert.equal(input(bad).status, 400, JSON.stringify(bad));
+  const writes = []; const w = s.write; s.write = (x) => writes.push(x);
+  assert.equal(input({ id: s.id, data: 'ls\r', cols: 0, rows: 5 }).status, 400);
+  assert.deepEqual([writes, pty.rec.size], [[], [100, 30]], 'a bad size applies none of the request');
+  s.write = w;
   const done = finished(s);
   assert.equal(input({ id: s.id, data: 'exit\r' }).status, 200);
   const ev = await done;
@@ -187,6 +191,35 @@ test('sdk mode: query() from the host, one event per message; a failure or a mis
   assert.deepEqual(bad.slice(-2).map((e) => [e.type, e.message ?? e.code]), [['error', 'boom'], ['exit', null]]);
   const nomod = { id: 'x', modes: ['sdk'], launch: () => ({ module: '@nope/none', prompt: 'p', options: {} }) };
   assert.match((await finished(startSession(nomod, { mode: 'sdk' }, { cwd: home }))).find((e) => e.type === 'error').message, /sdk mode needs @nope\/none, which is not installed/);
+});
+
+test('terminal on Windows: npm\'s claude.cmd goes to node-pty as one cmd.exe line, not quoted twice', async () => {
+  const pty = fakePty(), win = { platform: 'win32', env: { PATH: 'C:\\npm', PATHEXT: '.EXE;.CMD', ComSpec: 'C:\\Windows\\system32\\cmd.exe' }, isFile: (p) => p.toLowerCase() === 'c:\\npm\\claude.cmd' };
+  const s = startSession(claude, { mode: 'terminal', resume: 'abc' }, { cwd: home, env: stubEnv, modules: { pty }, resolve: win });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual([pty.rec.file, pty.rec.args], ['C:\\Windows\\system32\\cmd.exe', '/d /s /c ""C:\\npm\\claude.cmd" --resume abc"']);
+  s.stop(); await finished(s);
+});
+
+test('a stop while node-pty or the SDK loads is kept: nothing starts', async () => {
+  const pty = fakePty(), sdk = fakeSdk();
+  const t = startSession(claude, { mode: 'terminal' }, { cwd: home, modules: { pty } }); t.stop();
+  const q = startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { sdk } }); q.stop();
+  assert.deepEqual([(await finished(t)).at(-1).code, (await finished(q)).at(-1).code], ['stopped', 'stopped']);
+  assert.deepEqual([pty.rec.file, sdk.rec.q], [undefined, undefined]);
+});
+
+test('sdk mode: the host env reaches the SDK, and a failed result exits 1', async () => {
+  const sdk = fakeSdk(), env = { ...stubEnv, FACTORY_MARK: 'x' };
+  await finished(startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, env, modules: { sdk } }));
+  assert.equal(sdk.rec.q.options.env, env);
+  for (const [result, code] of [[{ type: 'result', subtype: 'success' }, 0], [{ type: 'result', subtype: 'error_max_budget_usd' }, 1], [{ type: 'result', subtype: 'success', is_error: true }, 1], [null, 1]]) {
+    assert.equal((await finished(startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { sdk: fakeSdk(false, result) } }))).at(-1).code, code, JSON.stringify(result));
+  }
+});
+
+test('launchSession() never starts a terminal session for a factory run: it would have no budget cap', () => {
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 9, mode: 'terminal' }, stubEnv, { pty: fakePty() }), /no budget cap/);
 });
 
 test('launchSession() passes the host modules on: an sdk run in the attached clone with the run budget and write mode', async () => {

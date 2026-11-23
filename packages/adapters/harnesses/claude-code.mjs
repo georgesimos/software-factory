@@ -67,6 +67,7 @@ export default {
       if (!prompt) throw new Error('a headless launch needs a prompt');
       return { cmd: 'claude', args: [...res, '-p', ...headlessArgs({ budget, write, stream: true })], stdin: prompt }; // the prompt on stdin: npm's claude.cmd can't take it as an argument
     }
+    // terminal: a person at the keyboard, so no budget or permission flags; launchSession() never starts one for a factory run
     if (mode === 'terminal') return { cmd: 'claude', args: [...res, ...(prompt ? [prompt] : [])] };
     if (mode === 'sdk') { // the Agent SDK's query(): the same pinned policy as headlessArgs, as SDK options (checked against 0.3.330)
       if (!prompt) throw new Error('an sdk launch needs a prompt');

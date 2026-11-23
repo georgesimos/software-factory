@@ -84,8 +84,11 @@ export const UI_ROUTES = {
   '/sessions/input': ({ id, data, cols, rows }) => { // keystrokes and size for a terminal session
     const s = getSession(id);
     if (!s?.write || s.state !== 'running') throw new Error('no running terminal session with that id');
-    if (data !== undefined) { if (typeof data !== 'string' || data.length > 65536) throw new Error('data must be a string up to 64 KB'); s.write(data); }
-    if (cols !== undefined || rows !== undefined) { if (![cols, rows].every((n) => Number.isInteger(n) && n > 0 && n <= 1000)) throw new Error('cols and rows must be 1-1000'); s.resize(cols, rows); }
+    const size = cols !== undefined || rows !== undefined; // all checked before any is applied
+    if (data !== undefined && (typeof data !== 'string' || data.length > 65536)) throw new Error('data must be a string up to 64 KB');
+    if (size && ![cols, rows].every((n) => Number.isInteger(n) && n > 0 && n <= 1000)) throw new Error('cols and rows must be 1-1000');
+    if (data !== undefined) s.write(data);
+    if (size) s.resize(cols, rows);
     return { ok: true };
   },
   '/sessions/stop': ({ id }) => { const s = getSession(id); if (s?.state !== 'running') throw new Error('no running session with that id'); s.stop(); return { ok: true }; },
@@ -103,6 +106,7 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
   const h = harnesses.find((y) => y.id === harness);
   if (!h?.launch) throw new Error(`harness ${String(harness).slice(0, 40)} cannot launch sessions`);
   if (!(h.modes || []).includes(mode)) throw new Error(`${h.id} modes are ${(h.modes || []).join(', ')}`);
+  if (mode === 'terminal') throw new Error('factory runs are headless or sdk: a terminal session has no budget cap or pinned policy'); // a person drives terminal mode
   const [owner, name, extra] = typeof repo === 'string' ? repo.split('/') : [];
   if (extra !== undefined || !LOGIN.test(owner || '') || !/^(?!\.\.?$)[\w.-]{1,100}$/.test(name || '')) throw new Error('repo must be owner/repo');
   const cwd = projects()[repo]?.path;
