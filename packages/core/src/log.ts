@@ -1,4 +1,3 @@
-// @ts-nocheck
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,13 +7,14 @@ import { runnerStamp } from './review.ts';
 import { withMeasured } from './burn.ts';
 import { derive, validateReview, validateUsage } from './derive.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
+import type { FactoryEvent, Run } from './types.ts';
 
 // The dashboard renderer, registered by packages/server when it loads. Core alone (no server) skips the render.
 export const dashboard = { render: () => undefined };
 
 // One mutable object, not `let`s: once code moves into packages, an importer cannot reassign a binding (docs/plans/split.md S1): where F reads and writes, and which binaries it runs.
 // gh/git are overridable only so the self-test can stub GitHub; projects: demo and test point it at fixture transcripts.
-export const io = { dir: process.env.FACTORY_DIR || path.join(os.homedir(), '.claude', 'factory'), gh: process.env.FACTORY_GH || 'gh', git: process.env.FACTORY_GIT || 'git', projects: null };
+export const io: { dir: string; gh: string; git: string; projects: string | null } = { dir: process.env.FACTORY_DIR || path.join(os.homedir(), '.claude', 'factory'), gh: process.env.FACTORY_GH || 'gh', git: process.env.FACTORY_GIT || 'git', projects: null };
 export const REAL_DIR = path.resolve(os.homedir(), '.claude', 'factory'); // at load: tests swap HOME in-process later
 // Every state-dir path goes through here, so no test (FACTORY_TEST) can read or write the real ~/.claude/factory.
 export const stateDir = () => {
@@ -23,16 +23,16 @@ export const stateDir = () => {
 };
 export const log = () => path.join(stateDir(), 'events.jsonl');
 export const factoryDir = () => stateDir();
-export const runDir = (run) => path.join(stateDir(), run.replace(/[^a-z0-9]+/gi, '-'));
-export function read() {
+export const runDir = (run: string) => path.join(stateDir(), run.replace(/[^a-z0-9]+/gi, '-'));
+export function read(): FactoryEvent[] {
   try {
     return fs.readFileSync(log(), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
   } catch (e) {
-    if (e.code === 'ENOENT') return [];
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw e;
   }
 }
-export function record(run, stage, status, payload = {}, cli) { // cli: {fallback?} when the orchestrator reports a step; in-process records (sync, demo) get no runner
+export function record(run: string, stage: string, status: string, payload: Partial<FactoryEvent> = {}, cli?: { fallback?: unknown }): FactoryEvent { // cli: {fallback?} when the orchestrator reports a step; in-process records (sync, demo) get no runner
   if (!run) throw new Error('missing run id');
   if (String(run).endsWith(':project')) throw new Error('project runs are recorded by "new", "issues create", "loop" and "retire", not by hand');
   if (!STAGES.includes(stage)) throw new Error(`unknown stage "${stage}" (${STAGES.join('|')})`);
@@ -47,11 +47,11 @@ export function record(run, stage, status, payload = {}, cli) { // cli: {fallbac
   }
   payload = validateUsage(payload);
   const me = stage === 'ship' ? null : harnesses.find((h) => h.current?.()); // the harness F runs inside, if any; lets the UI link back to the driving session
-  const ev = { ts: new Date().toISOString(), ...payload, ...(me ? { harness: me.id, sessionId: me.current(), cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback, payload.role)), run, stage, status };
+  const ev = { ts: new Date().toISOString(), ...payload, ...(me ? { harness: me.id, sessionId: (me.current as () => string)(), cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback, payload.role)), run, stage, status };
   fs.mkdirSync(stateDir(), { recursive: true });
   fs.appendFileSync(log(), JSON.stringify(ev) + '\n');
   if (TERMINAL.includes(status) || status === 'needs-info') { // a finished (or parked) run gives back its worktree
-    try { const c = cleanup(run); if (c.startsWith('kept')) console.error(`factory: ${c}`); } catch (e) { console.error(`factory: worktree cleanup failed: ${e.message}`); }
+    try { const c = cleanup(run); if (c.startsWith('kept')) console.error(`factory: ${c}`); } catch (e) { console.error(`factory: worktree cleanup failed: ${(e as Error).message}`); }
   }
   dashboard.render();
   return ev;
@@ -65,7 +65,7 @@ export function archive(days = 14) {
   if (!old.length) return { archived: 0 };
   const ids = new Set(old.map((r) => r.id));
   // events: the last five, notes left out (their events and texts) so they never crowd out how the run ended
-  const sessionEvents = (r) => r.events.filter((e) => e.sessionId).map((e) => ({ ts: e.ts, stage: e.stage, status: e.status, sessionId: e.sessionId }));
+  const sessionEvents = (r: Run) => r.events.filter((e) => e.sessionId).map((e) => ({ ts: e.ts, stage: e.stage, status: e.status, sessionId: e.sessionId }));
   fs.appendFileSync(archiveFile(), old.map((r) => JSON.stringify({ ...r, notes: undefined, events: r.events.filter((e) => e.stage !== 'note').slice(-5), sessionEvents: sessionEvents(r), archived: true })).join('\n') + '\n');
   const tmp = log() + '.tmp'; // write-then-rename so a crash never leaves a half log
   fs.writeFileSync(tmp, events.filter((e) => !ids.has(e.run)).map((e) => JSON.stringify(e)).join('\n') + (events.length > ids.size ? '\n' : ''));
@@ -76,4 +76,4 @@ export function archive(days = 14) {
 }
 export const archiveFile = () => path.join(stateDir(), 'archive.jsonl');
 export const sessionsFile = () => path.join(stateDir(), 'sessions.json');
-export const readArchive = () => { try { return fs.readFileSync(archiveFile(), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
+export const readArchive = (): Run[] => { try { return fs.readFileSync(archiveFile(), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };

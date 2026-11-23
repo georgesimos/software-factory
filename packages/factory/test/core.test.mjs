@@ -38,9 +38,10 @@ export function coreTest() {
   const capped = { iteration: CAP, axes: { [CAP]: ['code'] }, reviews: { [CAP]: { code: { verdict: 'failed', findings: [{ route: 'build' }] } } } };
   assert.equal(gate(capped).next, 'approve');
   // Untrusted author, red CI, big diff each force escalation.
-  const ok = { association: 'OWNER', iteration: 1, pr: 'x', axes: { 1: ['code'] }, reviews: { 1: { code: { verdict: 'passed' } } } };
+  const ok = { association: 'OWNER', iteration: 1, pr: 'x', reviewedSha: 's1', axes: { 1: ['code'] }, reviews: { 1: { code: { verdict: 'passed' } } } };
   const facts = { checks: 'pass', additions: 10, deletions: 0, files: ['src/a.ts', 'src/a.test.ts'] };
   assert.equal(decide(ok, facts).action, 'merge');
+  assert.deepEqual(decide({ ...ok, reviewedSha: undefined }, facts), { action: 'escalate', reasons: ['no reviewed commit recorded'] }); // never a merge decision merge() would then refuse
   assert.equal(decide({ ...ok, association: 'CONTRIBUTOR' }, facts).action, 'escalate');
   assert.equal(decide(ok, { ...facts, checks: 'none' }).action, 'escalate');
   assert.equal(decide(ok, { ...facts, additions: 400 }).action, 'escalate');

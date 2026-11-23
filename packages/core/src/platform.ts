@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import type { ExecFileSyncOptions, SpawnSyncOptions } from 'node:child_process';
+import type { ExecFileSyncOptions, ExecFileSyncOptionsWithStringEncoding, SpawnSyncOptions } from 'node:child_process';
 
 type Env = Record<string, string | undefined>;
 export interface Resolve { platform?: NodeJS.Platform; env?: Env; isFile?: (p: string) => boolean }
@@ -45,6 +45,8 @@ export function command(cmd: string, args: string[] = [], { platform = process.p
 
 const spawnOptions = <O extends { env?: NodeJS.ProcessEnv }>(c: Command, options: O): O =>
   ({ ...options, ...(c.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}), ...(c.env ? { env: { ...(options.env ?? process.env), ...c.env } } : {}) });
+export function exec(cmd: string, args: string[], options: ExecFileSyncOptionsWithStringEncoding): string;
+export function exec(cmd: string, args?: string[], options?: ExecFileSyncOptions): string | Buffer;
 export function exec(cmd: string, args: string[] = [], options: ExecFileSyncOptions = {}) {
   const c = command(cmd, args);
   return execFileSync(c.file, c.args, spawnOptions(c, options));

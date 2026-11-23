@@ -6,6 +6,7 @@ import { dashboard } from './log.ts';
 import { gh } from './github.ts';
 import { projects, projectsFile } from './workspace.ts';
 import { log, stateDir } from './log.ts';
+import type { Rule } from './types.ts';
 
 export function setAutoMerge(repo, on) {
   if (!projects()[repo]) throw new Error(`${repo} is not attached; run sync first`);
@@ -55,7 +56,7 @@ export function checkGuide(v, at) {
   }
 }
 // Project rule over global, per key. An expired rule stops applying (the global one, or the built-in, takes over) and warns.
-export function rules(repo, cfg = readSkills(), now = Date.now()) {
+export function rules(repo: string, cfg = readSkills(), now = Date.now()): { repo: string; policy: Record<string, Rule>; guide: Record<string, string[]>; expired: Rule[]; warnings: string[] } {
   const today = dayOf(now), policy = {}, expired = [], warnings = [];
   for (const scope of [...new Set([repo, 'default'])]) {
     for (const [key, x] of Object.entries(cfg[scope]?.rules || {})) {

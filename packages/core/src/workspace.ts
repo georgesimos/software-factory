@@ -7,14 +7,15 @@ import { exec, posixShell } from './platform.ts';
 import { gh, parseRun } from './github.ts';
 import { io, read, record, runDir, stateDir } from './log.ts';
 import { rules } from './rules.ts';
+import type { Project, WorktreeInfo } from './types.ts';
 
-export const git = (...args) => exec(io.git, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-export const ls = (d) => { try { return fs.readdirSync(d); } catch { return []; } };
+export const git = (...args: string[]): string => exec(io.git, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+export const ls = (d: string): string[] => { try { return fs.readdirSync(d); } catch { return []; } };
 export const projectsFile = () => path.join(stateDir(), 'projects.json');
-export const projects = () => { try { return JSON.parse(fs.readFileSync(projectsFile(), 'utf8')); } catch { return {}; } };
+export const projects = (): Record<string, Project> => { try { return JSON.parse(fs.readFileSync(projectsFile(), 'utf8')); } catch { return {}; } };
 export const saveProject = (repo, p) => { fs.mkdirSync(stateDir(), { recursive: true }); fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...projects()[repo], path: p, synced: projects()[repo]?.synced } }, null, 2)); };
 export const wtFile = (run) => path.join(runDir(run), 'worktree.json');
-export const wtInfo = (run) => { try { return JSON.parse(fs.readFileSync(wtFile(run), 'utf8')); } catch { return null; } };
+export const wtInfo = (run: string): WorktreeInfo | null => { try { return JSON.parse(fs.readFileSync(wtFile(run), 'utf8')); } catch { return null; } };
 // One git worktree per run, sharing the clone's object store (not a second clone). A resume recreates it from the pushed branch.
 export function worktree(run, repoPath) {
   const have = wtInfo(run);
@@ -37,7 +38,7 @@ export function worktree(run, repoPath) {
   return info;
 }
 // Removes a run's worktree and local branch, unless that would lose uncommitted or unpushed work.
-export function cleanup(run) {
+export function cleanup(run: string): string {
   const w = wtInfo(run);
   if (!w) return 'none';
   if (fs.existsSync(w.path)) {

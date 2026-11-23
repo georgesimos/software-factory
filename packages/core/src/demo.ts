@@ -55,7 +55,7 @@ export function demo() {
   g(R);
   ev(R, 'build', 'started');
   ev(R, 'build', 'passed');
-  ev(R, 'review', 'started', { axes: ['code', 'security', 'ux', 'ui', 'seo'] });
+  ev(R, 'review', 'started', { axes: ['code', 'security', 'ux', 'ui', 'seo'], sha: '3b9e41d07c2a' });
   pass(R, ['code', 'security', 'ux', 'ui', 'seo']);
   g(R);
   d(R, { checks: 'pass', additions: 84, deletions: 6, files: ['components/Footer.tsx', 'app/api/subscribe/route.ts', 'components/Footer.test.tsx'] });
@@ -79,7 +79,7 @@ export function demo() {
   ev(R, 'spec', 'passed', { spec: 'OAuth via existing auth lib, GitHub provider only.' });
   ev(R, 'build', 'started');
   ev(R, 'build', 'passed', { pr: 'https://github.com/acme/shop/pull/91', branch: 'factory/issue-44' });
-  ev(R, 'review', 'started', { axes: ['code', 'security', 'ux', 'ui'] });
+  ev(R, 'review', 'started', { axes: ['code', 'security', 'ux', 'ui'], sha: '8d02f6ea51b7' });
   pass(R, ['code', 'security', 'ux', 'ui'], true); // reported: copied from each subagent's usage
   g(R);
   d(R, { checks: 'pass', additions: 140, deletions: 12, files: ['lib/auth/github.ts', 'package.json'] });
@@ -113,7 +113,7 @@ export function demo() {
   g(R, { runner: who.verifier });
   ev(R, 'build', 'started', { runner: who.build });
   ev(R, 'build', 'passed', { runner: who.build });
-  ev(R, 'review', 'started', { axes: axes50 });
+  ev(R, 'review', 'started', { axes: axes50, sha: 'c47a19e2f305' });
   axes50.filter((a) => a !== 'a11y').forEach(ok);
   review('a11y', JSON.stringify({ axis: 'a11y', verdict: 'passed', findings: [{ severity: 'low', file: 'components/SizePicker.tsx', line: 31, issue: 'Focus ring uses the default outline instead of the focus token.', route: 'build' }] }));
   g(R, { runner: who.verifier });
