@@ -15,6 +15,8 @@ export interface Command { file: string; args: string[]; windowsVerbatimArgument
 // What cmd.exe treats as plain text: no & | < > ^ " % ! ( ) or whitespace. Empty arguments need quotes, so they fail too.
 const PLAIN = /^[\w\-.,:/\\=@+~]+$/;
 const envGet = (env: Env, key: string) => env[Object.keys(env).find((k) => k.toUpperCase() === key) ?? key];
+// A Windows system file by full path (%SystemRoot%\…): a bare name would be looked up in the current folder first (#97).
+export const systemRoot = (env: Env, ...parts: string[]) => path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', ...parts);
 const isFileSync = (p: string) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
 
 function findOnPath(cmd: string, env: Env, isFile: (p: string) => boolean, skip?: RegExp): string | undefined {
@@ -39,7 +41,7 @@ export function command(cmd: string, args: string[] = [], { platform = process.p
   }
   // /s strips the outer quotes, leaving "file" args; verbatim so Node adds no quoting of its own. The shim runs a bare `node`,
   // which cmd.exe would look for in the current folder (a run's worktree, maybe an untrusted clone) first: env turns that off.
-  return { file: envGet(env, 'COMSPEC') || path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', 'System32', 'cmd.exe'), args: ['/d', '/s', '/c', `""${file}" ${args.join(' ')}"`], windowsVerbatimArguments: true,
+  return { file: envGet(env, 'COMSPEC') || systemRoot(env, 'System32', 'cmd.exe'), args: ['/d', '/s', '/c', `""${file}" ${args.join(' ')}"`], windowsVerbatimArguments: true,
     env: { NoDefaultCurrentDirectoryInExePath: '1' } };
 }
 
@@ -87,7 +89,7 @@ export function opener(target: string, platform: NodeJS.Platform = process.platf
 }
 // The opener is spawned by the full path found, never by bare name (on Windows that is looked up in the current folder first).
 export function open(target: string, { platform = process.platform, env = process.env, isFile = isFileSync }: Resolve = {}, launch = spawn) {
-  const c = opener(target, platform), sys = path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', c.file);
+  const c = opener(target, platform), sys = systemRoot(env, c.file); // explorer.exe sits in %SystemRoot% itself
   const file = platform === 'win32' ? (isFile(sys) ? sys : findOnPath(c.file, env, isFile))
     : (envGet(env, 'PATH') || '').split(':').filter((d) => path.posix.isAbsolute(d)).map((d) => path.posix.join(d, c.file)).find(isFile);
   if (!file) throw new Error(`no ${c.file} here to open ${target}; open it yourself`);
@@ -129,7 +131,7 @@ export function cliShims(entry: string, platform: NodeJS.Platform = process.plat
 // shortcut: reg.exe writes the OEM code page and this reads UTF-8, so a non-ASCII folder never matches; that fails safe (the
 // folder counts as not on Path and the PowerShell line, which adds it only when missing, is printed). Upgrade: chcp 65001.
 export function windowsPath(env: Env = process.env, run: (file: string, args: string[], o: object) => string = execFileSync as never) {
-  const reg = path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', 'System32', 'reg.exe');
+  const reg = systemRoot(env, 'System32', 'reg.exe');
   const read = (key: string) => {
     let m;
     try { m = /^\s*Path\s+REG_(EXPAND_)?SZ\s+(.*)$/im.exec(run(reg, ['query', key, '/v', 'Path'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })); } catch { return ''; }
