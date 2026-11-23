@@ -4,6 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { read, record } from './log.ts';
 import { derive } from './derive.ts';
+import type { Deploy } from './types.ts';
 
 // packages/ship, when it sits next to the factory (the repo layout). Optional: without it F works, and deploy.preview=required escalates.
 const SHIP_FILE = path.join(import.meta.dirname, '..', '..', 'ship', 'ship.mjs');
@@ -22,7 +23,7 @@ export async function loadShipList() {
   catch (e) { ship.list = null; console.error(`factory: ship connectors failed to load: ${e.message}`); } // as loadShip: F ui and the app still start
 }
 // Records deploy state through record(). A failed lookup is reported in the result, never thrown: it must not break sync or merge.
-export function shipTrack(pairs) {
+export function shipTrack(pairs: { run: string; repo: string; sha?: string; path?: string }[]): { recorded: Deploy[]; errors?: { error: string }[] } | undefined {
   if (!ship.mod || !pairs.length) return undefined;
   try { return ship.mod.track(pairs, { runs: derive(read()), record }); } catch (e) { return { recorded: [], errors: [{ error: e.message }] }; }
 }
