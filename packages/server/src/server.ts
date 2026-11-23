@@ -21,7 +21,7 @@ import { logMetrics } from '../../core/src/metrics.ts';
 import { open } from '../../core/src/platform.ts';
 import { spawn } from 'node:child_process';
 import { getSession, killTree, listSessions, resolveSpec, startSession, stopAll, subscribe } from '../../adapters/sessions.mjs';
-import { claimLive, dropClaim, procStart, readClaim, takeClaim } from './claim.ts';
+import { claimLive, procStart, readClaim, running, takeClaim } from './claim.ts';
 
 // `F ui`: the dashboard on a loopback port, where the Skills sheet can save. Pure, so the self-test can drive it.
 export const same = (a, b) => typeof a === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -126,10 +126,13 @@ export const harnessReady = new Map(); // harness id -> when detect() and login(
 const SESSION_ID = /^\w[\w-]{0,99}$/; // a harness session id as an argument: plain, and never a flag (no leading '-')
 export function resumeFor(r, last) {
   if (!r || TERMINAL.includes(r.outcome) || !last || last.state === 'running' || last.exit === 0) return undefined;
-  const at = Date.parse(r.events.at(-1)?.ts || 0), from = Date.parse(last.started), to = Date.parse(last.ended) + 5_000; // its last lines land just after
   const v = last.harnessSession;
-  return at >= from && at <= to && SESSION_ID.test(v || '') ? v : undefined;
+  return covers(r, last) && SESSION_ID.test(v || '') ? v : undefined;
 }
+const covers = (r, x) => { // the run's last event falls inside x's life; its last lines land just after
+  const at = Date.parse(r?.events?.at(-1)?.ts || 0);
+  return at >= Date.parse(x.started) && at <= Date.parse(x.ended) + 5_000;
+};
 // The factory's own sessions: a person's terminal on the same run label never stands in for the run's last session.
 const factorySessions = (label) => listSessions().filter((x) => x.mode !== 'terminal' && x.label === label);
 // Runs a POST /api/sessions would resume now: active, and last written by a session here that stopped or crashed.
@@ -168,7 +171,7 @@ export function terminalSession({ harness = 'claude-code', repo, issue, resume }
     if (listSessions().some((x) => x.state === 'running' && (x.label === from.label || x.harnessSession === resume))) throw new Error(`${from.label} already has a running session`); // one claude per harness session
     cwd = getSession(from.id).cwd ?? cwd; label = from.label;
   }
-  const start = () => startSession(h, { mode: 'terminal', resume }, { cwd, env, label, modules });
+  const start = (onPid?: (pid: number) => void) => startSession(h, { mode: 'terminal', resume }, { cwd, env, label, modules, onPid });
   return label.includes('#') ? claimed(label, 'terminal', start) : start(); // on a run: no F start or other app alongside
 }
 // The checks every factory start passes (#25), for a live session here (launchSession) and a detached run (startRun).
@@ -182,10 +185,7 @@ function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue },
   const cwd = clone(repo);
   if (!Number.isInteger(issue) || issue < 1 || issue > 1e9) throw new Error('issue must be a positive issue number');
   const id = `${repo}#${issue}`, r = derive(read())[id];
-  let held = readClaim(id);
-  // A finished run's claim is done with, unless its process is still finishing; on Windows (no start time) a reused pid can't
-  // be told apart, so there the run's outcome wins.
-  if (held && r && TERMINAL.includes(r.outcome) && (!held.since || !claimLive(held))) { dropClaim(id, held); held = undefined; }
+  const held = readClaim(id); // a stale one is taken over by the launcher's takeClaim(); a live one refuses, finished run or not
   if (r?.imported) throw new Error(`${id} is imported: never run claude -p in its checkout`);
   if (['escalated', 'rejected'].includes(r?.outcome)) throw new Error(`${id} is ${r.outcome}: it needs a human, not a new run`); // the factory handed it over
   // F archive drops a run from the log, not from history: a stray later event (a sync, a step) doesn't reopen it. Only a new
@@ -195,11 +195,13 @@ function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue },
   if (gone) throw new Error(`${id} is ${gone.outcome} (archived): it needs a human, not a new run`);
   // Any running session on the run, a person's terminal included: two harnesses would share one session or worktree.
   if (listSessions().some((x) => x.label === id && x.state === 'running')) throw new Error(`${id} already has a running session`); // before its first event lands
-  if (held && claimLive(held)) throw new Error(`${id} already has a running session (${held.launcher}${held.pid ? `, pid ${held.pid}` : ''})`); // another process's
+  if (held && claimLive(held)) throw running(id, held); // another process's, or a harness this app left running
   // A run left active by a session that was stopped or crashed (here, or an F start whose process is gone) resumes that
   // harness session instead of staying stuck.
-  const here = factorySessions(id).at(-1), there = detachedLast(id);
-  const resume = resumeFor(r, there && !(Date.parse(here?.started) > Date.parse(there.started)) ? there : here); // the newer one
+  // Here, the last session (one that exited 0 since refuses, as before); of F start's logs, the newest that wrote the run's
+  // last event, so a later start that died before writing doesn't hide it. The newer of the two.
+  const here = factorySessions(id).at(-1), there = detachedRuns(id).find((x) => covers(r, x));
+  const resume = resumeFor(r, there && !(Date.parse(here?.started) > Date.parse(there.started)) ? there : here);
   if (r && !TERMINAL.includes(r.outcome) && !resume) throw new Error(`${id} already has an active run (${r.outcome || r.stage})`);
   const b = r ? budget(r) : null;
   if (b?.over) throw new Error(`run budget exceeded ${budgetWhy(b)}`);
@@ -214,22 +216,40 @@ function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue },
 }
 export function launchSession(x, env = process.env, modules = hostModules) {
   const { h, mode, cwd, id, resume, budget: left } = launchGate(x, modules);
-  return claimed(id, 'session', () => startSession(h, { mode, prompt: `/software-factory ${id}`, resume, budget: left, write: true }, { cwd, env, label: id, modules }));
+  return claimed(id, 'session', (onPid) => startSession(h, { mode, prompt: `/software-factory ${id}`, resume, budget: left, write: true }, { cwd, env, label: id, modules, onPid }));
 }
-// A session in this process holds the run's claim (this process's pid) until it exits; a failed start lets go at once.
-function claimed(id: string, launcher: string, start: () => { id: string }) {
-  const cl = takeClaim(id, launcher, { pid: process.pid, since: procStart(process.pid) });
-  try { const s = start(); subscribe(s, (e) => { if (e.type === 'exit') cl.release(); }); return s; } catch (e) { cl.release(); throw e; }
+// A session started here holds the run's claim until it exits, under its harness's pid and start time (a pty's pid; the
+// SDK's is this process), so a harness this app leaves behind when killed still holds it. A failed start lets go at once;
+// a pid whose start time can't be read (POSIX) is stopped, as the claim couldn't tell it from a reused pid later.
+function claimed(id: string, launcher: string, start: (onPid: (pid: number) => void) => Session) {
+  const cl = takeClaim(id, launcher); // pid 0 until the spawn
+  let s: Session | undefined, bad: Error | undefined;
+  const onPid = (pid: number) => {
+    try { cl.update({ pid, since: startTime(pid) }); } catch (e) { bad = e as Error; s?.stop(); }
+  };
+  try { s = start(onPid); } catch (e) { cl.release(); throw e; }
+  subscribe(s, (e) => { if (e.type === 'exit') cl.release(); });
+  if (bad) { s.stop(); throw bad; } // a headless spawn reports its pid before start() returns
+  return s;
 }
-// The newest F start run, as resumeFor() reads a stopped session, from its log in the run's folder (not the claim, which a
-// later launcher may have taken over): started at the time in its name, ended at its last write, its harness session from
-// the first init line, and exit 0 when its last line is a successful result. Only asked once no live claim holds the run.
+const startTime = (pid: number) => {
+  const since = procStart(pid);
+  if (!since && process.platform !== 'win32') throw new Error(`could not read the start time of pid ${pid} (ps): stopped it`);
+  return since;
+};
+type Session = { id: string; stop: () => void };
+// F start's runs, newest first, as resumeFor() reads a stopped session, from their logs in the run's folder (not the claim,
+// which a later launcher may have taken over): started at the time in the name, ended at the last write, the harness
+// session from the first init line, exit 0 when the last line is a successful result. Those with no session id are left out.
+// Only asked once no live claim holds the run.
 const LOG = /^headless-(\d{4}-\d\d-\d\dT\d\d)-(\d\d)-(\d\d)-(\d{3}Z)\.log$/;
-function detachedLast(id: string) {
-  const dir = runDir(id);
-  const name = (() => { try { return fs.readdirSync(dir).filter((f) => LOG.test(f)).sort().at(-1); } catch { return undefined; } })();
-  if (!name) return undefined;
-  const [, d, mm, ss, ms] = LOG.exec(name)!, file = path.join(dir, name), cap = 64 * 1024;
+function detachedRuns(id: string) {
+  let names: string[] = [];
+  try { names = fs.readdirSync(runDir(id)).filter((f) => LOG.test(f)).sort().reverse().slice(0, 20); } catch { /* no folder */ }
+  return names.map((n) => detachedRun(path.join(runDir(id), n))).filter((x) => x?.harnessSession);
+}
+function detachedRun(file: string) {
+  const [, d, mm, ss, ms] = LOG.exec(path.basename(file))!, cap = 64 * 1024;
   try {
     const size = fs.statSync(file).size, fd = fs.openSync(file, 'r'), buf = Buffer.alloc(Math.min(size, cap));
     try {
@@ -261,7 +281,7 @@ export function startRun(issue, env = process.env, run = spawn) {
       child.on('error', () => { /* no pid: refused below */ });
     } finally { fs.closeSync(stdin); fs.closeSync(out); }
     if (!child.pid) throw new Error(`${spec.cmd} did not start`);
-    cl.update({ pid: child.pid, since: procStart(child.pid), log });
+    cl.update({ pid: child.pid, since: startTime(child.pid), log }); // an unreadable start time fails the start: the child is killed below
   } catch (e) { // nothing left behind: no claim, no empty log, no child the claim doesn't name
     if (child?.pid) killTree(child);
     cl.release();

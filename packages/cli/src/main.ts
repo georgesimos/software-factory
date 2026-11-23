@@ -18,6 +18,7 @@ import { issuesCreate, loop, newProject, projectStatus, queue, retireIdea } from
 import { loadShip, loadShipList, ship } from '../../core/src/ship.ts';
 import { claudeDir, onboardState, onboardText, setShip } from '../../core/src/onboard.ts';
 import { artifact, render, startRun, ui } from '../../server/src/server.ts';
+import { unclaim } from '../../server/src/claim.ts';
 import { rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
 import { note, takeNotes } from '../../core/src/notes.ts';
 import { withMeasured } from '../../core/src/burn.ts';
@@ -183,6 +184,9 @@ export async function main(argv) {
         out(installCli(path.join(import.meta.dirname, '..', '..', 'factory', 'factory.mjs'), { home: os.homedir() })); break;
       case 'ui': await ui(Number(run) || 0); break;
       case 'start': out(startRun(run)); break; // start owner/repo#N: a detached headless run in the attached clone, as POST /api/runs
+      case 'unclaim': // a person clears a run's claim (#25); CLI only, never an API route or a button
+        if (!/^\w[\w.-]*\/\w[\w.-]*#\d{1,10}$/.test(run || '') || rest.some((x) => x !== '--force')) throw new Error('usage: unclaim <owner/repo#N> [--force]');
+        out(unclaim(run, rest.includes('--force'))); break;
       case 'demo': // never pollute the real log with fixtures
         if (!process.env.FACTORY_DIR) io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-demo-'));
         console.log(demo()); break;
@@ -214,6 +218,7 @@ export async function main(argv) {
   skills catalog [owner/repo...]          every runner on this machine: built-in, harness tools, global, project, your briefs
   ui     [port]                           serve the dashboard on 127.0.0.1 with a token, so the Skills sheet and setup wizard can save
   start  <owner/repo#N>                   start the factory on an issue: a detached headless claude in the attached clone, logging to the run's folder; prints {pid, log}
+  unclaim <owner/repo#N> [--force]        clear a run's claim.json when the process it names is gone (refused while it may live, unless --force)
   rules  <owner/repo>                     print the policy rules, warnings and per-step guidance that apply
   rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, deploy.preview required|advisory|off, artifact https://claude.ai/artifact/<id> (owner/repo only), project.budgetUsd x, project.maxIssuesPerSession n, guide.<step> "text"
   rules unset <owner/repo|default> <key> [--reason "…"]  remove one (back to the global rule, or the built-in)
