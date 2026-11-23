@@ -22,6 +22,7 @@ description: Attach a GitHub repo to a software factory (importing open PRs and 
 In the commands below:
 
 - `F` means `node "${CLAUDE_SKILL_DIR}/factory.mjs"`. Claude Code fills in this skill's folder, which is the same command for a plugin install and a linked `~/.claude/skills/software-factory`. In Codex, which does not fill it in, `F` means `node ~/.agents/skills/software-factory/factory.mjs` (where `F install-skill --codex` links it); use that path wherever this file says `${CLAUDE_SKILL_DIR}`.
+  A human who ran `F install-cli` can type `factory` for `F` in their terminal. In a session, keep the full form: it always points at this copy, while a `factory` on PATH may be an older one.
 - `RUN` is `owner/repo#N`.
 - `DIR` is `$(F dir RUN)`.
 - `WT` is the run's worktree path, as printed by `F worktree`.
