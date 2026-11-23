@@ -1,0 +1,64 @@
+import type { Run } from '@software-factory/design-system';
+import { cleanup, render, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+import { RunDetail } from '../src/RunDetail.tsx';
+
+const decision = (r: Partial<Run>) => {
+  render(<RunDetail run={{ id: 'acme/app#1', title: 'One', stage: 'approve', ...r }} cap={3} costCap={5} />);
+  return screen.getByRole('heading', { name: 'Decision' }).parentElement!.textContent;
+};
+
+describe('RunDetail decision', () => {
+  it('shows Closed, not Deciding, for a closed run with a decision', () => {
+    expect(decision({ outcome: 'closed', decision: { reasons: ['Issue closed upstream.'] } } as Partial<Run>)).toMatch(/^DecisionClosedIssue closed upstream\.$/i);
+  });
+  it('escalated without a decision record', () => {
+    expect(decision({ outcome: 'escalated' })).toMatch(/Escalated to a human/);
+  });
+  it('closed without a decision record', () => {
+    expect(decision({ outcome: 'closed' })).toMatch(/Closed/);
+  });
+  it('says Merging or Escalating for an in-progress run with a decision, and keeps repeated reasons', () => {
+    expect(decision({ outcome: 'in-progress', decision: { action: 'merge', reasons: ['same', 'same'] } })).toMatch(/Merging.*samesame/);
+    cleanup();
+    expect(decision({ outcome: 'in-progress', decision: { action: 'escalate', reasons: ['x'] } })).toMatch(/Escalating/);
+  });
+
+  it('shows intake rejection reasons given as a reasons array', () => {
+    expect(decision({ outcome: 'rejected', events: [{ stage: 'intake', status: 'rejected', reasons: ['Out of scope.', 'Duplicate of #3.'] }] }))
+      .toMatch(/Rejected at intakeOut of scope\.Duplicate of #3\./);
+  });
+
+  it('takes split reasons from the split event', () => {
+    expect(decision({ outcome: 'split', children: ['a/b#2', 'a/b#3'], events: [{ stage: 'intake', status: 'split', reasons: ['Two features.'] }] }))
+      .toMatch(/Split into 2 runsTwo features\./);
+  });
+
+  it('links the revert PR and skips an empty reason', () => {
+    expect(decision({ outcome: 'merged', reverted: { pr: 'https://github.com/a/b/pull/9' } })).toMatch(/Reverted · revert PR$/);
+    expect(screen.getByRole('link', { name: 'revert PR' }).getAttribute('href')).toBe('https://github.com/a/b/pull/9');
+  });
+  it('says "several" for a split with no children listed', () => {
+    expect(decision({ outcome: 'split', children: [] })).toMatch(/Split into several runs/);
+  });
+});
+
+describe('RunDetail cost', () => {
+  const facts = (r: Partial<Run> & { burn?: unknown }, costCap = 5) => {
+    render(<RunDetail run={{ id: 'acme/app#1', stage: 'build', ...r } as Run} cap={3} costCap={costCap} />);
+    return screen.getByRole('heading', { name: 'Run' }).parentElement!.textContent;
+  };
+
+  it('prefers measured burn over reported cost and tokens', () => {
+    const t = facts({ costUsd: 0.9, tokens: 1000, burn: { total: { costUsd: 4.8, tokens: 2_400_000 } } });
+    expect(t).toMatch(/\$4\.80of \$5\.00 cap/);
+    expect(t).not.toMatch(/\$0\.90/);
+    expect(t).toMatch(/2\.4M/);
+  });
+
+  it('falls back to reported numbers, and drops the meter when the cap is 0', () => {
+    const t = facts({ costUsd: 0.9 }, 0);
+    expect(t).toMatch(/\$0\.90/);
+    expect(t).not.toMatch(/cap/);
+  });
+});
