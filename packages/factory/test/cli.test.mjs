@@ -124,7 +124,7 @@ export function harnessTest(cli) {
       const hl = h.headless?.();
       if (hl) assert.ok(typeof hl.cmd === 'string' && Array.isArray(hl.args), at('headless shape'));
       if (h.launch) for (const mode of h.modes) { // optional: only what to run, never a spawn (packages/adapters/sessions.mjs runs it)
-        const l = h.launch({ mode, prompt: 'p' });
+        const l = h.launch({ mode, ...(mode !== 'terminal' && { prompt: 'p' }) }); // terminal takes no prompt (HARNESSES.md)
         assert.ok(typeof l.cmd === 'string' ? Array.isArray(l.args) && l.args.every((a) => typeof a === 'string') : typeof l.module === 'string' && typeof l.prompt === 'string', at(`launch ${mode} shape`));
       }
     });
