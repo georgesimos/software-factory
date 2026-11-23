@@ -15,6 +15,12 @@ export async function loadShip() {
   if (!fs.existsSync(file)) return null;
   try { const m = await import(pathToFileURL(file).href); await m.ready(); return m; } catch (e) { console.error(`factory: ship harness failed to load: ${e.message}`); return null; }
 }
+// mod plus its connector list, for onboard and ui (F ui and the desktop app). Loads once.
+export async function loadShipList() {
+  ship.mod ??= await loadShip();
+  try { if (ship.mod) ship.list = (await ship.mod.ready()).connectors.map((c) => ({ id: c.id, kind: c.kind, label: c.label || c.id })); }
+  catch (e) { ship.list = null; console.error(`factory: ship connectors failed to load: ${e.message}`); } // as loadShip: F ui and the app still start
+}
 // Records deploy state through record(). A failed lookup is reported in the result, never thrown: it must not break sync or merge.
 export function shipTrack(pairs) {
   if (!ship.mod || !pairs.length) return undefined;

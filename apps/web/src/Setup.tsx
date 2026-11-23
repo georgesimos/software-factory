@@ -36,7 +36,8 @@ export function SetupWizard({ open, onClose, ...p }: Props) {
   const blocked = useRef<() => boolean>(() => false); // Escape, the backdrop and Close warn about unsaved rules like the steps do
   return (
     <Dialog open={open} onClose={() => { if (!blocked.current()) onClose(); }} title="Set up the factory" className="web-ob"
-      description={p.token ? <><Dot tone="ok" /> Live: saves through F ui</> : <><Dot tone="idle" /> Read-only page: each step shows the command to run</>}>
+      description={<>{p.token ? <><Dot tone="ok" /> Live: saves through F ui</> : <><Dot tone="idle" /> Read-only page: each step shows the command to run</>}
+        {p.data.fMissing ? <span className="web-ob-note" role="note"> The commands below need the factory installed: in Claude Code, <code>/plugin install software-factory@software-factory</code> (after <code>/plugin marketplace add georgesimos/software-factory</code>), or <code>F install-skill</code> from a clone.</span> : null}</>}>
       <Wizard {...p} ob={ob} setOb={setOb} error={error} check={check} close={onClose} blocked={blocked} />
     </Dialog>
   );
