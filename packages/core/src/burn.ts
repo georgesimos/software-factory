@@ -77,14 +77,15 @@ export function measure(events) {
 // event, that stage; otherwise the stage the next event closes. Messages before a session's first event are not factory
 // work; those after its last event wait for the next event to close their window. Each subagent transcript goes whole to the slot of its first message.
 // shortcut: anything else the session does between two factory events counts too; drive one run per session if that skews it.
-export function withMeasured(runs, events, by = measure(events)) {
-  if (!Object.keys(by).length) return runs;
+// Calls onRow(slot, row, file) for each transcript message that falls to a run the factory drove; slot: {run, stage, iteration, harness}.
+// archived: the archive summaries, whose session-event stubs still close windows.
+export function attribute(runs, events, by, onRow, archived = readArchive()) {
   const iter = {}, slots = {};
   // Archived runs keep stubs of their session events so their windows still close; their messages are then dropped (not in runs).
-  const stubs = readArchive().flatMap((a) => (a.sessionEvents || []).map((e) => ({ ...e, run: a.id })));
+  const stubs = archived.flatMap((a) => (a.sessionEvents || []).map((e) => ({ ...e, run: a.id })));
   for (const e of [...events, ...stubs]) {
     if (e.stage === 'build' && e.status === 'started') iter[e.run] = (iter[e.run] || 0) + 1;
-    if (e.sessionId && by[e.sessionId]) (slots[e.sessionId] ||= []).push({ t: Date.parse(e.ts), run: e.run, stage: e.stage, status: e.status, iteration: iter[e.run] || 0 });
+    if (e.sessionId && by[e.sessionId]) (slots[e.sessionId] ||= []).push({ t: Date.parse(e.ts), run: e.run, stage: e.stage, status: e.status, iteration: iter[e.run] || 0, harness: e.harness });
   }
   const slot = (list, t) => {
     let lo = 0, hi = list.length;
@@ -92,21 +93,27 @@ export function withMeasured(runs, events, by = measure(events)) {
     const prev = list[lo - 1], next = list[lo];
     return !prev || !next ? null : prev.status === 'started' ? prev : next;
   };
-  const got = {};
   for (const [sid, filesOf] of Object.entries(by)) {
     const list = (slots[sid] || []).sort((a, b) => a.t - b.t), seen = new Set();
     for (const f of filesOf) {
-      const first = f.sub && f.rows.length ? slot(list, Math.min(...f.rows.map((x) => Date.parse(x[0])))) : null;
-      for (const [ts, id, model, ...rest] of f.rows) {
-        if (seen.has(id)) continue; // streaming writes one line per content block, all with the same usage
-        seen.add(id);
-        const at = f.sub ? first : slot(list, Date.parse(ts));
+      const first = f.sub && f.rows.length ? slot(list, f.rows.reduce((m, x) => Math.min(m, Date.parse(x[0])), Infinity)) : null; // no spread: a long transcript would overflow the stack
+      for (const row of f.rows) {
+        if (seen.has(row[1])) continue; // streaming writes one line per content block, all with the same usage
+        seen.add(row[1]);
+        const at = f.sub ? first : slot(list, Date.parse(row[0]));
         if (!at || !runs[at.run] || runs[at.run].imported) continue; // the factory did not drive an imported run: sync's events only close windows
-        const t = rest.slice(0, 5);
-        addBurn((got[at.run] ||= burnOf()), { stage: at.stage, iteration: at.iteration, axis: f.sub ? f.axis : null }, t.reduce((s, n) => s + n, 0), costOf(model, t, rest[5]), t[2], model, f.sub);
+        onRow(at, row, f);
       }
     }
   }
+}
+export function withMeasured(runs, events, by = measure(events), archived) { // archived: undefined reads the archive, only once there is something to attribute
+  if (!Object.keys(by).length) return runs;
+  const got = {};
+  attribute(runs, events, by, (at, [, , model, ...rest], f) => {
+    const t = rest.slice(0, 5);
+    addBurn((got[at.run] ||= burnOf()), { stage: at.stage, iteration: at.iteration, axis: f.sub ? f.axis : null }, t.reduce((s, n) => s + n, 0), costOf(model, t, rest[5]), t[2], model, f.sub);
+  }, archived);
   for (const [id, b] of Object.entries(got)) {
     const reported = runs[id].burn;
     finishBurn(b);

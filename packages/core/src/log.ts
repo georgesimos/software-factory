@@ -37,7 +37,8 @@ export function record(run, stage, status, payload = {}, cli) { // cli: {fallbac
   if (String(run).endsWith(':project')) throw new Error('project runs are recorded by "new", "issues create", "loop" and "retire", not by hand');
   if (!STAGES.includes(stage)) throw new Error(`unknown stage "${stage}" (${STAGES.join('|')})`);
   if (!STATUSES.includes(status)) throw new Error(`unknown status "${status}" (${STATUSES.join('|')})`);
-  if (status === 'merged' && derive(read())[run]?.decision?.action !== 'merge') throw new Error('refusing "merged": the recorded decision is not merge');
+  const prior = status === 'merged' ? derive(read())[run] : undefined; // sync records a human's merge of an escalated run (#21); F event owns neither
+  if (status === 'merged' && prior?.decision?.action !== 'merge' && !(stage === 'approve' && payload.by === 'human' && prior?.outcome === 'escalated')) throw new Error('refusing "merged": the recorded decision is not merge');
   if (stage === 'review' && payload.axis !== undefined) validateReview(run, payload, status);
   if (stage === 'review' && payload.role !== undefined) {
     if (payload.role !== 'verifier' || payload.axis !== undefined) throw new Error('role must be "verifier", without an axis');
