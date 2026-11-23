@@ -60,7 +60,7 @@ export function uiHandle({ method, url, headers = {}, body = '' }, { token, port
     if (!same(headers['x-factory-token'], token)) return reply(403, { error: 'missing or wrong token' });
     if (headers.origin !== undefined && !hosts.some((h) => headers.origin === `http://${h}`)) return reply(403, { error: 'cross-origin request' });
     if (route === '/runs') return reply(200, { runs: runsData() });
-    if (route === '/state') return reply(200, pageData()); // what page() embeds, for apps/web; never the token
+    if (route === '/state') return reply(200, pageData({ resumable: resumable() })); // what page() embeds, for apps/web; never the token
     if (route === '/sessions') return reply(200, { sessions: listSessions() });
     const ev = route.match(/^\/sessions\/([0-9a-f-]{36})\/events$/);
     if (ev) { // server-sent events; ui() writes the stream. EventSource can't send x-factory-token, so clients read it with fetch.
@@ -138,6 +138,11 @@ export function resumeFor(r, last) {
   const v = last.harnessSession;
   return at >= from && at <= to && /^[\w-]{1,100}$/.test(v || '') ? v : undefined; // plain: it becomes an argument
 }
+// Runs a POST /api/sessions would resume now: active, and last written by a session here that stopped or crashed.
+export function resumable() {
+  const runs = derive(read()), labels = [...new Set(listSessions().map((x) => x.label))];
+  return labels.filter((id) => resumeFor(runs[id], listSessions().filter((x) => x.label === id).at(-1)));
+}
 // What the run may still spend: COST_CAP less the dollars, and less the share of TOKEN_CAP used, for usage with no price.
 export const budgetLeft = (b) => b ? Math.min(COST_CAP - b.usd, COST_CAP * (1 - b.tokens / TOKEN_CAP)) : COST_CAP;
 // node-pty and the SDK for terminal and sdk sessions, keyed by package name. Empty until a host that ships them (apps/desktop,
@@ -158,6 +163,7 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
   if (!Number.isInteger(issue) || issue < 1 || issue > 1e9) throw new Error('issue must be a positive issue number');
   const id = `${repo}#${issue}`, r = derive(read())[id];
   if (r?.imported) throw new Error(`${id} is imported: never run claude -p in its checkout`);
+  if (['escalated', 'rejected'].includes(r?.outcome)) throw new Error(`${id} is ${r.outcome}: it needs a human, not a new run`); // the factory handed it over
   const mine = listSessions().filter((x) => x.label === id);
   if (mine.some((x) => x.state === 'running')) throw new Error(`${id} already has a running session`); // before its first event lands
   // A run left active by a session that was stopped or crashed here resumes that harness session instead of staying stuck.

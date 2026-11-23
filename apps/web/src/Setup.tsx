@@ -94,10 +94,11 @@ function Wizard({ data, token, onSkills, refresh, openSkills, ob, setOb, error, 
       {['default', ...projects].map((s) => <Button key={s} size="sm" variant="ghost" aria-pressed={s === scope} onClick={() => pickScope(s)}>{s === 'default' ? 'All projects' : s}</Button>)}
     </div>
   );
-  const ctx: StepCtx = { data, ob, live, F, scope, scopePicker, write, fail, setStatus, setDirty, setScope, onSkills, openSkills, token, S };
+  const clean = (d: boolean) => { setDirty(d); if (!d) setWarned(false); }; // after a save, later edits are guarded again
+  const ctx: StepCtx = { data, ob, live, F, scope, scopePicker, write, fail, setStatus, setDirty: clean, setScope, onSkills, openSkills, token, S };
   const key = STEPS[step]![0];
   const body = live && !ob ? (error ? <><p className="web-sk-err">{error}</p><Button onClick={check}>Check again</Button></> : <p className="web-ob-lead">Checking this machine: harness CLIs, logins and local clones…</p>)
-    : key === 'ai' ? <Ai {...ctx} check={check} /> : key === 'repo' ? <Repo {...ctx} /> : key === 'ship' ? <Ship {...ctx} /> : key === 'flow' ? <Flow {...ctx} /> : key === 'rules' ? <Rules key={scope} {...ctx} /> : <Start {...ctx} />;
+    : key === 'ai' ? <Ai {...ctx} check={check} /> : key === 'repo' ? <Repo {...ctx} /> : key === 'ship' ? <Ship key={scope} {...ctx} /> : key === 'flow' ? <Flow {...ctx} /> : key === 'rules' ? <Rules key={scope} {...ctx} /> : <Start {...ctx} />;
   const last = step === STEPS.length - 1;
   return (
     <div className="web-ob-wrap">
@@ -201,16 +202,16 @@ function Repo({ data, ob, live, F, write, setScope, fail }: StepCtx) {
 }
 
 function Ship({ data, ob, live, F, scope, scopePicker, write }: StepCtx) {
-  const shipOf = (live ? ob?.ship : data.onboard) ?? {}, [cur, setCur] = useState<string[]>(shipOf[scope]?.ship ?? []);
-  useEffect(() => setCur(shipOf[scope]?.ship ?? []), [scope]); // eslint-disable-line react-hooks/exhaustive-deps
+  const shipOf = (live ? ob?.ship : data.onboard) ?? {}, [cur, setCur] = useState<string[]>(shipOf[scope]?.ship ?? []); // keyed by scope
+  const stored = useRef(cur); // the last list the server confirmed
   const hooks = (live ? ob?.hooks : data.hooks) ?? {}, conns = hooks.connectors as { kind?: string; label?: string }[] | { error?: string } | undefined;
   const toggle = async (k: string, on: boolean) => {
     const next = SHIP.map(([x]) => x).filter((x) => (x === k ? on : cur.includes(x)));
-    const prev = cur;
     setCur(next);
     if (!live) return;
     const x = await write('/onboard/ship', { scope, ship: next }, `Saved: ${next.join(', ') || 'nothing'} for ${where(scope)}.`);
-    setCur(x ? x.ship?.[scope]?.ship ?? next : prev); // a refused write puts the boxes back as stored
+    if (x) stored.current = x.ship?.[scope]?.ship ?? next;
+    setCur(stored.current); // a refused write puts the boxes back as last stored
   };
   return (
     <>

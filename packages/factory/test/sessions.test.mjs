@@ -144,6 +144,10 @@ test('launchSession(): an attached repo and an issue number only; #25\'s refusal
   }
   record('acme/app#4', 'intake', 'started', {});
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 4 }), /already has an active run/);
+  for (const [n, o] of [[80, 'escalated'], [81, 'rejected']]) {
+    record(`acme/app#${n}`, 'approve', o, {});
+    assert.throws(() => launchSession({ repo: 'acme/app', issue: n }), new RegExp(`is ${o}: it needs a human`));
+  }
   record('acme/app#5', 'intake', 'started', { imported: true });
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 5 }), /imported/);
   process.env.STUB_LOGGED_OUT = '1'; harnessReady.clear();
@@ -198,6 +202,8 @@ test('launchSession(): a run left active by a stopped session resumes that harne
   record('acme/app#10', 'intake', 'started', {}); // what the session writes as it works
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 10 }, stubEnv), /already has a running session/);
   const end = finished(s); s.stop(); await end;
+  const state = () => JSON.parse(uiHandle({ method: 'GET', url: '/api/state', headers: { host: '127.0.0.1:1', 'x-factory-token': 't'.repeat(32) } }, { token: 't'.repeat(32), port: 1 }).body);
+  assert.deepEqual(state().resumable, ['acme/app#10'], 'GET /api/state names the runs a start would resume');
   const again = await finished(launchSession({ repo: 'acme/app', issue: 10 }, stubEnv));
   assert.deepEqual(again.find((e) => e.data?.subtype === 'init').data.argv.slice(0, 2), ['--resume', 'stub-session']);
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 10 }, stubEnv), /active run/, 'it exited 0: the run is active for its own reasons');

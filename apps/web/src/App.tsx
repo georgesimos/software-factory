@@ -1,10 +1,10 @@
 import { Button, Dot, EmptyState, IconButton, Kbd, Sheet, Skeleton, Tabs, ThemeToggle, formatAgo, formatClock, repoOf } from '@software-factory/design-system';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Board, runHref } from './Board.tsx';
-import { loadData, projectsOf, CAP, COST_CAP, type FactoryData } from './data.ts';
+import { loadData, post, projectsOf, CAP, COST_CAP, type FactoryData } from './data.ts';
 import { Panel } from './Panel.tsx';
 import { RuleChips } from './Rules.tsx';
-import { RunDetail } from './RunDetail.tsx';
+import { RunDetail, type StartState } from './RunDetail.tsx';
 import { SetupWizard } from './Setup.tsx';
 import { SkillsSheet } from './Skills.tsx';
 import { store } from './store.ts';
@@ -99,7 +99,18 @@ function Shell({ data, patch, refresh }: { data: FactoryData; patch: (p: Partial
   useEffect(() => { document.title = (inProg ? `(${inProg}) ` : '') + (sel ? (sel.title || sel.id) + ' · ' : '') + 'Software Factory'; }, [inProg, sel]);
 
   const fresh = Date.now() - Date.parse(data.generated ?? '') < 5 * 60e3;
-  const detail = (r: NonNullable<typeof sel>) => <RunDetail run={r} cap={data.cap ?? CAP} costCap={data.costCap ?? COST_CAP} find={(id) => byId.get(id)} href={runHref} />;
+  const token = data.token, [starts, setStarts] = useState<Record<string, StartState>>({}); // per run, so switching runs keeps a pending result
+  const resume = async (id: string) => { // POST /api/sessions takes the repo and issue only
+    const put = (s: StartState) => setStarts((x) => ({ ...x, [id]: s })), [repo, n] = id.split('#');
+    put({ text: 'Resuming…', busy: true });
+    try {
+      const x = await post<{ session?: unknown }>('/sessions', { repo, issue: Number(n) }, token!);
+      put({ text: `Resumed${typeof x.session === 'string' ? ` in session ${x.session.slice(0, 8)}` : ''}. It shows here as it runs.` });
+      refresh();
+    } catch (e) { put({ text: (e as Error).message, bad: true }); }
+  };
+  const detail = (r: NonNullable<typeof sel>) => <RunDetail run={r} cap={data.cap ?? CAP} costCap={data.costCap ?? COST_CAP} find={(id) => byId.get(id)} href={runHref}
+    resume={token && (data.resumable?.includes(r.id) || starts[r.id]) ? { go: () => resume(r.id), state: starts[r.id] } : undefined} />;
   return (
     <>
       <header className="web-top">

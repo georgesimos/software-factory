@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import state from '../fixtures/state.json';
@@ -61,7 +61,7 @@ describe('Setup wizard', () => {
     expect(calls).toEqual(['/api/onboard']);
   });
 
-  const live = (reply: (url: string, body: { ship?: string[] }) => Response) => vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+  const live = (reply: (url: string, body: { ship?: string[] }) => Response | Promise<Response>) => vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
     if (url === '/api/onboard') return new Response(JSON.stringify({ harnesses: [], repos: [], projects: { 'acme/app': { path: '/x' }, 'acme/two': { path: '/y' } }, rules: {} }), { status: 200 });
     return reply(url, JSON.parse(String(init.body)));
   }));
@@ -74,6 +74,36 @@ describe('Setup wizard', () => {
     await userEvent.click(screen.getByRole('checkbox', { name: /Web/ }));
     expect(await screen.findByText('disk full')).toBeTruthy();
     expect(screen.getByRole('checkbox', { name: /Web/ })).not.toBeChecked();
+  });
+
+  it('live: two refused ship toggles roll back to what the server last stored', async () => {
+    localStorage.setItem('sf.onboard', JSON.stringify({ step: 2, scope: 'acme/app' }));
+    const pending: (() => void)[] = [];
+    live(() => new Promise<Response>((r) => { pending.push(() => r(new Response(JSON.stringify({ error: 'refused' }), { status: 400 }))); }));
+    wizard({ token: 'tok' });
+    await userEvent.click(await screen.findByRole('checkbox', { name: /Web/ }));
+    await userEvent.click(screen.getByRole('checkbox', { name: /Database/ }));
+    expect(screen.getByRole('checkbox', { name: /Database/ })).toBeChecked();
+    await act(async () => { pending.shift()!(); });
+    await act(async () => { pending.shift()!(); });
+    expect(screen.getByRole('checkbox', { name: /Web/ })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Database/ })).not.toBeChecked();
+  });
+
+  it('live: after Save rules, a later edit is guarded again', async () => {
+    localStorage.setItem('sf.onboard', JSON.stringify({ step: 4, scope: 'acme/app' }));
+    live(() => new Response('{}', { status: 200 }));
+    wizard({ token: 'tok' });
+    await userEvent.selectOptions(await screen.findByRole('combobox', { name: 'CI' }), 'advisory');
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(status()).toHaveTextContent('Unsaved rule changes');
+    await userEvent.type(screen.getByRole('textbox', { name: 'Reason (required)' }), 'why');
+    await userEvent.click(screen.getByRole('button', { name: 'Save rules' }));
+    expect(await screen.findByText('Rules saved for acme/app.')).toBeTruthy();
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'CI' }), 'skip');
+    await userEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(status()).toHaveTextContent('Unsaved rule changes');
+    expect(screen.getByRole('heading', { name: 'Rules' })).toBeTruthy();
   });
 
   it('live: switching scope or closing warns once about unsaved rule edits', async () => {

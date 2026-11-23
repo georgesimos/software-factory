@@ -1,8 +1,9 @@
 import {
-  ArrowUpRightIcon, Badge, Dot, MetricStat, OutcomePill, ReviewMatrix, STAGES, SessionList, SourceChip, StageTrack, Timeline,
+  ArrowUpRightIcon, Badge, Button, Dot, MetricStat, OutcomePill, ReviewMatrix, STAGES, SessionList, SourceChip, StageTrack, Timeline,
   burnText, costText, formatAgo, formatClock, formatDuration, formatMoney, formatTokens, outcomeOf, previewOf, repoOf, shortId, type Run,
 } from '@software-factory/design-system';
 import type { CSSProperties, ReactNode } from 'react';
+import { Cmd } from './Setup.tsx';
 
 const Section = ({ title, children }: { title: string; children: ReactNode }) => (
   <section className="web-sec"><h3 className="sf-label">{title}</h3>{children}</section>
@@ -126,8 +127,24 @@ export function openInClaude(r: Run) {
   return 'claude-cli://open?' + Object.entries({ cwd, q }).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
 }
 
-export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, href = (id) => '#' + encodeURIComponent(id) }:
-  { run: Run; cap: number; costCap: number; now?: number; find?: (id: string) => Run | undefined; href?: (id: string) => string }) {
+// An active run the factory still owns: continue it. Escalated and rejected runs belong to a human, approval stays human-only.
+const startable = (r: Run) => !r.imported && !r.archived && /^[\w.-]+\/[\w.-]+#\d+$/.test(r.id) && ['in-progress', 'needs-info'].includes(outcomeOf(r));
+export type StartState = { text: string; bad?: boolean; busy?: boolean };
+/** Under F ui, for a run whose session here stopped or crashed: POST /api/sessions resumes it headless. */
+export type Resume = { go: () => void; state?: StartState };
+function Start({ run: r, resume }: { run: Run; resume?: Resume }) {
+  if (!resume) return <Cmd cmd={`/software-factory ${r.id}`} />; // the Claude Code prompt to paste
+  const st = resume.state;
+  return (
+    <div className="web-start">
+      <Button size="sm" disabled={st?.busy} title="Its session here stopped: resume it headless in the attached clone" onClick={resume.go}>{st?.busy ? 'Resuming…' : 'Resume factory'}</Button>
+      <p className="web-sk-status" role="status" data-bad={st?.bad || undefined}>{st?.busy ? '' : st?.text}</p>
+    </div>
+  );
+}
+
+export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, href = (id) => '#' + encodeURIComponent(id), resume }:
+  { run: Run; cap: number; costCap: number; now?: number; find?: (id: string) => Run | undefined; href?: (id: string) => string; resume?: Resume }) {
   const d = formatDuration(r.durationMs ?? Date.parse(r.updated ?? '') - Date.parse(r.started ?? ''));
   const { costUsd, tokens } = spent(r);
   const src = r.burn ? (r.burn.measured ? 'measured' : 'reported') : '';
@@ -168,8 +185,9 @@ export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, h
       <Burn run={r} />
       <Deploys run={r} />
       <Epic run={r} find={find} href={href} />
-      {r.sessions?.length || open ? (
+      {r.sessions?.length || open || startable(r) ? (
         <Section title="Sessions">
+          {startable(r) ? <Start run={r} resume={resume} /> : null}
           {open ? <p className="web-links"><a href={open} title="Opens a new Claude Code terminal here (prompt pre-filled, not sent). Requires the claude-cli handler: send one message in any interactive claude session first.">Open in Claude</a></p> : null}
           {r.sessions?.length ? <SessionList sessions={r.sessions} now={now} /> : null}
         </Section>

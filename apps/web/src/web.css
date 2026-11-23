@@ -236,3 +236,5 @@
 @media (max-width: 640px) { /* the dialog body's phone padding */
   .web-ob-foot { margin: var(--sf-space-4) calc(-1 * var(--sf-space-4)) calc(-1 * var(--sf-space-4)); padding: var(--sf-space-3) var(--sf-space-4); }
 }
+.web-start { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sf-space-2) var(--sf-space-3); margin-bottom: var(--sf-space-3); }
+.web-start .web-sk-status { margin: 0; }
