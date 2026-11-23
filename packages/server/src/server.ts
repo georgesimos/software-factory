@@ -85,7 +85,7 @@ export const UI_ROUTES = {
     const s = getSession(id);
     if (!s?.write || s.state !== 'running') throw new Error('no running terminal session with that id');
     const size = cols !== undefined || rows !== undefined; // all checked before any is applied
-    if (data !== undefined && (typeof data !== 'string' || data.length > 65536)) throw new Error('data must be a string up to 64 KB');
+    if (data !== undefined && (typeof data !== 'string' || data.length > 32768)) throw new Error('data must be a string up to 32 KB'); // JSON escaping can double it: the body cap is 64K
     if (size && ![cols, rows].every((n) => Number.isInteger(n) && n > 0 && n <= 1000)) throw new Error('cols and rows must be 1-1000');
     if (data !== undefined) s.write(data);
     if (size) s.resize(cols, rows);
@@ -112,8 +112,8 @@ export function resumeFor(r, last) {
 }
 // What the run may still spend: COST_CAP less the dollars, and less the share of TOKEN_CAP used, for usage with no price.
 export const budgetLeft = (b) => b ? Math.min(COST_CAP - b.usd, COST_CAP * (1 - b.tokens / TOKEN_CAP)) : COST_CAP;
-// node-pty and the SDK for terminal and sdk sessions, keyed by package name. A host that ships them (the desktop app) must set
-// them: packages/adapters' lazy import() can't see apps/desktop's dependencies under pnpm (ADR 0001).
+// node-pty and the SDK for terminal and sdk sessions, keyed by package name. Empty until a host that ships them (apps/desktop,
+// not built yet) sets them: packages/adapters' lazy import() can't see apps/desktop's dependencies under pnpm (ADR 0001).
 export const hostModules = {};
 export function launchSession({ harness = 'claude-code', mode = 'headless', repo, issue }, env = process.env, modules = hostModules) {
 
@@ -121,6 +121,8 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
   if (!h?.launch) throw new Error(`harness ${String(harness).slice(0, 40)} cannot launch sessions`);
   if (!(h.modes || []).includes(mode)) throw new Error(`${h.id} modes are ${(h.modes || []).join(', ')}`);
   if (mode === 'terminal') throw new Error('factory runs are headless or sdk: a terminal session has no budget cap or pinned policy'); // a person drives terminal mode
+  const need = mode === 'sdk' && h.launch({ mode, prompt: 'x' }).module;
+  if (need && !modules[need]) throw new Error(`${mode} mode needs the desktop app (not built yet), which supplies ${need}: run headless`);
   const [owner, name, extra] = typeof repo === 'string' ? repo.split('/') : [];
   if (extra !== undefined || !LOGIN.test(owner || '') || !/^(?!\.\.?$)[\w.-]{1,100}$/.test(name || '')) throw new Error('repo must be owner/repo');
   const cwd = projects()[repo]?.path;

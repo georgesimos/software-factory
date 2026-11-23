@@ -4,6 +4,7 @@
 // modules['@anthropic-ai/claude-agent-sdk']), else they are imported lazily by name. argv only, never a shell (core/src/platform.ts).
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 import { command } from '../core/src/platform.ts';
@@ -55,6 +56,7 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(sig, () => { sto
 // command()'s platform and file lookup (core/src/platform.ts).
 export function startSession(h, opts, { cwd, env = process.env, label = '', modules = {}, resolve }) {
   if (typeof h.launch !== 'function' || !(h.modes || []).includes(opts.mode)) throw new Error(`${h.id} cannot launch in ${opts.mode} mode`);
+  if (opts.mode === 'terminal' && opts.budget != null) throw new Error('a terminal session has no budget cap: run headless or sdk for a budget');
   const spec = h.launch(opts);
   const s = { id: crypto.randomUUID(), harness: h.id, mode: opts.mode, label, state: 'running', exit: null, started: new Date().toISOString(), events: [], next: 0, listeners: new Set(), bytes: 0, stop: () => {}, harnessSession: undefined, ended: null };
   sessions.set(s.id, s);
@@ -98,6 +100,10 @@ const load = async (modules, name, what) => {
   }
 };
 
+// Whether the binary a spawn was given exists. On Windows command() already returned a found one as a full path.
+const onPath = (file, env) => /[\\/]/.test(file) ? fs.existsSync(file)
+  : process.platform !== 'win32' && String(env.PATH || '').split(path.delimiter).some((d) => d && fs.existsSync(path.join(d, file)));
+
 // An interactive harness in a pseudo-terminal (ConPTY on Windows). Output is raw terminal data for xterm.js; input and
 // resize come back through write() and resize(). Exit: 'stopped' after stop(), else the signal, else the exit code.
 async function terminal(s, spec, { cwd, env, modules, resolve, done }) {
@@ -109,10 +115,10 @@ async function terminal(s, spec, { cwd, env, modules, resolve, done }) {
   let p;
   // A .cmd shim's cmd.exe line goes to node-pty as one string: given an array, node-pty quotes each argument again.
   try { p = pty.spawn(c.file, c.windowsVerbatimArguments ? c.args.join(' ') : c.args, { name: 'xterm-256color', cols: 120, rows: 32, cwd, env }); } catch (e) {
-    throw /ENOENT|posix_spawnp|not found/i.test(e.message) ? new Error(`${spec.cmd} is not installed`) : e;
+    throw onPath(c.file, env) ? e : new Error(`${spec.cmd} is not installed`); // else a bad cwd or a broken pty passes through
   }
-  s.write = (data) => p.write(data);
-  s.resize = (cols, rows) => p.resize(cols, rows);
+  s.write = (data) => { if (!stopped) p.write(data); }; // a stopped pty may already be gone
+  s.resize = (cols, rows) => { if (!stopped) p.resize(cols, rows); };
   s.stop = () => { stopped = true; p.kill(); };
   p.onData((data) => emit(s, { type: 'output', data }));
   p.onExit(({ exitCode, signal }) => done(stopped ? 'stopped' : signal || exitCode));

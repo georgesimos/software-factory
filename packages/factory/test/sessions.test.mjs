@@ -36,12 +36,28 @@ test('claude-code launch(): headless pins stream-json --verbose with the prompt 
   assert.throws(() => claude.launch({ mode: 'terminal', prompt: 'fix #3' }), /takes no prompt/, 'never a prompt in argv: a .cmd shim could not pass it');
   assert.throws(() => claude.launch({ mode: 'headless' }), /needs a prompt/);
   const sd = claude.launch({ mode: 'sdk', prompt: 'x', budget: 2 });
-  assert.deepEqual([sd.module, sd.prompt, sd.options.permissionMode, sd.options.maxBudgetUsd, sd.options.strictMcpConfig], ['@anthropic-ai/claude-agent-sdk', 'x', 'dontAsk', 2, true]);
+  assert.deepEqual([sd.module, sd.prompt, sd.options.permissionMode, sd.options.maxBudgetUsd, sd.options.strictMcpConfig], ['@anthropic-ai/claude-agent-sdk', 'x', 'default', 2, true], 'read-only: the CLI\'s manual mode');
   assert.deepEqual([claude.launch({ mode: 'sdk', prompt: 'x', write: true }).options.permissionMode, claude.launch({ mode: 'sdk', prompt: 'x', write: true }).options.allowedTools], ['auto', undefined]);
   assert.equal(sd.options.permissionPrompts, 'none', 'no prompt can stall an sdk run');
   assert.throws(() => claude.launch({ mode: 'sdk' }), /needs a prompt/);
+  assert.throws(() => startSession(claude, { mode: 'terminal', budget: 3 }, { cwd: home }), /no budget cap/);
   assert.throws(() => claude.launch({ mode: 'nope', prompt: 'x' }), /no nope mode/);
   assert.ok(claude.headlessArgs().includes('json') && !claude.headlessArgs().includes('stream-json'), 'F headless-args is unchanged');
+});
+
+// The sdk options are checked against the installed SDK's types: an option it doesn't declare would be dropped silently.
+test('the sdk launch options are ones the installed Agent SDK declares', (t) => {
+  const root = path.join(HERE, '..', '..', 'node_modules', '.pnpm');
+  const dir = fs.existsSync(root) && fs.readdirSync(root).find((d) => d.startsWith('@anthropic-ai+claude-agent-sdk@'));
+  if (!dir) return t.skip('the Agent SDK is not installed here');
+  const dts = fs.readFileSync(path.join(root, dir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'sdk.d.ts'), 'utf8');
+  const modes = /export declare type PermissionMode = ([^;]+);/.exec(dts)[1];
+  for (const write of [false, true]) {
+    const { options } = claude.launch({ mode: 'sdk', prompt: 'x', budget: 2, resume: 'abc', write });
+    for (const k of Object.keys(options)) assert.match(dts, new RegExp(`\\n\\s+${k}\\?:`), `Options.${k}`);
+    assert.ok(modes.includes(`'${options.permissionMode}'`), options.permissionMode);
+  }
+  assert.match(dts, /permissionPrompts\?: 'host' \| 'none';/);
 });
 
 test('Windows: a headless launch runs through npm\'s claude.cmd, because the prompt (space, #) goes on stdin', () => {
@@ -234,7 +250,7 @@ function fakePty(spawnError) {
     Object.assign(rec, { file, args, cwd: opts.cwd });
     let data, exit;
     setTimeout(() => data('ready\r\n'), 5);
-    return { onData: (f) => { data = f; }, onExit: (f) => { exit = f; }, write: (x) => { data(`echo:${x}`); if (x === 'exit\r') exit({ exitCode: 0 }); }, resize: (c, r) => { rec.size = [c, r]; }, kill: () => exit({ exitCode: null }) };
+    return { onData: (f) => { data = f; }, onExit: (f) => { exit = f; }, write: (x) => { (rec.writes ||= []).push(x); data(`echo:${x}`); if (x === 'exit\r') exit({ exitCode: 0 }); }, resize: (c, r) => { rec.size = [c, r]; }, kill: () => exit({ exitCode: null }) };
   } };
 }
 const fakeSdk = (fail, result = { type: 'result', subtype: 'success' }) => ({ rec: {}, async *query(q) { this.rec.q = q; yield { type: 'system', subtype: 'init', session_id: 'sdk-1' }; if (fail) throw new Error('boom'); if (result) yield result; } });
@@ -248,7 +264,7 @@ test('terminal mode: a pseudo-terminal from the host, with input and resize thro
   const input = (body) => uiHandle({ method: 'POST', url: '/api/sessions/input', headers: H, body: JSON.stringify(body) }, { token: tok, port: 4646 });
   assert.equal(input({ id: s.id, cols: 100, rows: 30 }).status, 200);
   assert.deepEqual(pty.rec.size, [100, 30]);
-  for (const bad of [{ id: s.id, data: 7 }, { id: s.id, cols: 0, rows: 5 }, { id: 'nope', data: 'x' }]) assert.equal(input(bad).status, 400, JSON.stringify(bad));
+  for (const bad of [{ id: s.id, data: 7 }, { id: s.id, data: 'x'.repeat(32769) }, { id: s.id, cols: 0, rows: 5 }, { id: 'nope', data: 'x' }]) assert.equal(input(bad).status, 400, JSON.stringify(bad));
   const writes = []; const w = s.write; s.write = (x) => writes.push(x);
   assert.equal(input({ id: s.id, data: 'ls\r', cols: 0, rows: 5 }).status, 400);
   assert.deepEqual([writes, pty.rec.size], [[], [100, 30]], 'a bad size applies none of the request');
@@ -302,17 +318,29 @@ test('a stop mid-run ends as stopped, in a terminal and in the SDK; a missing bi
   await new Promise((r) => setTimeout(r, 20));
   const tEnd = finished(t); t.stop();
   assert.equal((await tEnd).at(-1).code, 'stopped');
+  t.write('late'); t.resize(1, 1);
+  assert.deepEqual([pty.rec.writes, pty.rec.size], [undefined, undefined], 'a stopped pty takes no input');
   const waiting = { async *query(q) { yield { type: 'system', subtype: 'init' }; await new Promise((_, no) => q.options.abortController.signal.addEventListener('abort', () => no(Object.assign(new Error('aborted'), { name: 'AbortError' })))); } };
   const q = startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { [SDK]: waiting } });
   await new Promise((r) => { const off = subscribe(q, (e) => { if (e.data?.subtype === 'init') { off(); r(); } }); });
   const qEnd = finished(q); q.stop();
   assert.deepEqual((await qEnd).slice(-1).map((e) => [e.type, e.code]), [['exit', 'stopped']], 'no error event for our own abort');
-  const gone = await finished(startSession(claude, { mode: 'terminal' }, { cwd: home, modules: { [PTY]: fakePty('posix_spawnp failed.') } }));
+  const nowhere = { PATH: fs.mkdtempSync(path.join(os.tmpdir(), 'factory-nopath-')) };
+  const gone = await finished(startSession(claude, { mode: 'terminal' }, { cwd: home, env: nowhere, modules: { [PTY]: fakePty('posix_spawnp failed.') } }));
   assert.deepEqual(gone.slice(-2).map((e) => e.message ?? e.code), ['claude is not installed', null]);
+  if (process.platform !== 'win32') { // the stub is a shell script, found on stubEnv's PATH
+    const other = await finished(startSession(claude, { mode: 'terminal' }, { cwd: home, env: stubEnv, modules: { [PTY]: fakePty('posix_spawnp failed.') } }));
+    assert.equal(other.find((e) => e.type === 'error').message, 'posix_spawnp failed.', 'claude is there: the pty error passes through');
+  }
 });
 
 test('launchSession() never starts a terminal session for a factory run: it would have no budget cap', () => {
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 9, mode: 'terminal' }, stubEnv, { [PTY]: fakePty() }), /no budget cap/);
+});
+
+test('launchSession() refuses sdk mode up front while no host supplies the SDK (apps/desktop is not built yet)', () => {
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 9, mode: 'sdk' }, stubEnv), /needs the desktop app \(not built yet\), which supplies @anthropic-ai\/claude-agent-sdk/);
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 9, mode: 'sdk' }, stubEnv, { 'node-pty': fakePty() }), /needs the desktop app/, 'node-pty alone is not the SDK');
 });
 
 test('launchSession() passes the host modules on: an sdk run in the attached clone with the run budget and write mode', async () => {

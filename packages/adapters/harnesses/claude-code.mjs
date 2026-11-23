@@ -76,8 +76,8 @@ export default {
       if (!prompt) throw new Error('an sdk launch needs a prompt');
       const usd = usdOf(budget);
       return { module: '@anthropic-ai/claude-agent-sdk', prompt, options: { ...(resume && { resume }), settingSources: ['user'], strictMcpConfig: true,
-        permissionMode: write ? 'auto' : 'dontAsk', ...(usd != null && { maxBudgetUsd: usd }), ...(write ? {} : { allowedTools: READ_ONLY_TOOLS }),
-        permissionPrompts: 'none' } }; // as --permission-prompts none: what auto's classifier can't decide is denied, never waits
+        permissionMode: write ? 'auto' : 'default', ...(usd != null && { maxBudgetUsd: usd }), ...(write ? {} : { allowedTools: READ_ONLY_TOOLS }),
+        permissionPrompts: 'none' } }; // as --permission-mode manual|auto --permission-prompts none: what would prompt is denied, never waits
     }
     throw new Error(`claude-code has no ${mode} mode`);
   },
