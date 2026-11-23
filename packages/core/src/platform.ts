@@ -98,3 +98,60 @@ export function linkSkill(target: string, link: string, platform: NodeJS.Platfor
   fs.symlinkSync(target, link, platform === 'win32' ? 'junction' : 'dir');
   return { link, target, created: true };
 }
+
+// `F install-cli`: a `factory` command in a user bin dir, never one that needs admin. factory.mjs is not executable in
+// git (100644), so a shim runs it with the `node` on PATH (an old one prints the upgrade message). Windows gets a .cmd for
+// cmd.exe and PowerShell and an extensionless sh shim for Git Bash, which ignores PATHEXT. MARK makes a re-run idempotent
+// and keeps it off a `factory` someone else wrote. shortcut: a plugin update moves the cache path; the shim then says to re-run.
+const MARK = 'software-factory install-cli';
+export function cliShims(entry: string, platform: NodeJS.Platform = process.platform): Record<string, string> {
+  const posix = platform === 'win32' ? entry.replace(/\\/g, '/') : entry, q = `'${posix.replace(/'/g, `'\\''`)}'`;
+  const sh = `#!/bin/sh\n# ${MARK}\n[ -f ${q} ] || { echo "factory: ${posix.replace(/["$`\\]/g, '\\$&')} is gone (a plugin update moves it); run F install-cli again" >&2; exit 1; }\nexec node ${q} "$@"\n`;
+  if (platform !== 'win32') return { factory: sh };
+  if (/["%]/.test(entry)) throw new Error(`${entry} has a " or %, which a .cmd shim cannot hold; run node "${entry}" instead`);
+  const cmd = ['@echo off', `rem ${MARK}`, `if not exist "${entry}" (echo factory: its install moved, which a plugin update does; run F install-cli again 1>&2& exit /b 1)`, `node "${entry}" %*`];
+  return { factory: sh, 'factory.cmd': `${cmd.join('\r\n')}\r\n` };
+}
+
+// The Path a new cmd.exe or PowerShell starts with: the registry user and machine values, with %VARS% expanded. Not this
+// process's PATH: Git Bash, where Claude Code runs F on Windows, adds ~/bin and other folders Windows itself never sees.
+// reg.exe by full path: a bare 'reg' may resolve from the current folder first, and F can run inside an untrusted clone.
+export function windowsPath(env: Env = process.env, run: (file: string, args: string[], o: object) => string = execFileSync as never) {
+  const reg = path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', 'System32', 'reg.exe');
+  const read = (key: string) => { try { return /^\s*Path\s+REG_(?:EXPAND_)?SZ\s+(.*)$/im.exec(run(reg, ['query', key, '/v', 'Path'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))?.[1]?.trim() ?? ''; } catch { return ''; } };
+  return [read('HKCU\\Environment'), read('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment')].join(';')
+    .replace(/%([^%;]+)%/g, (m, v) => envGet(env, v) ?? m);
+}
+
+// Where install-cli writes: whichever of ~/.local/bin and ~/bin comes first on PATH, else ~/.local/bin (not yet on PATH).
+// PATH entries are judged as absolute paths only, with a leading ~ meaning home; relative ones never count.
+export function cliDir(home: string, pathList: string, platform: NodeJS.Platform = process.platform) {
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const norm = (d: string) => { const n = p.normalize(d).replace(/[\\/]+$/, ''); return platform === 'win32' ? n.toLowerCase() : n; };
+  const local = p.join(home, '.local', 'bin'), dirs = [local, p.join(home, 'bin')];
+  for (const e of pathList.split(platform === 'win32' ? ';' : ':')) {
+    const abs = /^~(?=[\\/]|$)/.test(e) ? p.join(home, e.slice(1)) : e;
+    const hit = p.isAbsolute(abs) && dirs.find((d) => norm(d) === norm(abs));
+    if (hit) return { dir: hit, onPath: true };
+  }
+  return { dir: local, onPath: false };
+}
+
+export function installCli(entry: string, { home, platform = process.platform, env = process.env, pathList }: { home: string; platform?: NodeJS.Platform; env?: Env; pathList?: string }) {
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const { dir, onPath } = cliDir(home, pathList ?? (platform === 'win32' ? windowsPath(env) : envGet(env, 'PATH') || ''), platform);
+  const shims = cliShims(entry, platform);
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of Object.keys(shims)) { // check every file before writing any; never write through a link
+    const f = p.join(dir, name), st = fs.lstatSync(f, { throwIfNoEntry: false });
+    if (st && (!st.isFile() || !fs.readFileSync(f, 'utf8').includes(MARK))) throw new Error(`${f} already exists and was not written by install-cli; move it aside first`);
+  }
+  for (const [name, text] of Object.entries(shims)) fs.writeFileSync(p.join(dir, name), text, { mode: 0o755 });
+  if (platform !== 'win32') fs.chmodSync(p.join(dir, 'factory'), 0o755); // mode is ignored when the file already exists
+  const fish = /(^|\/)fish$/.test(envGet(env, 'SHELL') || '');
+  const addToPath = onPath ? undefined : platform === 'win32'
+    ? `[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';${dir.replace(/'/g, "''")}', 'User')   # PowerShell, then open a new terminal`
+    : fish ? `fish_add_path '${dir.replace(/['\\]/g, '\\$&')}'   # run once in fish`
+    : `export PATH="${dir.replace(/["$`\\]/g, '\\$&')}:$PATH"   # add this line to your shell profile (~/.zshrc, ~/.bashrc), then open a new terminal`;
+  return { dir, files: Object.keys(shims).map((n) => p.join(dir, n)), entry, ...(addToPath ? { onPath: false, addToPath } : { onPath: true }) };
+}

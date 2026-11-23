@@ -98,17 +98,18 @@ export function risk(r, plannedFiles) {
 }
 export function metrics(runs) {
   const count = (o) => runs.filter((r) => r.outcome === o).length;
-  const merged = count('merged'), escalated = count('escalated');
+  const humanMerged = runs.filter((r) => r.outcome === 'merged' && r.humanMerge).length; // escalated, then merged on GitHub by a human (#21)
+  const merged = count('merged') - humanMerged, escalated = count('escalated') + humanMerged; // merge rate = the factory's own merges
   const built = runs.filter((r) => !r.imported && ['merged', 'escalated'].includes(r.outcome));
   const cycles = built.map((r) => r.durationMs).sort((a, b) => a - b);
-  const reverts = runs.filter((r) => r.reverted).length;
+  const reverts = runs.filter((r) => r.reverted && !r.humanMerge).length; // of the factory's own merges, like the rate's denominator
   const spent = (r) => r.burn?.total || { tokens: r.tokens || 0, costUsd: r.costUsd ?? null };
   const costUsd = +runs.reduce((s, r) => s + (spent(r).costUsd || 0), 0).toFixed(2);
   const tokens = runs.reduce((s, r) => s + spent(r).tokens, 0);
   const byStage = {};
   for (const r of runs) for (const [k, c] of Object.entries(r.burn?.byStage || {})) byStage[k] = (byStage[k] || 0) + c.tokens;
   return {
-    runs: runs.length, inProgress: count('in-progress'), merged, escalated, rejected: count('rejected'), needsInfo: count('needs-info'),
+    runs: runs.length, inProgress: count('in-progress'), merged, humanMerged, escalated, rejected: count('rejected'), needsInfo: count('needs-info'),
     closed: count('closed'), awaitingApproval: count('awaiting-approval'), split: count('split'),
     mergeRate: merged + escalated ? +(merged / (merged + escalated)).toFixed(3) : null,
     avgIterations: built.length ? +(built.reduce((s, r) => s + r.iteration, 0) / built.length).toFixed(2) : null,
