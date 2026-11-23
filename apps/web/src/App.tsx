@@ -1,5 +1,5 @@
 import { Button, Dot, EmptyState, IconButton, Kbd, Sheet, Skeleton, Tabs, ThemeToggle, formatAgo, formatClock, repoOf } from '@software-factory/design-system';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Board, runHref } from './Board.tsx';
 import { loadData, projectsOf, CAP, COST_CAP, type FactoryData } from './data.ts';
 import { Panel } from './Panel.tsx';
@@ -19,25 +19,26 @@ function useMedia(q: string) {
 
 export function App({ load = loadData }: { load?: () => Promise<FactoryData> }) {
   const [state, setState] = useState<{ data?: FactoryData; error?: string }>({});
+  const writes = useRef(0); // a poll that started before a write must not undo its reply
   useEffect(() => {
     let ignore = false, waiting = false, timer: ReturnType<typeof setTimeout> | undefined;
     const later = () => { timer = setTimeout(() => { if (document.hidden) waiting = true; else go(false); }, 10_000); }; // no polling in a hidden tab
     const onVis = () => { if (waiting && !document.hidden) { waiting = false; go(false); } };
-    const go = (first: boolean) => load().then((data) => {
+    const go = (first: boolean) => { const w = writes.current; return load().then((data) => {
       if (ignore) return;
-      setState({ data });
+      if (w === writes.current) setState({ data });
       if (data.token) later(); // F ui: live; injected data is a snapshot
     }, (e: unknown) => {
       if (ignore) return;
       if (first) setState({ error: String((e as Error)?.message ?? e ?? 'Unknown error') });
       else later(); // keep the last good data through a blip
-    });
+    }); };
     go(true);
     document.addEventListener('visibilitychange', onVis);
     return () => { ignore = true; clearTimeout(timer); document.removeEventListener('visibilitychange', onVis); };
   }, [load]);
   const { data, error } = state;
-  const patch = useCallback((p: Partial<FactoryData>) => setState((s) => (s.data ? { data: { ...s.data, ...p } } : s)), []); // a write's reply, until the next poll
+  const patch = useCallback((p: Partial<FactoryData>) => (writes.current++, setState((s) => (s.data ? { data: { ...s.data, ...p } } : s))), []); // a write's reply, until the next poll
   return data ? <Shell data={data} patch={patch} /> : (
     <>
       <header className="web-top"><span className="web-brand"><span className="sf-mark" aria-hidden="true" />Software Factory</span><ThemeToggle /></header>

@@ -621,6 +621,20 @@ export function skillsTest(cli) {
   assert.equal(state.status, 200);
   assert.deepEqual([sd.runs.map((r) => r.id), Object.keys(sd.skills.plans).includes('acme/kit'), sd.ui], [runsData().map((r) => r.id), true, undefined], 'what page() embeds, without ui');
   assert.equal(get('/api/state', { 'x-factory-token': 'u'.repeat(32) }).status, 403);
+  // GET /app/: apps/web's build, by exact file name only; /app redirects so the build's relative URLs resolve.
+  const web = fs.mkdtempSync(path.join(os.tmpdir(), 'web-dist-'));
+  fs.mkdirSync(path.join(web, 'assets'));
+  fs.writeFileSync(path.join(web, 'index.html'), '<!doctype html><div id="root"></div>');
+  fs.writeFileSync(path.join(web, 'assets', 'app.js'), 'export {}');
+  fs.writeFileSync(path.join(web, 'notes.txt'), 'no type');
+  const app = (url, h = {}, w = web) => uiHandle({ method: 'GET', url, headers: { ...H, ...h } }, { ...ctx, web: w });
+  assert.deepEqual([app('/app?t=x').status, app('/app?t=x').location], [308, '/app/?t=x']);
+  assert.deepEqual([app('/app/?t=x').status, app('/app/').type, String(app('/app/').body)], [200, 'text/html; charset=utf-8', '<!doctype html><div id="root"></div>']);
+  assert.equal(app('/app/assets/app.js').type, 'text/javascript; charset=utf-8');
+  for (const u of ['/app/assets/', '/app/notes.txt', '/app/%2e%2e/package.json', '/app/assets%2fapp.js', '/app/..%2f..%2fpackage.json', '/app/nope.js']) assert.equal(app(u).status, 404, u);
+  assert.equal(app('/app/', { host: 'evil.test:4242' }).status, 403);
+  assert.match(app('/app/', {}, path.join(web, 'missing')).body, /not built: run pnpm --filter @software-factory\/web build/);
+  assert.equal(uiHandle({ method: 'POST', url: '/app/', headers: H, body: '{}' }, ctx).status, 404);
   // POST /api/skills/preset: the same checks; a bad name writes nothing; the reply says which steps changed.
   const pre = (body, h = {}) => uiHandle({ method: 'POST', url: '/api/skills/preset', headers: { ...H, origin: 'http://127.0.0.1:4242', 'content-type': 'application/json', 'x-factory-token': tok, ...h }, body: JSON.stringify(body) }, ctx);
   const beforePreset = fs.readFileSync(path.join(io.dir, 'skills.json'), 'utf8');
