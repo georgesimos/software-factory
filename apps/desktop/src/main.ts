@@ -1,7 +1,7 @@
 import { app, BrowserWindow, session, shell } from 'electron';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { APP_HTML, serve } from '@software-factory/server';
+import { APP_HTML, hostModules, serve } from '@software-factory/server';
 
 // F ui in this process, in one window (#56). The page is the same app.html F ui serves, loaded from the loopback server
 // with its token, so it can save settings and start sessions. Sandboxed, no preload, no Node in the page; nothing loads
@@ -24,7 +24,17 @@ function csp() {
   return `default-src 'self'; script-src ${hashes.join(' ')}; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
 }
 
+// What the app ships for terminal and sdk sessions (the server keys them by package name). A missing or broken one only
+// turns its mode off: the session refuses with the reason, and the rest of the app works.
+const HOST_MODULES = ['node-pty', '@anthropic-ai/claude-agent-sdk'];
+async function host() {
+  for (const name of HOST_MODULES) {
+    try { hostModules[name] = await import(name); } catch (e) { console.error(`factory desktop: ${name} did not load: ${(e as Error).message}`); }
+  }
+}
+
 async function start() {
+  await host();
   const s = await serve(0); // listen first: the window has nothing to load before this
   close = s.close;
   const origin = new URL(s.url).origin, policy = csp();

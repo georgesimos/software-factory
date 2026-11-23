@@ -362,8 +362,8 @@ test('launchSession() never starts a terminal session for a factory run: it woul
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 9, mode: 'terminal' }, stubEnv, { [PTY]: fakePty() }), /no budget cap/);
 });
 
-test('launchSession() refuses sdk mode up front while no host supplies the SDK (apps/desktop is not built yet)', () => {
-  assert.throws(() => launchSession({ repo: 'acme/app', issue: 9, mode: 'sdk' }, stubEnv), /needs the desktop app \(not built yet\), which supplies @anthropic-ai\/claude-agent-sdk/);
+test('launchSession() refuses sdk mode up front while no host supplies the SDK (outside the desktop app)', () => {
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 9, mode: 'sdk' }, stubEnv), /needs the desktop app, which supplies @anthropic-ai\/claude-agent-sdk/);
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 9, mode: 'sdk' }, stubEnv, { 'node-pty': fakePty() }), /needs the desktop app/, 'node-pty alone is not the SDK');
 });
 

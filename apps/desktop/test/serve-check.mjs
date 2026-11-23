@@ -18,5 +18,6 @@ try {
     harnesses: onboard.harnesses?.map((h) => h.id),
     connectors: onboard.hooks?.connectors?.map((c) => c.id),
     templates: Object.keys(loadTemplates()),
+    fMissing: (await (await fetch(`${u.origin}/api/state`, { headers: { 'x-factory-token': t } })).json()).fMissing ?? false,
   }));
 } finally { server.closeAllConnections(); server.close(); }
