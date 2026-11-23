@@ -88,8 +88,10 @@ describe('factory', () => {
   });
 
   it('Timeline shows notes and local checks', () => {
-    render(<Timeline events={[{ stage: 'note' as never, status: 'pending', step: 'build', text: 'use the v2 API' }, { stage: 'gate', status: 'passed', localChecks: { state: 'passed' } }]} />);
+    render(<Timeline events={[{ stage: 'note' as never, status: 'pending', step: 'build', text: 'use the v2 API' }, { stage: 'note' as never, status: 'applied', steps: ['build', 'review.code'] },
+      { stage: 'gate', status: 'passed', localChecks: { state: 'passed' } }]} />);
     expect(screen.getByText('for build: use the v2 API')).toBeInTheDocument();
+    expect(screen.getByText('handed to build, review.code')).toBeInTheDocument(); // was dashboard.html's timeline test
     expect(screen.getByText(/local checks passed/)).toBeInTheDocument();
   });
 

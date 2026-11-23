@@ -18,6 +18,9 @@ The repo is a plain pnpm workspace. Each package's own `package.json` scripts ar
 - Keep changes lean: no new dependency for something a few lines can do, and no speculative options.
 - Every interactive component gets a Vitest + Testing Library test. UI changes must pass `pnpm test`, including contrast, and
   work at 375px (`pnpm screenshots` checks overflow).
+- The dashboard ships as one generated file, `packages/factory/app.html`. After changing `apps/web` or the design system, run
+  `pnpm --filter @software-factory/web dashboard` and commit the result. Never edit it by hand, and on a merge conflict in it,
+  rebuild it.
 - Colours come from tokens. Edit `packages/design-system/src/tokens.ts`, then run `pnpm tokens`. Never edit `tokens.css` by hand.
 - No personal data in code, fixtures, screenshots or docs. Use neutral names like `acme/shop` and `/home/dev`.
 - Write commit messages in the imperative mood, and explain why the change is needed in the body.

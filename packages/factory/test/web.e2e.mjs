@@ -1,20 +1,19 @@
 #!/usr/bin/env node
-// Drives apps/web as `F ui` serves it (/app/): the setup wizard end to end, then the Skills sheet, at 1280 and 375 px in light
-// and dark, and read-only without a token. A temp FACTORY_DIR, a fake HOME and stubbed gh, git, claude and codex (the
-// environment onboard.e2e.cjs used for dashboard.html) keep it off real repos, GitHub and ~/.claude/factory.
-// Asserts what each write leaves on disk. Needs the build: pnpm --filter @software-factory/web build. Set CHROME to pick a browser.
-// Run: pnpm --filter @software-factory/factory e2e:web [screenshot dir]
+// Drives the app (packages/factory/app.html) as `F ui` serves it: the setup wizard end to end, then the Skills sheet, at 1280
+// and 375 px in light and dark; then read-only, as F render writes it, over file://. A temp FACTORY_DIR, a fake HOME and
+// stubbed gh, git, claude and codex keep it off real repos, GitHub and ~/.claude/factory.
+// Asserts what each write leaves on disk. Rebuild the app with pnpm --filter @software-factory/web dashboard. Set CHROME to pick a browser.
+// Run: pnpm --filter @software-factory/factory e2e [screenshot dir]
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
 import { findChrome } from '../../../scripts/chrome.mjs';
 
 const HERE = path.join(import.meta.dirname, '..');
-const WEB_DIST = path.join(HERE, '..', '..', 'apps', 'web', 'dist'); // not imported from the server: that loads its whole graph here, with the real HOME
-if (!fs.existsSync(path.join(WEB_DIST, 'index.html'))) { console.error('apps/web is not built: run pnpm --filter @software-factory/web build'); process.exit(1); }
 const SHOTS = path.resolve(process.argv[2] || fs.mkdtempSync(path.join(os.tmpdir(), 'factory-web-shots-')));
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-web-e2e-'));
 const DIR = path.join(root, 'factory'), HOME = path.join(root, 'home'), clone = path.join(HOME, 'Development', 'app');
@@ -24,8 +23,12 @@ fs.mkdirSync(SHOTS, { recursive: true });
 const env = { ...process.env, FACTORY_DIR: DIR, FACTORY_TEST: '1', HOME, USERPROFILE: HOME, PATH: [path.join(HERE, 'test', 'bin'), path.dirname(process.execPath), ...(process.platform === 'win32' ? [] : ['/usr/bin', '/bin'])].join(path.delimiter),
   FACTORY_GH: path.join(HERE, 'test', 'gh-stub.mjs'), FACTORY_GIT: path.join(HERE, 'test', 'git-stub.mjs') };
 delete env.CLAUDE_CODE_SESSION_ID;
+const F = (args, input) => execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), ...args], { env, input, stdio: ['pipe', 'pipe', 'inherit'] });
 const json = (f) => JSON.parse(fs.readFileSync(path.join(DIR, f), 'utf8')), skills = () => json('skills.json');
 
+// Drift: when apps/web has been built here, the committed app.html must be that build (never a stale or hand-merged one).
+const built = path.join(HERE, '..', '..', 'apps', 'web', 'dist', 'index.html');
+if (fs.existsSync(built)) assert.ok(fs.readFileSync(built).equals(fs.readFileSync(path.join(HERE, 'app.html'))), 'app.html differs from apps/web/dist: run pnpm --filter @software-factory/web dashboard');
 const server = spawn(process.execPath, [path.join(HERE, 'factory.mjs'), 'ui', '0'], { env, stdio: ['ignore', 'pipe', 'inherit'] });
 const errors = [], shots = [];
 let last, url, browser;
@@ -44,8 +47,8 @@ const noOverflow = async (page, what) => assert.ok(await page.evaluate(() => [do
 try {
   url = await new Promise((resolve, reject) => {
     let out = '';
-    const t = setTimeout(() => reject(new Error('F ui printed no /app/ URL within 30 s')), 30_000);
-    server.stdout.on('data', (c) => { out += c; const m = /http:\/\/127\.0\.0\.1:\d+\/app\/\?t=[\w-]+/.exec(out); if (m) { clearTimeout(t); resolve(m[0]); } });
+    const t = setTimeout(() => reject(new Error('F ui printed no URL within 30 s')), 30_000);
+    server.stdout.on('data', (c) => { out += c; const m = /http:\/\/127\.0\.0\.1:\d+\/\?t=[\w-]+/.exec(out); if (m) { clearTimeout(t); resolve(m[0]); } });
     server.on('exit', (code) => { clearTimeout(t); reject(new Error('F ui exited ' + code)); });
   });
   browser = await chromium.launch({ executablePath: findChrome() });
@@ -194,10 +197,9 @@ try {
   // Read-only: the page data injected the way a host does, no token. Every step offers the command and nothing is written.
   {
     const { ctx, page } = await open(1280, 'light');
-    const [, port, tok] = /:(\d+)\/app\/\?t=([\w-]+)/.exec(url);
-    const state = await (await fetch(`http://127.0.0.1:${port}/api/state`, { headers: { 'x-factory-token': tok } })).json();
-    await ctx.addInitScript((d) => { window.__FACTORY_DATA__ = d; }, state);
-    await page.goto(url.replace(/\?t=.*/, ''));
+    F(['render']); // the file every record() rewrites
+    await page.goto(pathToFileURL(path.join(DIR, 'dashboard.html')).href);
+    await page.getByRole('tab', { name: /app/ }).waitFor(); // the run data is inlined; nothing loads from anywhere
     await page.getByRole('button', { name: 'Set up' }).click();
     const wiz = page.getByRole('dialog', { name: 'Set up the factory' });
     assert.match(await wiz.innerText(), /Read-only page[^]*npm install -g @openai\/codex[^]*onboard/);
@@ -207,15 +209,24 @@ try {
     assert.match(await wiz.locator('.web-ob-cmd code').first().innerText(), /onboard ship 'acme\/app' web,mobile,database$/);
     assert.equal(fs.readFileSync(path.join(DIR, 'onboard.json'), 'utf8').includes('mobile'), false); // the read-only page never writes
     await shot(page, '1280-light-static-3');
+    await wiz.getByRole('button', { name: /^Close/ }).click();
+    F(['event', 'acme/app#77', 'spec', 'started', '-'], '{"title":"Arrived after the page loaded"}'); // record() re-renders the file
+    await page.getByText('Arrived after the page loaded').first().waitFor({ timeout: 15_000 }); // the file re-reads itself every 10 s
     await ctx.close();
   }
-  // Without the token the page can't read /api/state, and says so instead of showing anyone's data.
+  // The claude.ai Artifact: the same app, scrubbed; the host adds the skeleton.
   {
-    const { ctx, page } = await open(1280, 'light');
-    await page.goto(url.replace(/\?t=.*/, ''));
-    await page.getByText('Could not load runs').waitFor();
+    const { ctx, page } = await open(1280, 'light'), out = path.join(root, 'artifact.html'), wrapped = path.join(root, 'artifact-page.html');
+    F(['render', '--artifact', out]);
+    fs.writeFileSync(wrapped, `<!doctype html><html><head><meta charset="utf-8"></head><body>${fs.readFileSync(out, 'utf8')}</body></html>`);
+    await page.goto(pathToFileURL(wrapped).href);
+    await page.getByText('Arrived after the page loaded').first().waitFor();
+    assert.ok(!(await page.content()).includes(HOME), 'no local path in the published page');
     await ctx.close();
   }
+  // Without the token F ui serves nothing, and the API refuses.
+  assert.equal((await fetch(url.replace(/\?t=.*/, ''))).status, 403);
+  assert.equal((await fetch(url.replace(/\?t=.*/, 'api/state'))).status, 403);
   assert.deepEqual(errors, []);
   console.log(`ok - web e2e passed; ${shots.length} screenshots in ${SHOTS}`);
 } catch (e) {

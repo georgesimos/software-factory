@@ -38,7 +38,7 @@ software-factory/
 │   │   ├── templates/        stack templates, data only: next-web.json, expo-mobile.json, _template.json, README.md
 │   │   ├── examples/
 │   │   │   └── budget-app/   PLAN.md + issues.json for "a personal budget app", and the F new --dry-run output
-│   │   ├── dashboard.html    static dashboard template; F render injects the run data at __FACTORY_DATA__ (also the setup wizard)
+│   │   ├── app.html          apps/web's single-file build (generated: pnpm --filter @software-factory/web dashboard); F render fills its #data tag
 │   │   ├── references/
 │   │   │   └── reviewers.md  per-axis reviewer briefs (code, security, ux, ui, seo, docs) and the verifier brief
 │   │   ├── evals/golden/     1.json … 8.json: intake fixtures with the expected outcome (pass / needs-info / reject / split)
@@ -50,7 +50,7 @@ software-factory/
 │   │   │   ├── bin/          fake `claude` and `codex` for the harness contract test (one stub per harness)
 │   │   │   ├── gh-project-stub.mjs  stateful fake `gh` (repos, labels, issues) for the idea-to-app test
 │   │   │   ├── project.mjs   idea-to-app checks (run by project.test.mjs): commands, idempotency, queue, loop stops, adapter contracts
-│   │   │   └── onboard.e2e.cjs  Playwright run of the setup wizard against F ui (375/1280 px, light/dark, static file)
+│   │   │   └── web.e2e.mjs   Playwright run of the app against F ui (wizard, Skills; 375/1280 px, light/dark) and F render's file
 │   │   └── package.json      private; `test` = env -u CLAUDE_CODE_SESSION_ID node factory.mjs test
 │   ├── core/                 @software-factory/core: the logic moving out of factory.mjs (docs/plans/split.md). Run by Node directly
 │   │   └── src/              constants, log (event log, record), derive, burn, gate (gate/decide/risk/metrics), skills, rules, review,
@@ -140,16 +140,15 @@ The log is an append-only JSONL file, and it is the source of truth. Everything 
 
 ### 2.4 The dashboard
 
-`dashboard.html` is a self-contained static page. On every `record()`, `F render`:
+The dashboard is the React app in `apps/web`, built into one self-contained file, `packages/factory/app.html`: its CSS, JS and fonts are inlined, so it loads nothing. The file is committed, so plugin and skill installs need no build step; rebuild it with `pnpm --filter @software-factory/web dashboard` after changing `apps/web` or the design system. One build has three hosts (#55):
 
-1. derives all runs, live and archived;
-2. merges in the session links from `sessions.json`;
-3. computes metrics overall and per project: merge rate, average iterations, median cycle time, revert rate, cost per merge;
-4. writes `~/.claude/factory/dashboard.html` with the data inlined as JSON.
+- **`F render`**, on every `record()`, derives all runs (live and archived), merges in the session links from `sessions.json`, computes metrics overall and per project (merge rate, average iterations, median cycle time, revert rate, cost per merge), and writes `~/.claude/factory/dashboard.html` with that data in the `#data` tag. The page re-reads itself every 10 s (`reload` in the data), never under an open dialog. Without `F ui` it is read-only: each change shows or copies the command to run.
+- **The claude.ai Artifact**: `F render --artifact` publishes the same page through `artifact()`, which strips the document skeleton and the reload, scrubs local paths and refuses a page that still carries one, the login, the host name or a token.
+- **`F ui`** serves the file unfilled at `/?t=<token>`; the page reads `GET /api/state` and writes through the API (`packages/factory/API.md`).
 
-Every `<` in that JSON is written as the escape sequence backslash-u-003c, so issue titles cannot break out of the script tag; the self-test asserts this. The page filters by project, and each run's detail has Pipeline, Review, Decision, Loop-backs, Sessions and Timeline sections; a split parent also gets an Epic section listing its children. For each linked agent session it offers a **Copy resume** button, which copies `cd '<cwd>' && claude --resume <id>` for Claude Code or `codex resume <id>` for Codex. The working directory is single-quoted for the shell. Ids that don't match `[\w.-]+` get no button. Above the sessions, an **Open in Claude** link (`claude-cli://open?cwd=…&q=…`) opens a new Claude Code terminal in the run's worktree (`worktree` in the page data, from `worktree.json`), or else the latest session's `cwd`, with "Continue factory run <id>. Run F state '<id>' first." pre-filled but not sent. Both values are `encodeURIComponent`-encoded; the path must be absolute with no `..` and no control or bidi characters, and the run id must look like `owner/repo#N` or `owner/repo:branch`, or there is no link. The handler exists only after the user has sent one message in an interactive `claude` session, which the tooltip says. Every other link stays `https:`-only. Each run card shows an "N sessions" chip when sessions are linked. When a step or a review axis was run by something other than the built-in brief, the pipeline stage or the review-matrix cell shows a small runner chip, such as `skill: brand-review` or `codex`, with a fallback reason in its tooltip. A theme switch offers System, Light and Dark; the choice is stored in `localStorage` under `factory.theme` and applied by an inline script before first paint, so there is no flash of the wrong theme.
+Every `<` in that JSON is written as the escape sequence backslash-u-003c, so issue titles cannot break out of the script tag; the self-test asserts this. The page filters by project, and each run's detail has Pipeline, Review, Decision, Loop-backs, Sessions and Timeline sections; a split parent also gets an Epic section listing its children. For each linked agent session it offers a **Copy resume** button, which copies `cd '<cwd>' && claude --resume <id>` for Claude Code or `codex resume <id>` for Codex. The working directory is single-quoted for the shell. Ids that don't match `[\w.-]+` get no button. Above the sessions, an **Open in Claude** link (`claude-cli://open?cwd=…&q=…`) opens a new Claude Code terminal in the run's worktree (`worktree` in the page data, from `worktree.json`), or else the latest session's `cwd`, with "Continue factory run <id>. Run F state '<id>' first." pre-filled but not sent. Both values are `encodeURIComponent`-encoded; the path must be absolute with no `..` and no control or bidi characters, and the run id must look like `owner/repo#N` or `owner/repo:branch`, or there is no link. The handler exists only after the user has sent one message in an interactive `claude` session, which the tooltip says. Every other link stays `https:`-only. Each run card shows an "N sessions" chip when sessions are linked. When a step or a review axis was run by something other than the built-in brief, the pipeline stage or the review-matrix cell shows a small runner chip, such as `skill: brand-review` or `codex`, with a fallback reason in its tooltip. A theme switch offers System, Light and Dark; the choice is stored in `localStorage` under `sf.theme` and applied by an inline script before first paint, so there is no flash of the wrong theme.
 
-On screens 1100 px and wider, the run detail is a docked column beside the board. It is open by default, and with no run selected it shows a "Select a run" state. The column is about 44% of the viewport, clamped to 480–760 px. Drag its edge or use the arrow keys on the focused edge to resize it. Collapse it with the header toggle or the `]` key, and use **Focus** to widen it to most of the screen. Width, collapsed state and focus mode persist in `localStorage` under `factory.panelW`, `factory.panelCollapsed` and `factory.panelFocus`. Choosing a run always re-opens a collapsed column. Below 1100 px the detail becomes a full view. Esc closes the run and returns focus to its card.
+On screens 1100 px and wider, the run detail is a docked column beside the board. It opens when a run is chosen, and with no run selected it shows a "Select a run" state. It is at least 420 px wide and leaves the board at least 340 px. Drag its edge or use the arrow keys on the focused edge to resize it. Collapse it with the header toggle or the `]` key, and use **Focus** to widen it to most of the screen. Width, collapsed state and focus mode persist in `localStorage` under `sf.panelW`, `sf.panelCollapsed` and `sf.panelFocus`. Choosing a run always re-opens a collapsed column. Below 1100 px the detail opens in a sheet. Esc closes the run and returns focus to its card.
 
 ### 2.5 The design system: `packages/design-system`
 
@@ -158,7 +157,7 @@ The design system holds tokens in `tokens.ts`, from which CSS is generated, plus
 - **generic primitives** in `src/components/`;
 - **factory views** in `src/factory/`, typed against `src/factory/model.ts`, which mirrors the JSON that `derive()`, `metrics()`, `discover()` and `sync()` emit.
 
-The design system is the UI kit for the planned app. The current `dashboard.html` does not use it yet.
+The dashboard (`apps/web`) is built from it.
 
 ### 2.6 The planned app (not built)
 
@@ -376,7 +375,7 @@ Each step can be run by the built-in brief, a user skill or brief, or a harness 
   - `POST /skills` needs the token header, a same-origin `Origin`, a JSON content type and an exact `Host` (against DNS rebinding);
   - it sends no CORS headers, caps the body at 64 KB, and sets `no-store`, `no-referrer` and `DENY` framing;
   - every write goes through `setSkill`, which validates before writing;
-  - the token is only in the served response, never in the `dashboard.html` that `render()` writes.
+  - the token is only in the printed URL; the page reads it from `?t=` and sends it as `x-factory-token`. Neither the served `app.html` nor the `dashboard.html` that `render()` writes contains it.
 
   The written file shows the same Skills sheet read-only, and offers each change as a copyable `F skills set` command. The page's 10-second reload pauses while a dialog is open.
 - **Stamped only from the CLI.** `F event`, `F review` and `F gate` stamp the runner. In-process records such as `sync` imports never do, so a tracked human PR never shows a `codex` chip. The verifier's runner is stamped on every `gate` event while it is configured, even in an iteration with nothing to verify.

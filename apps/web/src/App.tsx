@@ -8,6 +8,7 @@ import { RunDetail, type StartState } from './RunDetail.tsx';
 import { SetupWizard } from './Setup.tsx';
 import { SkillsSheet } from './Skills.tsx';
 import { store } from './store.ts';
+import { restoreView, saveView } from './view.ts';
 
 const WIDE = '(min-width: 1100px)'; // the docked panel; narrower screens open a run in a sheet
 const readHash = () => { try { return decodeURIComponent(location.hash.slice(1)); } catch { return ''; } };
@@ -22,7 +23,8 @@ function useMedia(q: string) {
 export const merged = (prev: FactoryData | undefined, data: FactoryData, keep: string[]): FactoryData =>
   prev && keep.length ? { ...data, ...Object.fromEntries(keep.map((k) => [k, prev[k as keyof FactoryData]])) } : data;
 
-export function App({ load = loadData }: { load?: () => Promise<FactoryData> }) {
+const RELOAD = () => location.reload(); // a stable default: it is an effect dependency
+export function App({ load = loadData, reload = RELOAD }: { load?: () => Promise<FactoryData>; reload?: () => void }) {
   const [state, setState] = useState<{ data?: FactoryData; error?: string }>({});
   const writes = useRef<string[][]>([]); // the keys each write's reply patched
   // A poll that started before a write keeps that write's keys and takes the rest, so steady editing never freezes the board.
@@ -35,6 +37,10 @@ export function App({ load = loadData }: { load?: () => Promise<FactoryData> }) 
       if (ignore) return;
       settle(w, data);
       if (data.token) later(); // F ui: live; injected data is a snapshot
+      else if (first && data.reload) { // F render's file: re-read it, but never under an open sheet or dialog
+        const tick = () => { timer = setTimeout(() => { if (document.querySelector('dialog[open]')) tick(); else { saveView(); reload(); } }, data.reload); };
+        tick();
+      }
     }, (e: unknown) => {
       if (ignore) return;
       if (first) setState({ error: String((e as Error)?.message ?? e ?? 'Unknown error') });
@@ -43,7 +49,7 @@ export function App({ load = loadData }: { load?: () => Promise<FactoryData> }) 
     go(true);
     document.addEventListener('visibilitychange', onVis);
     return () => { ignore = true; clearTimeout(timer); document.removeEventListener('visibilitychange', onVis); };
-  }, [load, settle]);
+  }, [load, reload, settle]);
   const { data, error } = state;
   const patch = useCallback((p: Partial<FactoryData>) => (writes.current.push(Object.keys(p)), setState((s) => (s.data ? { data: { ...s.data, ...p } } : s))), []); // a write's reply, until the next poll
   const refresh = useCallback(() => { const w = writes.current.length; load().then((d) => settle(w, d), () => {}); }, [load, settle]); // after a setup write
@@ -75,6 +81,7 @@ function Shell({ data, patch, refresh }: { data: FactoryData; patch: (p: Partial
   const [setupOpen, setSetupOpen] = useState(() => Array.isArray(data.projects) && !projects.length && session('sf.onboardClosed') !== '1');
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 60_000); return () => clearInterval(t); }, []); // "Updated 3m ago" stays true
+  useEffect(restoreView, []); // after a 10 s re-read of F render's file: after the panel's own focus effect, as a parent's runs last
   const byId = new Map(data.runs.map((r) => [r.id, r]));
   const sel = byId.get(hash) ?? null;
   const runs = data.runs.filter((r) => !project || repoOf(r.id) === project);

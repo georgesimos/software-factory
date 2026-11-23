@@ -46,6 +46,7 @@ describe('run actions (#27)', () => {
     expect(JSON.parse(calls[0]![1].body as string)).toEqual({ repo: 'acme/shop', issue: 45 });
     done(new Response(JSON.stringify({}), { status: 200 })); // no session id: still a success
     expect(await within(panel).findByText('Resumed. It shows here as it runs.')).toBeTruthy();
+    expect(within(panel).queryByRole('button', { name: /Resum/ })).toBeNull(); // no second resume of a live run
   });
 
   it('under F ui: an active run the server would refuse gets the prompt, not a button', async () => {
