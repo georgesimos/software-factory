@@ -37,7 +37,10 @@ function webApp(pathname, search, web) {
   try { f = (pathname.slice('/app/'.length) || 'index.html').split('/').map((x) => { const d = decodeURIComponent(x); if (/[/\\]/.test(d)) throw 0; return d; }).join('/'); } catch { /* malformed, or an encoded separator */ }
   const type = f && TYPES[path.extname(f)];
   const found = () => filesOf(web, false).includes(f) || filesOf(web, true).includes(f);
-  if (type && found()) return { status: 200, type, body: fs.readFileSync(path.join(web, ...f.split('/'))), ...(f.startsWith('assets/') && { cache: 'public, max-age=31536000, immutable' }) }; // hashed names
+  if (type && found()) {
+    try { return { status: 200, type, body: fs.readFileSync(path.join(web, ...f.split('/'))), ...(f.startsWith('assets/') && { cache: 'public, max-age=31536000, immutable' }) }; } // hashed names
+    catch (e) { if (e.code !== 'ENOENT') throw e; listed.delete(web); } // deleted since it was listed: a 404, never a 500 naming the path
+  }
   const files = filesOf(web, false);
   return { status: 404, type: 'application/json', body: JSON.stringify({ error: files.length ? 'not found' : 'apps/web is not built: run pnpm --filter @software-factory/web build' }) };
 }
