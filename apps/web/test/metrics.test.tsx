@@ -91,6 +91,23 @@ describe('Metrics sheet', () => {
     const { unmount: u2 } = render(<MetricsSheet open onClose={() => {}} token="t" projects={[]} project="" load={async () => normMetrics({ outcomes: { closed: 2, split: 1 } })} />);
     expect(await screen.findByText('Nothing in this range')).toBeTruthy(); // closed and split have no tile, so they don't fill the page
     u2();
+    // A filter change while empty: the message keeps the filter it was loaded for and goes busy until the new one answers; a
+    // late answer for the old filter, after a newer one landed, is dropped.
+    const pending: Record<string, (m: LogMetrics) => void> = {};
+    const lazy = vi.fn((_t: string, project: string) => (project ? new Promise<LogMetrics>((ok) => { pending[project] = ok; }) : Promise.resolve(normMetrics({}))));
+    const { unmount: u3 } = render(<MetricsSheet open onClose={() => {}} token="t" projects={['acme/a', 'acme/b']} project="" load={lazy} />);
+    await screen.findByText(/^No run spent tokens or finished in the last 30 days\.$/);
+    await userEvent.selectOptions(screen.getByLabelText('Project'), 'acme/a');
+    expect(screen.queryByText(/in acme\/a/)).toBeNull();
+    expect(screen.getByText(/^No run spent tokens or finished in the last 30 days\.$/).closest('.web-mx-data')!.getAttribute('aria-busy')).toBe('true');
+    await userEvent.selectOptions(screen.getByLabelText('Project'), 'acme/b');
+    pending['acme/b']!(normMetrics({}));
+    expect(await screen.findByText(/in acme\/b\.$/)).toBeTruthy();
+    pending['acme/a']!(normMetrics(reply)); // A's late answer
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByText(/in acme\/b\.$/)).toBeTruthy();
+    expect(screen.queryByRole('region', { name: 'Burn and cost' })).toBeNull();
+    u3();
     // A 200 that isn't JSON (a dev server's index.html) is an error, not an empty range.
     vi.stubGlobal('fetch', vi.fn(async () => new Response('<!doctype html>', { status: 200 })));
     try {

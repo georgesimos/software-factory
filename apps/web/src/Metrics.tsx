@@ -129,12 +129,12 @@ function Breakdown({ title, by, order, base }: { title: string; by: Record<strin
 
 function Body({ token, projects, initial, load }: { token: string; projects: string[]; initial: string; load: typeof fetchMetrics }) {
   const [project, setProject] = useState(initial), [range, setRange] = useState('30');
-  const [st, setSt] = useState<{ m?: LogMetrics; error?: string; busy?: boolean }>({});
+  const [st, setSt] = useState<{ m?: LogMetrics; error?: string; busy?: boolean; of?: { project: string; range: string } }>({}); // of: the filter m was loaded for
   const now = Date.now(), since = sinceFor(range, now), to = range ? dayOf(now) : ''; // a range runs to today, quiet days included
   useEffect(() => {
     let ignore = false;
-    setSt((s) => ({ m: s.m, busy: true })); // the last numbers stay, dimmed and marked busy, until the new filter's arrive
-    load(token, project, since).then((m) => { if (!ignore) setSt({ m }); }, (e: unknown) => { if (!ignore) setSt({ error: String((e as Error)?.message ?? e) }); });
+    setSt((s) => ({ m: s.m, of: s.of, busy: true })); // the last numbers stay, dimmed and marked busy, until the new filter's arrive
+    load(token, project, since).then((m) => { if (!ignore) setSt({ m, of: { project, range } }); }, (e: unknown) => { if (!ignore) setSt({ error: String((e as Error)?.message ?? e) }); });
     return () => { ignore = true; };
   }, [token, project, since, load]);
   const { m, error } = st, o = m?.outcomes, t = m?.total;
@@ -149,7 +149,9 @@ function Body({ token, projects, initial, load }: { token: string; projects: str
         <label>Range <Select value={range} onChange={(e) => setRange(e.target.value)}>{RANGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</Select></label>
       </div>
       {error ? <EmptyState title="Could not load metrics">{error}</EmptyState> : !m ? <><span className="sf-sr-only">Loading metrics…</span><Skeleton height={240} width="100%" /></> : empty ? (
-        <EmptyState title="Nothing in this range">No run spent tokens or finished {range ? `in the last ${range} days` : 'yet'}{project ? ` in ${project}` : ''}.</EmptyState>
+        <div className="web-mx-data" aria-busy={st.busy || undefined}> {/* worded for the filter that loaded it, not one still loading */}
+          <EmptyState title="Nothing in this range">No run spent tokens or finished {st.of?.range ? `in the last ${st.of.range} days` : 'yet'}{st.of?.project ? ` in ${st.of.project}` : ''}.</EmptyState>
+        </div>
       ) : (
         <div className="web-mx-data" aria-busy={st.busy || undefined}>
           <MetricStrip label="Burn and cost">
