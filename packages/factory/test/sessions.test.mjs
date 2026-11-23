@@ -247,6 +247,20 @@ test('F ui streams a live session over HTTP as server-sent events, to the end', 
   } finally { server.closeAllConnections(); server.close(); }
 });
 
+test('serve().close(), the desktop app\'s quit: stops the sessions it started (detached, so they would outlive it), then the server', async () => {
+  const { url, close } = await serve(0);
+  const u = new URL(url), H = { 'x-factory-token': u.searchParams.get('t'), origin: u.origin, 'content-type': 'application/json' };
+  process.env.STUB_HANG = '1'; // the stub claude runs until killed
+  let id;
+  try { ({ session: id } = await (await fetch(`${u.origin}/api/sessions`, { method: 'POST', headers: H, body: JSON.stringify({ repo: 'acme/app', issue: 91 }) })).json()); }
+  finally { delete process.env.STUB_HANG; }
+  assert.equal(getSession(id).state, 'running');
+  close();
+  assert.ok((await finished(getSession(id))).length, 'the session ends');
+  assert.notEqual(getSession(id).state, 'running');
+  assert.equal(await fetch(`${u.origin}/`).then(() => 'up', () => 'down'), 'down');
+});
+
 // Stand-ins for node-pty and the Agent SDK: the host passes these in, so no real module or binary is touched.
 const PTY = 'node-pty', SDK = '@anthropic-ai/claude-agent-sdk'; // host modules are keyed by package name
 function fakePty(spawnError) {

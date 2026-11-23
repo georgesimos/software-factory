@@ -48,7 +48,7 @@ export function killTree(child, platform = process.platform, run = spawn, kill =
   else try { kill(-child.pid, 'SIGTERM'); } catch { child.kill(); } // the group is gone: the child alone, if it is not
 }
 // Detached children don't get the terminal's Ctrl-C, so a running session is stopped when this process ends.
-const stopAll = () => { for (const s of sessions.values()) if (s.state === 'running') s.stop(); };
+export const stopAll = () => { for (const s of sessions.values()) if (s.state === 'running') s.stop(); };
 process.once('exit', stopAll);
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(sig, () => { stopAll(); process.kill(process.pid, sig); }); // then the default action
 

@@ -4,7 +4,7 @@
 // A temp FACTORY_DIR, a fake HOME and the factory's stub gh, git, claude and codex keep it off real repos and ~/.claude.
 // Never clicks Resume: that would spawn a harness. Run: pnpm --filter @software-factory/desktop e2e [screenshot dir]
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -29,6 +29,8 @@ let origin;
 try {
   const win = await app.firstWindow();
   win.on('pageerror', (e) => errors.push(e.message));
+  const blocked = [];
+  win.on('console', (m) => { if (/Content.Security.Policy/i.test(m.text())) blocked.push(m.text()); });
   await win.setViewportSize({ width: 1280, height: 860 });
   const url = new URL(win.url());
   origin = url.origin;
@@ -48,6 +50,7 @@ try {
   const panel = win.getByRole('complementary');
   await panel.getByRole('heading', { name: 'Sessions' }).waitFor();
   await win.screenshot({ path: path.join(SHOTS, 'desktop-run.png') });
+  assert.deepEqual(blocked, [], 'the app itself breaks no CSP rule');
 
   // No Node in the page, nothing from another origin, no new windows, no navigation away.
   assert.deepEqual(await win.evaluate(() => [typeof window.process, typeof window.require, typeof window.module]), ['undefined', 'undefined', 'undefined']);
@@ -59,6 +62,22 @@ try {
   await win.evaluate(() => { location.href = 'http://example.invalid/'; });
   await win.waitForTimeout(500);
   assert.equal(win.url(), before, 'off-origin navigation is refused');
+  // The CSP from the main: app.html's own scripts ran (the board is up), anything else is refused.
+  assert.equal(await win.evaluate(() => new Promise((r) => { // an injected inline script: refused (Playwright's own evaluate is exempt)
+    document.addEventListener('securitypolicyviolation', (e) => r(e.violatedDirective), { once: true });
+    const x = document.createElement('script'); x.textContent = 'window.injected = 1'; document.body.append(x);
+    setTimeout(() => r(window.injected ? 'ran' : 'silent'), 1000);
+  })), 'script-src-elem');
+  // The one permission it grants, for the Copy buttons. (Writes this string to the real clipboard.)
+  await win.bringToFront();
+  assert.equal(await win.evaluate(() => navigator.clipboard.writeText('software-factory e2e').then(() => 'ok', (e) => e.name)), 'ok');
+  assert.equal(await win.evaluate(() => navigator.mediaDevices?.getUserMedia({ audio: true }).then(() => 'ok', (e) => e.name) ?? 'none'), 'NotAllowedError');
+  // A second launch on the same profile hands over to this one and exits: one server per FACTORY_DIR.
+  const second = spawn(app.process().spawnfile, [APP], { cwd: APP, env, stdio: 'ignore' });
+  const code = await Promise.race([new Promise((r) => second.on('exit', r)), new Promise((r) => setTimeout(() => r('still running'), 20_000))]);
+  if (code === 'still running') second.kill();
+  assert.equal(code, 0, 'the second instance quits');
+  assert.equal(app.windows().length, 1);
   assert.deepEqual(errors, []);
 } finally {
   await app.close();

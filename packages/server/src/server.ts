@@ -18,7 +18,7 @@ import { applyPreset, readSkills, setSkill, skillsData } from '../../core/src/sk
 import { sync } from '../../core/src/sync.ts';
 import { withMeasured } from '../../core/src/burn.ts';
 import { open } from '../../core/src/platform.ts';
-import { getSession, listSessions, startSession, subscribe } from '../../adapters/sessions.mjs';
+import { getSession, listSessions, startSession, stopAll, subscribe } from '../../adapters/sessions.mjs';
 
 // `F ui`: the dashboard on a loopback port, where the Skills sheet can save. Pure, so the self-test can drive it.
 export const same = (a, b) => typeof a === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -182,9 +182,15 @@ export async function serve(port = 0) {
       if (r.stream.state !== 'running') res.end();
     });
   });
-  return new Promise<{ server: http.Server; token: string; url: string }>((resolve, reject) => {
+  // close(): the desktop app's quit. Sessions run detached in their own process group, so they'd outlive it; stop them first.
+  const close = () => { stopAll(); server.closeAllConnections(); server.close(); };
+  return new Promise<{ server: http.Server; token: string; url: string; close: () => void }>((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, '127.0.0.1', () => resolve({ server, token, url: `http://127.0.0.1:${server.address().port}/?t=${token}` }));
+    server.listen(port, '127.0.0.1', () => {
+      server.off('error', reject); // later errors are logged, not swallowed by a settled promise
+      server.on('error', (e) => console.error(`factory ui: ${e.message}`));
+      resolve({ server, token, url: `http://127.0.0.1:${server.address().port}/?t=${token}`, close });
+    });
   });
 }
 export const ui = (port = 0) => serve(port).then(({ url }) => console.log(`factory ui: ${url}\nOnly this URL can change settings (skills.json, rules, projects). Ctrl-C to stop.`));
@@ -223,7 +229,7 @@ export function pageData(extra = {}) {
   let idea = {};
   try { idea = { ideas: ideas(events, Object.fromEntries(runs.map((r) => [r.id, r]))) }; } catch (e) { idea = { ideasError: e.message }; } // never fail the event that triggered the render
   return { generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)),
-    harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), fCmd: F_CMD,
+    harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), fCmd: F_CMD, ...(!F_CMD && { fMissing: true }),
     autoMerge: Object.fromEntries(Object.entries(projects()).map(([r, p]) => [r, p?.autoMerge !== false])), ...idea, ...extra };
 }
 export function page(extra = {}) {
