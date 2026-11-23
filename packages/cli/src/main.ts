@@ -17,7 +17,7 @@ import { headlessArgs, reviewFromText, stepModel } from '../../core/src/review.t
 import { issuesCreate, loop, newProject, projectStatus, queue, retireIdea } from '../../core/src/project.ts';
 import { loadShip, loadShipList, ship } from '../../core/src/ship.ts';
 import { claudeDir, onboardState, onboardText, setShip } from '../../core/src/onboard.ts';
-import { artifact, render, ui } from '../../server/src/server.ts';
+import { artifact, render, startRun, ui } from '../../server/src/server.ts';
 import { rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
 import { note, takeNotes } from '../../core/src/notes.ts';
 import { withMeasured } from '../../core/src/burn.ts';
@@ -182,6 +182,7 @@ export async function main(argv) {
         if (run) throw new Error('usage: install-cli');
         out(installCli(path.join(import.meta.dirname, '..', '..', 'factory', 'factory.mjs'), { home: os.homedir() })); break;
       case 'ui': await ui(Number(run) || 0); break;
+      case 'start': out(startRun(run)); break; // start owner/repo#N: a detached headless run in the attached clone, as POST /api/runs
       case 'demo': // never pollute the real log with fixtures
         if (!process.env.FACTORY_DIR) io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-demo-'));
         console.log(demo()); break;
@@ -212,6 +213,7 @@ export async function main(argv) {
   skills preset <name> [owner/repo|default]  set every Claude-run step's model, effort and fallback from a preset; a project only on steps it sets (${Object.keys(PRESETS).join(', ')}; built-in: ${DEFAULT_PRESET})
   skills catalog [owner/repo...]          every runner on this machine: built-in, harness tools, global, project, your briefs
   ui     [port]                           serve the dashboard on 127.0.0.1 with a token, so the Skills sheet and setup wizard can save
+  start  <owner/repo#N>                   start the factory on an issue: a detached headless claude in the attached clone, logging to the run's folder; prints {pid, log}
   rules  <owner/repo>                     print the policy rules, warnings and per-step guidance that apply
   rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, deploy.preview required|advisory|off, artifact https://claude.ai/artifact/<id> (owner/repo only), project.budgetUsd x, project.maxIssuesPerSession n, guide.<step> "text"
   rules unset <owner/repo|default> <key> [--reason "…"]  remove one (back to the global rule, or the built-in)

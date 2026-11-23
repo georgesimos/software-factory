@@ -13,13 +13,14 @@ import { ideas, startIdea } from '../../core/src/project.ts';
 import { metrics } from '../../core/src/gate.ts';
 import { fCmd, onboardConfig, onboardState, readOnboard, setShip } from '../../core/src/onboard.ts';
 import { projects, wtInfo } from '../../core/src/workspace.ts';
-import { dashboard, read, readArchive, sessionsFile, stateDir } from '../../core/src/log.ts';
+import { dashboard, read, readArchive, runDir, sessionsFile, stateDir } from '../../core/src/log.ts';
 import { applyPreset, readSkills, setSkill, skillsData } from '../../core/src/skills.ts';
 import { sync } from '../../core/src/sync.ts';
 import { measure, withMeasured } from '../../core/src/burn.ts';
 import { logMetrics } from '../../core/src/metrics.ts';
 import { open } from '../../core/src/platform.ts';
-import { getSession, listSessions, startSession, stopAll, subscribe } from '../../adapters/sessions.mjs';
+import { spawn } from 'node:child_process';
+import { getSession, listSessions, resolveSpec, startSession, stopAll, subscribe } from '../../adapters/sessions.mjs';
 
 // `F ui`: the dashboard on a loopback port, where the Skills sheet can save. Pure, so the self-test can drive it.
 export const same = (a, b) => typeof a === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -96,6 +97,7 @@ export const UI_ROUTES = {
   },
   '/onboard/automerge': ({ repo, on }) => { setAutoMerge(repo, on); return onboardConfig(); },
   '/sessions': (x) => ({ session: launchSession(x).id }),
+  '/runs': ({ issue }) => startRun(issue),
   '/sessions/terminal': (x) => ({ session: terminalSession(x).id }),
   '/sessions/input': ({ id, data, cols, rows }) => { // keystrokes and size for a terminal session
     const s = getSession(id);
@@ -167,8 +169,8 @@ export function terminalSession({ harness = 'claude-code', repo, issue, resume }
   }
   return startSession(h, { mode: 'terminal', resume }, { cwd, env, label, modules });
 }
-export function launchSession({ harness = 'claude-code', mode = 'headless', repo, issue }, env = process.env, modules = hostModules) {
-
+// The checks every factory start passes (#25), for a live session here (launchSession) and a detached run (startRun).
+function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue }, modules = hostModules) {
   const h = harnesses.find((y) => y.id === harness);
   if (!h?.launch) throw new Error(`harness ${String(harness).slice(0, 40)} cannot launch sessions`);
   if (!(h.modes || []).includes(mode)) throw new Error(`${h.id} modes are ${(h.modes || []).join(', ')}`);
@@ -187,6 +189,8 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
   if (gone) throw new Error(`${id} is ${gone.outcome} (archived): it needs a human, not a new run`);
   // Any running session on the run, a person's terminal included: two harnesses would share one session or worktree.
   if (listSessions().some((x) => x.label === id && x.state === 'running')) throw new Error(`${id} already has a running session`); // before its first event lands
+  const pid = startedPid(id);
+  if (pid) throw new Error(`${id} already has a running session (pid ${pid}, started by F start)`);
   // A run left active by a session that was stopped or crashed here resumes that harness session instead of staying stuck.
   const resume = resumeFor(r, factorySessions(id).at(-1));
   if (r && !TERMINAL.includes(r.outcome) && !resume) throw new Error(`${id} already has an active run (${r.outcome || r.stage})`);
@@ -199,7 +203,42 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
     if (!l.ok) throw new Error(`${h.label} is not signed in: ${l.hint}`);
     harnessReady.set(h.id, Date.now()); // only a success is cached, so a fresh sign-in counts at once
   }
-  return startSession(h, { mode, prompt: `/software-factory ${id}`, resume, budget: budgetLeft(b), write: true }, { cwd, env, label: id, modules });
+  return { h, mode, cwd, id, resume, budget: budgetLeft(b) };
+}
+export function launchSession(x, env = process.env, modules = hostModules) {
+  const { h, mode, cwd, id, resume, budget: left } = launchGate(x, modules);
+  return startSession(h, { mode, prompt: `/software-factory ${id}`, resume, budget: left, write: true }, { cwd, env, label: id, modules });
+}
+// A run F start launched: its pid while that process lives. A dead pid refuses nothing, so the file needs no cleanup.
+const startFile = (id) => path.join(runDir(id), 'start.json');
+function startedPid(id) {
+  let pid;
+  try { ({ pid } = JSON.parse(fs.readFileSync(startFile(id), 'utf8'))); } catch { return undefined; }
+  if (!Number.isInteger(pid) || pid < 1) return undefined;
+  try { process.kill(pid, 0); return pid; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM' ? pid : undefined; }
+}
+// F start and POST /api/runs (#25): the factory on one issue as a detached headless harness that outlives F and F ui, with
+// launchSession's checks. Not a session here: GET /api/sessions doesn't list it and quitting doesn't stop it. The prompt
+// and output are files in the run's folder, so nothing waits on F. run is for tests (child_process.spawn's shape).
+export function startRun(issue, env = process.env, run = spawn) {
+  const m = /^([\w.-]+\/[\w.-]+)#(\d{1,10})$/.exec(typeof issue === 'string' ? issue : '');
+  if (!m) throw new Error('issue must be owner/repo#N');
+  const { h, cwd, id, resume, budget: left } = launchGate({ repo: m[1], issue: Number(m[2]) });
+  const spec = h.launch({ mode: 'headless', prompt: `/software-factory ${id}`, resume, budget: left, write: true });
+  const c = resolveSpec(spec, env), dir = runDir(id), stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const log = path.join(dir, `headless-${stamp}.log`), prompt = path.join(dir, `headless-${stamp}.prompt`);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(prompt, spec.stdin ?? '');
+  const stdin = fs.openSync(prompt, 'r'), out = fs.openSync(log, 'a');
+  let child;
+  try {
+    child = run(c.file, c.args, { cwd, env: { ...env, ...c.env }, stdio: [stdin, out, out], detached: true, windowsHide: true, windowsVerbatimArguments: !!c.windowsVerbatimArguments });
+    child.on('error', () => { /* no pid: refused below; the log says the rest */ });
+  } finally { fs.closeSync(stdin); fs.closeSync(out); }
+  if (!child.pid) throw new Error(`${spec.cmd} did not start`);
+  child.unref();
+  fs.writeFileSync(startFile(id), JSON.stringify({ pid: child.pid, log, started: new Date().toISOString() }));
+  return { pid: child.pid, log };
 }
 
 // The F ui server, unprinted: the desktop main loads `url` in its window; F ui prints it. Resolves once listening.

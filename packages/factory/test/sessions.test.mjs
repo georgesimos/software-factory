@@ -1,6 +1,7 @@
 // H1: the harness launch contract, the session runner and /api/sessions, against test/bin's claude stub only.
 // test/bin goes first on PATH and nothing else that could hold a real `claude`: a real one would start a paid run.
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,12 +9,12 @@ import { test } from 'node:test';
 import { setup } from './setup.mjs';
 import { COST_CAP, TOKEN_CAP } from '../../core/src/constants.ts';
 import { HERE } from '../factory.mjs';
-import { archive, record } from '../../core/src/log.ts';
+import { archive, io, record, runDir } from '../../core/src/log.ts';
 import { projects, saveProject, wtFile } from '../../core/src/workspace.ts';
 import { command, opener } from '../../core/src/platform.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { MAX_BYTES, killTree, listSessions, resolveSpec, startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
-import { budgetLeft, harnessReady, launchSession, resumable, resumeFor, serve, terminalSession, uiHandle } from '../../server/src/server.ts';
+import { budgetLeft, harnessReady, launchSession, resumable, resumeFor, serve, startRun, terminalSession, uiHandle } from '../../server/src/server.ts';
 
 setup();
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-shome-'));
@@ -217,6 +218,35 @@ test('launchSession(): a run left active by a stopped session resumes that harne
   const again = await finished(launchSession({ repo: 'acme/app', issue: 10 }, stubEnv));
   assert.deepEqual(again.find((e) => e.data?.subtype === 'init').data.argv.slice(0, 2), ['--resume', 'stub-session']);
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 10 }, stubEnv), /active run/, 'it exited 0: the run is active for its own reasons');
+});
+
+test('startRun() (F start, POST /api/runs): launchSession\'s checks, then a detached headless run that logs to the run\'s folder', async () => {
+  for (const [x, re] of [[undefined, /owner\/repo#N/], ['acme/app 7', /owner\/repo#N/], ['acme/app#7; rm -rf ~', /owner\/repo#N/], ['acme/nope#7', /not attached/], ['acme/app#0', /positive issue number/]])
+    assert.throws(() => startRun(x, stubEnv, () => assert.fail('no spawn')), re, String(x));
+  record('acme/app#40', 'approve', 'escalated', {});
+  assert.throws(() => startRun('acme/app#40', stubEnv, () => assert.fail('no spawn')), /escalated: it needs a human/);
+  const calls = [], fake = (file, args, opts) => { calls.push({ file, args, opts }); return { pid: process.pid, on() { return this; }, unref() {} }; }; // a live pid
+  const r = startRun('acme/app#41', stubEnv, fake);
+  const [{ file, args, opts }] = calls;
+  assert.equal(path.basename(file), 'claude');
+  assert.deepEqual([args[0], args.includes('stream-json'), opts.detached, opts.windowsHide, fs.realpathSync(opts.cwd)], ['-p', true, true, true, fs.realpathSync(projects()['acme/app'].path)]);
+  assert.ok(opts.stdio.every((fd) => typeof fd === 'number'), 'files, not pipes: nothing waits on F');
+  assert.deepEqual([r.pid, path.dirname(r.log), fs.readFileSync(r.log.replace(/\.log$/, '.prompt'), 'utf8')], [process.pid, runDir('acme/app#41'), '/software-factory acme/app#41']);
+  assert.throws(() => startRun('acme/app#41', stubEnv, fake), /already has a running session \(pid \d+, started by F start\)/, 'not twice before its first event');
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 41 }, stubEnv), /already has a running session/);
+  const tok = 't'.repeat(32), H = { host: '127.0.0.1:4646', origin: 'http://127.0.0.1:4646', 'content-type': 'application/json', 'x-factory-token': tok };
+  const post = (body, h = H) => uiHandle({ method: 'POST', url: '/api/runs', headers: h, body: JSON.stringify(body) }, { token: tok, port: 4646 });
+  assert.equal(post({ issue: 'acme/app#41' }, { ...H, 'x-factory-token': 'x'.repeat(32) }).status, 403);
+  assert.equal(post({ issue: 'acme/app#41' }, { ...H, origin: 'http://evil.example' }).status, 403);
+  assert.match(JSON.parse(post({ issue: 'acme/app#41' }).body).error, /already has a running session/);
+
+  // For real: F start returns, and the detached stub claude it left behind reads its prompt and writes the log.
+  const f = spawnSync(process.execPath, [path.join(HERE, 'factory.mjs'), 'start', 'acme/app#42'], { env: { ...stubEnv, FACTORY_DIR: io.dir }, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(f.status, 0, f.stderr);
+  const { pid, log } = JSON.parse(f.stdout);
+  assert.ok(pid > 0);
+  for (let i = 0; i < 100 && !/prompt: \/software-factory acme\/app#42/.test(fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : ''); i++) await new Promise((res) => setTimeout(res, 100));
+  assert.match(fs.readFileSync(log, 'utf8'), /prompt: \/software-factory acme\/app#42/);
 });
 
 test('/api/sessions: POST starts one behind the token and Origin checks; GET lists; events come back as a stream', async () => {
