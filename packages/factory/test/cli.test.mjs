@@ -634,6 +634,9 @@ export function skillsTest(cli) {
   assert.deepEqual([lean.applied.includes('review.code'), lean.plans.default.plan['review.code'].model, lean.efforts.includes('high')], [true, 'sonnet', true]);
   const proj = JSON.parse(pre({ name: 'all-claude', scope: 'acme/kit' }).body);
   assert.ok(proj.inherited.length > 0 && Array.isArray(proj.skipped), 'a project preset only touches the steps it sets');
+  const bare = fs.readFileSync(path.join(io.dir, 'skills.json'), 'utf8');
+  assert.deepEqual(JSON.parse(pre({ name: 'all-claude', scope: 'acme/none' }).body).applied, []);
+  assert.equal(fs.readFileSync(path.join(io.dir, 'skills.json'), 'utf8'), bare, 'a preset that changes nothing writes nothing');
   for (const r of [all, one, state]) assert.ok(!r.body.includes(tok), 'API reads never carry the ui token');
   assert.equal(get(`/api/runs/${o}/${rp}/999999`).status, 404);
   assert.equal(get(`/api/runs/${o}/${rp}/x1`).status, 400);
