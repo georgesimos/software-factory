@@ -47,9 +47,10 @@ export const resolveSpec = (spec, env, resolve) => command(spec.cmd, spec.args, 
 export function killTree(child, platform = process.platform, run, kill = process.kill, wait = false) {
   if (!child.pid) return;
   const args = ['/pid', String(child.pid), '/T', '/F'];
+  const taskkill = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe'); // by path: a bare name searches the cwd first (#97)
   if (platform !== 'win32') try { kill(-child.pid, 'SIGTERM'); } catch { child.kill(); } // the group is gone: the child alone, if it is not
-  else if (wait) (run ?? spawnSync)('taskkill', args, { stdio: 'ignore', windowsHide: true, timeout: 5_000 });
-  else (run ?? spawn)('taskkill', args, { stdio: 'ignore', windowsHide: true }).on('error', () => { /* taskkill missing: nothing else to try */ });
+  else if (wait) (run ?? spawnSync)(taskkill, args, { stdio: 'ignore', windowsHide: true, timeout: 5_000 });
+  else (run ?? spawn)(taskkill, args, { stdio: 'ignore', windowsHide: true }).on('error', () => { /* taskkill missing: nothing else to try */ });
 }
 // Detached children don't get the terminal's Ctrl-C, so a running session is stopped when this process ends: waited for,
 // since nothing after 'exit' or quit gets another turn of the event loop.
