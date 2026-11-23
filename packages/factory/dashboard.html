@@ -1042,6 +1042,7 @@ function timeline(r) {
       el('div', { class: 'what' }, el('b', {}, e.stage || '?'), ' · ', e.status || '?', e.axis ? ' · ' + e.axis : '', e.next ? ' → ' + e.next : '',
         num(e.costUsd) ? ' · ' + money(e.costUsd) : '', num(e.tokens) ? ' · ' + tokens(e.tokens) + ' tok' : '', e.localChecks ? ' · local checks ' + obj(e.localChecks).state : ''),
       e.summary || e.reason || e.spec ? el('div', { class: 'txt' }, e.summary || e.reason || e.spec) : null,
+      e.stage === 'note' ? el('div', { class: 'txt' }, e.status === 'pending' ? `for ${e.step}: ${e.text || ''}` : `handed to ${arr(e.steps).join(', ')}`) : null,
       arr(e.reasons).length ? el('div', { class: 'txt' }, arr(e.reasons).join(' · ')) : null,
       arr(e.questions).length ? el('ul', {}, arr(e.questions).map((q) => el('li', {}, q))) : null)))),
     r.archived ? el('p', { class: 'muted', style: 'margin-top:4px' }, 'Older events were archived.') : null);
