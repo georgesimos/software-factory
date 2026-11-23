@@ -97,7 +97,7 @@ test('a failing provider becomes an error entry, never a throw', () => {
 });
 
 test('track records through factory record(): typed fields, deduped, cached per sha; decide() gates on any web-deploy provider', async () => {
-  const F = await import('../../factory/factory.mjs');
+  const F = await import('../../core/src/index.ts');
   const RUN = 'acme/app#1', fx = { exec: { ...fixtureOf('github-deployments').exec, ...fixtureOf('fake-host').exec } };
   for (const k of Object.keys(fx.exec)) if (k.includes(`deployments?sha=${'a'.repeat(40)}`)) fx.exec[k.replace('a'.repeat(40), SHA)] = []; // github has nothing at this sha
   F.record(RUN, 'intake', 'started', { title: 't', url: 'https://github.com/acme/app/issues/1', association: 'OWNER' });

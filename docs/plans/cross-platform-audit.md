@@ -45,6 +45,11 @@ Since the April 2024 security releases (CVE-2024-27980; Node 18.20.2, 20.12.2 an
   - never `shell: true`, which is deprecated with arguments (DEP0190).
 - Do not hand-roll `cmd.exe` escaping. Mistakes there are command injection, and prompts and JSON schemas are passed as arguments.
 
+**Done in X1 (#49):**
+- `core/src/platform.ts` holds `command()`, `exec()` and `run()`. `gh`, `git`, `deps`, the `F new` init, the `evals` `claude -p` and ship's `exec` all go through it.
+- A shim given an argument that isn't plain fails with a message naming that argument. For example, `claude.cmd` with `evals`' prompt fails that way.
+- **Still open:** the harness adapters keep `spawnSync`, because a harness file may live in an outside registry folder and imports only `node:` builtins. A `.cmd` Codex still reports as not installed. H1's contract can hand harnesses a spawn function.
+
 ## 2. Shells and shell syntax
 
 | Where | What | Rating |
@@ -117,6 +122,26 @@ Document it as the one install step. **Never copy** the skill folder: the [split
 - Change `SKILL.md` to say `F open dashboard`.
 - Make install hints per-OS.
 
+**Done in X2 (#50), §2–§5:**
+- **`localChecks`:** runs through `platform.posixShell()`: `/bin/sh` on POSIX; on Windows, Git Bash from `CLAUDE_CODE_GIT_BASH_PATH` or from beside `git.exe`. It refuses otherwise and never uses `cmd.exe`.
+- **`deps`:** clones with `fs.cpSync` and `COPYFILE_FICLONE_FORCE` (APFS, btrfs, XFS). Where cloning isn't possible, and always on Windows, it installs instead of making a full copy.
+- **Paths:**
+  - brief runners accept `C:\…` and `~\…`;
+  - brief paths may contain spaces;
+  - `relPath` rejects `\` and drive prefixes;
+  - `SKIP_DIRS` adds `AppData` and `OneDrive`;
+  - the dashboard's `deepCwd` accepts `C:\…`;
+  - on Windows, `F_CMD` prints the real quoted path.
+- **New commands:** `F open [dashboard|url]` (`platform.opener()`: https:, file: and claude-cli: only; `open`, `explorer.exe` or `xdg-open`, never through a shell) and `F install-skill` (a junction on Windows, a symlink elsewhere, never a copy).
+- **Docs and hints:** `SKILL.md` says `F open dashboard`. The README uses `install-skill`, drops the `FACTORY_DIR=$(mktemp -d)` prefix and states the Git for Windows requirement. The Claude Code install hint is per-OS.
+
+**Still open:**
+- the `claude-cli://` handler check on Windows and Linux;
+- Codex's Windows install hint;
+- `shq` and `resumeCmd` copy-paste lines for PowerShell (W2 and #27 replace them with buttons);
+- an `F onboard` check for Git for Windows;
+- the Claude Code session folder name for `C:\…` paths.
+
 ## 6. Tests
 
 | Where | What | Rating |
@@ -127,6 +152,15 @@ Document it as the one install step. **Never copy** the skill folder: the [split
 | `factory.mjs:2322` | `deps` asserts "cloned copy-on-write" on macOS only. | OK as written; keep it per-OS when the clone logic changes. |
 
 **There is no CI**, so none of this can be caught today: the repo has no `.github/workflows`. The first fix step adds a Linux, macOS and Windows matrix, which makes this audit enforceable.
+
+**Done in X3 (#51):**
+- Test `PATH`s use `path.delimiter`, and the e2e appends `/usr/bin:/bin` only on POSIX.
+- Every fake home sets `USERPROFILE` as well as `HOME`.
+- Script stubs need no shebang. `platform.command()` runs any `.mjs`/`.cjs`/`.js` command under the current `node` on every OS, which covers `FACTORY_GH`, `FACTORY_GIT` and ship's `FACTORY_<CMD>`.
+
+**Still open:**
+- `harnessTest` is skipped on Windows. The adapters spawn with `spawnSync`, and `test/bin/claude` and `codex` and the written `fake-agent` are shebang scripts. H1 hands harnesses `platform.run()`, and then the stubs get `.cmd` twins.
+- Nothing here has run on Windows yet. Keep the Windows CI job `continue-on-error` until a green Windows run.
 
 ## 7. Already portable
 

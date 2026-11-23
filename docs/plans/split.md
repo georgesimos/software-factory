@@ -125,7 +125,7 @@ Line ranges are from `b9f4e87`.
 | **S8 Idea-to-app, onboarding, demo** | `project.mjs` becomes `core/src/project.ts`. Its cycle with `factory.mjs` ends because it now imports from `core` modules. Also moves `setShip`, onboarding (`onboardConfig`, `onboardState`, `onboardText`) and `demo`/`demoTranscripts`. | `project.mjs`, 1304–1559 |
 | **S9 Server** | `uiHandle`, `UI_ROUTES`, `ui`, `page` and `render` go to `packages/server`. This includes PR #29's `/api/*`, so S9 waits for #23 to merge. | 591–650, 1274–1303 |
 | **S10 CLI and thin entry** | The command switch and usage text go to `packages/cli/src/main.ts`. `factory.mjs` becomes the entry above plus the self-test, which still lives there. `SKILL.md` and the `bin` path are unchanged. | 2389–2575 |
-| **S11 Split the self-test** | The self-test moves into per-module `node:test` files next to the code: `core/test/derive.test.ts`, and so on. `factory.mjs test` keeps working as an alias for `pnpm test`. This is the step where the oracle stops being one function. Its proof is that every old assertion appears in a new test file: count `assert` calls before and after. | 1560–2388 |
+| **S11 Split the self-test** | The self-test moves into `node:test` files. Done in #74: they are CLI integration tests, so they live in `packages/factory/test/*.test.mjs`, one process per file, not `core/test`. `factory.mjs test` keeps working as an alias for `pnpm test`. This is the step where the oracle stops being one function. Its proof is that every old assertion appears in a new test file: count `assert` calls before and after. | 1560–2388 |
 
 ### Cross-platform fixes
 

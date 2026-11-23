@@ -999,7 +999,7 @@ async function copyText(text) {
 }
 // claude-cli://open: a new Claude Code terminal in the run's worktree (else the latest session's cwd), prompt pre-filled, not sent.
 // The handler refuses relative paths, "..", network paths and control/bidi characters; refuse them here too.
-const deepCwd = (p) => typeof p === 'string' && /^\/(?!\/)/.test(p) && !p.includes('..') && !/[\p{Cc}\p{Cf}]/u.test(p);
+const deepCwd = (p) => typeof p === 'string' && /^(\/(?!\/)|[A-Za-z]:\\)/.test(p) && !p.includes('..') && !/[\p{Cc}\p{Cf}]/u.test(p);
 function openInClaude(r) {
   const cwd = [r.worktree, ...r.sessions.map((s) => s.cwd)].find(deepCwd);
   if (!cwd || !/^[\w.-]+\/[\w.-]+(#\d+|:[\w.\/-]+)$/.test(r.id)) return null; // owner/repo#N or an import's owner/repo:branch; it goes into a prompt that runs F

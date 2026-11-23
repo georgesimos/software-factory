@@ -1,0 +1,10 @@
+{
+  "name": "@software-factory/server",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "The loopback HTTP server behind `F ui` and the dashboard renderer. Run by Node directly (type stripping).",
+  "type": "module",
+  "engines": { "node": ">=24.12" },
+  "exports": { ".": "./src/server.ts" }
+}
