@@ -45,4 +45,12 @@ test('F runs from a copy of the tracked files, the way Claude Code copies a plug
   const r = spawnSync(process.execPath, [path.join(copy, 'packages', 'factory', 'factory.mjs'), 'help'], { encoding: 'utf8', env }); // usage exits 1
   assert.equal(r.stderr, '');
   assert.match(r.stdout, /install-skill/);
+  // A broken app.html (a bad merge): the event is still recorded, once, with a warning; F render itself fails loudly.
+  fs.writeFileSync(path.join(copy, 'packages', 'factory', 'app.html'), '<!doctype html><p>conflicted</p>');
+  const F = (args, input) => spawnSync(process.execPath, [path.join(copy, 'packages', 'factory', 'factory.mjs'), ...args], { encoding: 'utf8', env, input });
+  const ev = F(['event', 'acme/app#7', 'spec', 'started', '-'], '{"title":"x"}');
+  assert.equal(ev.status, 0, ev.stderr);
+  assert.match(ev.stderr, /dashboard not updated: .*no data tag/);
+  assert.equal(fs.readFileSync(path.join(env.FACTORY_DIR, 'events.jsonl'), 'utf8').split('\n').filter((l) => l.includes('acme/app#7')).length, 1);
+  assert.notEqual(F(['render']).status, 0);
 });

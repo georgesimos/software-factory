@@ -190,7 +190,9 @@ export function render() {
   fs.writeFileSync(out, page({ reload: 10_000 })); // never carries a ui token; reload: the file:// page re-reads itself, as the Artifact can't
   return out;
 }
-dashboard.render = render; // core calls dashboard.render() after every state change
+// Core calls this after every state change, once the event is written: a broken app.html must not fail the write (the
+// skill would retry and record twice), so it warns and leaves the last dashboard.html. F render itself still throws.
+dashboard.render = () => { try { return render(); } catch (e) { console.error(`factory: dashboard not updated: ${e.message}`); return undefined; } };
 // The run list the dashboard embeds and GET /api/runs returns: live + archived, linked sessions, worktree path.
 export function runsData(events = read()) {
   const live = Object.values(withMeasured(derive(events), events));
@@ -269,6 +271,8 @@ export function residue(json, raw, me = machine()) {
   return left;
 }
 const DATA_TAG = /(<script type="application\/json" id="data">)([^<]*)(<\/script>)/;
+// GitHub, Anthropic and OpenAI key shapes, and an F ui URL with its token.
+export const SECRET = /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_\w{30,}|sk-(?:ant-)?[\w-]{30,})|127\.0\.0\.1:\d+\/?\?t=[\w-]{20,}/;
 export function artifact(html = page()) {
   // Opening tags and metas come before the inlined script, so their first match is the tag; closing tags come after it, so their last.
   for (const [re, last] of [[/^<!doctype html>\s*/i], [/<html[^>]*>\s*/i], [/<head>\s*/i], [/<meta charset="utf-8">\s*/i], [/<meta name="viewport"[^>]*>\s*/i],
@@ -286,5 +290,9 @@ export function artifact(html = page()) {
   const json = JSON.stringify(d), left = residue(json, raw);
   if (left.length) throw new Error(`artifact: refusing to publish: after scrubbing, the page still carries ${left.join(', ')}`);
   if (/"[^"]*token"\s*:/i.test(json)) throw new Error('artifact: refusing to publish a page that carries a token'); // a key ending in token; tokens/tokenCap are counts
+  // The bundle itself (anyone can rebuild and commit app.html): the same residue check, and no credential-shaped value anywhere.
+  const shell = html.replace(DATA_TAG, (_, open, _old, close) => open + close), inShell = residue(shell, raw);
+  if (inShell.length) throw new Error(`artifact: refusing to publish: the app itself carries ${inShell.join(', ')}`);
+  if (SECRET.test(shell) || SECRET.test(json)) throw new Error('artifact: refusing to publish a page that carries a token');
   return html.replace(DATA_TAG, (_, open, _old, close) => open + json.replace(/</g, '\\u003c') + close);
 }

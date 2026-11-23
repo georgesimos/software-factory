@@ -1,9 +1,21 @@
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import react from '@vitejs/plugin-react';
 import { defineConfig, type Plugin } from 'vite';
 
 // One self-contained index.html (#55): F render writes it with the run data filled in, the claude.ai Artifact publishes it,
 // and F ui serves it, so it can load nothing from anywhere. Fonts become data URIs; the CSS and the one JS chunk are inlined.
 // The script goes last in <body>, after the #data tag and every tag artifact() strips, so no match can land inside it.
+// The escaped chunk must still parse: a SyntaxError would leave the dashboard blank.
+function check(js: string) {
+  const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'single-file-')), 'app.mjs');
+  fs.writeFileSync(f, js);
+  const r = spawnSync(process.execPath, ['--check', f], { encoding: 'utf8' });
+  fs.rmSync(path.dirname(f), { recursive: true, force: true });
+  if (r.status !== 0) throw new Error(`single-file: the escaped bundle does not parse: ${r.stderr.split('\n').slice(0, 5).join('\n')}`);
+}
 function singleFile(): Plugin {
   return {
     name: 'single-file',
@@ -14,7 +26,9 @@ function singleFile(): Plugin {
       let page = String(html.source);
       for (const [name, x] of Object.entries(bundle)) {
         if (x.type === 'chunk' && x.isEntry) {
-          const js = x.code.replace(/<\/script/gi, '<\\/script').replace(/<!--/g, '<\\!--'); // nothing in it may end or comment the tag
+          // Nothing in it may end or comment the tag. \/ and \x3C read the same in strings, templates and regexes (u flag too).
+          const js = x.code.replace(/<\/script/gi, '<\\/script').replace(/<!--/g, '\\x3C!--');
+          check(js);
           page = page.replace(new RegExp(`\\s*<script type="module" crossorigin src="\\./${name}"></script>`), '');
           page = page.replace('</body>', () => `<script type="module">${js}</script>\n</body>`);
         } else if (x.type === 'asset' && name.endsWith('.css')) {

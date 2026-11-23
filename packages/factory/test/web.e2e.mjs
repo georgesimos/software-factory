@@ -26,6 +26,9 @@ delete env.CLAUDE_CODE_SESSION_ID;
 const F = (args, input) => execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), ...args], { env, input, stdio: ['pipe', 'pipe', 'inherit'] });
 const json = (f) => JSON.parse(fs.readFileSync(path.join(DIR, f), 'utf8')), skills = () => json('skills.json');
 
+// Drift: when apps/web has been built here, the committed app.html must be that build (never a stale or hand-merged one).
+const built = path.join(HERE, '..', '..', 'apps', 'web', 'dist', 'index.html');
+if (fs.existsSync(built)) assert.ok(fs.readFileSync(built).equals(fs.readFileSync(path.join(HERE, 'app.html'))), 'app.html differs from apps/web/dist: run pnpm --filter @software-factory/web dashboard');
 const server = spawn(process.execPath, [path.join(HERE, 'factory.mjs'), 'ui', '0'], { env, stdio: ['ignore', 'pipe', 'inherit'] });
 const errors = [], shots = [];
 let last, url, browser;

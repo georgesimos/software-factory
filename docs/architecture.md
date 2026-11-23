@@ -375,7 +375,7 @@ Each step can be run by the built-in brief, a user skill or brief, or a harness 
   - `POST /skills` needs the token header, a same-origin `Origin`, a JSON content type and an exact `Host` (against DNS rebinding);
   - it sends no CORS headers, caps the body at 64 KB, and sets `no-store`, `no-referrer` and `DENY` framing;
   - every write goes through `setSkill`, which validates before writing;
-  - the token is only in the served response, never in the `dashboard.html` that `render()` writes.
+  - the token is only in the printed URL; the page reads it from `?t=` and sends it as `x-factory-token`. Neither the served `app.html` nor the `dashboard.html` that `render()` writes contains it.
 
   The written file shows the same Skills sheet read-only, and offers each change as a copyable `F skills set` command. The page's 10-second reload pauses while a dialog is open.
 - **Stamped only from the CLI.** `F event`, `F review` and `F gate` stamp the runner. In-process records such as `sync` imports never do, so a tracked human PR never shows a `codex` chip. The verifier's runner is stamped on every `gate` event while it is configured, even in an iteration with nothing to verify.

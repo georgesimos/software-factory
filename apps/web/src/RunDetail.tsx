@@ -137,7 +137,8 @@ function Start({ run: r, resume }: { run: Run; resume?: Resume }) {
   const st = resume.state;
   return (
     <div className="web-start">
-      <Button size="sm" disabled={st?.busy} title="Its session here stopped: resume it headless in the attached clone" onClick={resume.go}>{st?.busy ? 'Resuming…' : 'Resume factory'}</Button>
+      {st && !st.busy && !st.bad ? null : /* resumed: the run is live again, so no second button */
+        <Button size="sm" disabled={st?.busy} title="Its session here stopped: resume it headless in the attached clone" onClick={resume.go}>{st?.busy ? 'Resuming…' : 'Resume factory'}</Button>}
       <p className="web-sk-status" role="status" data-bad={st?.bad || undefined}>{st?.busy ? '' : st?.text}</p>
     </div>
   );
