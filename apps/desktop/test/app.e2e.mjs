@@ -2,7 +2,8 @@
 // Launches the built Electron app on `F demo` data: the window shows the board and a run's sessions from the in-process
 // server, the page has no Node, nothing off-origin loads, opens or navigates, and closing the window stops the server.
 // A temp FACTORY_DIR, a fake HOME and the factory's stub gh, git, claude and codex keep it off real repos and ~/.claude.
-// Never clicks Resume: that would spawn a harness. Run: pnpm --filter @software-factory/desktop e2e [screenshot dir]
+// Never clicks Resume: that would spawn a harness. Run: pnpm --filter @software-factory/desktop e2e [screenshot dir];
+// DESKTOP_EXE=<packaged binary> runs it against a packaged build instead (CI does, on Linux under Xvfb).
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -23,7 +24,9 @@ delete env.CLAUDE_CODE_SESSION_ID;
 delete env.ELECTRON_RUN_AS_NODE;
 execFileSync(process.execPath, [path.join(FACTORY, 'factory.mjs'), 'demo'], { env, stdio: 'ignore' });
 
-const app = await _electron.launch({ args: [APP], cwd: APP, env });
+const EXE = process.env.DESKTOP_EXE; // a packaged build's binary (scripts/smoke.mjs prints where), else the dev build
+const ARGS = EXE ? [] : [APP];
+const app = await _electron.launch({ ...(EXE && { executablePath: EXE }), args: ARGS, cwd: APP, env });
 const errors = [];
 let origin;
 try {
@@ -73,7 +76,7 @@ try {
   assert.equal(await win.evaluate(() => navigator.clipboard.writeText('software-factory e2e').then(() => 'ok', (e) => e.name)), 'ok');
   assert.equal(await win.evaluate(() => navigator.mediaDevices?.getUserMedia({ audio: true }).then(() => 'ok', (e) => e.name) ?? 'none'), 'NotAllowedError');
   // A second launch on the same profile hands over to this one and exits: one server per FACTORY_DIR.
-  const second = spawn(app.process().spawnfile, [APP], { cwd: APP, env, stdio: 'ignore' });
+  const second = spawn(app.process().spawnfile, ARGS, { cwd: APP, env, stdio: 'ignore' });
   const code = await Promise.race([new Promise((r) => second.on('exit', r)), new Promise((r) => setTimeout(() => r('still running'), 20_000))]);
   if (code === 'still running') second.kill();
   assert.equal(code, 0, 'the second instance quits');

@@ -21,6 +21,8 @@ The repo is a plain pnpm workspace. Each package's own `package.json` scripts ar
 - The dashboard ships as one generated file, `packages/factory/app.html`. After changing `apps/web` or the design system, run
   `pnpm --filter @software-factory/web dashboard` and commit the result. Never edit it by hand, and on a merge conflict in it,
   rebuild it.
+- The desktop app (`apps/desktop`): `pnpm --filter @software-factory/desktop start` runs it on your real factory state;
+  `e2e` drives it on a temp one; `package` then `smoke` make and check an unsigned build for your OS (`out/`, not committed).
 - Colours come from tokens. Edit `packages/design-system/src/tokens.ts`, then run `pnpm tokens`. Never edit `tokens.css` by hand.
 - No personal data in code, fixtures, screenshots or docs. Use neutral names like `acme/shop` and `/home/dev`.
 - Write commit messages in the imperative mood, and explain why the change is needed in the body.

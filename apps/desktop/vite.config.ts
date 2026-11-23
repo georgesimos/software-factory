@@ -22,6 +22,7 @@ export default defineConfig({
         path.join(root, 'packages/ship/ship.mjs'),
         ...['packages/adapters/harnesses', 'packages/adapters/hosts', 'packages/adapters/trackers', 'packages/ship/connectors'].flatMap(plugins),
       ],
+      external: ['electron', 'node-pty', '@anthropic-ai/claude-agent-sdk'], // native, or spawns files of its own: shipped in node_modules
       output: { format: 'es', preserveModules: true, preserveModulesRoot: root, entryFileNames: '[name].mjs' },
     },
   },
