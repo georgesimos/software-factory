@@ -21,7 +21,26 @@ pnpm --filter @software-factory/factory test     # factory self-test only
 node packages/factory/factory.mjs demo           # sample dashboard in a temp dir, no GitHub needed
 ```
 
-To use the skill in Claude Code, link it into your skills folder. This makes a symlink, or a junction on Windows, which needs no admin rights. Never copy the folder: it imports the sibling packages by relative path.
+## Install
+
+**Claude Code plugin** (no clone, no pnpm; needs Node 24.12 or newer):
+
+```
+/plugin marketplace add georgesimos/software-factory
+/plugin install software-factory@software-factory
+```
+
+Or in one step on Claude Code 2.1.275 or later: `/plugin install software-factory --marketplace georgesimos/software-factory`.
+While the repository is private, this needs git credentials that can read it (`gh auth login`, then `gh auth setup-git`).
+The skill is then `/software-factory:software-factory`, and it finds its CLI through `${CLAUDE_SKILL_DIR}`.
+
+**Codex:** clone the repo, then link the skill into `~/.agents/skills`, where Codex looks for personal skills:
+
+```bash
+node packages/factory/factory.mjs install-skill --codex
+```
+
+**From a clone (contributors):** to use the skill in Claude Code, link it into your skills folder. This makes a symlink, or a junction on Windows, which needs no admin rights. Never copy the folder: it imports the sibling packages by relative path.
 
 ```bash
 node packages/factory/factory.mjs install-skill

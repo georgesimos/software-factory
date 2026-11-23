@@ -13,9 +13,17 @@ import { stateDir } from './log.ts';
 
 // ---- Onboarding: the wizard (dashboard, via `F ui`) and `F onboard`. What spawns CLIs or walks the disk runs only
 // when asked for, never in page(), which runs on every record().
-// cmd.exe and PowerShell don't expand ~ in an argument, so Windows gets the real path.
-export const F_CMD = process.platform === 'win32' ? `node "${path.join(os.homedir(), '.claude', 'skills', 'software-factory', 'factory.mjs')}"` : 'node ~/.claude/skills/software-factory/factory.mjs';
+// The command for this copy of F: the short ~ form when ~/.claude/skills/software-factory links here, else this file's real
+// path (a plugin install lives in Claude Code's plugin cache). cmd.exe and PowerShell don't expand ~, so Windows always gets the real path.
+export function fCmd(platform = process.platform, home = os.homedir(), entry = path.join(import.meta.dirname, '..', '..', 'factory', 'factory.mjs')) {
+  const linked = path.join(home, '.claude', 'skills', 'software-factory', 'factory.mjs');
+  let here = entry, viaLink = false;
+  try { here = fs.realpathSync(entry); viaLink = fs.realpathSync(linked) === here; } catch {}
+  if (platform === 'win32') return `node "${viaLink ? linked : here}"`;
+  return viaLink ? 'node ~/.claude/skills/software-factory/factory.mjs' : `node ${shq(here)}`;
+}
 export const shq = (x) => (/^[\w@%+=:,./~-]+$/.test(String(x)) ? String(x) : "'" + String(x).replace(/'/g, "'\\''") + "'");
+export const F_CMD = fCmd();
 export const onboardFile = () => path.join(stateDir(), 'onboard.json');
 export const SHIP_KINDS = ['web', 'mobile', 'database'];
 export const readOnboard = () => { try { return JSON.parse(fs.readFileSync(onboardFile(), 'utf8')); } catch { return {}; } };
@@ -77,6 +85,6 @@ export function onboardText(s, platform = process.platform) {
     L.push(`   ${sc}: ${pol.map(([k, x]) => `${k}=${JSON.stringify(x.value)}`).join(', ') || 'built-in'}${am}`);
   }
   L.push(`   ${F_CMD} rules set <scope> ci required|advisory|skip --reason "…"   ·   ${F_CMD} automerge <owner/repo> on|off`);
-  L.push('', '6. Start', '   In Claude Code: /software-factory <owner/repo>#<issue>', `   What's ready: ${F_CMD} queue <owner/repo>   ·   Live setup: ${F_CMD} ui`);
+  L.push('', '6. Start', `   In Claude Code: ${F_CMD.includes('~/.claude/skills/') ? '/software-factory' : '/software-factory:software-factory (plugin) or /software-factory'} <owner/repo>#<issue>`, `   What's ready: ${F_CMD} queue <owner/repo>   ·   Live setup: ${F_CMD} ui`);
   return L.join('\n');
 }
