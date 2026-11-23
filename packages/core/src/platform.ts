@@ -19,7 +19,7 @@ const isFileSync = (p: string) => { try { return fs.statSync(p).isFile(); } catc
 function findOnPath(cmd: string, env: Env, isFile: (p: string) => boolean, skip?: RegExp): string | undefined {
   const exts = (envGet(env, 'PATHEXT') || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map((e) => e.toLowerCase()); // NTFS ignores case
   const names = exts.some((e) => cmd.toLowerCase().endsWith(e)) ? [cmd, ...exts.map((e) => cmd + e)] : exts.map((e) => cmd + e);
-  const dirs = /[\\/]/.test(cmd) ? [''] : (envGet(env, 'PATH') || '').split(';').filter((d) => d && !skip?.test(d));
+  const dirs = /[\\/]/.test(cmd) ? [''] : (envGet(env, 'PATH') || '').split(';').map((d) => d.trim().replace(/^"(.*)"$/, '$1')).filter((d) => d && !skip?.test(d)); // "C:\\Tools\\gh bin" is valid
   for (const d of dirs) for (const n of names) { const p = d ? path.win32.join(d, n) : n; if (isFile(p)) return p; }
   return undefined;
 }
@@ -37,7 +37,7 @@ export function command(cmd: string, args: string[] = [], { platform = process.p
     throw new Error(`${path.win32.basename(file)} is a .cmd shim, and ${JSON.stringify(bad ?? file)} would need cmd.exe quoting; install a native ${cmd}.exe or run this step yourself`);
   }
   // /s strips the outer quotes, leaving "file" args; verbatim so Node adds no quoting of its own.
-  return { file: envGet(env, 'COMSPEC') || 'cmd.exe', args: ['/d', '/s', '/c', `""${file}" ${args.join(' ')}"`], windowsVerbatimArguments: true };
+  return { file: envGet(env, 'COMSPEC') || path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', 'System32', 'cmd.exe'), args: ['/d', '/s', '/c', `""${file}" ${args.join(' ')}"`], windowsVerbatimArguments: true };
 }
 
 export function exec(cmd: string, args: string[] = [], options: ExecFileSyncOptions = {}) {

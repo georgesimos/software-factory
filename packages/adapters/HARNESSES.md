@@ -6,7 +6,7 @@ stamp, the sensitive paths, `F onboard` and the setup wizard all read it, so not
 
 1. **Copy the template.** `cp harnesses/_template.mjs harnesses/<id>.mjs`. The `id` must equal the file name. Files starting
    with `_` are never loaded. Import only `node:` builtins, never `factory.mjs`.
-2. **Fill in the contract.** Run the CLI only through `spawnSync` with an argv array and a timeout, on Windows only from the template's `which()` (an `.exe` on PATH, never a bare name that Windows looks up in the current folder first), and read both streams,
+2. **Fill in the contract.** Run the CLI only through `spawnSync` with an argv array and a timeout, on Windows only through the template's `spawnFor()` (an `.exe` or npm `.cmd` shim found on PATH, never a bare name that Windows looks up in the current folder first), and read both streams,
    since some CLIs print status to stderr. `detect()` and `login()` must never throw.
 
    | field | required | what it is |

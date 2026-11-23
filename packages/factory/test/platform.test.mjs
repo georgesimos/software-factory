@@ -37,12 +37,29 @@ test('Windows: not found on PATH throws ENOENT "not installed", never hands spaw
   assert.equal(run('factory-no-such-binary', ['--version'], {}).error.code, 'ENOENT'); // on this OS too, a missing binary is r.error
 });
 
-test('the claude and codex harnesses never spawn a bare name: on Windows only an .exe found on PATH', () => {
+test('harnesses (claude, codex, the template) spawn on Windows only a file found on PATH: .exe directly, npm .cmd via cmd.exe, else not installed', async () => {
   for (const f of ['claude-code', 'codex', '_template']) {
     const src = fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'adapters', 'harnesses', `${f}.mjs`), 'utf8');
-    assert.match(src, /const which = \(name\) => process\.platform !== 'win32' \? name : .*`\$\{name\}\.exe`/, f);
-    assert.doesNotMatch(src, /spawnSync\(\s*['"`A-Z]/, f); // only spawnSync(file, …) from which()
+    assert.doesNotMatch(src, /spawnSync\(\s*['"`A-Z]/, f); // only spawnSync(s[0], …) from spawnFor()
+    const { spawnFor } = await import(`../../adapters/harnesses/${f}.mjs`);
+    const at = (...files) => (p) => files.includes(p);
+    const env = { PATH: '"C:\\Tools\\x bin";C:\\npm', SystemRoot: 'D:\\WIN' }; // a quoted entry is valid on Windows
+    assert.deepEqual(spawnFor('x', ['--version'], 'darwin', env, at()), ['x', ['--version'], {}], f);
+    assert.deepEqual(spawnFor('x', ['--version'], 'win32', env, at('C:\\Tools\\x bin\\x.exe')), ['C:\\Tools\\x bin\\x.exe', ['--version'], {}], f);
+    assert.deepEqual(spawnFor('x', ['auth', 'status'], 'win32', env, at('C:\\npm\\x.cmd')), ['D:\\WIN\\System32\\cmd.exe', ['/d', '/s', '/c', '""C:\\npm\\x.cmd" auth status"'], { windowsVerbatimArguments: true }], f);
+    assert.equal(spawnFor('x', ['--version'], 'win32', env, at()), null, f); // not installed: never the bare name
+    assert.equal(spawnFor('x', ['--version'], 'win32', { PATH: 'C:\\100%' }, at('C:\\100%\\x.cmd')), null, f);
   }
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-which-')); fs.mkdirSync(path.join(d, 'x.exe')); // a folder named x.exe is not the CLI
+  const { spawnFor } = await import('../../adapters/harnesses/codex.mjs');
+  assert.equal(spawnFor('x', [], 'win32', { PATH: d }), null);
+  fs.rmSync(d, { recursive: true });
+});
+
+test('Windows: a quoted PATH entry is found, and a .cmd shim runs through %SystemRoot%\\System32\\cmd.exe when COMSPEC is unset', () => {
+  const isFile = (p) => p === 'C:\\Tools\\gh bin\\gh.exe' || p === 'C:\\n\\npm.cmd';
+  assert.equal(command('gh', ['pr'], { platform: 'win32', env: { PATH: '"C:\\Tools\\gh bin";C:\\x' }, isFile }).file, 'C:\\Tools\\gh bin\\gh.exe');
+  assert.equal(command('npm', ['ci'], { platform: 'win32', env: { PATH: 'C:\\n', SystemRoot: 'E:\\W' }, isFile }).file, 'E:\\W\\System32\\cmd.exe');
 });
 
 test('run() spawns the resolved command', () => {

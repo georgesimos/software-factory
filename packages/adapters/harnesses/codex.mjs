@@ -4,13 +4,28 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-// On Windows only an .exe found on PATH: a bare name would be looked up in the current folder (maybe an untrusted clone)
-// first. Bare spawns only ever found .com/.exe there, so nothing else is lost. Not found: reported as not installed.
-const which = (name) => process.platform !== 'win32' ? name : (process.env.PATH || '').split(';').map((d) => d && path.win32.join(d, `${name}.exe`)).find((f) => f && fs.existsSync(f));
+// What to spawn for `name args`. On Windows only a file found on PATH (quoted entries unquoted), never the bare name, which
+// Windows looks up in the current folder (maybe an untrusted clone) first: an .exe directly, an npm .cmd shim through
+// cmd.exe /d /s /c like sessions do (args here are fixed words, never quoted). null: not installed. Kept in this file:
+// a harness is one file with node: builtins only.
+const isFile = (f) => { try { return fs.statSync(f).isFile(); } catch { return false; } };
+export function spawnFor(name, args, platform = process.platform, env = process.env, exists = isFile) {
+  if (platform !== 'win32') return [name, args, {}];
+  for (const d of String(env.PATH ?? env.Path ?? '').split(';').map((x) => x.trim().replace(/^"(.*)"$/, '$1')).filter(Boolean)) {
+    for (const ext of ['.exe', '.cmd']) {
+      const f = path.win32.join(d, name + ext);
+      if (!exists(f)) continue;
+      if (ext === '.exe') return [f, args, {}];
+      if (/["%]/.test(f)) return null; // a path cmd.exe can't take quoted as is
+      return [env.ComSpec || env.COMSPEC || path.win32.join(env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows', 'System32', 'cmd.exe'), ['/d', '/s', '/c', `""${f}" ${args.join(' ')}"`], { windowsVerbatimArguments: true }];
+    }
+  }
+  return null;
+}
 // Both streams: some CLIs print status to stderr. No shell, argv only, bounded by a timeout.
 const run = (args) => {
-  const file = which('codex');
-  const r = file ? spawnSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000 }) : { error: true };
+  const s = spawnFor('codex', args);
+  const r = s ? spawnSync(s[0], s[1], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000, ...s[2] }) : { error: true };
   return { code: r.error ? -1 : r.status ?? -1, out: `${r.stdout || ''}${r.stderr || ''}` };
 };
 const slug = (url) => /[:/]([^/:]+\/[^/]+?)(?:\.git)?\/?$/.exec(url || '')?.[1].toLowerCase(); // owner/repo from any remote URL form
