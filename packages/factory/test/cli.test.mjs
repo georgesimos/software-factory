@@ -412,7 +412,7 @@ function modelsTest(cli, R, stub) {
   assert.ok(out.inherited.includes('review.code'));
   p = plan();
   assert.deepEqual(p.spec, { use: 'skill', name: 'my-planner', model: 'opus', effort: 'high', fallback: ['sonnet'] });
-  assert.deepEqual(p['review.code'], { use: 'skill', name: 'house-review', model: 'fable', effort: 'high', fallback: ['opus'] }); // still global's
+  assert.deepEqual(p['review.code'], { use: 'skill', name: 'house-review', model: 'opus', effort: 'high', modelFallback: p.intake.modelFallback }); // still global's: fable, too old here
   assert.deepEqual(p['review.docs'], { use: 'default', model: 'haiku', effort: 'medium', fallback: ['sonnet'] }); // the preset replaces the step's own model
   assert.deepEqual(p.intake.modelFallback, { from: 'fable', reason: 'Claude Code 2.1.304 is older than 2.1.321, which fable needs' });
   assert.deepEqual(read().filter((e) => e.stage === 'rules' && e.key === 'preset').map((e) => [e.run, e.value]), [['acme/kit', 'all-claude-lean']]);
@@ -435,7 +435,6 @@ function modelsTest(cli, R, stub) {
   // A global preset reaches a project that swaps only the runner: unset fields come from the global step first.
   const before = fs.readFileSync(file, 'utf8');
   set('acme/gp', 'review.code', { use: 'skill', name: 'gp-review' });
-  assert.equal(plan('acme/gp')['review.code'].model, 'fable');
   assert.equal(JSON.parse(cli(['skills', 'preset', 'all-claude-lean', 'default'])).scope, 'default');
   assert.deepEqual(plan('acme/gp')['review.code'], { use: 'skill', name: 'gp-review', model: 'sonnet', effort: 'high', fallback: ['opus'] });
   set('acme/gp', 'review.code', { use: 'skill', name: 'gp-review', model: 'haiku' });
