@@ -8,6 +8,7 @@ import { test } from 'node:test';
 import { HERE } from '../factory.mjs';
 import { derive } from '../../core/src/derive.ts';
 import { io, read, record } from '../../core/src/log.ts';
+import { runsData } from '../../server/src/server.ts';
 import { setup } from './setup.mjs';
 
 // F note / F notes (#16): the user's one-shot note for a step, handed out once, never seen by the gate.
@@ -51,6 +52,8 @@ test('notes: record, hand out once, next, loop-back, refusals, invisible to the 
   assert.deepEqual(r.events.filter((e) => e.stage === 'note').map((e) => e.status), ['pending', 'pending', 'pending', 'pending', 'applied', 'pending', 'applied', 'applied']); // the timeline rows
   assert.ok(read().filter((e) => e.stage === 'note').every((e) => !('sessionId' in e))); // no session: measured burn never sees a note
   assert.equal(r.stage, 'build');
+  assert.equal(runsData(read()).find((x) => x.id === R).events.filter((e) => e.stage === 'note').length, 8); // what the dashboard timeline renders as "note · pending|applied"
+  assert.doesNotThrow(() => derive([{ run: '__proto__', stage: 'note', status: 'pending', id: 'n1', step: 'build', text: 'x' }])); // a hand-edited log line can't break derive()
   same(); // stage, clock, burn, reviews: identical without the notes, so gate and decide can't see them
   record('acme/note#2', 'intake', 'started', { imported: true });
   assert.throws(() => cli(['note', 'acme/note#2', 'build', '-'], 'x'), /imported/);
