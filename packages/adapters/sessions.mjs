@@ -60,7 +60,7 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(sig, () => { sto
 
 // h: the harness adapter; opts go to h.launch(); cwd and env are the host's, never the request's. resolve is for tests:
 // command()'s platform and file lookup (core/src/platform.ts). onPid(pid) is told the harness's pid once it runs: the child's,
-// the pty's, or this process's for the SDK (which spawns its CLI out of sight).
+// the pty's, or the CLI the SDK spawns (through its spawnClaudeCodeProcess hook).
 export function startSession(h, opts, { cwd, env = process.env, label = '', modules = {}, resolve, onPid = () => {} }) {
   if (typeof h.launch !== 'function' || !(h.modes || []).includes(opts.mode)) throw new Error(`${h.id} cannot launch in ${opts.mode} mode`);
   if (opts.mode === 'terminal' && opts.budget != null) throw new Error('a terminal session has no budget cap: run headless or sdk for a budget');
@@ -78,7 +78,7 @@ export function startSession(h, opts, { cwd, env = process.env, label = '', modu
   const fail = (e) => { emit(s, { type: 'error', message: e.message }); done(null); };
   if (cwd && !fs.existsSync(cwd)) { fail(new Error(`the folder ${cwd} does not exist`)); return s; } // else ENOENT reads as "not installed"
   if (opts.mode === 'terminal') { terminal(s, spec, { cwd, env, modules, resolve, done, onPid }).catch(fail); return s; }
-  if (opts.mode === 'sdk') { onPid(process.pid); sdk(s, spec, { cwd, env, modules, done }).catch(fail); return s; }
+  if (opts.mode === 'sdk') { sdk(s, spec, { cwd, env, modules, done, onPid }).catch(fail); return s; }
   let c;
   try { c = resolveSpec(spec, env, resolve); } catch (e) { fail(e); return s; }
   // spec.stdin carries the prompt: as an argument its space and # would need cmd.exe quoting, which a .cmd shim can't get
@@ -135,14 +135,22 @@ async function terminal(s, spec, { cwd, env, modules, resolve, done, onPid }) {
 
 // The harness's SDK in this process (it runs its own CLI binary as a child, with the host's env). Each SDK message is one
 // event. Exit: 'stopped' after stop(); else 0 for a success result, 1 for an error subtype, is_error, or no result.
-async function sdk(s, spec, { cwd, env, modules, done }) {
+async function sdk(s, spec, { cwd, env, modules, done, onPid }) {
   const abortController = new AbortController(), aborted = () => abortController.signal.aborted;
   s.stop = () => abortController.abort(); // before the await, so a stop while the SDK loads is kept
   const mod = await load(modules, spec.module, 'sdk mode');
   if (aborted()) return done('stopped');
   let result;
   try {
-    for await (const m of mod.query({ prompt: spec.prompt, options: { ...spec.options, cwd, env, abortController } })) {
+    // The SDK's own spawn, made here so the CLI's pid reaches the claim. stderr is read (else a full pipe stalls the CLI)
+    // and passed on to the options' stderr callback, as the SDK's default spawn does.
+    const spawnClaudeCodeProcess = (o) => {
+      const child = spawn(o.command, o.args, { cwd: o.cwd, env: o.env, signal: o.signal, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      child.stderr.on('data', (d) => spec.options?.stderr?.(String(d)));
+      if (child.pid) onPid(child.pid);
+      return child;
+    };
+    for await (const m of mod.query({ prompt: spec.prompt, options: { ...spec.options, cwd, env, abortController, spawnClaudeCodeProcess } })) {
       if (m?.type === 'result') result = m;
       emit(s, { type: 'event', data: m });
     }

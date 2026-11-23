@@ -148,9 +148,21 @@ export const budgetLeft = (b) => b ? Math.min(COST_CAP - b.usd, COST_CAP * (1 - 
 // node-pty and the SDK for terminal and sdk sessions, keyed by package name. Empty until a host that ships them (apps/desktop,
 // main.ts) sets them: packages/adapters' lazy import() can't see apps/desktop's dependencies under pnpm (ADR 0001).
 export const hostModules: Record<string, unknown> = {};
-const clone = (repo) => { // an attached repo's folder
+const checkRepo = (repo) => {
   const [owner, name, extra] = typeof repo === 'string' ? repo.split('/') : [];
   if (extra !== undefined || !LOGIN.test(owner || '') || !/^(?!\.\.?$)[\w.-]{1,100}$/.test(name || '')) throw new Error('repo must be owner/repo');
+};
+// A run id as F start, POST /api/runs and F unclaim take it: owner/repo#N, checked as launches check the repo and issue.
+export function parseRun(x: unknown) {
+  const m = /^([\w.-]+\/[\w.-]+)#(\d{1,10})$/.exec(typeof x === 'string' ? x : '');
+  if (!m) throw new Error('issue must be owner/repo#N');
+  checkRepo(m[1]);
+  const issue = Number(m[2]);
+  if (issue < 1 || issue > 1e9) throw new Error('issue must be a positive issue number');
+  return { repo: m[1], issue, id: `${m[1]}#${issue}` };
+}
+const clone = (repo) => { // an attached repo's folder
+  checkRepo(repo);
   const cwd = projects()[repo]?.path;
   if (!cwd || !fs.existsSync(cwd)) throw new Error(`${repo} is not attached: F sync ${repo} <path> first`);
   return cwd;
@@ -268,9 +280,7 @@ function detachedRun(file: string) {
 // launchSession's checks. Not a session here: GET /api/sessions doesn't list it and quitting doesn't stop it. The prompt
 // and output are files in the run's folder, so nothing waits on F. run is for tests (child_process.spawn's shape).
 export function startRun(issue, env = process.env, run = spawn) {
-  const m = /^([\w.-]+\/[\w.-]+)#(\d{1,10})$/.exec(typeof issue === 'string' ? issue : '');
-  if (!m) throw new Error('issue must be owner/repo#N');
-  const { h, cwd, id, resume, budget: left } = launchGate({ repo: m[1], issue: Number(m[2]) });
+  const { h, cwd, id, resume, budget: left } = launchGate(parseRun(issue));
   const cl = takeClaim(id, 'start'); // before the spawn: a second launcher now waits on this claim, not on the run's first event
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const log = path.join(runDir(id), `headless-${stamp}.log`), prompt = path.join(runDir(id), `headless-${stamp}.prompt`);

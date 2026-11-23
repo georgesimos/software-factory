@@ -17,7 +17,7 @@ import { headlessArgs, reviewFromText, stepModel } from '../../core/src/review.t
 import { issuesCreate, loop, newProject, projectStatus, queue, retireIdea } from '../../core/src/project.ts';
 import { loadShip, loadShipList, ship } from '../../core/src/ship.ts';
 import { claudeDir, onboardState, onboardText, setShip } from '../../core/src/onboard.ts';
-import { artifact, render, startRun, ui } from '../../server/src/server.ts';
+import { artifact, parseRun, render, startRun, ui } from '../../server/src/server.ts';
 import { unclaim } from '../../server/src/claim.ts';
 import { rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
 import { note, takeNotes } from '../../core/src/notes.ts';
@@ -185,8 +185,8 @@ export async function main(argv) {
       case 'ui': await ui(Number(run) || 0); break;
       case 'start': out(startRun(run)); break; // start owner/repo#N: a detached headless run in the attached clone, as POST /api/runs
       case 'unclaim': // a person clears a run's claim (#25); CLI only, never an API route or a button
-        if (!/^\w[\w.-]*\/\w[\w.-]*#\d{1,10}$/.test(run || '') || rest.some((x) => x !== '--force')) throw new Error('usage: unclaim <owner/repo#N> [--force]');
-        out(unclaim(run, rest.includes('--force'))); break;
+        if (!run || rest.some((x) => x !== '--force')) throw new Error('usage: unclaim <owner/repo#N> [--force]');
+        out(unclaim(parseRun(run).id, rest.includes('--force'))); break;
       case 'demo': // never pollute the real log with fixtures
         if (!process.env.FACTORY_DIR) io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-demo-'));
         console.log(demo()); break;

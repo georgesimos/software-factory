@@ -15,7 +15,7 @@ import { command, opener } from '../../core/src/platform.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { MAX_BYTES, killTree, listSessions, resolveSpec, startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
 import { budgetLeft, harnessReady, launchSession, resumable, resumeFor, serve, startRun, terminalSession, uiHandle } from '../../server/src/server.ts';
-import { procStart, readClaim, takeClaim, unclaim } from '../../server/src/claim.ts';
+import { procStart, readClaim, statTicks, takeClaim, unclaim } from '../../server/src/claim.ts';
 
 setup();
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-shome-'));
@@ -262,18 +262,23 @@ test('startRun() (F start, POST /api/runs): launchSession\'s checks, then a deta
 // An lstart string ms later than another, as ps prints it (UTC).
 const lstartPlus = (x, ms) => { const d = new Date(Date.parse(x.replace(/^\w{3} +(\w{3}) +(\d+) (\S+) (\d{4})$/, '$2 $1 $4 $3 UTC')) + ms);
   return `${'SunMonTueWedThuFriSat'.slice(d.getUTCDay() * 3, d.getUTCDay() * 3 + 3)} ${d.toUTCString().slice(8, 11)} ${String(d.getUTCDate()).padStart(2)} ${d.toISOString().slice(11, 19)} ${d.getUTCFullYear()}`; };
+test('statTicks(): the start time from /proc/<pid>/stat, past a command name with spaces and parentheses', () => {
+  const rest = Array.from({ length: 18 }, (_, i) => String(i + 1)).join(' ');
+  assert.equal(statTicks(`42 (a) b) c) S ${rest} 777 99 1`), 'ticks:777');
+  assert.equal(statTicks('42 (x)'), undefined);
+  if (process.platform === 'linux') assert.match(procStart(process.pid), /^ticks:\d+$/);
+});
 const claimAt = (id, c) => { fs.mkdirSync(runDir(id), { recursive: true }); fs.writeFileSync(path.join(runDir(id), 'claim.json'), JSON.stringify({ at: new Date().toISOString(), ...c })); };
 test('takeClaim(): one launcher per run across processes; a dead, reused or foreign pid doesn\'t hold it', { skip: process.platform === 'win32' && 'start times are POSIX (ps)' }, () => {
   const id = 'acme/claims#1', file = path.join(runDir(id), 'claim.json');
   const a = takeClaim(id, 'start');
-  assert.throws(() => takeClaim(id, 'session'), /acme\/claims#1 already has a running session \(start\)/, 'pid 0: between its claim and its spawn');
+  assert.throws(() => takeClaim(id, 'session'), /acme\/claims#1 already has a running session \(start, not started yet\)\. If nothing is starting it: F unclaim acme\/claims#1 --force/, 'pid 0: between its claim and its spawn');
   a.update({ pid: process.pid, since: procStart(process.pid) });
   assert.throws(() => takeClaim(id, 'session'), /\(start, pid \d+\)/);
   a.release();
   assert.equal(fs.existsSync(file), false);
   for (const [c, why] of [[{ pid: process.pid, since: 'Mon Jan  1 00:00:00 2001', launcher: 'start' }, 'a reused pid: its start time differs'],
-    [{ pid: 0, launcher: 'start', at: new Date(Date.now() - 120_000).toISOString() }, 'a launcher that died before its spawn'],
-    [{ pid: process.pid, since: lstartPlus(procStart(process.pid), 60_000), launcher: 'start' }, 'a start time a minute off'],
+    [{ pid: process.pid, since: procStart(process.pid)?.startsWith('ticks:') ? 'ticks:1' : lstartPlus(procStart(process.pid), 60_000), launcher: 'start' }, 'another start time'],
     [{ pid: 999_999_9, since: 'x', launcher: 'start' }, 'no such pid']]) {
     claimAt(id, c);
     const b = takeClaim(id, 'session', { pid: process.pid });
@@ -281,7 +286,8 @@ test('takeClaim(): one launcher per run across processes; a dead, reused or fore
     b.release();
   }
   const me = procStart(process.pid);
-  for (const [c, why] of [[{ pid: process.pid, since: lstartPlus(me, 1_000), launcher: 'start' }, 'a second off: lstart drifts after an NTP step'],
+  const linux = me?.startsWith('ticks:'); // Linux: start ticks, compared exactly; elsewhere lstart, within 5 s
+  for (const [c, why] of [...(linux ? [] : [[{ pid: process.pid, since: lstartPlus(me, 1_000), launcher: 'start' }, 'a second off: lstart drifts after an NTP step']]),
     [{ pid: process.pid, launcher: 'start' }, 'no start time: unsure means live'], [{ pid: process.pid, since: 'garbled', launcher: 'start' }, 'an unreadable start time'],
     ...(process.getuid?.() === 0 ? [] : [[{ pid: 1, since: 'garbled', launcher: 'start' }, 'EPERM: the pid exists']])]) {
     claimAt(id, c);
@@ -298,11 +304,25 @@ test('takeClaim(): one launcher per run across processes; a dead, reused or fore
   claimAt(id, { pid: process.pid, since: me, launcher: 'session' });
   assert.match(f(id).stderr, /claim is live/);
   assert.equal(JSON.parse(f(id, '--force').stdout).unclaimed, true);
-  for (const bad of [['acme/claims'], [id, '--yes'], ['../x#1']]) assert.match(f(...bad).stderr, /usage: unclaim <owner\/repo#N> \[--force\]/, bad.join(' '));
-  fs.writeFileSync(file, '{');
-  assert.throws(() => takeClaim(id, 'session'), /already has a running session/, 'unreadable and new: another launcher mid-write');
-  fs.utimesSync(file, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000));
-  takeClaim(id, 'session').release();
+  for (const [bad, re] of [[[], /usage: unclaim/], [[id, '--yes'], /usage: unclaim/], [['acme/claims'], /owner\/repo#N/], [['../x#1'], /owner\/repo/]]) assert.match(f(...bad).stderr, re, bad.join(' '));
+  const dot = 'o/.github#3'; // any run id F start takes: the same parser
+  claimAt(dot, { pid: 999_999_9, launcher: 'start' });
+  assert.equal(JSON.parse(f(dot).stdout).unclaimed, true);
+  claimAt(dot, { pid: 0, launcher: 'start' });
+  assert.match(f(dot).stderr, /not started yet.*F unclaim o\/\.github#3 --force/);
+  assert.equal(JSON.parse(f(dot, '--force').stdout).unclaimed, true);
+  // Never stale by age: an hour-old claim with no pid yet, an unreadable one and an empty one hold until F unclaim --force.
+  for (const [body, re] of [[JSON.stringify({ pid: 0, launcher: 'start', at: new Date(Date.now() - 3_600_000).toISOString() }), /not started yet\)\. If nothing is starting it: F unclaim acme\/claims#1 --force/],
+    ['{', /\(unreadable claim\)\. If nothing is starting it: F unclaim acme\/claims#1 --force/], ['', /unreadable claim/]]) {
+    fs.writeFileSync(file, body);
+    fs.utimesSync(file, new Date(Date.now() - 3_600_000), new Date(Date.now() - 3_600_000));
+    assert.throws(() => takeClaim(id, 'session'), re, JSON.stringify(body));
+    assert.throws(() => unclaim(id), /F unclaim acme\/claims#1 --force/);
+    assert.equal(unclaim(id, true).unclaimed, true);
+  }
+  const w = takeClaim(id, 'start'); w.update({ log: 'x' });
+  assert.deepEqual([readClaim(id).log, fs.readdirSync(runDir(id)).filter((x) => x.endsWith('.tmp'))], ['x', []], 'written aside and renamed in: never half a file');
+  w.release();
   const c = takeClaim(id, 'start'); claimAt(id, { pid: 0, launcher: 'other', token: 'x' });
   c.release();
   assert.equal(readClaim(id).launcher, 'other', 'release() never drops a claim another launcher took over');
@@ -534,6 +554,21 @@ test('a stop while node-pty or the SDK loads is kept: nothing starts', async () 
   const q = startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { [SDK]: sdk } }); q.stop();
   assert.deepEqual([(await finished(t)).at(-1).code, (await finished(q)).at(-1).code], ['stopped', 'stopped']);
   assert.deepEqual([pty.rec.file, sdk.rec.q], [undefined, undefined]);
+});
+
+test('sdk mode: the CLI the SDK spawns goes through our spawn, so its pid reaches onPid (the claim)', async () => {
+  const pids = [], children = [];
+  const sdk = { async *query(q) {
+    const child = q.options.spawnClaudeCodeProcess({ command: process.execPath, args: ['-e', 'process.stderr.write("warn"); setTimeout(() => {}, 200)'], env: process.env, signal: new AbortController().signal });
+    children.push(child);
+    yield { type: 'system', subtype: 'init', session_id: 'sdk-2' };
+    await new Promise((r) => child.on('exit', r));
+    yield { type: 'result', subtype: 'success' };
+  } };
+  const s = startSession(claude, { mode: 'sdk', prompt: 'x' }, { cwd: home, env: stubEnv, modules: { [SDK]: sdk }, onPid: (p) => pids.push(p) });
+  assert.equal((await finished(s)).at(-1).code, 0);
+  assert.deepEqual(pids, [children[0].pid]);
+  assert.notEqual(pids[0], process.pid, 'the CLI, not this process');
 });
 
 test('sdk mode: the host env reaches the SDK, and a failed result exits 1', async () => {
