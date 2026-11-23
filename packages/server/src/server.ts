@@ -144,7 +144,10 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
   const id = `${repo}#${issue}`, r = derive(read())[id];
   if (r?.imported) throw new Error(`${id} is imported: never run claude -p in its checkout`);
   if (['escalated', 'rejected'].includes(r?.outcome)) throw new Error(`${id} is ${r.outcome}: it needs a human, not a new run`); // the factory handed it over
-  const gone = !r && readArchive().find((a) => a.id === id); // F archive drops it from the log, not from history
+  // F archive drops a run from the log, not from history: a stray later event (a sync, a step) doesn't reopen it. Only a new
+  // intake does, which a person starts (/software-factory <id>), so that is the explicit reopen.
+  const reopened = r?.events?.some((e) => e.stage === 'intake' && e.status === 'started');
+  const gone = !reopened && readArchive().find((a) => a.id === id);
   if (gone) throw new Error(`${id} is ${gone.outcome} (archived): it needs a human, not a new run`);
   const mine = listSessions().filter((x) => x.label === id);
   if (mine.some((x) => x.state === 'running')) throw new Error(`${id} already has a running session`); // before its first event lands

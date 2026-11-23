@@ -151,6 +151,10 @@ test('launchSession(): an attached repo and an issue number only; #25\'s refusal
   assert.ok(archive(-1).archived >= 2, 'F archive moves the finished runs out of the log');
   for (const [n, o] of [[80, 'escalated'], [81, 'rejected']])
     assert.throws(() => launchSession({ repo: 'acme/app', issue: n }), new RegExp(`is ${o} \\(archived\\): it needs a human`), 'an archived run is still a human\'s call');
+  record('acme/app#80', 'spec', 'started', {}); // a stray event after the archive: a live run again, with no outcome of its own
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 80 }), /is escalated \(archived\)/, 'a later event doesn\'t reopen it');
+  record('acme/app#80', 'intake', 'started', {}); // a person ran /software-factory on it again
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 80 }), /already has an active run/, 'reopened: the ordinary rules apply');
   record('acme/app#5', 'intake', 'started', { imported: true });
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 5 }), /imported/);
   process.env.STUB_LOGGED_OUT = '1'; harnessReady.clear();
