@@ -70,6 +70,7 @@ test('notes: record, hand out once, next, loop-back, refusals, races, invisible 
   assert.equal(new Set(r.notes.map((x) => x.id)).size, r.notes.length);
   assert.ok(read().filter((e) => e.stage === 'note').every((e) => !('sessionId' in e))); // no session: measured burn never sees a note
   assert.equal(r.stage, 'build');
+  assert.ok(runsData(read()).find((x) => x.id === R).notes.every((n) => n.state === 'pending'), 'applied notes stay in the log, not on the page'); // derive() has six applied ones above
   assert.deepEqual(runsData(read()).find((x) => x.id === R).events.filter((e) => e.stage === 'note').map((e) => e.status), read().filter((e) => e.stage === 'note' && e.run === R).map((e) => e.status)); // the dashboard timeline's "note · pending|applied" rows
   assert.doesNotThrow(() => derive([{ run: '__proto__', stage: 'note', status: 'pending', id: 'n1', step: 'build', text: 'x' }])); // a hand-edited log line can't break derive()
   same(); // stage, clock, burn, reviews: identical without the notes, so gate and decide can't see them

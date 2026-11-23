@@ -3,7 +3,7 @@ import {
   burnText, costText, formatAgo, isDone, formatClock, formatDuration, formatMoney, formatTokens, outcomeOf, previewOf, repoOf, shortId, type Run,
 } from '@software-factory/design-system';
 import { useState, type CSSProperties, type ReactNode } from 'react';
-import { post, uiToken } from './data.ts';
+import { post } from './data.ts';
 import { Cmd } from './Setup.tsx';
 
 const Section = ({ title, children }: { title: string; children: ReactNode }) => (
@@ -155,7 +155,8 @@ function Notes({ run: r, token }: { run: Run; token?: string }) {
   const [text, setText] = useState(''), [added, setAdded] = useState<Note[]>([]), [st, setSt] = useState<{ text: string; bad?: boolean; busy?: boolean }>();
   const known = new Set((r.notes ?? []).map((n) => n.id)); // a note F already reports, pending or applied, replaces its local copy
   const pending = [...(r.notes ?? []).filter((n) => n.state === 'pending'), ...added.filter((n) => !known.has(n.id))];
-  const open = !!token && !r.imported && !r.archived && !isDone(r); // F refuses notes for imported and finished runs
+  if (isDone(r)) return null; // finished: no next step will take a note, pending or new
+  const open = !!token && !r.imported; // F refuses notes for imported runs
   if (!open && !pending.length) return null;
   const send = async () => {
     if (!token) return;
@@ -190,7 +191,7 @@ function Notes({ run: r, token }: { run: Run; token?: string }) {
   );
 }
 
-export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, href = (id) => '#' + encodeURIComponent(id), resume, token = uiToken() }:
+export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, href = (id) => '#' + encodeURIComponent(id), resume, token }:
   { run: Run; cap: number; costCap: number; now?: number; find?: (id: string) => Run | undefined; href?: (id: string) => string; resume?: Resume; token?: string }) {
   const d = formatDuration(r.durationMs ?? Date.parse(r.updated ?? '') - Date.parse(r.started ?? ''));
   const { costUsd, tokens } = spent(r);

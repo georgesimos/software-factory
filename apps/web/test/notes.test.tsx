@@ -2,9 +2,12 @@ import type { Run } from '@software-factory/design-system';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import state from '../fixtures/state.json';
+import { App } from '../src/App.tsx';
+import { normData, normRun, type FactoryData } from '../src/data.ts';
 import { RunDetail } from '../src/RunDetail.tsx';
 
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); history.replaceState(null, '', '/'); });
 
 const R: Run = {
   id: 'acme/app#7', title: 'Seven', stage: 'build', outcome: 'in-progress',
@@ -31,7 +34,7 @@ describe('Note for next step (#17)', () => {
     const { unmount } = render(<RunDetail run={{ ...R, notes: [] }} cap={3} costCap={5} />);
     expect(screen.queryByRole('heading', { name: 'Note for next step' })).toBeNull();
     unmount();
-    for (const r of [{ ...R, notes: [], outcome: 'merged' as const }, { ...R, notes: [], imported: true }]) {
+    for (const r of [{ ...R, outcome: 'merged' as const }, { ...R, archived: true }, { ...R, notes: [], imported: true }]) { // finished: even its pending notes will never be taken
       const { unmount: u } = render(<RunDetail run={r} cap={3} costCap={5} token="tok" />);
       expect(screen.queryByRole('heading', { name: 'Note for next step' })).toBeNull();
       u();
@@ -66,5 +69,28 @@ describe('Note for next step (#17)', () => {
     await userEvent.click(within(b).getByRole('button', { name: 'Add note' }));
     expect((await within(b).findByRole('status')).textContent).toMatch(/notes steer a running issue/);
     expect((ta as HTMLTextAreaElement).value).toBe('x');
+  });
+
+  it('a malformed notes field cannot crash the detail', () => {
+    const bad = normRun({ ...R, notes: [null, 7, { text: { html: '<b>x</b>' } }, { id: 'n-3', text: 'ok', state: 'pending' }] } as unknown as Run);
+    expect(bad.notes?.map((n) => n.id)).toEqual(['n-3']);
+    expect(normRun({ ...R, notes: 'x' } as unknown as Run).notes).toEqual([]);
+    render(<RunDetail run={bad} cap={3} costCap={5} />);
+    expect(box().textContent).toMatch(/ok/);
+  });
+
+  // The box writes only when the data came from F ui (data.token), like every other write; ?t= alone is not enough.
+  it('App gives the box the token its data loaded with, not the one in the URL', async () => {
+    const data = normData(state as unknown as FactoryData), id = 'acme/shop#45';
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: q.includes('1100'), addEventListener() {}, removeEventListener() {} }));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}')));
+    history.replaceState(null, '', '/?t=tok#' + encodeURIComponent(id)); // a token in the URL, but injected data: a snapshot
+    const { unmount } = render(<App load={async () => data} />);
+    expect(await screen.findByRole('heading', { name: data.runs.find((r) => r.id === id)?.title })).toBeTruthy();
+    expect(screen.queryByRole('textbox', { name: 'Note for the next step' })).toBeNull();
+    unmount();
+    history.replaceState(null, '', '/#' + encodeURIComponent(id)); // F ui data, whatever the URL says
+    render(<App load={async () => ({ ...data, token: 'tok' })} />);
+    expect(await screen.findByRole('textbox', { name: 'Note for the next step' })).toBeTruthy();
   });
 });
