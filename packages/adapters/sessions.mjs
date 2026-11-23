@@ -57,9 +57,14 @@ export const stopAll = () => { for (const s of sessions.values()) if (s.state ==
 process.once('exit', stopAll);
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(sig, () => { stopAll(); process.kill(process.pid, sig); }); // then the default action
 
+// The env a spawned harness gets: never the ids of the session F itself runs in, or every run it starts would record the
+// parent's desktop session (#26) and CLI transcript as its own. A spawned claude sets its own.
+export const childEnv = (env) => { const e = { ...env }; delete e.CLAUDE_CODE_HOST_SESSION_ID; delete e.CLAUDE_CODE_SESSION_ID; return e; };
+
 // h: the harness adapter; opts go to h.launch(); cwd and env are the host's, never the request's. resolve is for tests:
 // command()'s platform and file lookup (core/src/platform.ts).
-export function startSession(h, opts, { cwd, env = process.env, label = '', modules = {}, resolve }) {
+export function startSession(h, opts, { cwd, env: parent = process.env, label = '', modules = {}, resolve }) {
+  const env = childEnv(parent); // headless, terminal and sdk alike
   if (typeof h.launch !== 'function' || !(h.modes || []).includes(opts.mode)) throw new Error(`${h.id} cannot launch in ${opts.mode} mode`);
   if (opts.mode === 'terminal' && opts.budget != null) throw new Error('a terminal session has no budget cap: run headless or sdk for a budget');
   const spec = h.launch(opts);

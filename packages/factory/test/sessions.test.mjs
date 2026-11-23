@@ -80,8 +80,8 @@ test('record() stamps the desktop session id from CLAUDE_CODE_HOST_SESSION_ID on
     assert.equal(record('acme/host#2', 'intake', 'started').hostSessionId, undefined, 'not a local_<uuid>: not recorded');
     env('CLAUDE_CODE_HOST_SESSION_ID', undefined);
     assert.equal(record('acme/host#3', 'intake', 'started', forged).hostSessionId, undefined, 'a payload alone never sets it');
-    env('CLAUDE_CODE_SESSION_ID', undefined);
-    assert.equal(record('acme/host#4', 'intake', 'started', forged).hostSessionId, undefined, 'outside a harness session too');
+    env('CLAUDE_CODE_SESSION_ID', undefined); env('CLAUDE_CODE_HOST_SESSION_ID', LOCAL);
+    assert.equal(record('acme/host#4', 'intake', 'started', forged).hostSessionId, undefined, 'not inside claude-code: an inherited id isn\'t this run\'s');
   } finally { env('CLAUDE_CODE_SESSION_ID', undefined); env('CLAUDE_CODE_HOST_SESSION_ID', undefined); }
   assert.deepEqual(derive(read())['acme/host#1'].sessions.map((x) => [x.id, x.hostId]), [['cli-1', LOCAL]]);
   assert.deepEqual(derive(read())['acme/host#2'].sessions.map((x) => [x.id, x.hostId]), [['cli-1', undefined]]);
@@ -92,11 +92,24 @@ test('openSession() (F open <id>, POST /api/sessions/open): the desktop app when
   for (const bad of [undefined, 7, '--resume', 'a b', '../x', 'x'.repeat(101)]) assert.throws(() => openSession({ id: bad }, launch), /id must be a session id/, String(bad));
   assert.throws(() => openSession({ harness: 'nope', id: 'cli-1' }, launch), /no harness/);
   assert.deepEqual(openSession({ id: LOCAL }, launch), { opened: `claude://claude.ai/epitaxy/${LOCAL}` }, 'its own desktop id');
-  assert.deepEqual(openSession({ id: 'cli-1' }, launch), { opened: `claude://claude.ai/epitaxy/${LOCAL}` }, 'the desktop id recorded with the CLI session\'s events');
+  const later = LOCAL.replace('0123abcd', 'fedcba98'), at = (id, host, run) => { process.env.CLAUDE_CODE_SESSION_ID = id; process.env.CLAUDE_CODE_HOST_SESSION_ID = host; try { record(run, 'intake', 'started'); } finally { delete process.env.CLAUDE_CODE_SESSION_ID; delete process.env.CLAUDE_CODE_HOST_SESSION_ID; } };
+  at('cli-7', later, 'acme/open#2'); at('cli-7', LOCAL, 'acme/open#1'); // one CLI session, two runs: the newer write is #1's
+  assert.deepEqual(openSession({ id: 'cli-7' }, launch), { opened: `claude://claude.ai/epitaxy/${LOCAL}` }, 'the desktop id last recorded with the CLI session\'s events');
   record('acme/host#5', 'intake', 'started', { harness: 'claude-code', sessionId: 'term-9', cwd: '/work/acme' }); // a plain terminal: no desktop id
   assert.deepEqual(openSession({ id: 'term-9' }, launch), { resume: { command: 'claude --resume term-9', cwd: '/work/acme' } });
   assert.deepEqual(openSession({ id: 'never-seen' }, launch), { resume: { command: 'claude --resume never-seen' } });
   assert.deepEqual(opened, [`claude://claude.ai/epitaxy/${LOCAL}`, `claude://claude.ai/epitaxy/${LOCAL}`], 'the opener only ever gets the claude:// link');
+});
+
+test('a spawned harness never inherits the ids of the session F runs in: headless, terminal and sdk', async () => {
+  const env = { ...stubEnv, CLAUDE_CODE_SESSION_ID: 'outer-1', CLAUDE_CODE_HOST_SESSION_ID: LOCAL };
+  const ev = await finished(startSession(claude, { mode: 'headless', prompt: 'x' }, { cwd: home, env }));
+  assert.deepEqual(ev.find((e) => e.data?.subtype === 'init').data.parentIds, []);
+  const pty = fakePty(), sdk = fakeSdk();
+  const t = startSession(claude, { mode: 'terminal' }, { cwd: home, env, modules: { [PTY]: pty } });
+  await new Promise((r) => setTimeout(r, 20)); const end = finished(t); t.stop(); await end;
+  await finished(startSession(claude, { mode: 'sdk', prompt: 'x' }, { cwd: home, env, modules: { [SDK]: sdk } }));
+  for (const e of [pty.rec.env, sdk.rec.q.options.env]) assert.deepEqual([e.CLAUDE_CODE_SESSION_ID, e.CLAUDE_CODE_HOST_SESSION_ID, e.PATH], [undefined, undefined, stubEnv.PATH]);
 });
 
 test('openDesktop(): only a desktop session id gets the link, and opener() takes that one claude: URL only', () => {
@@ -406,7 +419,7 @@ test('a stop while node-pty or the SDK loads is kept: nothing starts', async () 
 test('sdk mode: the host env reaches the SDK, and a failed result exits 1', async () => {
   const sdk = fakeSdk(), env = { ...stubEnv, FACTORY_MARK: 'x' };
   await finished(startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, env, modules: { [SDK]: sdk } }));
-  assert.equal(sdk.rec.q.options.env, env);
+  assert.deepEqual(sdk.rec.q.options.env, env);
   for (const [result, code] of [[{ type: 'result', subtype: 'success' }, 0], [{ type: 'result', subtype: 'error_max_budget_usd' }, 1], [{ type: 'result', subtype: 'success', is_error: true }, 1], [null, 1]]) {
     assert.equal((await finished(startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { [SDK]: fakeSdk(false, result) } }))).at(-1).code, code, JSON.stringify(result));
   }

@@ -122,7 +122,8 @@ const deepCwd = (p: unknown): p is string => typeof p === 'string' && /^(\/(?!\/
 // A run driven from the Claude desktop app opens that session there (#26): F recorded its local_<uuid> with the events.
 const HOST_ID = /^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export function openInClaude(r: Run) {
-  const host = (r.sessions ?? []).map((s) => s.hostId).filter((h): h is string => !!h && HOST_ID.test(h)).at(-1);
+  const last = (r.sessions ?? []).slice().sort((a, b) => (a.last ?? '').localeCompare(b.last ?? '')).at(-1); // the session that drove it most recently
+  const host = last?.agent === 'claude-code' && last.hostId && HOST_ID.test(last.hostId) ? last.hostId : undefined;
   if (host) return `claude://claude.ai/epitaxy/${host}`;
   const cwd = [r.worktree, ...(r.sessions ?? []).map((s) => s.cwd)].find(deepCwd);
   if (!cwd || !/^[\w.-]+\/[\w.-]+(#\d+|:[\w./-]+)$/.test(r.id)) return null; // owner/repo#N or an import's owner/repo:branch; it goes into a prompt that runs F

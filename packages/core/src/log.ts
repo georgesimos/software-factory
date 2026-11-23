@@ -49,7 +49,7 @@ export function record(run: string, stage: string, status: string, payload: Part
   payload = validateUsage(payload);
   const { hostSessionId: _forged, ...own } = payload; payload = own; // the desktop session comes from the environment, never a payload
   const me = stage === 'ship' ? null : harnesses.find((h) => h.current?.()); // the harness F runs inside, if any; lets the UI link back to the driving session
-  const host = process.env.CLAUDE_CODE_HOST_SESSION_ID; // the Claude desktop app's id for that session (#26); CLAUDE_CODE_SESSION_ID is the CLI transcript's
+  const host = me?.id === 'claude-code' ? process.env.CLAUDE_CODE_HOST_SESSION_ID : undefined; // the Claude desktop app's id for that session (#26); CLAUDE_CODE_SESSION_ID is the CLI transcript's
   const ev = { ts: new Date().toISOString(), ...payload, ...(me ? { harness: me.id, sessionId: (me.current as () => string)(), ...(host && HOST_ID.test(host) && { hostSessionId: host }), cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback, payload.role)), run, stage, status };
   fs.mkdirSync(stateDir(), { recursive: true });
   fs.appendFileSync(log(), JSON.stringify(ev) + '\n');

@@ -206,7 +206,8 @@ export function openSession({ harness = 'claude-code', id }: { harness?: string;
   if (!h) throw new Error(`no harness ${String(harness).slice(0, 40)}`);
   const sid = typeof id === 'string' ? id : '';
   if (!HOST_ID.test(sid) && !SESSION_ID.test(sid)) throw new Error('id must be a session id');
-  const seen = Object.values(derive(read())).flatMap((r) => r.sessions ?? []).filter((x) => x.id === sid && (!x.agent || x.agent === h.id));
+  const seen = Object.values(derive(read())).flatMap((r) => r.sessions ?? []).filter((x) => x.id === sid && (!x.agent || x.agent === h.id))
+    .sort((a, b) => (a.last ?? '').localeCompare(b.last ?? '')); // the latest last: one CLI session can drive several runs
   const url = h.openDesktop?.(HOST_ID.test(sid) ? sid : seen.map((x) => x.hostId).filter(Boolean).at(-1) ?? ''), cwd = seen.at(-1)?.cwd;
   if (url) return { opened: opener(url) };
   if (!h.modes?.includes('terminal')) throw new Error(`${h.id} has no desktop link or terminal resume for ${sid}`);
@@ -298,7 +299,7 @@ export function page(extra = {}) {
 // root (/Users, /home, …) or any /a/b, and runs to the next hard delimiter or URL, spaces included ("Application
 // Support", "Bob Smith"): over-redacting prose is the safe side. Web URLs survive: their slashes follow a word
 // character or '/'. Whatever the patterns miss, the residue check in artifact() refuses.
-const PATH_ONLY = new Set(['worktree', 'cwd', 'installPath', 'projectPath', 'fCmd']); // fCmd: the page falls back to the ~ form
+const PATH_ONLY = new Set(['worktree', 'cwd', 'installPath', 'projectPath', 'fCmd', 'hostId', 'hostSessionId']); // fCmd: the page falls back to the ~ form; hostId: a desktop session on this machine
 const STOP = String.raw`\n\r"'\x60<>|(){}\[\];,&*?`;
 const BODY = String.raw`(?:(?:(?!\s+https?:\/\/)[^${STOP}])*[^\s${STOP}])?`;
 const ROOTS = 'Users|home|Volumes|srv|private|var|tmp|opt|mnt|media|root|usr|etc|Library|Applications|nix|workspaces?';
