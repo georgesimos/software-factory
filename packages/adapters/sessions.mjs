@@ -18,7 +18,7 @@ const sessions = new Map();
 export const getSession = (id) => sessions.get(id);
 export const listSessions = () => [...sessions.values()].map(({ id, harness, mode, label, state, exit, started, ended, harnessSession }) => ({ id, harness, mode, label, state, exit, started, ended, harnessSession }));
 // A run that a killed session leaves active is resumed from it (server.ts), so its newest one is never forgotten, only emptied.
-const resumable = (x) => x.exit !== 0 && x.harnessSession && [...sessions.values()].filter((y) => y.label === x.label).at(-1) === x;
+const resumable = (x) => x.exit !== 0 && x.harnessSession && [...sessions.values()].filter((y) => y.label === x.label && y.mode !== 'terminal').at(-1) === x;
 
 function emit(s, e) {
   const ev = { n: s.next++, at: new Date().toISOString(), ...e };
@@ -63,7 +63,7 @@ export function startSession(h, opts, { cwd, env = process.env, label = '', modu
   if (typeof h.launch !== 'function' || !(h.modes || []).includes(opts.mode)) throw new Error(`${h.id} cannot launch in ${opts.mode} mode`);
   if (opts.mode === 'terminal' && opts.budget != null) throw new Error('a terminal session has no budget cap: run headless or sdk for a budget');
   const spec = h.launch(opts);
-  const s = { id: crypto.randomUUID(), harness: h.id, mode: opts.mode, label, state: 'running', exit: null, started: new Date().toISOString(), events: [], next: 0, listeners: new Set(), bytes: 0, stop: () => {}, harnessSession: undefined, ended: null };
+  const s = { id: crypto.randomUUID(), harness: h.id, mode: opts.mode, label, cwd, state: 'running', exit: null, started: new Date().toISOString(), events: [], next: 0, listeners: new Set(), bytes: 0, stop: () => {}, harnessSession: undefined, ended: null };
   sessions.set(s.id, s);
   const done = (exit) => {
     if (s.state !== 'running') return;
@@ -124,7 +124,7 @@ async function terminal(s, spec, { cwd, env, modules, resolve, done }) {
   }
   s.write = (data) => { if (!stopped) p.write(data); }; // a stopped pty may already be gone
   s.resize = (cols, rows) => { if (!stopped) p.resize(cols, rows); };
-  s.stop = () => { stopped = true; p.kill(); };
+  s.stop = () => { stopped = true; killTree({ pid: p.pid, kill() {} }, process.platform, undefined, process.kill, true); try { p.kill(); } catch { /* gone */ } }; // the tree first, waited (taskkill /T on Windows walks it from the live root), then the pty
   p.onData((data) => emit(s, { type: 'output', data }));
   p.onExit(({ exitCode, signal }) => done(stopped ? 'stopped' : signal || exitCode));
 }

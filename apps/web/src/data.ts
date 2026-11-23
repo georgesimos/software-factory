@@ -44,6 +44,8 @@ export interface FactoryData {
   fCmd?: string | null;
   /** No F on this machine (the desktop app with no skill or plugin installed): the copy commands need one first. */
   fMissing?: boolean;
+  /** F ui in the desktop app, which supplies node-pty: terminal sessions can start. */
+  terminal?: boolean;
   /** F render's file: reload every this many ms to pick up new runs (the Artifact strips it). */
   reload?: number;
   /** Under F ui: runs whose session here stopped or crashed, which POST /api/sessions would resume. */

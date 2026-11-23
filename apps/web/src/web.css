@@ -185,7 +185,11 @@
   .web-sk-act { text-align: left; }
   .web-pk-foot { bottom: calc(-1 * var(--sf-space-4)); margin: var(--sf-space-3) calc(-1 * var(--sf-space-4)) calc(-1 * var(--sf-space-4)); padding-inline: var(--sf-space-4); }
 }
+/* Sessions: in the header, or above the board on a phone, where the header has no room left */
+.sf-btn.web-live-alt { display: none; }
 @media (max-width: 420px) { /* the mark alone, so Skills and the theme switch fit; the name stays for screen readers */
+  .sf-btn.web-live-top { display: none; }
+  .sf-btn.web-live-alt { display: flex; width: 100%; justify-content: center; margin-bottom: var(--sf-space-4); }
   .web-brand-t { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
 
@@ -238,3 +242,12 @@
 }
 .web-start { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sf-space-2) var(--sf-space-3); margin-bottom: var(--sf-space-3); }
 .web-start .web-sk-status { margin: 0; }
+
+/* Sessions sheet (#58): live sessions and the xterm.js pane */
+.web-live-new { display: flex; gap: var(--sf-space-2); align-items: center; flex-wrap: wrap; }
+.web-live-list { list-style: none; margin: var(--sf-space-3) 0 0; padding: 0; }
+.web-live-list li { display: flex; flex-wrap: wrap; gap: var(--sf-space-2); align-items: center; justify-content: space-between; padding: var(--sf-space-2) 0; border-bottom: 1px solid var(--sf-color-line); }
+.web-live-list li[aria-current] .web-live-l b { text-decoration: underline; }
+.web-live-l { min-width: 0; overflow-wrap: anywhere; }
+.web-live-acts { display: flex; gap: var(--sf-space-1); flex-wrap: wrap; }
+.web-term { height: 360px; margin-top: var(--sf-space-4); padding: var(--sf-space-2); border-radius: var(--sf-radius-md); background: var(--sf-color-sunken); overflow: hidden; }
