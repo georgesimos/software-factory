@@ -227,16 +227,24 @@ const LOCAL_PATH = new RegExp([
 const scrub = (v) => typeof v === 'string' ? v.replace(LOCAL_PATH, '[local path]')
   : Array.isArray(v) ? v.map(scrub)
   : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([k]) => !PATH_ONLY.has(k)).map(([k, x]) => [k, scrub(x)])) : v;
-// The backstop: what identifies this machine must not be in the page at all. Web URLs are left out of the search, since
-// the GitHub owner in them may be the login; the login itself counts only as a path segment (\bob\, /bob/).
+// The backstop: what identifies this machine must not be in the page at all, URLs included (http://host.local:5173,
+// http://localhost:3000/Users/bob). Two exceptions keep it from refusing every page: the login counts only as a path
+// segment outside GitHub URLs and owner/repo ids (the owner, and a profile repo login/login, is often the login), and a
+// short host name counts only as a host (host.local, @host, host:port, \\host, //host), since "build" or "app" is prose.
 const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-function residue(json, raw) {
-  const text = json.replace(/https?:\/\/[^\s"]*/g, ''), jsonOf = (x) => JSON.stringify(x).slice(1, -1);
-  const { username } = os.userInfo(), host = os.hostname(), left = [];
-  const paths = [os.homedir(), ...Object.values(projects()).map((p) => p?.path), ...(raw.runs || []).flatMap((r) => [r.worktree, ...(r.sessions || []).map((s) => s.cwd)])];
-  if (paths.some((p) => typeof p === 'string' && p.length > 3 && text.includes(jsonOf(p)))) left.push('a home, clone or worktree path');
-  if (username.length >= 3 && new RegExp(String.raw`(?:\\\\|\/)${esc(username)}(?![\w.-])`, 'i').test(text)) left.push('the login name in a path');
-  if ([host, host.split('.')[0]].some((h) => h.length >= 3 && new RegExp(String.raw`(?<![\w-])${esc(h)}(?![\w-])`, 'i').test(text))) left.push('the host name');
+const machine = () => ({ user: os.userInfo().username, host: os.hostname(), home: os.homedir(), projects: projects() });
+export function residue(json, raw, me = machine()) {
+  const jsonOf = (x) => JSON.stringify(x).slice(1, -1), runs = raw.runs || [], left = [];
+  const paths = [me.home, ...Object.values(me.projects).map((p) => p?.path), ...runs.flatMap((r) => [r.worktree, ...(r.sessions || []).map((s) => s.cwd)])];
+  if (paths.some((p) => typeof p === 'string' && p.length > 3 && json.includes(jsonOf(p)))) left.push('a home, clone or worktree path');
+  const ids = new Set([...Object.keys(me.projects), ...runs.map((r) => String(r.id).split(/[#:]/)[0])]);
+  let text = json.replace(/(?:https?:\/\/)?(?:www\.)?github\.com[/:][^\s"]*/gi, '');
+  for (const id of ids) text = text.replace(new RegExp(String.raw`(?<![\w.\/\\-])${esc(id)}(?![\w.-])`, 'g'), '');
+  if (me.user.length >= 3 && new RegExp(String.raw`(?:\\\\|\/)${esc(me.user)}(?![\w.-])`, 'i').test(text)) left.push('the login name in a path');
+  const short = me.host.split('.')[0], hosts = [];
+  if (me.host.includes('.') && me.host.length >= 3) hosts.push(String.raw`(?<![\w-])${esc(me.host)}(?![\w-])`);
+  if (short.length >= 3) hosts.push(String.raw`(?<![\w-])${esc(short)}(?=\.local\b|:\d)`, String.raw`(?:[@＠]|\\\\\\\\|\/\/)${esc(short)}(?![\w.-])`);
+  if (hosts.length && new RegExp(hosts.join('|'), 'i').test(json)) left.push('the host name');
   return left;
 }
 const DATA_TAG = /(<script type="application\/json" id="data">)([^<]*)(<\/script>)/;

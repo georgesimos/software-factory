@@ -13,7 +13,7 @@ import { derive, getRun } from '../../core/src/derive.ts';
 import { facts, intake } from '../../core/src/github.ts';
 import { headlessArgs } from '../../core/src/review.ts';
 import { loop } from '../../core/src/project.ts';
-import { artifact, page, render } from '../../server/src/server.ts';
+import { artifact, page, render, residue } from '../../server/src/server.ts';
 import { rules } from '../../core/src/rules.ts';
 import { wtFile } from '../../core/src/workspace.ts';
 import { test } from 'node:test';
@@ -179,7 +179,7 @@ export function artifactTest() {
     assert.match(pub, /GET \/api\/runs/); // a route, not a path
     assert.match(pub, /\[local path\] https:\/\/github\.com\/evil\/x\/pull\/3 ok/); // a path stops at the URL after it
     // The backstop: whatever the patterns miss, the login (as a path segment), the host name or a known path is refused.
-    for (const note of [`built in x\\${user}\\y`, `on ${os.hostname()}`]) assert.throws(() => artifact(page({ note })), /still carries/, note);
+    for (const note of [`built in x\\${user}\\y`, `dev server http://${os.hostname()}:5173/x`]) assert.throws(() => artifact(page({ note })), /still carries/, note);
     assert.match(pub, /https:\/\/github\.com\/evil\/x\/pull\/2/);
     assert.deepEqual(a.skills.catalog, { global: [], projects: {} });
     assert.deepEqual(a.onboard.default, { ship: ['web'] });
@@ -193,6 +193,25 @@ export function artifactTest() {
   }
 }
 
+// The backstop with a made-up machine: login X (whose profile repo is X/X), host build or Georges-MacBook-Pro.local.
+export function residueTest() {
+  const me = (host = 'build', projects = { 'X/X': { path: '/srv/clones/xx' } }) => ({ user: 'X1x', host, home: '/home/X1x', projects });
+  const raw = { runs: [{ id: 'X1x/X1x#3', worktree: '/srv/wt/x3', sessions: [{ cwd: '/srv/s/1' }] }] };
+  const check = (data, m = me()) => residue(JSON.stringify(data), raw, m);
+  // The owner/repo id, its project key and its GitHub URLs are not the login in a path, nor is prose that says "build".
+  const ok = { runs: [{ id: 'X1x/X1x#3', url: 'https://github.com/X1x/X1x/issues/3', pr: 'https://github.com/X1x/X1x/pull/4', remote: 'git@github.com:X1x/X1x.git',
+    note: 'X1x/X1x#3: build passed; see packages/build/x and src/app; npm run build' }], projects: ['X1x/X1x'] };
+  assert.deepEqual(check(ok, me('build', { 'X1x/X1x': { path: '/srv/clones/xx' } })), []);
+  assert.deepEqual(residue(JSON.stringify(ok), raw, me('app')), []);
+  for (const [note, what, m] of [
+    ['C:\\work\\X1x\\proj', /login/], ['under /mnt/X1x/app', /login/], ['http://localhost:3000/home/X1x/proj', /home, clone or worktree/],
+    ['at /srv/clones/xx/src', /home, clone or worktree/, me('build', { 'X1x/X1x': { path: '/srv/clones/xx' } })], ['cd /srv/wt/x3', /worktree/], ['cwd /srv/s/1', /worktree/],
+    ['open http://build.local:5173/x', /host/], ['http://build:5173/', /host/], ['me@build', /host/], ['\\\\build\\share', /host/], ['smb://build/share', /host/],
+    ['http://Georges-MacBook-Pro.local:5173/x', /host/, me('Georges-MacBook-Pro.local')], ['ran on Georges-MacBook-Pro.local', /host/, me('Georges-MacBook-Pro.local')],
+  ]) assert.match(check({ note }, m).join(), what, note);
+}
+
 setup();
 test('demo: derive, gate, decide, risk, metrics and the dashboard', coreTest);
+test('artifact backstop: refuses this machine\'s names and paths, not owner/repo ids or prose', residueTest);
 test('artifact: the claude.ai page built from the demo state', artifactTest); // runs after coreTest, on its state
