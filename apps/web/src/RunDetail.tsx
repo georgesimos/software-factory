@@ -1,8 +1,9 @@
 import {
   ArrowUpRightIcon, Badge, Button, Dot, MetricStat, OutcomePill, ReviewMatrix, STAGES, SessionList, SourceChip, StageTrack, Timeline,
-  burnText, costText, formatAgo, formatClock, formatDuration, formatMoney, formatTokens, outcomeOf, previewOf, repoOf, shortId, type Run,
+  burnText, costText, formatAgo, isDone, formatClock, formatDuration, formatMoney, formatTokens, outcomeOf, previewOf, repoOf, shortId, type Run,
 } from '@software-factory/design-system';
-import type { CSSProperties, ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
+import { post, uiToken } from './data.ts';
 import { Cmd } from './Setup.tsx';
 
 const Section = ({ title, children }: { title: string; children: ReactNode }) => (
@@ -144,8 +145,53 @@ function Start({ run: r, resume }: { run: Run; resume?: Resume }) {
   );
 }
 
-export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, href = (id) => '#' + encodeURIComponent(id), resume }:
-  { run: Run; cap: number; costCap: number; now?: number; find?: (id: string) => Run | undefined; href?: (id: string) => string; resume?: Resume }) {
+type Note = NonNullable<Run['notes']>[number];
+const NOTE_MAX = 1000; // core/src/notes.ts; the server refuses longer
+/**
+ * The user's notes for whatever step starts next (F note <run> next). Under F ui (a token) a box records one; the static
+ * dashboard lists them read-only. Note text is shown as text, never HTML.
+ */
+function Notes({ run: r, token }: { run: Run; token?: string }) {
+  const [text, setText] = useState(''), [added, setAdded] = useState<Note[]>([]), [st, setSt] = useState<{ text: string; bad?: boolean; busy?: boolean }>();
+  const known = new Set((r.notes ?? []).map((n) => n.id)); // a note F already reports, pending or applied, replaces its local copy
+  const pending = [...(r.notes ?? []).filter((n) => n.state === 'pending'), ...added.filter((n) => !known.has(n.id))];
+  const open = !!token && !r.imported && !r.archived && !isDone(r); // F refuses notes for imported and finished runs
+  if (!open && !pending.length) return null;
+  const send = async () => {
+    if (!token) return;
+    setSt({ text: '', busy: true });
+    try {
+      const n = await post<Note & { warning?: string }>('/note', { run: r.id, text }, token);
+      setAdded((a) => [...a, { ...n, state: 'pending' }]);
+      setText('');
+      setSt({ text: n.warning || 'Noted: the next step to start takes it.' });
+    } catch (e) {
+      setSt({ text: (e as Error).message, bad: true });
+    }
+  };
+  return (
+    <Section title="Note for next step">
+      <p className="web-sk-note">Applies from the next step or iteration, once: whichever step starts next reads it in its brief.</p>
+      {pending.length ? (
+        <ul className="web-notes" aria-label="Pending notes">
+          {pending.map((n, i) => <li key={n.id ?? i}><p className="web-note-t">{n.text}</p><span className="sf-muted">{[n.by, n.ts ? formatAgo(n.ts) : ''].filter(Boolean).join(' · ') || 'pending'}</span></li>)}
+        </ul>
+      ) : null}
+      {open ? (
+        <form className="web-note-form" onSubmit={(e) => { e.preventDefault(); void send(); }}>
+          <textarea className="sf-input web-ob-ta" aria-label="Note for the next step" maxLength={NOTE_MAX} placeholder="e.g. Keep the old endpoint until the client ships." value={text} onChange={(e) => setText(e.target.value)} />
+          <div className="web-start">
+            <Button size="sm" type="submit" disabled={st?.busy || !text.trim()}>{st?.busy ? 'Saving…' : 'Add note'}</Button>
+            <p className="web-sk-status" role="status" data-bad={st?.bad || undefined}>{st?.busy ? '' : st?.text}</p>
+          </div>
+        </form>
+      ) : null}
+    </Section>
+  );
+}
+
+export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, href = (id) => '#' + encodeURIComponent(id), resume, token = uiToken() }:
+  { run: Run; cap: number; costCap: number; now?: number; find?: (id: string) => Run | undefined; href?: (id: string) => string; resume?: Resume; token?: string }) {
   const d = formatDuration(r.durationMs ?? Date.parse(r.updated ?? '') - Date.parse(r.started ?? ''));
   const { costUsd, tokens } = spent(r);
   const src = r.burn ? (r.burn.measured ? 'measured' : 'reported') : '';
@@ -175,6 +221,7 @@ export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, h
       <Section title="Pipeline"><StageTrack run={r} /></Section>
       <Section title="Review"><ReviewMatrix run={r} /></Section>
       <Section title="Decision"><Decision run={r} /></Section>
+      <Notes key={r.id} run={r} token={token} />
       <Section title="Run">
         <div className="web-facts">
           <MetricStat size="sm" label="Iterations" value={`${r.iteration ?? 0} / ${cap}`} sub={r.loopbacks?.length ? `${r.loopbacks.length} loop-back${r.loopbacks.length > 1 ? 's' : ''}` : 'no loop-backs'} />

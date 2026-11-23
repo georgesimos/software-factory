@@ -16,6 +16,7 @@ import { projects, wtInfo } from '../../core/src/workspace.ts';
 import { dashboard, read, readArchive, sessionsFile, stateDir } from '../../core/src/log.ts';
 import { applyPreset, readSkills, setSkill, skillsData } from '../../core/src/skills.ts';
 import { sync } from '../../core/src/sync.ts';
+import { note } from '../../core/src/notes.ts';
 import { measure, withMeasured } from '../../core/src/burn.ts';
 import { logMetrics } from '../../core/src/metrics.ts';
 import { open } from '../../core/src/platform.ts';
@@ -81,6 +82,8 @@ export const UI_ROUTES = {
   // Records the idea only: repo and issue creation stay in the Claude session, behind its checkpoints. Returns an id, never
   // the idea text, since `next` is pasted into a terminal.
   '/idea': ({ repo, idea, stack }) => { const p = startIdea({ repo, idea, stack }); return { run: p.id, next: `/software-factory new ${p.repo}` }; },
+  // F note <run> next: the same validation (1-1000 characters, a run F builds, not finished) and the same audit record.
+  '/note': ({ run, text }) => { if (typeof run !== 'string' || typeof text !== 'string') throw new Error('run and text must be strings'); return note(run, 'next', text); },
   '/onboard': () => onboardState(),
   '/onboard/sync': ({ repo, path: p }) => {
     if (typeof p !== 'string' || !path.isAbsolute(p) || !fs.existsSync(path.join(p, '.git'))) throw new Error('path must be the absolute path of a local clone');

@@ -9,7 +9,7 @@ import { test } from 'node:test';
 import { HERE } from '../factory.mjs';
 import { derive } from '../../core/src/derive.ts';
 import { archive, io, read, readArchive, record } from '../../core/src/log.ts';
-import { runsData } from '../../server/src/server.ts';
+import { artifact, page, runsData, uiHandle } from '../../server/src/server.ts';
 import { setup } from './setup.mjs';
 
 // F note / F notes (#16): the user's one-shot note for a step, handed out once, never seen by the gate.
@@ -97,4 +97,48 @@ test('notes: verifier and postmerge map to their own events', () => {
   cli(['event', R, 'review', 'passed', '-'], '{"role":"verifier","tokens":10}');
   assert.match(note('verifier').warning, /verifier already ran/);
   assert.equal(note('postmerge').warning, undefined); // not merged yet
+});
+
+// F ui's "Note for next step" box (#17): POST /note behind the same guard as every write, recorded through note() as "next".
+test('notes: POST /note from F ui, its guard, and the published page', () => {
+  const prev = { dir: io.dir, gh: io.gh };
+  io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-note-'));
+  io.gh = path.join(HERE, 'test', 'gh-stub.mjs');
+  try {
+    const R = 'acme/note#4', tok = 'n'.repeat(32), ctx = { token: tok, port: 4343 };
+    const H = { host: 'localhost:4343', origin: 'http://localhost:4343', 'content-type': 'application/json', 'x-factory-token': tok };
+    const post = (url, body, h = {}) => { const r = uiHandle({ method: 'POST', url, headers: { ...H, ...h }, body: JSON.stringify(body) }, ctx); return { ...r, json: JSON.parse(r.body) }; };
+    record(R, 'intake', 'passed');
+    for (const url of ['/note', '/api/note']) {
+      const { 'x-factory-token': _, ...noToken } = H;
+      assert.equal(uiHandle({ method: 'POST', url, headers: noToken, body: '{}' }, ctx).status, 403); // missing token
+      assert.equal(post(url, {}, { 'x-factory-token': 'x'.repeat(32) }).status, 403); // wrong token
+      assert.equal(post(url, {}, { origin: 'http://evil.test' }).status, 403); // wrong Origin
+      assert.equal(post(url, {}, { host: 'evil.test:4343' }).status, 403);
+      assert.equal(post(url, {}, { 'content-type': 'text/plain' }).status, 415);
+    }
+    assert.equal(read().filter((e) => e.stage === 'note').length, 0); // nothing refused was recorded
+    assert.match(post('/note', { run: R, text: { x: 1 } }).json.error, /must be strings/);
+    assert.match(post('/note', { run: R, text: '   ' }).json.error, /1-1000 characters/);
+    assert.match(post('/note', { run: R, text: 'x'.repeat(1001) }).json.error, /1-1000 characters/);
+    assert.match(post('/note', { run: 'acme/note#9', text: 'x' }).json.error, /no run acme\/note#9/);
+    assert.match(post('/note', { run: '__proto__', text: 'x' }).json.error, /no run __proto__/);
+    const home = os.homedir(), text = `Keep the old route; see ${path.join(home, 'notes', 'plan.md')} <b>bold</b>`;
+    const r = post('/api/note', { run: R, text, step: 'build' }); // the box always writes "next"; a step in the body is ignored
+    assert.equal(r.status, 200, r.body);
+    assert.deepEqual([r.json.step, r.json.text, r.json.by], ['next', text, 'stub-user']);
+    const n = derive(read())[R].notes;
+    assert.deepEqual(n.map((x) => [x.id, x.step, x.text, x.state]), [[r.json.id, 'next', text, 'pending']]);
+    assert.ok(runsData().find((x) => x.id === R).notes.some((x) => x.text === text)); // what the static dashboard lists read-only
+    // Published: the note's path is scrubbed like any run text, and a credential in a note refuses the page.
+    const pub = artifact(page());
+    assert.ok(!pub.includes(JSON.stringify(home).slice(1, -1)), 'no home path in the artifact');
+    assert.match(pub, /Keep the old route; see \[local path\] \\u003cb>bold\\u003c\/b>/);
+    assert.equal(post('/note', { run: R, text: 'token ghp_' + 'a'.repeat(36) }).status, 200);
+    assert.throws(() => artifact(page()), /carries a token/);
+    record('acme/note#5', 'intake', 'rejected');
+    assert.match(post('/note', { run: 'acme/note#5', text: 'x' }).json.error, /is rejected/); // a finished run takes no note
+  } finally {
+    Object.assign(io, prev);
+  }
 });
