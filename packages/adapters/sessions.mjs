@@ -124,7 +124,7 @@ async function terminal(s, spec, { cwd, env, modules, resolve, done }) {
   }
   s.write = (data) => { if (!stopped) p.write(data); }; // a stopped pty may already be gone
   s.resize = (cols, rows) => { if (!stopped) p.resize(cols, rows); };
-  s.stop = () => { stopped = true; killTree({ pid: p.pid, kill() {} }); try { p.kill(); } catch { /* gone */ } }; // the harness's own children too (taskkill /T on Windows)
+  s.stop = (wait) => { stopped = true; killTree({ pid: p.pid, kill() {} }, process.platform, undefined, process.kill, wait); try { p.kill(); } catch { /* gone */ } }; // the harness's own children too (taskkill /T on Windows)
   p.onData((data) => emit(s, { type: 'output', data }));
   p.onExit(({ exitCode, signal }) => done(stopped ? 'stopped' : signal || exitCode));
 }
