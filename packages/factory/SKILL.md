@@ -21,7 +21,7 @@ description: Attach a GitHub repo to a software factory (importing open PRs and 
 
 In the commands below:
 
-- `F` means `node ~/.claude/skills/software-factory/factory.mjs`.
+- `F` means `node "${CLAUDE_SKILL_DIR}/factory.mjs"`. Claude Code fills in this skill's folder, which is the same command for a plugin install and a linked `~/.claude/skills/software-factory`. In a harness that does not fill it in (Codex), use the folder this SKILL.md is in.
 - `RUN` is `owner/repo#N`.
 - `DIR` is `$(F dir RUN)`.
 - `WT` is the run's worktree path, as printed by `F worktree`.
@@ -226,7 +226,7 @@ The page shows every attached project, as the owner approved; the rule only deci
 | `{"use":"skill","name":"x"}` | Invoke the Skill `x` in a fresh subagent, giving it the step's inputs and its output contract. |
 | `{"use":"brief","path":"…md"}` | Spawn a fresh subagent with that file as its brief, in place of the built-in one. |
 | `{"use":"provider","harness":"claude-code","name":"x"}` | If `x` is one of your Agent subagent types (such as `pr-review-toolkit:code-reviewer`), spawn that agent. Otherwise run the skill headless in WT with pinned flags: `(cd WT && claude -p "/x" <args>)`, where `<args>` is the JSON array from `F headless-args RUN [--review|--write] [--share N] --step <step>`, each element single-quoted as one shell word. For reviewers started together, pass `--share <number of headless reviewers in that message>`. See [Headless Claude Code runs](#headless-claude-code-runs). |
-| `{"use":"provider","harness":"codex"}` | Run Codex headless in WT. Review and verifier steps use `-s read-only` and build uses `-s workspace-write`; never pass `--dangerously-bypass-approvals-and-sandbox`. Review: `codex exec -C WT -s read-only --output-schema ~/.claude/skills/software-factory/references/review.schema.json -o DIR/<axis>.json "<brief>"`. With `"name":"review"`, run `codex review --base BASE` in WT and pass its prose through the adapter. Any other `name` is ignored. |
+| `{"use":"provider","harness":"codex"}` | Run Codex headless in WT. Review and verifier steps use `-s read-only` and build uses `-s workspace-write`; never pass `--dangerously-bypass-approvals-and-sandbox`. Review: `codex exec -C WT -s read-only --output-schema "${CLAUDE_SKILL_DIR}/references/review.schema.json" -o DIR/<axis>.json "<brief>"`. With `"name":"review"`, run `codex review --base BASE` in WT and pass its prose through the adapter. Any other `name` is ignored. |
 
 - **Same contract as the default.**
   - intake still ends in one of the intake outcomes;

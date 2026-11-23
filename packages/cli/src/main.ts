@@ -174,8 +174,8 @@ export async function main(argv) {
         const target = !run || run === 'dashboard' ? pathToFileURL(render()).href : run;
         out({ opened: open(target) }); break;
       }
-      case 'install-skill': // the one install step: ~/.claude/skills/software-factory -> this checkout's packages/factory
-        out(linkSkill(path.join(import.meta.dirname, '..', '..', 'factory'), path.join(os.homedir(), '.claude', 'skills', 'software-factory'))); break;
+      case 'install-skill': // link this checkout's packages/factory as a personal skill; --codex: Codex's ~/.agents/skills instead
+        out(linkSkill(path.join(import.meta.dirname, '..', '..', 'factory'), path.join(os.homedir(), ...(run === '--codex' ? ['.agents'] : ['.claude']), 'skills', 'software-factory'))); break;
       case 'ui': ui(Number(run) || 0); break;
       case 'demo': // never pollute the real log with fixtures
         if (!process.env.FACTORY_DIR) io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-demo-'));
@@ -235,7 +235,7 @@ export async function main(argv) {
   headless-args <run> [--review|--write] [--share N] [--step <step>]  pinned claude -p flags (read-only unless --write) for a provider runner, with the run's remaining budget split N ways and the step's model, effort and fallback (JSON array)
   dir    <run>                            print the run's artifact folder
   open   [dashboard|url]                  open the dashboard (default) or an https:, file: or claude-cli: URL with the OS opener
-  install-skill                          link ~/.claude/skills/software-factory to this checkout (a junction on Windows)
+  install-skill [--codex]                link ~/.claude/skills/software-factory (Codex: ~/.agents/skills) to this checkout (a junction on Windows)
   render [--artifact <out>]              rewrite dashboard.html, or write the claude.ai Artifact page to <out>
   demo | test`);
         process.exitCode = cmd ? 1 : 0;
