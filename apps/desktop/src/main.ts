@@ -2,6 +2,7 @@ import { app, BrowserWindow, session, shell } from 'electron';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { APP_HTML, hostModules, serve } from '@software-factory/server';
+import { loginPath } from './login-path.ts';
 
 // F ui in this process, in one window (#56). The page is the same app.html F ui serves, loaded from the loopback server
 // with its token, so it can save settings and start sessions. Sandboxed, no preload, no Node in the page; nothing loads
@@ -34,6 +35,8 @@ async function host() {
 }
 
 async function start() {
+  const PATH = loginPath(); // before anything looks a harness up
+  if (PATH) process.env.PATH = PATH;
   await host();
   const s = await serve(0); // listen first: the window has nothing to load before this
   close = s.close;
