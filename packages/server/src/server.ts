@@ -127,10 +127,21 @@ export function page(extra = {}) {
 // The claude.ai Artifact page (#18): the host adds the document skeleton, updates arrive by republish (no reload timer),
 // no local path leaves this machine, and it refuses to ship a token. Throws when the dashboard markup drifts, so a
 // broken page is never published.
-// No local path leaves the machine: the keys that only hold one ("Open in Claude" cwds) go, and any absolute path left
-// in a string (POSIX, C:\ or C:/, ~/…) becomes "[local path]". URLs survive: their slashes follow ':', '/' or a word.
+// No local path leaves the machine: the keys that only hold one ("Open in Claude" cwds) go, and every string is
+// scrubbed. A path starts at a file:// URL, a drive letter, ~/, a known root (/Users, /home, …) or any /a/b, and runs
+// to the next hard delimiter, spaces included ("Application Support", "Bob Smith"): over-redacting prose is the safe
+// side. URLs survive: their slashes follow a word character, ':' or '/'.
 const PATH_ONLY = new Set(['worktree', 'cwd', 'installPath', 'projectPath']);
-const LOCAL_PATH = /(?<![\w.:\/~<-])(?:[A-Za-z]:[\\/]|~?[\\/](?![\\/\s]))[^\s"'`()<>,;|*?]*/g;
+const STOP = '\\n\\r"\'`<>|(){}\\[\\];,&*?';
+const BODY = `(?:[^${STOP}]*[^\\s${STOP}])?`;
+const ROOTS = 'Users|home|Volumes|srv|private|var|tmp|opt|mnt|media|root|usr|etc|Library|Applications|nix|workspaces?';
+const LOCAL_PATH = new RegExp([
+  `\\b[\\w.+-]+:\\/\\/(?:\\/|file\\/)[^\\s"'\`<>]*`, // file:///…, vscode://file/…
+  `(?<![A-Za-z0-9])[A-Za-z]:[\\\\/]${BODY}`, // C:\…, C:/…, D:\
+  `(?<!\\w)~[\\\\/]${BODY}`,
+  `(?<!\\w)\\/(?:${ROOTS})(?![\\w.-])${BODY}`, // also after ':' or '=' (PATH=/a:/Users/…, cwd:/Users/…)
+  `(?<![\\w.:\\/~-])\\/[^\\s\\/${STOP}]+\\/${BODY}`, // any other path with 2+ segments; "/factory approve" stays
+].join('|'), 'g');
 const scrub = (v) => typeof v === 'string' ? v.replace(LOCAL_PATH, '[local path]')
   : Array.isArray(v) ? v.map(scrub)
   : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([k]) => !PATH_ONLY.has(k)).map(([k, x]) => [k, scrub(x)])) : v;
@@ -147,8 +158,9 @@ export function artifact(html = page()) {
   const m = html.match(DATA_TAG);
   if (!m) throw new Error('artifact: the dashboard no longer has its data tag');
   const d = scrub(JSON.parse(m[2]));
+  if (d.ui) throw new Error('artifact: refusing to publish a page built for F ui');
   if (d.skills?.catalog) d.skills.catalog = { global: [], projects: {} }; // install paths; the Skills sheet can't save there anyway
   html = html.replace(DATA_TAG, (_, open, _old, close) => open + JSON.stringify(d).replace(/</g, '\\u003c') + close);
-  if (html.includes('"token":"')) throw new Error('artifact: refusing to publish a page that carries a token');
+  if (/"[^"]*token"\s*:/i.test(html)) throw new Error('artifact: refusing to publish a page that carries a token'); // a key ending in token; tokens/tokenCap are counts
   return html;
 }

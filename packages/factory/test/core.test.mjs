@@ -137,46 +137,54 @@ export function coreTest() {
 }
 
 // The claude.ai Artifact page (#18): no skeleton, no reload timer, no local path, nothing dashboard.html doesn't carry, never a token.
+// It runs on a copy of the demo state, so the paths it plants never reach the other tests.
 export function artifactTest() {
-  const dataOf = (h) => JSON.parse(h.match(/<script type="application\/json" id="data">([^<]*)<\/script>/)[1]);
-  const home = os.homedir();
-  fs.mkdirSync(runDir('evil/x#1'), { recursive: true });
-  fs.writeFileSync(wtFile('evil/x#1'), JSON.stringify({ path: path.join(home, 'wt', 'x-1'), branch: 'factory/issue-1' }));
-  // Paths in and outside $HOME, in free text and in the onboard and skills config: none may reach claude.ai.
-  const outside = ['/Volumes/Data/secret', 'C:/Users/bob/app', 'D:\\work\\app', '/srv/alice'];
-  record('evil/x#1', 'intake', 'passed', { summary: `see ${path.join(home, 'notes.md')}; cd ${outside[0]} && x (${outside[1]}) ${outside[2]} ${outside[3]}: done, https://github.com/evil/x/pull/2`, sessionId: 's1', cwd: path.join(home, 'src', 'x') });
-  const skillsFile = path.join(io.dir, 'skills.json'), hadSkills = fs.existsSync(skillsFile), skillsBefore = hadSkills && fs.readFileSync(skillsFile, 'utf8');
-  fs.writeFileSync(skillsFile, JSON.stringify({ ...(hadSkills ? JSON.parse(skillsBefore) : {}), 'evil/x': { spec: { use: 'brief', path: '/Volumes/Data/briefs/spec.md' } } }));
-  fs.writeFileSync(path.join(io.dir, 'onboard.json'), JSON.stringify({ default: { ship: ['web'] }, 'evil/x': { ship: ['web'], path: '/Volumes/Data/clones/x' } }));
-  const before = fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), out = path.join(io.dir, 'artifact.html');
-  const line = execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), 'render', '--artifact', out], { env: { ...process.env, FACTORY_DIR: io.dir }, encoding: 'utf8' });
-  assert.equal(fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), before); // the local dashboard is left alone
-  const art = fs.readFileSync(out, 'utf8'), a = dataOf(art), full = dataOf(page());
-  assert.match(line, new RegExp(`artifact\\.html: ${Buffer.byteLength(art)} bytes, ${full.runs.length} runs`));
-  assert.ok(!/<!doctype|<html|<head>|<\/head>|<body|<\/body>|<\/html>|<meta charset|<meta name="viewport"|setTimeout\(tick, 10000\);/i.test(art));
-  assert.match(art, /<script type="application\/json" id="data">/);
-  assert.ok(!art.includes('</script><script>alert')); // a kept run's title still can't break out of the JSON tag
-  assert.deepEqual(Object.keys(a), Object.keys(full)); // nothing beyond what the dashboard shows
-  assert.deepEqual(a.runs.map((r) => r.id), full.runs.map((r) => r.id)); // every project the dashboard shows
-  assert.ok(JSON.stringify(full).includes(JSON.stringify(home).slice(1, -1))); // the local dashboard does carry home paths...
-  assert.ok(!JSON.stringify(a).includes(JSON.stringify(home).slice(1, -1))); // ...the published page none
-  const pub = JSON.stringify(a);
-  for (const p of [...outside, '/Volumes/Data', 'C:/Users', 'D:\\\\work']) assert.ok(!pub.includes(p), p);
-  assert.ok(JSON.stringify(full).includes('/Volumes/Data/briefs/spec.md') && JSON.stringify(full).includes('/Volumes/Data/clones/x'));
-  assert.match(pub, /\[local path\]/);
-  assert.match(a.runs.find((r) => r.id === 'evil/x#1').summary || pub, /https:\/\/github\.com\/evil\/x\/pull\/2/); // URLs survive
-  assert.deepEqual(a.runs.map((r) => r.pr), full.runs.map((r) => r.pr));
-  assert.deepEqual(a.onboard.default, { ship: ['web'] });
-  const x = a.runs.find((r) => r.id === 'evil/x#1');
-  assert.equal(x.worktree, undefined);
-  assert.ok(x.sessions.every((s) => !('cwd' in s)));
-  assert.deepEqual(a.skills.catalog, { global: [], projects: {} });
-  assert.throws(() => artifact(page({ ui: { token: 'secret' } })), /carries a token/);
-  assert.throws(() => artifact('<p>no skeleton</p>'), /no longer has/);
-  assert.throws(() => artifact(page().replace('setTimeout(tick, 10000);', '')), /exactly once/);
-  fs.rmSync(out);
-  fs.rmSync(path.join(io.dir, 'onboard.json'));
-  if (hadSkills) fs.writeFileSync(skillsFile, skillsBefore); else fs.rmSync(skillsFile);
+  const prev = io.dir;
+  io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-artifact-'));
+  fs.cpSync(prev, io.dir, { recursive: true });
+  try {
+    const dataOf = (h) => JSON.parse(h.match(/<script type="application\/json" id="data">([^<]*)<\/script>/)[1]);
+    const home = os.homedir();
+    fs.mkdirSync(runDir('evil/x#1'), { recursive: true });
+    fs.writeFileSync(wtFile('evil/x#1'), JSON.stringify({ path: path.join(home, 'wt', 'x-1'), branch: 'factory/issue-1' }));
+    // Paths in and outside $HOME, with spaces, in URLs and env strings, in free text and in onboard and skills config.
+    const planted = [`see ${path.join(home, 'notes.md')}`, 'cd /Volumes/Data/secret && x', '(C:/Users/bob/app)', 'C:\\Users\\Bob Smith\\app', 'C:\\Users\\Bob Smith',
+      'D:\\work\\app', '/srv/alice: done', '/Users/george/Library/Application Support/x', 'at file:///Users/al/x.mjs:3:9', 'vscode://file/home/al/x.ts',
+      'cwd:/Users/al/x', 'PATH=/a:/home/al/bin', '/factory approve', 'https://github.com/evil/x/pull/2'];
+    record('evil/x#1', 'intake', 'passed', { summary: planted.join('\n'), sessionId: 's1', cwd: path.join(home, 'src', 'x') });
+    fs.writeFileSync(path.join(io.dir, 'skills.json'), JSON.stringify({ 'evil/x': { spec: { use: 'brief', path: '/Volumes/Data/briefs/spec.md' } } }));
+    fs.writeFileSync(path.join(io.dir, 'onboard.json'), JSON.stringify({ default: { ship: ['web'] }, 'evil/x': { ship: ['web'], path: '/Volumes/Data/clones/x' } }));
+    const before = fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), out = path.join(io.dir, 'artifact.html');
+    const line = execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), 'render', '--artifact', out], { env: { ...process.env, FACTORY_DIR: io.dir }, encoding: 'utf8' });
+    assert.equal(fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), before); // the local dashboard is left alone
+    const art = fs.readFileSync(out, 'utf8'), a = dataOf(art), full = dataOf(page());
+    assert.match(line, new RegExp(`artifact\\.html: ${Buffer.byteLength(art)} bytes, ${full.runs.length} runs`));
+    assert.ok(!/<!doctype|<html|<head>|<\/head>|<body|<\/body>|<\/html>|<meta charset|<meta name="viewport"|setTimeout\(tick, 10000\);/i.test(art));
+    assert.match(art, /<script type="application\/json" id="data">/);
+    assert.ok(!art.includes('</script><script>alert')); // a kept run's title still can't break out of the JSON tag
+    assert.deepEqual(Object.keys(a), Object.keys(full)); // nothing beyond what the dashboard shows
+    assert.deepEqual(a.runs.map((r) => r.id), full.runs.map((r) => r.id)); // every project the dashboard shows
+    assert.deepEqual(a.runs.map((r) => r.pr), full.runs.map((r) => r.pr)); // URLs survive
+    const loc = JSON.stringify(full), pub = JSON.stringify(a);
+    for (const p of [JSON.stringify(home).slice(1, -1), '/Volumes/Data/briefs/spec.md', '/Volumes/Data/clones/x']) assert.ok(loc.includes(p), p); // the local dashboard has them...
+    const leak = new RegExp(`${JSON.stringify(home).slice(1, -1).replace(/[\\.]/g, '\\$&')}|\\/(Users|home|Volumes|srv)\\b|(?<![A-Za-z])[A-Za-z]:(\\\\\\\\|\\/)|file:\\/\\/|Smith|Support|secret|\\/a:`);
+    assert.match(loc, leak); // the check itself can see a leak
+    assert.doesNotMatch(pub, leak); // ...the published page has none, not even a fragment after a space
+    const x = a.runs.find((r) => r.id === 'evil/x#1');
+    assert.equal(x.worktree, undefined);
+    assert.ok(x.sessions.every((s) => !('cwd' in s)));
+    assert.match(pub, /\/factory approve/); // one segment, not a path
+    assert.match(pub, /https:\/\/github\.com\/evil\/x\/pull\/2/);
+    assert.deepEqual(a.skills.catalog, { global: [], projects: {} });
+    assert.deepEqual(a.onboard.default, { ship: ['web'] });
+    assert.throws(() => artifact(page({ ui: { token: 'secret' } })), /built for F ui|carries a token/);
+    assert.throws(() => artifact(page({ auth: { accessToken: 'x' } })), /carries a token/); // any key ending in token
+    assert.throws(() => artifact('<p>no skeleton</p>'), /no longer has/);
+    assert.throws(() => artifact(page().replace('setTimeout(tick, 10000);', '')), /exactly once/);
+  } finally {
+    fs.rmSync(io.dir, { recursive: true, force: true });
+    io.dir = prev;
+  }
 }
 
 setup();
