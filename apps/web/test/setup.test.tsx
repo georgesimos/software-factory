@@ -61,6 +61,49 @@ describe('Setup wizard', () => {
     expect(calls).toEqual(['/api/onboard']);
   });
 
+  const live = (reply: (url: string, body: { ship?: string[] }) => Response) => vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+    if (url === '/api/onboard') return new Response(JSON.stringify({ harnesses: [], repos: [], projects: { 'acme/app': { path: '/x' }, 'acme/two': { path: '/y' } }, rules: {} }), { status: 200 });
+    return reply(url, JSON.parse(String(init.body)));
+  }));
+
+  it('live: the saved scope survives the onboard read; a refused ship write leaves the box as stored', async () => {
+    localStorage.setItem('sf.onboard', JSON.stringify({ step: 2, scope: 'acme/two' }));
+    live(() => new Response(JSON.stringify({ error: 'disk full' }), { status: 400 }));
+    wizard({ token: 'tok' });
+    expect(await screen.findByRole('button', { name: 'acme/two' })).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(screen.getByRole('checkbox', { name: /Web/ }));
+    expect(await screen.findByText('disk full')).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: /Web/ })).not.toBeChecked();
+  });
+
+  it('live: switching scope or closing warns once about unsaved rule edits', async () => {
+    localStorage.setItem('sf.onboard', JSON.stringify({ step: 4, scope: 'acme/app' }));
+    live(() => new Response('{}', { status: 200 }));
+    const onClose = vi.fn();
+    wizard({ token: 'tok', onClose });
+    await userEvent.selectOptions(await screen.findByRole('combobox', { name: 'CI' }), 'advisory');
+    await userEvent.click(screen.getByRole('button', { name: 'acme/two' }));
+    expect(status()).toHaveTextContent('Unsaved rule changes');
+    expect(screen.getByRole('button', { name: 'acme/app' })).toHaveAttribute('aria-pressed', 'true');
+    await userEvent.click(screen.getByRole('button', { name: 'acme/two' }));
+    expect(screen.getByRole('combobox', { name: 'CI' })).toHaveValue('required');
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'CI' }), 'skip');
+    await userEvent.click(screen.getByRole('button', { name: /^Close/ }));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(status()).toHaveTextContent('Unsaved rule changes');
+    await userEvent.click(screen.getByRole('button', { name: /^Close/ }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('read-only: auto-merge reads the page data', async () => {
+    wizard({ data: { ...data, autoMerge: { 'acme/budget': false } } });
+    await step(/^Rules/);
+    await userEvent.click(screen.getByRole('button', { name: 'acme/budget' }));
+    expect(screen.getByRole('checkbox', { name: /auto-merge/ })).not.toBeChecked();
+    await userEvent.click(screen.getByRole('button', { name: 'acme/shop' }));
+    expect(screen.getByRole('checkbox', { name: /auto-merge/ })).toBeChecked();
+  });
+
   it('Alt+Arrow moves between steps, but not from a field', async () => {
     wizard();
     fireEvent.keyDown(screen.getByRole('heading', { name: 'Local AI' }), { key: 'ArrowRight', altKey: true });
@@ -74,15 +117,19 @@ describe('Setup wizard', () => {
 describe('Setup auto-open', () => {
   const app = (d: Partial<FactoryData>) => render(<App load={async () => ({ ...data, ...d })} />);
   it('opens when no project is attached, and stays closed for the tab once closed', async () => {
-    const { unmount } = app({ projects: [] });
+    const { unmount } = app({ projects: [], runs: [], ideas: {} });
     expect(await screen.findByRole('dialog', { name: 'Set up the factory' })).toBeTruthy();
     await userEvent.click(within(screen.getByRole('dialog', { name: 'Set up the factory' })).getByRole('button', { name: /Close/ }));
     unmount();
-    app({ projects: [] });
+    app({ projects: [], runs: [], ideas: {} });
     await screen.findByRole('tab', { name: /All/ });
     expect(screen.queryByRole('dialog', { name: 'Set up the factory' })).toBeNull();
   });
-  it('stays closed when the data has no projects list', async () => {
+  it('stays closed over a board with runs, or data with no projects list', async () => {
+    const { unmount } = app({ projects: [] });
+    await screen.findByRole('tab', { name: /All/ });
+    expect(screen.queryByRole('dialog', { name: 'Set up the factory' })).toBeNull();
+    unmount();
     app({ projects: undefined });
     await screen.findByRole('tab', { name: /All/ });
     expect(screen.queryByRole('dialog', { name: 'Set up the factory' })).toBeNull();

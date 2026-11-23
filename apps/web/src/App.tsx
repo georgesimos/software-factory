@@ -71,8 +71,8 @@ function Shell({ data, patch, refresh }: { data: FactoryData; patch: (p: Partial
   const setCollapsed = (c: boolean) => { store('sf.panelCollapsed', c ? '1' : '0'); setCollapsedState(c); };
   const wide = useMedia(WIDE);
   const [skillsOpen, setSkillsOpen] = useState<string | false>(false); // the scope it opens on
-  // No project attached yet: set up first, unless it was closed in this tab. Data without a projects list never opens it.
-  const [setupOpen, setSetupOpen] = useState(() => Array.isArray(data.projects) && !data.projects.length && session('sf.onboardClosed') !== '1');
+  // Nothing yet (no project, run or idea): set up first, unless it was closed in this tab. Data without a projects list never opens it.
+  const [setupOpen, setSetupOpen] = useState(() => Array.isArray(data.projects) && !projects.length && session('sf.onboardClosed') !== '1');
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 60_000); return () => clearInterval(t); }, []); // "Updated 3m ago" stays true
   const byId = new Map(data.runs.map((r) => [r.id, r]));
@@ -136,7 +136,7 @@ function Shell({ data, patch, refresh }: { data: FactoryData; patch: (p: Partial
       </div>
       <SetupWizard open={setupOpen} onClose={() => { session('sf.onboardClosed', '1'); setSetupOpen(false); }} data={data} token={data.token}
         onSkills={(skills) => patch({ skills })} refresh={refresh} openSkills={(s) => setSkillsOpen(s)} />
-      {data.skills ? <SkillsSheet key={String(skillsOpen)} open={!!skillsOpen} onClose={() => setSkillsOpen(false)} skills={data.skills} harnesses={data.harnesses} token={data.token} scope={skillsOpen || project} fCmd={data.fCmd} onSaved={(skills) => patch({ skills })} /> : null}
+      {data.skills ? <SkillsSheet open={!!skillsOpen} onClose={() => setSkillsOpen(false)} skills={data.skills} harnesses={data.harnesses} token={data.token} scope={skillsOpen || project} fCmd={data.fCmd} onSaved={(skills) => patch({ skills })} /> : null}
       {wide ? null : <Sheet open={!!sel} onClose={close} title={sel?.id ?? 'Run'}>{sel ? detail(sel) : null}</Sheet>}
     </>
   );

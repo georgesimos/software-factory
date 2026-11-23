@@ -1,5 +1,5 @@
 import { Badge, Button, Checkbox, Dialog, Dot, IngestProgress, Input, ProjectPicker, Select, shq, type DiscoveredRepo, type IngestItem } from '@software-factory/design-system';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { post, type FactoryData, type Rule, type SkillsData, type StepRunner } from './data.ts';
 import { Picker, copy, type Pick } from './Skills.tsx';
 import { F_CMD, kindOf, runnerName, skillCommand, stepLabel } from './skillsModel.ts';
@@ -17,7 +17,7 @@ export interface Onboard {
   projects?: Record<string, { path?: string; autoMerge?: boolean }>; ship?: Record<string, { ship?: string[] }>;
   skills?: SkillsData; rules?: Record<string, { policy?: Policy }>; rulesError?: string;
 }
-type Saved = { step?: number; seen?: number; scope?: string; done?: boolean };
+type Saved = { step?: number; visited?: number[]; scope?: string; done?: boolean };
 const saved = (): Saved => { try { return JSON.parse(store('sf.onboard') ?? '{}') ?? {}; } catch { return {}; } };
 const keep = (p: Saved) => store('sf.onboard', JSON.stringify({ ...saved(), ...p }));
 const where = (s: string) => (s === 'default' ? 'all projects' : s);
@@ -33,29 +33,39 @@ export function SetupWizard({ open, onClose, ...p }: Props) {
   const [ob, setOb] = useState<Onboard | null>(null), [error, setError] = useState('');
   const check = () => { if (!p.token) return; setError(''); setOb(null); post<Onboard>('/onboard', {}, p.token).then(setOb, (e: Error) => setError(e.message)); };
   useEffect(() => { if (open && p.token && !ob) check(); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  const blocked = useRef<() => boolean>(() => false); // Escape, the backdrop and Close warn about unsaved rules like the steps do
   return (
-    <Dialog open={open} onClose={onClose} title="Set up the factory" className="web-ob"
+    <Dialog open={open} onClose={() => { if (!blocked.current()) onClose(); }} title="Set up the factory" className="web-ob"
       description={p.token ? <><Dot tone="ok" /> Live: saves through F ui</> : <><Dot tone="idle" /> Read-only page: each step shows the command to run</>}>
-      <Wizard {...p} ob={ob} setOb={setOb} error={error} check={check} close={onClose} />
+      <Wizard {...p} ob={ob} setOb={setOb} error={error} check={check} close={onClose} blocked={blocked} />
     </Dialog>
   );
 }
 
-function Wizard({ data, token, onSkills, refresh, openSkills, ob, setOb, error, check, close }: Omit<Props, 'open' | 'onClose'> & { ob: Onboard | null; setOb: (o: Onboard) => void; error: string; check: () => void; close: () => void }) {
+function Wizard({ data, token, onSkills, refresh, openSkills, ob, setOb, error, check, close, blocked }: Omit<Props, 'open' | 'onClose'> & { ob: Onboard | null; setOb: (o: Onboard) => void; error: string; check: () => void; close: () => void; blocked: { current: () => boolean } }) {
   const [step, setStep] = useState(() => Math.max(0, Math.min(STEPS.length - 1, Number(saved().step) || 0)));
   const [status, setStatus] = useState<{ text: ReactNode; bad?: boolean }>({ text: '' });
   const [dirty, setDirty] = useState(false), [warned, setWarned] = useState(false);
   const live = !!token, F = data.fCmd || F_CMD;
   const projects = live ? Object.keys(ob?.projects ?? {}) : data.projects ?? [];
-  const [scope, setScopeState] = useState(() => { const s = saved().scope ?? ''; return s === 'default' || projects.includes(s) ? s : projects[0] ?? 'default'; });
+  const first = () => { const s = saved().scope ?? ''; return s === 'default' || projects.includes(s) ? s : projects[0] ?? 'default'; };
+  const [picked, setScopeState] = useState<string | null>(null);
+  const scope = picked ?? first(); // until one is picked: the saved one, once the live projects have arrived with POST /onboard
   const setScope = (s: string, quiet = false) => { keep({ scope: s }); setScopeState(s); if (!quiet) setStatus({ text: '' }); };
   const S = data.skills ?? {};
-  const go = (i: number) => { // every way out of a step warns once about unsaved rule edits
-    if (dirty && live && !warned) { setWarned(true); return setStatus({ text: 'Unsaved rule changes: save them, or move again to leave them.', bad: true }); }
+  const guard = () => { // every way out of the rules (a step, a scope, closing) warns once about unsaved edits
+    if (!(dirty && live && !warned)) return false;
+    setWarned(true); setStatus({ text: 'Unsaved rule changes: save them, or do that again to leave them.', bad: true });
+    return true;
+  };
+  blocked.current = guard;
+  const go = (i: number) => {
+    if (guard()) return;
     const n = Math.max(0, Math.min(STEPS.length - 1, i));
-    keep({ step: n, seen: Math.max(Number(saved().seen) || 0, n) });
+    keep({ step: n, visited: [...new Set([...(saved().visited ?? []), step])] });
     setStep(n); setDirty(false); setWarned(false); setStatus({ text: '' });
   };
+  const pickScope = (s: string) => { if (guard()) return; setDirty(false); setWarned(false); setScope(s); };
   useEffect(() => { // Alt+Arrow moves between steps, anywhere in the wizard but a field (word navigation) or the runner picker
     const onKey = (e: globalThis.KeyboardEvent) => {
       const t = e.target as HTMLElement;
@@ -66,7 +76,7 @@ function Wizard({ data, token, onSkills, refresh, openSkills, ob, setOb, error, 
     return () => removeEventListener('keydown', onKey);
   });
   useEffect(() => document.getElementById('ob-h')?.focus({ preventScroll: true }), [step]); // at commit, so it never steals focus from a field typed in next
-  const write = async (route: string, body: object, said: string | ((x: { run?: string }) => string)) => {
+  const write = async (route: string, body: object, said: string | ((x: { run?: string }) => string), errs?: string[]) => {
     try {
       const x = await post<Onboard & { run?: string; next?: string }>(route, body, token!);
       if (x.projects || x.skills) setOb({ ...ob, ...x });
@@ -74,14 +84,14 @@ function Wizard({ data, token, onSkills, refresh, openSkills, ob, setOb, error, 
       refresh(); // projects, rules and runs come back with GET /api/state
       if (said) setStatus({ text: typeof said === 'string' ? said : said(x) });
       return x;
-    } catch (e) { setStatus({ text: (e as Error).message, bad: true }); return null; }
+    } catch (e) { if (errs) errs.push((e as Error).message); else setStatus({ text: (e as Error).message, bad: true }); return null; }
   };
   const fail = (text: string) => setStatus({ text, bad: true });
-  const seen = Number(saved().seen) || 0;
+  const visited = saved().visited ?? [];
   const scopePicker = (
     <div className="web-ob-scope" role="group" aria-label="Configure for">
       <span>Applies to</span>
-      {['default', ...projects].map((s) => <Button key={s} size="sm" variant="ghost" aria-pressed={s === scope} onClick={() => setScope(s)}>{s === 'default' ? 'All projects' : s}</Button>)}
+      {['default', ...projects].map((s) => <Button key={s} size="sm" variant="ghost" aria-pressed={s === scope} onClick={() => pickScope(s)}>{s === 'default' ? 'All projects' : s}</Button>)}
     </div>
   );
   const ctx: StepCtx = { data, ob, live, F, scope, scopePicker, write, fail, setStatus, setDirty, setScope, onSkills, openSkills, token, S };
@@ -93,7 +103,7 @@ function Wizard({ data, token, onSkills, refresh, openSkills, ob, setOb, error, 
     <div className="web-ob-wrap">
       <nav className="web-ob-rail" aria-label="Setup steps">
         <ol>{STEPS.map(([k, t], i) => {
-          const done = i < step || (i <= seen && i !== step);
+          const done = i !== step && visited.includes(i);
           return <li key={k}><button type="button" aria-current={i === step ? 'step' : undefined} data-done={done || undefined} onClick={() => go(i)}>
             <span className="web-ob-n" aria-hidden="true">{done ? '✓' : i + 1}</span>{t}<span className="sf-sr-only">, step {i + 1} of {STEPS.length}</span></button></li>;
         })}</ol>
@@ -105,7 +115,7 @@ function Wizard({ data, token, onSkills, refresh, openSkills, ob, setOb, error, 
       <footer className="web-ob-foot">
         <p className="web-sk-status" role="status" aria-live="polite" data-bad={status.bad || undefined}>{status.text}</p>
         <Button variant="ghost" disabled={step === 0} onClick={() => go(step - 1)}>Back</Button>
-        <Button variant="primary" onClick={() => (last ? (keep({ done: true }), close()) : go(step + 1))}>{last ? 'Finish' : 'Next'}</Button>
+        <Button variant="primary" onClick={() => (!last ? go(step + 1) : guard() ? null : (keep({ done: true }), close()))}>{last ? 'Finish' : 'Next'}</Button>
       </footer>
     </div>
   );
@@ -113,7 +123,7 @@ function Wizard({ data, token, onSkills, refresh, openSkills, ob, setOb, error, 
 
 interface StepCtx {
   data: FactoryData; ob: Onboard | null; live: boolean; F: string; scope: string; scopePicker: ReactNode; token?: string; S: SkillsData;
-  write: (route: string, body: object, said: string | ((x: { run?: string }) => string)) => Promise<(Onboard & { run?: string; next?: string }) | null>;
+  write: (route: string, body: object, said: string | ((x: { run?: string }) => string), errs?: string[]) => Promise<(Onboard & { run?: string; next?: string }) | null>;
   fail: (t: string) => void; setStatus: (s: { text: ReactNode; bad?: boolean }) => void; setDirty: (d: boolean) => void; setScope: (s: string, quiet?: boolean) => void;
   onSkills: (s: SkillsData) => void; openSkills: (scope: string) => void;
 }
@@ -142,7 +152,7 @@ function Ai({ data, ob, live, F, check }: StepCtx & { check: () => void }) {
   );
 }
 
-function Repo({ data, ob, live, F, write, setScope }: StepCtx) {
+function Repo({ data, ob, live, F, write, setScope, fail }: StepCtx) {
   const [selected, setSelected] = useState<string[]>([]), [items, setItems] = useState<IngestItem[] | null>(null);
   const [repo, setRepo] = useState(''), [idea, setIdea] = useState(''), [next, setNext] = useState('');
   const hooks = live ? ob?.hooks : data.hooks, attached = ob?.projects ?? {};
@@ -154,7 +164,7 @@ function Repo({ data, ob, live, F, write, setScope }: StepCtx) {
       {hooks?.create && live ? <>
         <label className="web-ob-field">Repo <Input aria-label="New repo (owner/name)" value={repo} placeholder="owner/new-repo" onChange={(e) => setRepo(e.target.value)} /></label>
         <label className="web-ob-field">Idea<Input aria-label="Idea, one line" value={idea} placeholder="e.g. a personal budget app" maxLength={500} onChange={(e) => setIdea(e.target.value)} /></label>
-        <div><Button onClick={async () => { const x = await write('/idea', { repo: repo.trim(), idea: idea.trim() }, (y) => `Idea recorded for ${y.run}. Continue it in Claude Code.`); if (x) setNext(String(x.next)); }}>Record idea</Button></div>
+        <div><Button onClick={async () => { const x = await write('/idea', { repo: repo.trim(), idea: idea.trim() }, (y) => `Idea recorded for ${y.run}. Continue it in Claude Code.`); if (x?.next) setNext(String(x.next)); }}>Record idea</Button></div>
         {next ? <Cmd cmd={next} /> : null}
       </> : null}
     </div>
@@ -169,13 +179,15 @@ function Repo({ data, ob, live, F, write, setScope }: StepCtx) {
   const others = Object.keys(attached).filter((r) => !repos.some((x) => x.repo === r));
   const attach = async (list: string[]) => {
     setItems(list.map((r) => ({ repo: r, status: 'queued' })));
+    const errs: string[] = [], failed: string[] = [];
     for (const r of list) {
       setItems((xs) => xs!.map((x) => (x.repo === r ? { ...x, status: 'syncing' } : x)));
-      const x = await write('/onboard/sync', { repo: r, path: repos.find((y) => y.repo === r)?.path }, `Attached ${r}. Its open PRs and agent sessions are on the board.`);
+      const x = await write('/onboard/sync', { repo: r, path: repos.find((y) => y.repo === r)?.path }, `Attached ${r}. Its open PRs and agent sessions are on the board.`, errs);
       setItems((xs) => xs!.map((y) => (y.repo === r ? { ...y, status: x ? 'done' : 'failed' } : y)));
-      if (x) setScope(r, true); // later steps configure the project just attached
+      if (x) setScope(r, true); else failed.push(r); // later steps configure the project just attached
     }
-    setSelected([]);
+    setSelected(failed); // failed ones stay picked, to retry
+    if (failed.length) fail(`Not attached: ${failed.map((r, i) => `${r} (${errs[i]})`).join('; ')}`);
   };
   return (
     <>{lead}
@@ -194,8 +206,11 @@ function Ship({ data, ob, live, F, scope, scopePicker, write }: StepCtx) {
   const hooks = (live ? ob?.hooks : data.hooks) ?? {}, conns = hooks.connectors as { kind?: string; label?: string }[] | { error?: string } | undefined;
   const toggle = async (k: string, on: boolean) => {
     const next = SHIP.map(([x]) => x).filter((x) => (x === k ? on : cur.includes(x)));
+    const prev = cur;
     setCur(next);
-    if (live) await write('/onboard/ship', { scope, ship: next }, `Saved: ${next.join(', ') || 'nothing'} for ${where(scope)}.`);
+    if (!live) return;
+    const x = await write('/onboard/ship', { scope, ship: next }, `Saved: ${next.join(', ') || 'nothing'} for ${where(scope)}.`);
+    setCur(x ? x.ship?.[scope]?.ship ?? next : prev); // a refused write puts the boxes back as stored
   };
   return (
     <>
@@ -246,7 +261,7 @@ function Flow({ data, live, F, scope, scopePicker, token, S, setStatus, onSkills
 function Rules({ data, ob, live, F, scope, scopePicker, write, fail, setStatus, setDirty, S }: StepCtx) {
   const pol: Policy = (live ? ob?.rules?.[scope] : data.rules?.[scope])?.policy ?? {};
   const own = (k: string) => (pol[k]?.scope === scope ? pol[k] : undefined), proj = scope !== 'default';
-  const am = proj && ob?.projects?.[scope]?.autoMerge !== false;
+  const am = proj && (live ? ob?.projects?.[scope]?.autoMerge : data.autoMerge?.[scope]) !== false;
   const ciNow = String(pol.ci?.value ?? 'required'), checksNow = Array.isArray(pol['checks.commands']?.value) ? pol['checks.commands']!.value as string[] : [];
   const guideNow = String(((S.config?.[scope] as { guide?: Record<string, string> } | undefined)?.guide ?? {})['*'] ?? ''); // raw: resolved guidance folds "*" into every step
   const [f, setF] = useState({ ci: ciNow, checks: checksNow.join('\n'), merge: am, guide: guideNow, reason: '', until: '' });
