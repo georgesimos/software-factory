@@ -256,7 +256,12 @@ export function runsData(events = read()) {
   try { links = JSON.parse(fs.readFileSync(sessionsFile(), 'utf8')); } catch { /* no sync yet */ }
   for (const r of runs) if (links[r.id]) r.sessions = [...(r.sessions || []), ...links[r.id].filter((x) => !(r.sessions || []).some((y) => y.id === x.id))];
   for (const r of runs) { const w = wtInfo(r.id); if (w?.path) r.worktree = w.path; } // the dashboard's "Open in Claude" cwd
-  for (const r of runs) if (r.notes) r.notes = r.notes.filter((n) => n.state === 'pending'); // the page lists pending notes only; applied ones stay in F's log
+  // Notes leave F as the box shows them: pending ones, with no author login. Their events keep id, step and status for the
+  // timeline's "note · pending|applied" rows, never the text or `by`, so an applied note's text stays in F's log.
+  for (const r of runs) {
+    if (r.notes) r.notes = r.notes.filter((n) => n.state === 'pending').map(({ by, ...n }) => n);
+    r.events = (r.events || []).map((e) => e.stage === 'note' ? (({ text, by, ...x }) => x)(e) : e); // copies: derive() shares the log's objects
+  }
   return runs;
 }
 // Everything the dashboard shows: runs, metrics, rules, skills, harnesses, hooks, ideas. page() embeds it; GET /api/state returns it.

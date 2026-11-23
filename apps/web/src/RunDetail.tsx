@@ -175,7 +175,7 @@ function Notes({ run: r, token }: { run: Run; token?: string }) {
       <p className="web-sk-note">Applies from the next step or iteration, once: whichever step starts next reads it in its brief.</p>
       {pending.length ? (
         <ul className="web-notes" aria-label="Pending notes">
-          {pending.map((n, i) => <li key={n.id ?? i}><p className="web-note-t">{n.text}</p><span className="sf-muted">{[n.by, n.ts ? formatAgo(n.ts) : ''].filter(Boolean).join(' · ') || 'pending'}</span></li>)}
+          {pending.map((n, i) => <li key={n.id ?? i}><p className="web-note-t">{n.text}</p><span className="sf-muted">{n.ts ? formatAgo(n.ts) : 'pending'}</span></li>)}
         </ul>
       ) : null}
       {open ? (

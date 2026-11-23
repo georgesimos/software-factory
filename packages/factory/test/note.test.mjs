@@ -10,6 +10,7 @@ import { HERE } from '../factory.mjs';
 import { derive } from '../../core/src/derive.ts';
 import { archive, io, read, readArchive, record } from '../../core/src/log.ts';
 import { artifact, page, runsData, uiHandle } from '../../server/src/server.ts';
+import { takeNotes } from '../../core/src/notes.ts';
 import { setup } from './setup.mjs';
 
 // F note / F notes (#16): the user's one-shot note for a step, handed out once, never seen by the gate.
@@ -135,6 +136,16 @@ test('notes: POST /note from F ui, its guard, and the published page', () => {
     const pub = artifact(page());
     assert.ok(!pub.includes(JSON.stringify(home).slice(1, -1)), 'no home path in the artifact');
     assert.match(pub, /Keep the old route; see \[local path\] \\u003cb>bold\\u003c\/b>/);
+    // Once applied, its text stays in F's log: not in the run's notes, not in its timeline events. No note carries its author.
+    assert.deepEqual(takeNotes(R, ['build']), { build: [text] });
+    assert.equal(post('/note', { run: R, text: 'Second thought: drop the legacy cart cookie.' }).status, 200);
+    const pub2 = artifact(page()), sent = runsData().find((x) => x.id === R);
+    assert.ok(!pub2.includes('Keep the old route'), 'an applied note is not published');
+    assert.ok(!pub2.includes('stub-user'), 'no note author login anywhere in the page');
+    assert.match(pub2, /Second thought: drop the legacy cart cookie\./); // the pending note, listed read-only
+    assert.deepEqual(sent.notes.map((x) => Object.keys(x).sort()), [['id', 'state', 'step', 'text', 'ts']]);
+    assert.deepEqual(sent.events.filter((e) => e.stage === 'note').map((e) => [e.status, 'text' in e, 'by' in e]), [['pending', false, false], ['applied', false, false], ['pending', false, false]]);
+    assert.equal(read().find((e) => e.id === r.json.id).text, text); // F's log keeps it, and runsData() changed copies only
     assert.equal(post('/note', { run: R, text: 'token ghp_' + 'a'.repeat(36) }).status, 200);
     assert.throws(() => artifact(page()), /carries a token/);
     record('acme/note#5', 'intake', 'rejected');
