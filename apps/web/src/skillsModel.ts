@@ -2,7 +2,7 @@ import { shq } from '@software-factory/design-system';
 import type { CatalogEntry, SkillsData, StepRunner } from './data.ts';
 
 // The Skills sheet's rules, ported from dashboard.html so the two agree on what a change writes.
-export const F_CMD = 'node ~/.claude/skills/software-factory/factory.mjs';
+export const F_CMD = 'node ~/.claude/skills/software-factory/factory.mjs'; // the page data's fCmd (a plugin install's real path) wins
 const STEP_LABEL: Record<string, string> = { intake: 'Intake', spec: 'Spec', build: 'Build', verifier: 'Verifier', postmerge: 'Post-merge' };
 export const stepLabel = (k: string) => STEP_LABEL[k] ?? (k.startsWith('review.') ? 'Review · ' + k.slice(7) : k);
 export const SOURCES: [string, string][] = [['all', 'All'], ['builtin', 'Built-in'], ['system', 'Harness tools'], ['global', 'Global'], ['project', 'Project'], ['yours', 'Your briefs']];
@@ -42,10 +42,10 @@ export function modelSource(S: SkillsData, scope: string, step: string) {
   return { set, inherit: g ? `Global (${g})` : `Preset${preset ? ` (${preset})` : ''}`, why: set ? 'set here' : g ? 'from global' : `preset ${S.preset ?? ''}` };
 }
 
-export const skillCommand = (scope: string, step: string, runner: unknown) => runner === null
-  ? `${F_CMD} skills unset ${shq(scope)} ${shq(step)}`
-  : `${F_CMD} skills set ${shq(scope)} ${shq(step)} ${shq(JSON.stringify(runner))}`;
-export const presetCommand = (name: string, scope: string) => `${F_CMD} skills preset ${shq(name)} ${shq(scope)}`;
+export const skillCommand = (scope: string, step: string, runner: unknown, f = F_CMD) => runner === null
+  ? `${f} skills unset ${shq(scope)} ${shq(step)}`
+  : `${f} skills set ${shq(scope)} ${shq(step)} ${shq(JSON.stringify(runner))}`;
+export const presetCommand = (name: string, scope: string, f = F_CMD) => `${f} skills preset ${shq(name)} ${shq(scope)}`;
 
 /**
  * A new runner for a step keeps the model, effort and fallback set on it here, unless it moves to another harness's

@@ -16,7 +16,7 @@ describe('Board', () => {
 
     const merged = data.runs.find((r) => r.outcome === 'merged')!;
     await userEvent.click(within(done).getByText(merged.title!));
-    const sheet = screen.getByRole('dialog');
+    const sheet = screen.getByRole('dialog', { name: merged.id }); // the setup wizard is open too: no project is attached
     expect(within(sheet).getByText(merged.id)).toBeTruthy();
     expect(within(sheet).getByRole('heading', { name: merged.title })).toBeTruthy();
     expect(within(sheet).getByText('Pipeline')).toBeTruthy();
