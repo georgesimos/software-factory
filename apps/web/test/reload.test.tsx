@@ -10,6 +10,17 @@ beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'se
 afterEach(() => { vi.useRealTimers(); document.querySelectorAll('dialog[data-test]').forEach((d) => d.remove()); });
 
 describe('F render’s file re-reads itself; F ui polls', () => {
+  it('a stored view of another shape is dropped, not thrown on', async () => {
+    for (const bad of ['{"x":1}', '{"x":1,"y":2,"s":"no","f":null}', '{"x":1,"y":2,"s":[[1]],"f":3}', '[1]', '7']) {
+      sessionStorage.setItem('sf.view', bad);
+      const { unmount } = render(<App load={async () => ({ ...data, reload: 10_000 })} reload={() => {}} />);
+      await flush();
+      expect(screen.getAllByRole('link').length, bad).toBeGreaterThan(0);
+      expect(sessionStorage.getItem('sf.view')).toBeNull();
+      unmount();
+    }
+  });
+
   it('file data with reload: one reload after the interval, no polling', async () => {
     const load = vi.fn(async () => ({ ...data, reload: 10_000 })), reload = vi.fn();
     render(<App load={load} reload={reload} />);

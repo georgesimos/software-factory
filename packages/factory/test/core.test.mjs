@@ -229,8 +229,8 @@ setup();
 test('demo: derive, gate, decide, risk, metrics and the dashboard', coreTest);
 test('artifact backstop: refuses this machine\'s names and paths, not owner/repo ids or prose', residueTest);
 test('artifact: the claude.ai page built from the demo state', artifactTest);
-test('the committed app.html carries nothing from the machine that built it', () => {
-  const html = fs.readFileSync(path.join(HERE, 'app.html'), 'utf8'), host = os.hostname().split('.')[0];
+test('the committed app.html carries nothing from the machine that built it', () => { // but the install hint names the project's own GitHub repo
+  const html = fs.readFileSync(path.join(HERE, 'app.html'), 'utf8').replaceAll('georgesimos/software-factory', ''), host = os.hostname().split('.')[0];
   for (const re of [/\/Users\//, /\/home\//, /[A-Z]:\\{1,2}Users/i, /~\/(?!\.claude\/|\s)/]) assert.doesNotMatch(html, re); // ~/.claude/… is the documented generic path
   const user = os.userInfo().username;
   if (user.length >= 3) assert.ok(!html.toLowerCase().includes(user.toLowerCase()), 'the login');

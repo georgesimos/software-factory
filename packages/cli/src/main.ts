@@ -15,7 +15,7 @@ import { discover, sync } from '../../core/src/sync.ts';
 import { evals } from '../../core/src/eval.ts';
 import { headlessArgs, reviewFromText, stepModel } from '../../core/src/review.ts';
 import { issuesCreate, loop, newProject, projectStatus, queue, retireIdea } from '../../core/src/project.ts';
-import { loadShip, ship } from '../../core/src/ship.ts';
+import { loadShip, loadShipList, ship } from '../../core/src/ship.ts';
 import { onboardState, onboardText, setShip } from '../../core/src/onboard.ts';
 import { artifact, render, ui } from '../../server/src/server.ts';
 import { rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
@@ -32,7 +32,7 @@ export async function main(argv) {
   const out = (x) => console.log(JSON.stringify(x, null, 2));
   try {
     if (['sync', 'postmerge', 'revert', 'decide', 'merge', 'ship', 'onboard', 'ui'].includes(cmd)) ship.mod = await loadShip();
-    if (ship.mod && ['onboard', 'ui'].includes(cmd)) ship.list = (await ship.mod.ready()).connectors.map((c) => ({ id: c.id, kind: c.kind, label: c.label || c.id }));
+    if (cmd === 'onboard') await loadShipList(); // ui: serve() loads it
     switch (cmd) {
       case 'event': {
         const [stage, status] = rest, p = json(rest[2]);
@@ -181,7 +181,7 @@ export async function main(argv) {
       case 'install-cli': // a `factory` shim in ~/.local/bin (or ~/bin) for this copy; prints the PATH line when that dir is not on PATH
         if (run) throw new Error('usage: install-cli');
         out(installCli(path.join(import.meta.dirname, '..', '..', 'factory', 'factory.mjs'), { home: os.homedir() })); break;
-      case 'ui': ui(Number(run) || 0); break;
+      case 'ui': await ui(Number(run) || 0); break;
       case 'demo': // never pollute the real log with fixtures
         if (!process.env.FACTORY_DIR) io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-demo-'));
         console.log(demo()); break;
