@@ -20,7 +20,8 @@ import { measure, withMeasured } from '../../core/src/burn.ts';
 import { logMetrics } from '../../core/src/metrics.ts';
 import { open } from '../../core/src/platform.ts';
 import { spawn } from 'node:child_process';
-import { getSession, listSessions, resolveSpec, startSession, stopAll, subscribe } from '../../adapters/sessions.mjs';
+import { getSession, killTree, listSessions, resolveSpec, startSession, stopAll, subscribe } from '../../adapters/sessions.mjs';
+import { claimLive, dropClaim, procStart, readClaim, takeClaim } from './claim.ts';
 
 // `F ui`: the dashboard on a loopback port, where the Skills sheet can save. Pure, so the self-test can drive it.
 export const same = (a, b) => typeof a === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -167,7 +168,8 @@ export function terminalSession({ harness = 'claude-code', repo, issue, resume }
     if (listSessions().some((x) => x.state === 'running' && (x.label === from.label || x.harnessSession === resume))) throw new Error(`${from.label} already has a running session`); // one claude per harness session
     cwd = getSession(from.id).cwd ?? cwd; label = from.label;
   }
-  return startSession(h, { mode: 'terminal', resume }, { cwd, env, label, modules });
+  const start = () => startSession(h, { mode: 'terminal', resume }, { cwd, env, label, modules });
+  return label.includes('#') ? claimed(label, 'terminal', start) : start(); // on a run: no F start or other app alongside
 }
 // The checks every factory start passes (#25), for a live session here (launchSession) and a detached run (startRun).
 function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue }, modules = hostModules) {
@@ -180,6 +182,10 @@ function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue },
   const cwd = clone(repo);
   if (!Number.isInteger(issue) || issue < 1 || issue > 1e9) throw new Error('issue must be a positive issue number');
   const id = `${repo}#${issue}`, r = derive(read())[id];
+  let held = readClaim(id);
+  // A finished run's claim is done with, unless its process is still finishing; on Windows (no start time) a reused pid can't
+  // be told apart, so there the run's outcome wins.
+  if (held && r && TERMINAL.includes(r.outcome) && (!held.since || !claimLive(held))) { dropClaim(id, held); held = undefined; }
   if (r?.imported) throw new Error(`${id} is imported: never run claude -p in its checkout`);
   if (['escalated', 'rejected'].includes(r?.outcome)) throw new Error(`${id} is ${r.outcome}: it needs a human, not a new run`); // the factory handed it over
   // F archive drops a run from the log, not from history: a stray later event (a sync, a step) doesn't reopen it. Only a new
@@ -189,10 +195,11 @@ function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue },
   if (gone) throw new Error(`${id} is ${gone.outcome} (archived): it needs a human, not a new run`);
   // Any running session on the run, a person's terminal included: two harnesses would share one session or worktree.
   if (listSessions().some((x) => x.label === id && x.state === 'running')) throw new Error(`${id} already has a running session`); // before its first event lands
-  const pid = startedPid(id);
-  if (pid) throw new Error(`${id} already has a running session (pid ${pid}, started by F start)`);
-  // A run left active by a session that was stopped or crashed here resumes that harness session instead of staying stuck.
-  const resume = resumeFor(r, factorySessions(id).at(-1));
+  if (held && claimLive(held)) throw new Error(`${id} already has a running session (${held.launcher}${held.pid ? `, pid ${held.pid}` : ''})`); // another process's
+  // A run left active by a session that was stopped or crashed (here, or an F start whose process is gone) resumes that
+  // harness session instead of staying stuck.
+  const here = factorySessions(id).at(-1), there = detachedLast(id);
+  const resume = resumeFor(r, there && !(Date.parse(here?.started) > Date.parse(there.started)) ? there : here); // the newer one
   if (r && !TERMINAL.includes(r.outcome) && !resume) throw new Error(`${id} already has an active run (${r.outcome || r.stage})`);
   const b = r ? budget(r) : null;
   if (b?.over) throw new Error(`run budget exceeded ${budgetWhy(b)}`);
@@ -207,15 +214,32 @@ function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue },
 }
 export function launchSession(x, env = process.env, modules = hostModules) {
   const { h, mode, cwd, id, resume, budget: left } = launchGate(x, modules);
-  return startSession(h, { mode, prompt: `/software-factory ${id}`, resume, budget: left, write: true }, { cwd, env, label: id, modules });
+  return claimed(id, 'session', () => startSession(h, { mode, prompt: `/software-factory ${id}`, resume, budget: left, write: true }, { cwd, env, label: id, modules }));
 }
-// A run F start launched: its pid while that process lives. A dead pid refuses nothing, so the file needs no cleanup.
-const startFile = (id) => path.join(runDir(id), 'start.json');
-function startedPid(id) {
-  let pid;
-  try { ({ pid } = JSON.parse(fs.readFileSync(startFile(id), 'utf8'))); } catch { return undefined; }
-  if (!Number.isInteger(pid) || pid < 1) return undefined;
-  try { process.kill(pid, 0); return pid; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM' ? pid : undefined; }
+// A session in this process holds the run's claim (this process's pid) until it exits; a failed start lets go at once.
+function claimed(id: string, launcher: string, start: () => { id: string }) {
+  const cl = takeClaim(id, launcher, { pid: process.pid, since: procStart(process.pid) });
+  try { const s = start(); subscribe(s, (e) => { if (e.type === 'exit') cl.release(); }); return s; } catch (e) { cl.release(); throw e; }
+}
+// The newest F start run, as resumeFor() reads a stopped session, from its log in the run's folder (not the claim, which a
+// later launcher may have taken over): started at the time in its name, ended at its last write, its harness session from
+// the first init line, and exit 0 when its last line is a successful result. Only asked once no live claim holds the run.
+const LOG = /^headless-(\d{4}-\d\d-\d\dT\d\d)-(\d\d)-(\d\d)-(\d{3}Z)\.log$/;
+function detachedLast(id: string) {
+  const dir = runDir(id);
+  const name = (() => { try { return fs.readdirSync(dir).filter((f) => LOG.test(f)).sort().at(-1); } catch { return undefined; } })();
+  if (!name) return undefined;
+  const [, d, mm, ss, ms] = LOG.exec(name)!, file = path.join(dir, name), cap = 64 * 1024;
+  try {
+    const size = fs.statSync(file).size, fd = fs.openSync(file, 'r'), buf = Buffer.alloc(Math.min(size, cap));
+    try {
+      const head = buf.subarray(0, fs.readSync(fd, buf, 0, buf.length, 0)).toString('utf8');
+      const tail = buf.subarray(0, fs.readSync(fd, buf, 0, buf.length, Math.max(0, size - cap))).toString('utf8').trimEnd().split('\n').at(-1);
+      let done = false;
+      try { const x = JSON.parse(tail); done = x?.type === 'result' && x.subtype === 'success' && !x.is_error; } catch { /* killed mid-line */ }
+      return { state: 'exited', exit: done ? 0 : null, started: `${d}:${mm}:${ss}.${ms}`, ended: fs.statSync(file).mtime.toISOString(), harnessSession: /"session_id":"([\w-]{1,100})"/.exec(head)?.[1] };
+    } finally { fs.closeSync(fd); }
+  } catch { return undefined; }
 }
 // F start and POST /api/runs (#25): the factory on one issue as a detached headless harness that outlives F and F ui, with
 // launchSession's checks. Not a session here: GET /api/sessions doesn't list it and quitting doesn't stop it. The prompt
@@ -224,20 +248,27 @@ export function startRun(issue, env = process.env, run = spawn) {
   const m = /^([\w.-]+\/[\w.-]+)#(\d{1,10})$/.exec(typeof issue === 'string' ? issue : '');
   if (!m) throw new Error('issue must be owner/repo#N');
   const { h, cwd, id, resume, budget: left } = launchGate({ repo: m[1], issue: Number(m[2]) });
-  const spec = h.launch({ mode: 'headless', prompt: `/software-factory ${id}`, resume, budget: left, write: true });
-  const c = resolveSpec(spec, env), dir = runDir(id), stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const log = path.join(dir, `headless-${stamp}.log`), prompt = path.join(dir, `headless-${stamp}.prompt`);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(prompt, spec.stdin ?? '');
-  const stdin = fs.openSync(prompt, 'r'), out = fs.openSync(log, 'a');
+  const cl = takeClaim(id, 'start'); // before the spawn: a second launcher now waits on this claim, not on the run's first event
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const log = path.join(runDir(id), `headless-${stamp}.log`), prompt = path.join(runDir(id), `headless-${stamp}.prompt`);
   let child;
   try {
-    child = run(c.file, c.args, { cwd, env: { ...env, ...c.env }, stdio: [stdin, out, out], detached: true, windowsHide: true, windowsVerbatimArguments: !!c.windowsVerbatimArguments });
-    child.on('error', () => { /* no pid: refused below; the log says the rest */ });
-  } finally { fs.closeSync(stdin); fs.closeSync(out); }
-  if (!child.pid) throw new Error(`${spec.cmd} did not start`);
+    const spec = h.launch({ mode: 'headless', prompt: `/software-factory ${id}`, resume, budget: left, write: true }), c = resolveSpec(spec, env);
+    fs.writeFileSync(prompt, spec.stdin ?? '');
+    const stdin = fs.openSync(prompt, 'r'), out = fs.openSync(log, 'a');
+    try {
+      child = run(c.file, c.args, { cwd, env: { ...env, ...c.env }, stdio: [stdin, out, out], detached: true, windowsHide: true, windowsVerbatimArguments: !!c.windowsVerbatimArguments });
+      child.on('error', () => { /* no pid: refused below */ });
+    } finally { fs.closeSync(stdin); fs.closeSync(out); }
+    if (!child.pid) throw new Error(`${spec.cmd} did not start`);
+    cl.update({ pid: child.pid, since: procStart(child.pid), log });
+  } catch (e) { // nothing left behind: no claim, no empty log, no child the claim doesn't name
+    if (child?.pid) killTree(child);
+    cl.release();
+    for (const f of [log, prompt]) try { fs.unlinkSync(f); } catch { /* not written */ }
+    throw e;
+  }
   child.unref();
-  fs.writeFileSync(startFile(id), JSON.stringify({ pid: child.pid, log, started: new Date().toISOString() }));
   return { pid: child.pid, log };
 }
 
