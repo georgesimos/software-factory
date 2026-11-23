@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { TERMINAL, costOf } from './constants.ts';
-import { budget, derive } from './derive.ts';
+import { derive } from './derive.ts';
 import { attribute, withMeasured } from './burn.ts';
 
 // Dashboard metrics (#82), derived from the event log and stored nowhere. Pure: the transcript burn (`measure(events)`) and
@@ -28,6 +28,8 @@ export function logMetrics(events, { project, since, measured = {}, archive = []
   if (Number.isNaN(from)) throw new RangeError('since must be an ISO date like 2026-11-01');
   const inScope = (id) => !project || repoOf(id) === project;
   const after = (ts) => Date.parse(ts) >= from;
+  // When a run ended: the event that ended it (a later revert moves `updated`, not this).
+  const endedAt = (r) => r.events?.findLast((e) => e.status === r.outcome)?.ts ?? r.updated;
   // The full log, so `since` never cuts a run in half; rows and outcomes are then filtered by their own timestamps.
   const runs = withMeasured(derive(events), events, measured, archive);
   const total = cell(), by = { day: {}, project: {}, stage: {}, axis: {}, model: {}, harness: {} };
@@ -37,10 +39,13 @@ export function logMetrics(events, { project, since, measured = {}, archive = []
       axis ? by.axis[axis] ??= cell() : null, model ? by.model[model] ??= cell() : null, harness ? by.harness[harness] ??= cell() : null]) if (c) fill(c);
   };
   // Measured burn replaces reported burn per run, as in withMeasured: never both for one run.
-  const subAxes = new Set(); // measured runs with subagent axis cells; the others keep their reported axes, as withMeasured does
+  // byAxis is not a partition of total: a measured run without subagent axis cells shows its reviewers' reported tokens there
+  // (and nowhere else), as F usage does.
+  const subAxes = new Set(), measuredIn = new Set(); // measuredIn: runs with measured rows in the window
   attribute(runs, events, measured, (at, [ts, , model, ...rest], f) => {
     const t = rest.slice(0, 5), usd = costOf(model, t, rest[5]);
     if (f.sub && f.axis) subAxes.add(at.run);
+    if (inScope(at.run) && after(ts)) measuredIn.add(at.run);
     put(ts, at.run, { stage: at.stage, axis: f.sub ? f.axis : null, model, harness: at.harness }, (c) => add(c, t.reduce((s, n) => s + n, 0), t, usd, false));
   }, archive);
   for (const e of events) {
@@ -61,32 +66,36 @@ export function logMetrics(events, { project, since, measured = {}, archive = []
     if (reported) c.reported += x.tokens;
   };
   for (const a of archived) {
-    const b = a.burn;
-    if (!b?.total || !after(a.updated)) continue;
-    put(a.updated, a.id, {}, merge(b.total, !b.measured));
-    for (const [k, c] of Object.entries(b.byStage || {})) merge(c, !b.measured)(by.stage[k] ??= cell());
-    for (const [k, c] of Object.entries(b.byAxis || {})) merge(c, !b.measured)(by.axis[k] ??= cell());
+    const b = a.burn, at = endedAt(a), spent = b?.total || { tokens: a.tokens || 0, costUsd: a.costUsd ?? null }; // as gate's spent()
+    if (!(spent.tokens || spent.costUsd) || !after(at)) continue;
+    if (b?.measured) measuredIn.add(a.id);
+    put(at, a.id, {}, merge(spent, !b?.measured));
+    for (const [k, c] of Object.entries(b?.byStage || {})) merge(c, !b.measured)(by.stage[k] ??= cell());
+    for (const [k, c] of Object.entries(b?.byAxis || {})) merge(c, !b.measured)(by.axis[k] ??= cell());
   }
   for (const c of [total, ...Object.values(by).flatMap(Object.values)]) finish(c);
-  // Outcomes count the runs that ended in the window, at the event that ended them (a later revert moves `updated`, not this).
-  const endedAt = (r) => r.events?.findLast((e) => e.status === r.outcome)?.ts ?? r.updated;
+  // Outcomes count the runs that ended in the window, at the event that ended them.
   const ended = [...Object.values(runs), ...archived].filter((r) => inScope(r.id) && TERMINAL.includes(r.outcome) && after(endedAt(r)));
   const count = (o) => ended.filter((r) => r.outcome === o).length;
   const merged = ended.filter((r) => r.outcome === 'merged');
   const built = ended.filter((r) => !r.imported && ['merged', 'escalated'].includes(r.outcome));
   const avg = (xs) => (xs.length ? +(xs.reduce((s, n) => s + n, 0) / xs.length).toFixed(3) : null);
   const toMerge = merged.filter((r) => !r.imported).map((r) => Date.parse(endedAt(r)) - Date.parse(r.started)).sort((a, b) => a - b);
+  const mid = toMerge.length >> 1;
+  // A cap hit, as recorded at the time (never recomputed from today's burn): an unmerged run the gate sent to approve for the
+  // loop cap or budget, or whose approve decision named either.
+  const capped = (r) => r.outcome !== 'merged' && ((r.events || []).some((e) => e.stage === 'gate' && e.status === 'failed' && e.next === 'approve')
+    || (r.decision?.reasons || []).some((x) => /exceeds cap|run budget exceeded/.test(x)));
   return {
     project: project || null, since: since || null, total, cacheHitRatio: hitRatio(total),
     byDay: Object.fromEntries(Object.entries(by.day).sort(([a], [b]) => a.localeCompare(b))),
     byProject: by.project, byStage: by.stage, byAxis: by.axis, byModel: by.model, byHarness: by.harness,
-    outcomes: { merged: merged.length, escalated: count('escalated'), rejected: count('rejected'), reverted: merged.filter((r) => r.reverted).length },
+    outcomes: { merged: merged.length, escalated: count('escalated'), rejected: count('rejected'), closed: count('closed'), split: count('split'), reverted: merged.filter((r) => r.reverted).length },
     // shortcut: cost per merged PR divides all spend in the window (escalated runs included) by the merges in it, as gate's metrics() does
     costPerMergedPrUsd: merged.length && total.costUsd != null ? +(total.costUsd / merged.length).toFixed(2) : null,
     loopsPerRun: avg(built.map((r) => (r.loopbacks || []).length)), // gate loop-backs to spec or build, per finished build
-    // Stopped by the loop cap or the run budget: gate() sends a failing run to approve only for those; budget() catches an overrun at approve.
-    capHitShare: avg(built.map((r) => ((r.events || []).some((e) => e.stage === 'gate' && e.status === 'failed' && e.next === 'approve') || budget(r).over ? 1 : 0))),
-    medianIntakeToMergeMs: toMerge.length ? toMerge[Math.floor(toMerge.length / 2)] : null,
-    measuredRuns: Object.values(runs).filter((r) => inScope(r.id) && r.burn?.measured).length,
+    capHitShare: avg(built.map((r) => (capped(r) ? 1 : 0))),
+    medianIntakeToMergeMs: !toMerge.length ? null : toMerge.length % 2 ? toMerge[mid] : (toMerge[mid - 1] + toMerge[mid]) / 2,
+    measuredRuns: measuredIn.size,
   };
 }

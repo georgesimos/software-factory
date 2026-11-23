@@ -96,7 +96,7 @@ export function attribute(runs, events, by, onRow, archived = readArchive()) {
   for (const [sid, filesOf] of Object.entries(by)) {
     const list = (slots[sid] || []).sort((a, b) => a.t - b.t), seen = new Set();
     for (const f of filesOf) {
-      const first = f.sub && f.rows.length ? slot(list, Math.min(...f.rows.map((x) => Date.parse(x[0])))) : null;
+      const first = f.sub && f.rows.length ? slot(list, f.rows.reduce((m, x) => Math.min(m, Date.parse(x[0])), Infinity)) : null; // no spread: a long transcript would overflow the stack
       for (const row of f.rows) {
         if (seen.has(row[1])) continue; // streaming writes one line per content block, all with the same usage
         seen.add(row[1]);

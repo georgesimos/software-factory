@@ -44,8 +44,10 @@ export function uiHandle({ method, url, headers = {}, body = '' }, { token, port
     if (route === '/state') return reply(200, pageData({ resumable: resumable() })); // what page() embeds, for apps/web; never the token
     if (route === '/sessions') return reply(200, { sessions: listSessions() });
     if (route === '/metrics') { // #82: burn, outcomes and timing derived from the log; ?project=owner/repo&since=<ISO date>
-      const events = read(), q = (k) => u.searchParams.get(k) || undefined;
-      try { return reply(200, logMetrics(events, { project: q('project'), since: q('since'), measured: measure(events), archive: readArchive() })); } catch (e) { if (!(e instanceof RangeError)) throw e; return reply(400, { error: e.message }); } // RangeError: a bad since
+      const q = (k) => u.searchParams.get(k) || undefined;
+      if (q('since') && Number.isNaN(Date.parse(q('since')))) return reply(400, { error: 'since must be an ISO date like 2026-11-01' });
+      try { const events = read(); return reply(200, logMetrics(events, { project: q('project'), since: q('since'), measured: measure(events), archive: readArchive() })); }
+      catch (e) { console.error(`factory: /api/metrics: ${e.message}`); return reply(500, { error: 'metrics failed; see the F ui terminal' }); } // no internal message in the response
     }
     const ev = route.match(/^\/sessions\/([0-9a-f-]{36})\/events$/);
     if (ev) { // server-sent events; ui() writes the stream. EventSource can't send x-factory-token, so clients read it with fetch.
