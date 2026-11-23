@@ -55,7 +55,7 @@ In the commands below:
    ```bash
    for l in factory:in-progress factory:needs-info factory:rejected factory:needs-human factory:merged factory:ready factory:needs-approval; do gh label create "$l" -R OWNER/REPO --force --color BFD4F2 >/dev/null; done
    ```
-   **Every "add" or "remove" of a label below, on an issue or a PR, goes through the REST labels endpoint:** `gh api -X POST repos/OWNER/REPO/issues/<n>/labels -f 'labels[]=<label>'` to add, `gh api -X DELETE repos/OWNER/REPO/issues/<n>/labels/<label>` to remove (a 404 there means the label wasn't on it). Never `gh issue edit` or `gh pr edit` with `--add-label`/`--remove-label`: they fail on current `gh` (Projects classic deprecation).
+   **Every "add" or "remove" of a label below, on an issue or a PR, goes through the REST labels endpoint:** `gh api -X POST repos/OWNER/REPO/issues/<n>/labels -f 'labels[]=<label>'` to add, `gh api -X DELETE repos/OWNER/REPO/issues/<n>/labels/<label>` to remove. Your shell quotes the brackets; `F` itself sends `{"labels":[…]}` on stdin with `--input -`, because a Windows `gh.cmd` shim can't pass them. A 404 from the DELETE that says `Label does not exist` only means it wasn't there; any other 404, and every 404 from the POST, is a real error (wrong repo or number, or no access): stop and check. Never `gh issue edit` or `gh pr edit` with `--add-label`/`--remove-label`: they fail on current `gh` (Projects classic deprecation).
 3. Run `F skills OWNER/REPO` and keep its `plan`, `extra` and `guide` for this run. Each step below follows its runner as described in [Runners](#runners-who-does-each-step).
    Then run `F rules OWNER/REPO` and keep its `policy`. Tell the user every line of `warnings` (an expired or expiring rule) before going on.
 4. Run `F state RUN` and act on what it shows:
@@ -188,7 +188,7 @@ Run `F gate RUN`. Its `next` decides where the run goes:
    If they hold, it marks the PR ready, squash-merges it and labels the issue.
 2. **`merged: false`, or `F merge` fails with an error:** escalate. Never retry the merge by hand.
    1. `gh pr ready <pr>`.
-   2. Add `factory:needs-human` to the PR: `gh api -X POST repos/OWNER/REPO/issues/<pr number>/labels -f 'labels[]=factory:needs-human'`.
+   2. Add `factory:needs-human` to the PR: `gh api -X POST repos/OWNER/REPO/issues/<pr number>/labels -f 'labels[]=factory:needs-human'`, where `<pr number>` is the number at the end of the PR URL.
    3. `gh pr comment <pr>` with the reasons and the open findings.
    4. `F event RUN approve escalated`.
    

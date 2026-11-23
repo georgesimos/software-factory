@@ -9,6 +9,7 @@ import { SUB_AXIS } from '../../core/src/burn.ts';
 import { axesFor, decide, risk } from '../../core/src/gate.ts';
 import { checkRunner } from '../../core/src/skills.ts';
 import { derive } from '../../core/src/derive.ts';
+import { relabelMerged } from '../../core/src/github.ts';
 import { execFileSync } from 'node:child_process';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { hooks } from '../../core/src/ship.ts';
@@ -77,9 +78,18 @@ export function cliTest() {
   assert.throws(() => cli(['event', RUN, 'ship', 'passed', '-'], '{"connector":"x","env":"preview","state":"ready"}'), /recorded by "ship"/);
   for (const k of ['connector', 'kind', 'env', 'state', 'url', 'sha']) assert.throws(() => cli(['event', RUN, 'build', 'passed', '-'], JSON.stringify({ [k]: 'https://evil.example' })), new RegExp(`not from a payload: ${k}`));
   const labelLog = path.join(io.dir, 'labels.log');
-  assert.equal(JSON.parse(cli(['merge', RUN], '', { STUB_CHECKS: '1', STUB_LABEL_LOG: labelLog })).merged, true); // stub fails unless --match-head-commit abc123
-  assert.deepEqual(fs.readFileSync(labelLog, 'utf8').trim().split('\n'), [ // relabels the run's issue through the REST endpoint; the DELETE's 404 doesn't fail the merge
-    'api -X POST repos/acme/shop/issues/7/labels -f labels[]=factory:merged', 'api -X DELETE repos/acme/shop/issues/7/labels/factory:in-progress']);
+  assert.equal(JSON.parse(cli(['merge', RUN], '', { STUB_CHECKS: '1', STUB_LABEL_LOG: labelLog, STUB_LABEL_FAIL: 'post' })).merged, true); // stub fails unless --match-head-commit abc123; a failed label POST doesn't fail the merge
+  assert.deepEqual(fs.readFileSync(labelLog, 'utf8').trim().split('\n'), [ // relabels the run's issue through the REST endpoint, with no argument a gh.cmd shim refuses
+    'api -X POST repos/acme/shop/issues/7/labels --input - {"labels":["factory:merged"]}', 'api -X DELETE repos/acme/shop/issues/7/labels/factory:in-progress']);
+  const relabelWarnings = (fail) => {
+    const prev = [io.gh, console.error], msgs = [];
+    io.gh = stub; console.error = (m) => msgs.push(m); if (fail) process.env.STUB_LABEL_FAIL = fail;
+    try { relabelMerged(RUN); } finally { [io.gh, console.error] = prev; delete process.env.STUB_LABEL_FAIL; }
+    return msgs.join('\n');
+  };
+  assert.equal(relabelWarnings(), ''); // the DELETE's "Label does not exist" 404 stays silent
+  assert.match(relabelWarnings('500'), /^factory: label update on acme\/shop#7 failed: gh: Server Error \(HTTP 500\)$/); // any other DELETE error warns
+  assert.match(relabelWarnings('post'), /failed: gh: Server Error \(HTTP 500\)/);
   const st = JSON.parse(cli(['state', RUN]));
   assert.equal(st.outcome, 'merged');
   assert.equal(st.spec, nasty);
