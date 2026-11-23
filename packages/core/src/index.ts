@@ -8,3 +8,6 @@ export * from './skills.ts';
 export * from './rules.ts';
 export * from './review.ts';
 export * from './workspace.ts';
+export * from './github.ts';
+export * from './sync.ts';
+export * from './eval.ts';

@@ -13,7 +13,7 @@ import { harnesses } from '../adapters/harnesses/index.mjs';
 import * as project from './project.mjs'; // also handed whole to the idea-to-app test
 import { PROJECT_EVENTS, newProject, issuesCreate, projectStatus, loop, queue, startIdea, retireIdea, ideas } from './project.mjs';
 import { CAP, COST_CAP, DOCS, FINDING_KEYS, MAX_DIFF, MAX_ISSUES_PER_SESSION, OUTCOMES, PROJECT_BUDGET_USD, REVIEW_KEYS, SEO, SEVERITIES, SOURCE, STAGES, STATUSES, TERMINAL, TEST, TOKEN_CAP, TRUSTED, UI, USAGE_KEYS, VERIFIER_KEYS, blocking, costOf, isSensitive, sensitive } from '../core/src/constants.ts';
-import { archive, factoryDir, io, log, read, record, runDir, stateDir } from '../core/src/log.ts';
+import { archive, archiveFile, factoryDir, io, log, read, readArchive, record, runDir, sessionsFile, stateDir } from '../core/src/log.ts';
 import { INVALID, addBurn, allRuns, assertReviewOpen, budget, budgetWhy, burnOf, derive, finishBurn, getRun, validateReview, validateUsage } from '../core/src/derive.ts';
 import { SUB_AXIS, measure, usageFile, withMeasured } from '../core/src/burn.ts';
 import { axesFor, decide, gate, metrics, reviewAxes, risk } from '../core/src/gate.ts';
@@ -21,6 +21,13 @@ import { REQUIRED_AXES, STEP_KEYS, catalog, checkRunner, readSkills, setSkill, s
 import { LOGIN, checkGuide, checkRules, checkScope, dayOf, rules, setAutoMerge, setRule, unsetRule } from '../core/src/rules.ts';
 import { MIN_SHARE_USD, headlessArgs, reviewFromText, runnerStamp } from '../core/src/review.ts';
 import { cleanup, deps, gc, git, localChecks, ls, projects, projectsFile, saveProject, worktree, wtFile, wtInfo } from '../core/src/workspace.ts';
+import { adapterCtx, approval, facts, gh, intake, merge, openPRs, parseRun, postmerge, revert } from '../core/src/github.ts';
+import { discover, sessionsByBranch, sync } from '../core/src/sync.ts';
+import { evals } from '../core/src/eval.ts';
+export { evals };
+export { archiveFile, readArchive, sessionsFile };
+export { discover, sessionsByBranch, sync };
+export { adapterCtx, approval, facts, gh, intake, merge, openPRs, parseRun, postmerge, revert };
 export { cleanup, deps, gc, localChecks, ls, projects, projectsFile, worktree, wtInfo };
 export { MIN_SHARE_USD, headlessArgs, reviewFromText, runnerStamp };
 export { checkGuide, checkRules, rules, setAutoMerge, setRule, unsetRule };
@@ -31,7 +38,7 @@ export { allRuns, budget, derive, validateReview, validateUsage };
 export { archive, factoryDir, io, read, record, runDir };
 export { CAP, COST_CAP, MAX_DIFF, MAX_ISSUES_PER_SESSION, PROJECT_BUDGET_USD, TOKEN_CAP, costOf, isSensitive };
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
+export const HERE = path.dirname(fileURLToPath(import.meta.url));
 // render() lives with the server after the split; code bound for core calls dashboard.render().
 export const dashboard = { render: () => render() };
 
@@ -109,108 +116,6 @@ export function ui(port = 0) {
   return server;
 }
 
-export const gh = (...args) => execFileSync(io.gh, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-export const parseRun = (run) => {
-  const m = /^([\w.-]+)\/([\w.-]+)#(\d+)$/.exec(run || '');
-  if (!m) throw new Error(`run must look like owner/repo#N, got "${run}"`);
-  return { repo: `${m[1]}/${m[2]}`, n: m[3] };
-};
-
-// Fetches the issue itself so title/author/association are never model-typed. Prints what intake should read.
-export function intake(run) {
-  const { repo, n } = parseRun(run);
-  if (process.env.FACTORY_FIXTURES && repo === 'eval/golden') return intakeFixture(run, n); // offline eval: no GitHub
-  // Exact links only (GitHub closing references); the factory's own branch is a resume, not a clash.
-  const { prs } = openPRs(repo);
-  const inProgress = prs
-    .filter((p) => p.headRefName !== `factory/issue-${n}` && p.closingIssuesReferences.nodes.some((x) => String(x.number) === n))
-    .map((p) => p.url);
-  if (inProgress.length) return { inProgress }; // nothing recorded: someone is already on it
-  const i = JSON.parse(gh('api', `repos/${repo}/issues/${n}`));
-  if (i.pull_request) return { notAnIssue: `#${n} is a pull request` };
-  if (i.state !== 'open') return { notAnIssue: `#${n} is ${i.state}` };
-  // Advisory only: PRs naming the issue in their title without a formal closing link.
-  const mentions = prs.filter((p) => p.headRefName !== `factory/issue-${n}` && new RegExp(`(^|[^\\w])#${n}(?!\\d)`).test(p.title)).map((p) => ({ url: p.url, title: p.title }));
-  const comments = gh('api', '--paginate', `repos/${repo}/issues/${n}/comments`, '--jq', '.[]').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-  const meta = { title: i.title, url: i.html_url, author: i.user.login, association: i.author_association };
-  // A split child is authored by whoever ran the split; it inherits its parent's (possibly untrusted) author.
-  const parent = [...Object.values(derive(read())), ...readArchive()].find((r) => (r.children || []).includes(run));
-  if (parent) Object.assign(meta, { origin: parent.id, originAssociation: parent.originAssociation || parent.association });
-  record(run, 'intake', 'started', meta);
-  // Only the reporter and repo insiders may shape requirements; others could steer a trusted issue into auto-merge.
-  const counts = (c) => c.user.login === meta.author || TRUSTED.includes(c.author_association);
-  return {
-    ...meta, state: i.state, body: i.body, mentions,
-    comments: comments.filter(counts).map((c) => ({ author: c.user.login, association: c.author_association, created_at: c.created_at, body: c.body })),
-    ignoredComments: comments.filter((c) => !counts(c)).length,
-  };
-}
-
-function intakeFixture(run, n) {
-  const fx = JSON.parse(fs.readFileSync(path.join(process.env.FACTORY_FIXTURES, `${n}.json`), 'utf8'));
-  const meta = { title: fx.issue.title, url: `https://github.com/eval/golden/issues/${n}`, author: fx.issue.author, association: fx.issue.association };
-  record(run, 'intake', 'started', meta);
-  return { ...meta, state: 'open', body: fx.issue.body, mentions: [], comments: fx.comments || [], ignoredComments: 0, dryRun: true };
-}
-export const adapterCtx = () => ({ gh, git }); // what host and tracker adapters get: the same stubbable gh and git
-
-export function openPRs(repo) {
-  const [o, n] = repo.split('/');
-  const q = 'query($o:String!,$n:String!){repository(owner:$o,name:$n){defaultBranchRef{name} pullRequests(states:OPEN,first:100){nodes{number url title headRefName headRefOid authorAssociation author{login} closingIssuesReferences(first:20){nodes{number}}}} done: pullRequests(states:[MERGED,CLOSED],last:100){nodes{headRefName}}}}';
-  const r = JSON.parse(gh('api', 'graphql', '-f', `query=${q}`, '-f', `o=${o}`, '-f', `n=${n}`)).data.repository;
-  return { base: r.defaultBranchRef.name, prs: r.pullRequests.nodes, doneBranches: (r.done?.nodes || []).map((x) => x.headRefName) };
-}
-
-// branch -> { agents, last, sessions } from each harness's local logs (adapter sessions()). Branch names and file times only, never prompt text.
-export function sessionsByBranch(repo, repoPath) {
-  const out = {};
-  for (const h of harnesses) for (const { branch, id, cwd, last } of h.sessions?.(repoPath, `https://github.com/${repo}.git`) || []) {
-    if (!branch || branch === 'HEAD') continue;
-    const s = (out[branch] ??= { agents: [], last: '', sessions: [] });
-    if (!s.agents.includes(h.id)) s.agents.push(h.id);
-    if (last > s.last) s.last = last;
-    if (id && !s.sessions.some((x) => x.id === id)) s.sessions.push({ agent: h.id, id, cwd, last });
-  }
-  return out;
-}
-
-const SKIP_DIRS = new Set(['node_modules', 'Library', 'Applications', 'Pictures', 'Music', 'Movies', 'dist', 'build', 'vendor']);
-const DISCOVER_ROOTS = ['Development', 'code', 'Code', 'projects', 'Projects', 'src', 'dev', 'repos', 'workspace', 'git', 'GitHub'];
-
-// Finds local clones with a GitHub origin, for onboarding. Reads .git/config directly (no subprocess per folder);
-// skips hidden folders and node_modules.
-export function discover(roots, maxDepth = 5) {
-  roots = roots?.length ? roots.map((r) => path.resolve(r)) : DISCOVER_ROOTS.map((d) => path.join(os.homedir(), d)).filter((d) => fs.existsSync(d));
-  const clones = [];
-  const walk = (dir, depth) => {
-    let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-    const dotGit = entries.find((e) => e.name === '.git');
-    if (dotGit?.isDirectory()) clones.push(dir); // keep descending: clones can live inside another repo (a .git *file* is a linked worktree, counted under its clone)
-    if (depth >= maxDepth) return;
-    for (const e of entries) if (e.isDirectory() && !e.name.startsWith('.') && !SKIP_DIRS.has(e.name)) walk(path.join(dir, e.name), depth + 1);
-  };
-  for (const r of roots) walk(r, 0);
-  const byRepo = {};
-  for (const dir of clones) {
-    let config;
-    try { config = fs.readFileSync(path.join(dir, '.git', 'config'), 'utf8'); } catch { continue; }
-    const url = /\[remote "origin"\][^[]*?\burl\s*=\s*(\S+)/.exec(config)?.[1] || '';
-    const m = /github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/.exec(url);
-    if (!m) continue;
-    let lastCommit = null;
-    try { lastCommit = git('-C', dir, 'log', '-1', '--format=%cI').trim() || null; } catch { /* empty repo */ }
-    const worktrees = ls(path.join(dir, '.git', 'worktrees')).length;
-    (byRepo[`${m[1]}/${m[2]}`] ??= []).push({ path: dir, lastCommit, worktrees });
-  }
-  const attached = projects();
-  return Object.entries(byRepo).map(([repo, cs]) => {
-    cs.sort((a, b) => (b.lastCommit || '').localeCompare(a.lastCommit || ''));
-    const main = cs.find((c) => c.path === attached[repo]?.path) || cs[0]; // prefer the clone already attached, else the freshest
-    return { repo, path: main.path, otherClones: cs.filter((c) => c !== main).map((c) => c.path), attached: !!attached[repo], lastCommit: main.lastCommit, worktrees: main.worktrees };
-  }).sort((a, b) => (b.lastCommit || '').localeCompare(a.lastCommit || ''));
-}
-
 // packages/ship, when it sits next to the factory (the repo layout). Optional: without it F works, and deploy.preview=required escalates.
 let SHIP = null;
 async function loadShip() {
@@ -219,198 +124,9 @@ async function loadShip() {
   try { const m = await import(pathToFileURL(file).href); await m.ready(); return m; } catch (e) { console.error(`factory: ship harness failed to load: ${e.message}`); return null; }
 }
 // Records deploy state through record(). A failed lookup is reported in the result, never thrown: it must not break sync or merge.
-function shipTrack(pairs) {
+export function shipTrack(pairs) {
   if (!SHIP || !pairs.length) return undefined;
   try { return SHIP.track(pairs, { runs: derive(read()), record }); } catch (e) { return { recorded: [], errors: [{ error: e.message }] }; }
-}
-
-// Registers the repo and imports work already in flight: open PRs, plus recent agent sessions on unmerged branches.
-// Imported runs are tracked, never driven: decide() always escalates them.
-export function sync(repo, repoPath) {
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo || '')) throw new Error(`repo must look like owner/repo, got "${repo}"`);
-  repoPath = path.resolve(repoPath || projects()[repo]?.path || '.');
-  fs.mkdirSync(stateDir(), { recursive: true });
-  fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...projects()[repo], path: repoPath, synced: new Date().toISOString() } }, null, 2));
-  const runs = Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') || r.id.startsWith(repo + ':'));
-  const byPr = new Map(runs.filter((r) => r.pr).map((r) => [r.pr, r]));
-  const byBranch = new Map(runs.filter((r) => r.branch).map((r) => [r.branch, r]));
-  const { base, prs, doneBranches } = openPRs(repo);
-  const sessions = sessionsByBranch(repo, repoPath);
-  const ours = (b) => b.startsWith('factory/'); // the factory's own branches are never imported
-  const added = [], attached = [], closed = [];
-  const importRun = (id, meta, summary) => {
-    record(id, 'intake', 'started', { ...meta, imported: true });
-    record(id, 'intake', 'passed', { summary });
-  };
-  for (const p of prs) {
-    if (byPr.has(p.url) || ours(p.headRefName)) continue;
-    const prior = byBranch.get(p.headRefName);
-    if (prior) { // a session-only run whose branch now has a PR
-      if (!prior.pr && prior.outcome === 'in-progress') { record(prior.id, 'build', 'passed', { pr: p.url }); attached.push(prior.id); }
-      continue;
-    }
-    const s = sessions[p.headRefName];
-    const source = s ? s.agents.join('+') : 'none';
-    const id = `${repo}#${p.number}`; // PRs and issues share GitHub's number space
-    importRun(id, { title: p.title, url: p.url, author: p.author?.login, association: p.authorAssociation, source, issues: p.closingIssuesReferences.nodes.map((x) => x.number) },
-      `Imported open PR${s ? ` from a ${source} session` : ' (no local session found)'}; not built by the factory.`);
-    record(id, 'build', 'started');
-    record(id, 'build', 'passed', { pr: p.url, branch: p.headRefName });
-    added.push(id);
-  }
-  // shortcut: only local branches count as session work; a session on a remote-only branch is skipped until it has a PR.
-  const unmerged = new Set(git('-C', repoPath, 'branch', '--no-merged', `origin/${base}`, '--format=%(refname:short)').split('\n').map((b) => b.trim()).filter(Boolean));
-  const openHeads = new Set(prs.map((p) => p.headRefName));
-  const done = new Set(doneBranches); // squash-merged branches still look unmerged to git
-  const recent = new Date(Date.now() - 14 * 864e5).toISOString();
-  for (const [branch, s] of Object.entries(sessions)) {
-    if (ours(branch) || branch === 'project' || openHeads.has(branch) || done.has(branch) || byBranch.has(branch) || !unmerged.has(branch) || s.last < recent) continue;
-    const id = `${repo}:${branch}`;
-    importRun(id, { title: branch, source: s.agents.join('+') }, `Imported ${s.agents.join('+')} session on an unmerged branch with no PR yet.`);
-    record(id, 'build', 'started', { branch });
-    added.push(id);
-  }
-  // In-progress runs whose work ended outside the factory become "closed": a merge elsewhere is not a factory merge.
-  const open = new Set(prs.map((p) => p.url));
-  for (const r of runs) {
-    if (r.outcome !== 'in-progress' || attached.includes(r.id)) continue;
-    let reason;
-    if (r.pr && !open.has(r.pr)) {
-      const { state } = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'state'));
-      if (state !== 'OPEN') reason = `PR ${state.toLowerCase()} outside the factory`;
-    } else if (!r.pr && r.imported && r.branch && !openHeads.has(r.branch) && (done.has(r.branch) || !unmerged.has(r.branch))) {
-      reason = `branch ${r.branch} was merged, closed or deleted`;
-    }
-    if (reason) { record(r.id, 'approve', 'closed', { reasons: [reason] }); closed.push(r.id); }
-  }
-  const links = sessionsFile();
-  const prev = fs.existsSync(links) ? JSON.parse(fs.readFileSync(links, 'utf8')) : {};
-  for (const r of Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') || r.id.startsWith(repo + ':'))) {
-    if (r.branch && sessions[r.branch]) prev[r.id] = sessions[r.branch].sessions.sort((a, b) => b.last.localeCompare(a.last)).slice(0, 5);
-  }
-  fs.writeFileSync(links, JSON.stringify(prev, null, 2));
-  const head = new Map(prs.map((p) => [p.url, p.headRefOid])); // deploy state of each in-progress run's PR head (finished runs aren't polled)
-  const ship = shipTrack(Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') && r.outcome === 'in-progress' && head.get(r.pr)).map((r) => ({ run: r.id, repo, sha: head.get(r.pr), path: repoPath })));
-  dashboard.render();
-  return { repo, path: repoPath, added, attached, closed, ...(ship && { ship }) };
-}
-
-// Reads CI + diff facts from GitHub so the merge decision never depends on typed-in numbers.
-export function facts(r) {
-  const { repo, n } = parseRun(r.id);
-  const association = gh('api', `repos/${repo}/issues/${n}`, '--jq', '.author_association').trim();
-  const autoMerge = projects()[repo]?.autoMerge !== false;
-  const policy = rules(repo).policy; // a broken config throws here, so decide/merge fail and the run escalates
-  const pv = policy['deploy.preview']?.value, dep = {};
-  if (pv && pv !== 'off') { // live, like CI: record the reviewed commit's deploy state now, then decide on what the log says
-    shipTrack([{ run: r.id, repo, sha: r.reviewedSha, path: projects()[repo]?.path }]);
-    dep.deploys = derive(read())[r.id]?.deploys || [];
-  }
-  if (!r.pr) return { association, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy, ...dep };
-  const diff = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'additions,deletions,files'));
-  let checks = 'skipped'; // ci=skip: GitHub CI isn't even read
-  if (policy.ci?.value !== 'skip') try {
-    const b = JSON.parse(gh('pr', 'checks', r.pr, '-R', repo, '--json', 'bucket')).map((c) => c.bucket);
-    checks = !b.length ? 'none' : b.some((x) => x === 'fail' || x === 'cancel') ? 'fail' : b.includes('pending') ? 'pending' : 'pass';
-  } catch (e) {
-    if (!/no checks reported/i.test(String(e.stderr))) throw e;
-    checks = 'none';
-  }
-  return { association, autoMerge, checks, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), rules: policy, ...dep };
-}
-
-// The only merge path: re-decides from live GitHub facts and merges exactly the reviewed commit.
-export function merge(run) {
-  const r = getRun(run);
-  const { repo, n } = parseRun(run);
-  const f = r.imported ? {} : facts(r);
-  const d = decide(r, f);
-  record(run, 'approve', 'decided', { ...d, facts: f });
-  if (d.action !== 'merge') return { merged: false, ...d };
-  if (!r.reviewedSha) throw new Error('no reviewed commit recorded; refusing to merge');
-  gh('pr', 'ready', r.pr, '-R', repo);
-  gh('pr', 'merge', r.pr, '-R', repo, '--squash', '--delete-branch', '--match-head-commit', r.reviewedSha);
-  record(run, 'approve', 'merged');
-  try { gh('issue', 'edit', n, '-R', repo, '--remove-label', 'factory:in-progress', '--add-label', 'factory:merged'); } catch { /* label is cosmetic */ }
-  return { merged: true, ...d };
-}
-
-// Spec approval: a trusted "/factory approve" (or "/factory reject") comment after the run started waiting.
-export function approval(run) {
-  const r = getRun(run);
-  const { repo, n } = parseRun(run);
-  const since = [...r.events].reverse().find((e) => e.status === 'awaiting-approval')?.ts;
-  if (!since) throw new Error(`${run} is not awaiting approval`);
-  const comments = gh('api', '--paginate', `repos/${repo}/issues/${n}/comments`, '--jq', '.[]').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-  const vote = comments.filter((c) => c.created_at > since && TRUSTED.includes(c.author_association))
-    .map((c) => ({ by: c.user.login, m: /^\s*\/factory\s+(approve|reject)\b/i.exec(c.body || '') })).filter((x) => x.m).pop();
-  return vote ? { decision: vote.m[1].toLowerCase(), by: vote.by } : { decision: 'waiting' };
-}
-
-// After a merge: CI on the merge commit of the base branch.
-export function postmerge(run) {
-  const r = getRun(run);
-  const { repo } = parseRun(run);
-  const sha = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'mergeCommit')).mergeCommit?.oid;
-  if (!sha) return { state: 'not-merged' };
-  const ship = shipTrack([{ run, repo, sha, path: projects()[repo]?.path }]), deploys = ship?.recorded.length ? { deploys: ship.recorded } : {}; // production deploy of the merge commit, when a connector reports one
-  const ci = rules(repo).policy.ci?.value;
-  if (ci === 'skip') return { sha, state: 'skipped', reason: 'rule ci=skip: CI on the base branch is not watched, so it never triggers a revert', ...deploys };
-  const runs = JSON.parse(gh('run', 'list', '-R', repo, '--commit', sha, '--json', 'status,conclusion,name,url'));
-  const failed = runs.filter((x) => ['failure', 'cancelled', 'timed_out'].includes(x.conclusion)).map((x) => x.url);
-  const state = !runs.length ? 'none' : failed.length ? 'fail' : runs.some((x) => x.status !== 'completed') ? 'pending' : 'pass';
-  return { sha, state, failed, ...(ci === 'advisory' && { advisory: true }), ...deploys }; // advisory: report red, don't revert on it
-}
-
-// Opens (never merges) a revert PR for a merged run whose main CI went red.
-export function revert(run, reason) {
-  const r = getRun(run);
-  const { repo, n } = parseRun(run);
-  const pm = postmerge(run);
-  if (!pm.sha) throw new Error('run has no merge commit');
-  const repoPath = projects()[repo]?.path;
-  if (!repoPath) throw new Error(`no local clone registered for ${repo}`);
-  const base = gh('repo', 'view', repo, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name').trim();
-  const branch = `factory/revert-${n}`, wt = path.join(runDir(run), 'revert');
-  git('-C', repoPath, 'fetch', '-q', 'origin', base);
-  git('-C', repoPath, 'worktree', 'add', '-q', '-B', branch, wt, `origin/${base}`);
-  try {
-    git('-C', wt, 'revert', '--no-edit', pm.sha);
-    git('-C', wt, 'push', '-q', '-u', 'origin', branch);
-    const url = gh('pr', 'create', '-R', repo, '--base', base, '--head', branch, '--title', `Revert: ${r.title}`,
-      '--body', `Reverts ${r.pr} (#${n}): ${reason}\n\nOpened by the software factory. Needs a human to merge.`, '--label', 'factory:needs-human').trim();
-    record(run, 'approve', 'reverted', { pr: url, reason });
-    return { pr: url };
-  } finally {
-    try { git('-C', repoPath, 'worktree', 'remove', '--force', wt); git('-C', repoPath, 'branch', '-D', branch); } catch { /* best effort */ }
-  }
-}
-
-export const archiveFile = () => path.join(stateDir(), 'archive.jsonl');
-const sessionsFile = () => path.join(stateDir(), 'sessions.json');
-export const readArchive = () => { try { return fs.readFileSync(archiveFile(), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
-
-// Runs intake on each golden fixture with a headless Claude session (costs tokens; user-triggered) and scores the outcome.
-export function evals(only) {
-  const dir = path.join(HERE, 'evals', 'golden');
-  const ids = ls(dir).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5)).filter((n) => !only || n === only).sort((a, b) => a - b);
-  const results = [];
-  for (const n of ids) {
-    const fx = JSON.parse(fs.readFileSync(path.join(dir, `${n}.json`), 'utf8'));
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-eval-'));
-    const run = `eval/golden#${n}`;
-    try {
-      execFileSync('claude', ['-p', `/software-factory ${run} --dry-run --intake-only`, '--allowedTools', 'Bash(node:*)', 'Read', 'Grep', 'Glob'],
-        { env: { ...process.env, FACTORY_DIR: tmp, FACTORY_FIXTURES: dir }, stdio: 'ignore', timeout: 600_000 });
-    } catch { /* scored below from whatever was recorded */ }
-    const prevDir = io.dir; io.dir = tmp;
-    const r = derive(read())[run];
-    io.dir = prevDir;
-    const last = r?.events.filter((e) => e.stage === 'intake' || e.status === 'split').pop()?.status;
-    const got = { passed: 'pass', 'needs-info': 'needs-info', rejected: 'reject', split: 'split' }[last] || 'no-outcome';
-    results.push({ fixture: n, expect: fx.expect, got, ok: got === fx.expect });
-  }
-  return { score: `${results.filter((r) => r.ok).length}/${results.length}`, results };
 }
 
 const runRepos = () => [...new Set([...Object.keys(derive(read())), ...readArchive().map((a) => a.id)].map((id) => id.split(/[#:]/)[0]))];

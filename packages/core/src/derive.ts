@@ -1,8 +1,7 @@
 // @ts-nocheck
 import { COST_CAP, FINDING_KEYS, OUTCOMES, REVIEW_KEYS, SEVERITIES, TOKEN_CAP, USAGE_KEYS, blocking, costOf } from './constants.ts';
 import { PROJECT_EVENTS } from '../../factory/project.mjs';
-import { read } from './log.ts';
-import { readArchive } from '../../factory/factory.mjs';
+import { read, readArchive } from './log.ts';
 import { withMeasured } from './burn.ts';
 
 // Token numbers come from model-typed payloads: only non-negative numbers and a short model id get stored. `tokens` becomes the usage sum.

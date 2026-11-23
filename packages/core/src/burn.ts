@@ -4,8 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { addBurn, burnOf, finishBurn } from './derive.ts';
 import { costOf } from './constants.ts';
-import { io, stateDir } from './log.ts';
-import { readArchive } from '../../factory/factory.mjs';
+import { io, readArchive, stateDir } from './log.ts';
 import { ls } from './workspace.ts';
 
 // ---------- measured burn: Claude Code transcripts of the sessions that recorded events ----------

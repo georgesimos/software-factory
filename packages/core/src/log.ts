@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { STAGES, STATUSES, TERMINAL, VERIFIER_KEYS } from './constants.ts';
-import { archiveFile, dashboard } from '../../factory/factory.mjs';
+import { dashboard } from '../../factory/factory.mjs';
 import { cleanup, wtInfo } from './workspace.ts';
 import { runnerStamp } from './review.ts';
 import { withMeasured } from './burn.ts';
@@ -70,3 +70,6 @@ export function archive(days = 14) {
   dashboard.render();
   return { archived: old.length };
 }
+export const archiveFile = () => path.join(stateDir(), 'archive.jsonl');
+export const sessionsFile = () => path.join(stateDir(), 'sessions.json');
+export const readArchive = () => { try { return fs.readFileSync(archiveFile(), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
