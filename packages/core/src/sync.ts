@@ -117,19 +117,21 @@ export function sync(repo, repoPath) {
     if (reason) { record(r.id, 'approve', 'closed', { reasons: [reason] }); closed.push(r.id); }
   }
   // Escalated runs whose PR a human then merged on GitHub (#21): recorded as merged by a human. Every fact comes from
-  // GitHub (state, merge time, merger, merge commit, head branch), never from issue, PR or comment text. It never merges
-  // or re-runs; it only records, then relabels the issue factory:merged. The merge must follow the run's latest decision,
-  // and that decision must be "escalate": after a "merge" decision, a merged PR may be F merge's own that then threw.
+  // GitHub (state, merge time, merger, merge commit, head branch, fork or not), never from issue, PR or comment text. It
+  // never merges or re-runs; it only records, then relabels the issue factory:merged. The merge must follow the latest
+  // "decided escalate", or else (a "merge" decision, or none because facts() threw) the "escalated" event: F merge has
+  // returned or thrown by then, so a later merge is not its own.
   // A failed lookup skips the run and is reported, never breaks sync. shortcut: archived escalated runs are not checked.
   const humanMerged = [], humanMergeErrors = [];
   for (const r of runs) {
     const m = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)$/.exec(r.pr || ''); // r.pr was typed by the orchestrator
+    if (r.outcome !== 'escalated' || r.imported || !m || m[1] !== repo || open.has(r.pr)) continue; // imported runs: not the factory's work
     const decided = r.events.findLast((e) => e.stage === 'approve' && e.status === 'decided');
-    if (r.outcome !== 'escalated' || r.imported || !m || m[1] !== repo || open.has(r.pr) || decided?.action !== 'escalate') continue; // imported runs: not the factory's work
+    const since = decided?.action === 'escalate' ? decided.ts : r.events.findLast((e) => e.stage === 'approve' && e.status === 'escalated')?.ts;
     let p;
-    try { p = JSON.parse(gh('pr', 'view', m[2], '-R', repo, '--json', 'state,mergedAt,mergedBy,mergeCommit,headRefName')); }
+    try { p = JSON.parse(gh('pr', 'view', m[2], '-R', repo, '--json', 'state,mergedAt,mergedBy,mergeCommit,headRefName,isCrossRepository')); }
     catch (e) { humanMergeErrors.push({ run: r.id, error: String(e?.stderr || e?.message || e).trim().split('\n')[0] }); continue; }
-    if (p.state !== 'MERGED' || p.headRefName !== `factory/issue-${r.id.split('#')[1]}` || !(Date.parse(p.mergedAt) > Date.parse(decided.ts))) continue;
+    if (p.state !== 'MERGED' || p.isCrossRepository !== false || p.headRefName !== `factory/issue-${r.id.split('#')[1]}` || !(Date.parse(p.mergedAt) > Date.parse(since))) continue; // a fork's factory/issue-N branch never counts
     record(r.id, 'approve', 'merged', { by: 'human', mergedBy: p.mergedBy?.login || null, sha: p.mergeCommit?.oid || null });
     relabelMerged(r.id);
     humanMerged.push(r.id);

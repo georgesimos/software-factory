@@ -102,7 +102,7 @@ export function metrics(runs) {
   const merged = count('merged') - humanMerged, escalated = count('escalated') + humanMerged; // merge rate = the factory's own merges
   const built = runs.filter((r) => !r.imported && ['merged', 'escalated'].includes(r.outcome));
   const cycles = built.map((r) => r.durationMs).sort((a, b) => a - b);
-  const reverts = runs.filter((r) => r.reverted).length;
+  const reverts = runs.filter((r) => r.reverted && !r.humanMerge).length; // of the factory's own merges, like the rate's denominator
   const spent = (r) => r.burn?.total || { tokens: r.tokens || 0, costUsd: r.costUsd ?? null };
   const costUsd = +runs.reduce((s, r) => s + (spent(r).costUsd || 0), 0).toFixed(2);
   const tokens = runs.reduce((s, r) => s + spent(r).tokens, 0);

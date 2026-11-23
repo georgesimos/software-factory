@@ -386,9 +386,9 @@ Run `F sync owner/repo <local clone path>`. Running `F sync` with no arguments l
   - `none` when no local session matches.
 - **Imports recent agent sessions with no PR** on unmerged local branches as runs with id `owner/repo:<branch>`. When such a branch later gets a PR, the PR is attached to the same run.
 - **Closes finished runs.** A run whose PR or branch finished outside the factory is marked `closed`.
-- **Records a human's merge of an escalated run.** When a human merges an escalated run's PR on GitHub after the run's escalate decision, the run becomes `merged` with `humanMerge: {by, sha}`, its issue is relabelled `factory:merged`, and `F sync` lists it under `humanMerged`. A failed lookup is listed under `humanMergeErrors` and retried on the next sync. Every field comes from `gh`. The factory never merges or re-runs such a run itself, and `F intake` refuses it unless it was reverted. Metrics count it under `humanMerged`, not in the factory's merge rate.
+- **Records a human's merge of an escalated run.** When a human merges an escalated run's PR on GitHub (not from a fork) after the escalation, the run becomes `merged` with `humanMerge: {by, sha}`, its issue is relabelled `factory:merged`, and `F sync` lists it under `humanMerged`. A failed lookup is listed under `humanMergeErrors` and retried on the next sync. Every field comes from `gh`. The factory never merges or re-runs such a run itself, and `F intake` refuses it unless it was reverted. Metrics count it under `humanMerged`, not in the factory's merge rate.
 
-The factory never imports its own `factory/*` branches. A sync only reads GitHub, and repeating it never duplicates a run.
+The factory never imports its own `factory/*` branches. A sync only reads GitHub, except that it relabels the issue of a run a human merged (`factory:merged`). Repeating a sync never duplicates a run.
 
 `F automerge owner/repo off` makes every run in that project escalate instead of merging; `on` restores it.
 
