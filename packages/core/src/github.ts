@@ -93,8 +93,17 @@ export function merge(run) {
   gh('pr', 'ready', r.pr, '-R', repo);
   gh('pr', 'merge', r.pr, '-R', repo, '--squash', '--delete-branch', '--match-head-commit', r.reviewedSha);
   record(run, 'approve', 'merged');
-  try { gh('issue', 'edit', n, '-R', repo, '--remove-label', 'factory:in-progress', '--add-label', 'factory:merged'); } catch { /* label is cosmetic */ }
+  relabelMerged(run);
   return { merged: true, ...d };
+}
+// After a merge the issue gets factory:merged and loses factory:in-progress, through the REST labels endpoint with the body on stdin:
+// `gh issue edit --add-label` fails on current gh (Projects classic), and `-f labels[]=…` has brackets a Windows gh.cmd shim can't pass.
+// Labels are cosmetic: warn, never throw.
+export function relabelMerged(run) {
+  const { repo, n } = parseRun(run);
+  const warn = (e) => console.error(`factory: label update on ${run} failed: ${String(e?.stderr || e?.message || e).trim().split('\n')[0]}`);
+  try { exec(io.gh, ['api', '-X', 'POST', `repos/${repo}/issues/${n}/labels`, '--input', '-'], { encoding: 'utf8', input: JSON.stringify({ labels: ['factory:merged'] }), stdio: ['pipe', 'pipe', 'pipe'] }); } catch (e) { warn(e); }
+  try { gh('api', '-X', 'DELETE', `repos/${repo}/issues/${n}/labels/factory:in-progress`); } catch (e) { if (!/Label does not exist/.test(`${e?.stderr}${e?.stdout}`)) warn(e); } // the only silent 404: it wasn't on the issue
 }
 // Spec approval: a trusted "/factory approve" (or "/factory reject") comment after the run started waiting.
 export function approval(run) {
