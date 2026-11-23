@@ -1,8 +1,9 @@
 import {
-  ArrowUpRightIcon, Badge, Dot, MetricStat, OutcomePill, ReviewMatrix, STAGES, SessionList, SourceChip, StageTrack, Timeline,
+  ArrowUpRightIcon, Badge, Button, Dot, MetricStat, OutcomePill, ReviewMatrix, STAGES, SessionList, SourceChip, StageTrack, Timeline,
   burnText, costText, formatAgo, formatClock, formatDuration, formatMoney, formatTokens, outcomeOf, previewOf, repoOf, shortId, type Run,
 } from '@software-factory/design-system';
-import type { CSSProperties, ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
+import { Cmd } from './Setup.tsx';
 
 const Section = ({ title, children }: { title: string; children: ReactNode }) => (
   <section className="web-sec"><h3 className="sf-label">{title}</h3>{children}</section>
@@ -126,8 +127,27 @@ export function openInClaude(r: Run) {
   return 'claude-cli://open?' + Object.entries({ cwd, q }).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
 }
 
-export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, href = (id) => '#' + encodeURIComponent(id) }:
-  { run: Run; cap: number; costCap: number; now?: number; find?: (id: string) => Run | undefined; href?: (id: string) => string }) {
+// Start the factory on this issue. Under F ui (start given) POST /api/sessions runs it headless; the server picks the folder,
+// builds the prompt, and resumes or refuses an active run. Otherwise: the Claude Code prompt to paste.
+const startable = (r: Run) => !r.imported && !r.archived && /^[\w.-]+\/[\w.-]+#\d+$/.test(r.id) && !['merged', 'closed', 'split', 'awaiting-approval'].includes(outcomeOf(r)); // approving stays human-only
+function Start({ run: r, start }: { run: Run; start?: (id: string) => Promise<string> }) {
+  const [st, setSt] = useState<{ text: string; bad?: boolean; busy?: boolean }>({ text: '' });
+  if (!start) return <Cmd cmd={`/software-factory ${r.id}`} />;
+  const go = async () => {
+    setSt({ text: 'Starting…', busy: true });
+    try { setSt({ text: `Started session ${(await start(r.id)).slice(0, 8)}. It shows here as it runs.` }); }
+    catch (e) { setSt({ text: (e as Error).message, bad: true }); }
+  };
+  return (
+    <div className="web-start">
+      <Button size="sm" disabled={st.busy} title="Runs /software-factory headless in the attached clone" onClick={go}>{st.busy ? 'Starting…' : 'Run factory'}</Button>
+      <p className="web-sk-status" role="status" data-bad={st.bad || undefined}>{st.busy ? '' : st.text}</p>
+    </div>
+  );
+}
+
+export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, href = (id) => '#' + encodeURIComponent(id), start }:
+  { run: Run; cap: number; costCap: number; now?: number; find?: (id: string) => Run | undefined; href?: (id: string) => string; start?: (id: string) => Promise<string> }) {
   const d = formatDuration(r.durationMs ?? Date.parse(r.updated ?? '') - Date.parse(r.started ?? ''));
   const { costUsd, tokens } = spent(r);
   const src = r.burn ? (r.burn.measured ? 'measured' : 'reported') : '';
@@ -168,8 +188,9 @@ export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, h
       <Burn run={r} />
       <Deploys run={r} />
       <Epic run={r} find={find} href={href} />
-      {r.sessions?.length || open ? (
+      {r.sessions?.length || open || startable(r) ? (
         <Section title="Sessions">
+          {startable(r) ? <Start key={r.id} run={r} start={start} /> : null}
           {open ? <p className="web-links"><a href={open} title="Opens a new Claude Code terminal here (prompt pre-filled, not sent). Requires the claude-cli handler: send one message in any interactive claude session first.">Open in Claude</a></p> : null}
           {r.sessions?.length ? <SessionList sessions={r.sessions} now={now} /> : null}
         </Section>
