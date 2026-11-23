@@ -15,6 +15,7 @@ export { Table } from './components/Table.tsx';
 export { Card, type CardProps } from './components/Card.tsx';
 export { EmptyState, type EmptyStateProps } from './components/EmptyState.tsx';
 export { Skeleton } from './components/Skeleton.tsx';
+export { ThemeToggle, applyTheme, readTheme, themeInitScript, THEME_STORAGE_KEY, type ThemeChoice } from './components/ThemeToggle.tsx';
 export { ToastProvider, useToast, type ToastOptions } from './components/Toast.tsx';
 export * from './components/icons.tsx';
 
@@ -26,6 +27,7 @@ export { MetricStat, MetricStrip, type MetricStatProps } from './factory/MetricS
 export { SourceChip, SOURCE_LABEL, sourceLabel } from './factory/SourceChip.tsx';
 export { OutcomePill } from './factory/OutcomePill.tsx';
 export { Timeline } from './factory/Timeline.tsx';
+export { SessionLink, SessionList, SessionsChip, resumeCommand, type AgentSession } from './factory/Sessions.tsx';
 export { CommandMenu, filterCommands, type Command, type CommandMenuProps } from './factory/CommandMenu.tsx';
 
 export { ProjectPicker, type ProjectPickerProps } from './onboarding/ProjectPicker.tsx';

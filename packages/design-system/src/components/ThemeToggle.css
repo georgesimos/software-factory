@@ -1,0 +1,10 @@
+.sf-theme-toggle { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--sf-color-line); border-radius: var(--sf-radius-lg); }
+.sf-theme-opt { position: relative; display: inline-flex; }
+.sf-theme-opt span {
+  display: inline-flex; align-items: center; height: 22px; padding: 0 var(--sf-space-2); border-radius: var(--sf-radius-md);
+  font-size: var(--sf-text-sm); color: var(--sf-color-ink-2); cursor: pointer;
+  transition: color var(--sf-motion-duration-fast), background-color var(--sf-motion-duration-fast);
+}
+.sf-theme-opt span:hover { color: var(--sf-color-ink); }
+.sf-theme-opt input:checked + span { background: var(--sf-color-surface); color: var(--sf-color-ink); box-shadow: 0 0 0 1px var(--sf-color-line-2); }
+.sf-theme-opt input:focus-visible + span { outline: 2px solid var(--sf-color-accent); outline-offset: 1px; }

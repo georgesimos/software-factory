@@ -1,0 +1,56 @@
+# Factory local API
+
+`F ui [port]` serves the dashboard and a JSON API on `127.0.0.1` (`F` is `node ~/.claude/skills/software-factory/factory.mjs`). It prints one URL:
+
+```
+factory ui: http://127.0.0.1:<port>/?t=<token>
+```
+
+The token is random per launch and lives only in that process. Anyone with it can change the factory's settings, so don't share the URL.
+
+Each route calls the same validated function as its CLI command; there is no second code path. No route approves, merges, writes notes, or loosens rules, trust or the merge gate.
+
+## Auth
+
+Every `/api/*` request needs:
+
+| Check | Reads (`GET`) | Writes (`POST`) |
+|---|---|---|
+| `Host` is `127.0.0.1:<port>` or `localhost:<port>` | required | required |
+| `x-factory-token: <token>` | required | required |
+| `Origin` is `http://127.0.0.1:<port>` or `http://localhost:<port>` | a foreign one is refused; a missing one is accepted, since browsers omit it on same-origin GETs | required |
+| `Content-Type: application/json`, body a JSON object | – | required |
+
+Errors are JSON `{"error": "…"}`: `403` for Host, token or Origin, `415` for the content type, `400` for invalid input, `404` for an unknown route.
+
+```bash
+T=<token>; P=<port>
+curl -s -H "x-factory-token: $T" http://127.0.0.1:$P/api/runs
+curl -s -X POST -H "x-factory-token: $T" -H "Origin: http://127.0.0.1:$P" -H 'Content-Type: application/json' \
+  -d '{"repo":"acme/app","on":false}' http://127.0.0.1:$P/api/onboard/automerge
+```
+
+## Reads
+
+| Route | Returns | Errors | CLI |
+|---|---|---|---|
+| `GET /api/runs` | `{"runs": [run…]}`: the run list `dashboard.html` embeds (live and archived runs, newest first, with linked sessions and worktree path) | – | nearest: `F state <run>` per run |
+| `GET /api/runs/:owner/:repo/:n` | `{"run": run}` for `owner/repo#n` | `400` malformed owner, repo or number; `404` no such run | nearest: `F state owner/repo#n` (without archived runs, sessions or worktree) |
+
+Neither returns the `F ui` token.
+
+## Writes
+
+Every write is also served at its original path without `/api` (for example `POST /skills`), which the dashboard uses.
+
+| Route | Body | Returns | CLI |
+|---|---|---|---|
+| `POST /api/skills` | `{"scope": "owner/repo"\|"default", "step": "<step>", "runner": {…}\|null}` (`null` unsets) | the Skills sheet data | `F skills set\|unset` |
+| `POST /api/idea` | `{"repo": "owner/repo", "idea": "…", "stack": "<id>"}` | `{"run", "next"}`; records the idea only | `F new "<idea>" --name owner/repo --stack <id>` |
+| `POST /api/onboard` | `{}` | setup state (harnesses, logins, repos, runners, rules); reads only | `F onboard --json` |
+| `POST /api/onboard/sync` | `{"repo": "owner/repo", "path": "<absolute clone path>"}` | onboarding config | `F sync owner/repo <path>` |
+| `POST /api/onboard/ship` | `{"scope": "owner/repo"\|"default", "ship": ["web","mobile","database"]}` | onboarding config | `F onboard ship <scope> <kinds>` |
+| `POST /api/onboard/rule` | `{"scope", "key", "value", "reason", "until"?}` or `{"scope", "key", "unset": true, "reason"?}` | onboarding config | `F rules set\|unset` |
+| `POST /api/onboard/automerge` | `{"repo": "owner/repo", "on": true\|false}` | onboarding config | `F automerge owner/repo on\|off` |
+
+`/api/onboard` is a `POST` although it only reads, because it checks logins by running local CLIs.

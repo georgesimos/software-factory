@@ -3,6 +3,7 @@ import { Badge } from '../components/Badge.tsx';
 import { Dot } from '../components/Dot.tsx';
 import { cx } from '../components/cx.ts';
 import { OutcomePill } from './OutcomePill.tsx';
+import { SessionsChip } from './Sessions.tsx';
 import { SourceChip } from './SourceChip.tsx';
 import { formatAgo, formatClock, isDone, outcomeOf, repoOf, reviewFailed, runTone, shortId, stageOf, type Run } from './model.ts';
 
@@ -49,23 +50,24 @@ export function RunCard({ run: r, href, onSelect, selected, showRepo, cap = 3, n
       {!r.imported && iteration > 0 ? <IterDots n={iteration} cap={cap} capped={iteration >= cap && o !== 'merged'} /> : null}
       {!done && stageOf(r) === 'review' ? <AxesBar run={r} /> : null}
       {!done && r.loopbacks?.length ? <span className="sf-loops" title="Loop-backs">↺{r.loopbacks.length}</span> : null}
-      {r.imported ? <SourceChip source={r.source ?? 'none'} prefix="Tracked" /> : null}
+      {r.imported ? <SourceChip source={r.source ?? 'none'} title="Tracked: imported, not driven by the factory" /> : null}
+      {r.sessions?.length ? <SessionsChip sessions={r.sessions} /> : null}
       {r.children?.length ? <Badge quiet>{r.children.length} runs</Badge> : null}
       {r.archived ? <Badge quiet>Archived</Badge> : null}
     </>
   );
   const body = (
     <>
-      <div className="sf-rc-top">
+      <span className="sf-rc-top">
         <Dot tone={tone} live={live} />
         <span className="sf-rc-id" title={r.id}>
           {showRepo ? <span className="sf-rc-repo">{shortId(repo)}</span> : null}
           <span className="sf-rc-num">{r.id.slice(repo.length)}</span>
         </span>
         {r.updated ? <time dateTime={r.updated} title={formatClock(r.updated, now)}>{formatAgo(r.updated, now)}</time> : null}
-      </div>
-      <div className="sf-rc-title">{r.title || r.branch || shortId(r.id)}</div>
-      <div className="sf-rc-foot">{foot}</div>
+      </span>
+      <span className="sf-rc-title">{r.title || r.branch || shortId(r.id)}</span>
+      <span className="sf-rc-foot">{foot}</span>
     </>
   );
   const props = {

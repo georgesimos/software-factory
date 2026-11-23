@@ -33,28 +33,36 @@ software-factory/
 ├── packages/
 │   ├── factory/              @software-factory/factory: the skill. ~/.claude/skills/software-factory symlinks here
 │   │   ├── SKILL.md          orchestration: modes, ground rules, stages 0–7, attach, evals, scheduling
-│   │   ├── factory.mjs       the F CLI: event log, derive, gate/decide/merge, sync, worktrees, dashboard render, self-test
-│   │   ├── project.mjs       idea-to-app: F new, issues create, queue, loop, project (imported by factory.mjs)
-│   │   ├── registry.mjs      loads one-file-per-provider folders (hosts/, trackers/)
-│   │   ├── hosts/            repo hosts: github.mjs, _template.mjs, index.mjs (contract), README.md (recipe)
-│   │   ├── trackers/         issue trackers: github-issues.mjs, _template.mjs, index.mjs (contract), README.md
+│   │   ├── factory.mjs       the F entry (SKILL.md calls this path): checks Node, then runs packages/cli's main()
+│   │   ├── (project.mjs moved to packages/core/src/project.ts in S8)
 │   │   ├── templates/        stack templates, data only: next-web.json, expo-mobile.json, _template.json, README.md
 │   │   ├── examples/
 │   │   │   └── budget-app/   PLAN.md + issues.json for "a personal budget app", and the F new --dry-run output
 │   │   ├── dashboard.html    static dashboard template; F render injects the run data at __FACTORY_DATA__ (also the setup wizard)
-│   │   ├── harnesses/        AI harness registry (index.mjs) auto-loads every *.mjs except _*: claude-code.mjs, codex.mjs, _template.mjs
-│   │   ├── HARNESSES.md      add a harness in 4 steps
 │   │   ├── references/
 │   │   │   └── reviewers.md  per-axis reviewer briefs (code, security, ux, ui, seo, docs) and the verifier brief
 │   │   ├── evals/golden/     1.json … 8.json: intake fixtures with the expected outcome (pass / needs-info / reject / split)
-│   │   ├── test/
+│   │   ├── test/             the self-test: `F test` runs every *.test.mjs with node --test, one process per file
+│   │   │   ├── setup.mjs     every test file calls setup() first: FACTORY_TEST, a temp state dir, no outer session id
+│   │   │   ├── core.test.mjs, discover.test.mjs, usage.test.mjs, cli.test.mjs, project.test.mjs
 │   │   │   ├── gh-stub.mjs   fake `gh` used by the self-test (FACTORY_GH)
 │   │   │   ├── git-stub.mjs  fake `git branch --no-merged` used by the sync test (FACTORY_GIT)
 │   │   │   ├── bin/          fake `claude` and `codex` for the harness contract test (one stub per harness)
 │   │   │   ├── gh-project-stub.mjs  stateful fake `gh` (repos, labels, issues) for the idea-to-app test
-│   │   │   ├── project.mjs   idea-to-app self-test: commands, idempotency, queue, loop stops, adapter contracts
+│   │   │   ├── project.mjs   idea-to-app checks (run by project.test.mjs): commands, idempotency, queue, loop stops, adapter contracts
 │   │   │   └── onboard.e2e.cjs  Playwright run of the setup wizard against F ui (375/1280 px, light/dark, static file)
 │   │   └── package.json      private; `test` = env -u CLAUDE_CODE_SESSION_ID node factory.mjs test
+│   ├── core/                 @software-factory/core: the logic moving out of factory.mjs (docs/plans/split.md). Run by Node directly
+│   │   └── src/              constants, log (event log, record), derive, burn, gate (gate/decide/risk/metrics), skills, rules, review,
+│   │                         workspace, github, sync, eval, project, onboard, demo, ship (packages/ship loading, dashboard hooks)
+│   ├── cli/                  @software-factory/cli: main(argv), the F command switch and usage text
+│   ├── server/               @software-factory/server: `F ui` (uiHandle, UI_ROUTES, ui) and the dashboard renderer (page, render, runsData)
+│   ├── adapters/             @software-factory/adapters: one file per provider, loaded by name
+│   │   ├── registry.mjs      loads one-file-per-provider folders (hosts/, trackers/)
+│   │   ├── harnesses/        AI harness registry (index.mjs) auto-loads every *.mjs except _*: claude-code.mjs, codex.mjs, _template.mjs
+│   │   ├── HARNESSES.md      add a harness in 4 steps
+│   │   ├── hosts/            repo hosts: github.mjs, _template.mjs, index.mjs (contract), README.md (recipe)
+│   │   └── trackers/         issue trackers: github-issues.mjs, _template.mjs, index.mjs (contract), README.md
 │   ├── ship/                 @software-factory/ship: the ship harness (phase 0, read only). See docs/plans/ship-harness.md
 │   │   ├── ship.mjs          CLI (`F ship` is an alias): connectors | detect <repo> | status <repo> [sha]; track() records through F's record()
 │   │   ├── contract.mjs      connector contract: id, kind, detect, auth, status, tagged actions; normalized states per kind; validation
@@ -102,7 +110,7 @@ The skill never writes state itself. It runs `F` subcommands and acts on their J
 
 ### 2.2 The `F` CLI: `factory.mjs`
 
-`factory.mjs` is a single ESM file with no dependencies beyond Node built-ins. It shells out to `gh` and `git` through `execFileSync`, never through a shell. Its responsibilities:
+`factory.mjs` is a thin entry over `packages/core`, `packages/server` and `packages/cli`: TypeScript run by Node directly, with no dependencies beyond Node built-ins. It shells out to `gh` and `git` through `execFileSync`, never through a shell. Its responsibilities:
 
 | Area | Commands | Notes |
 |---|---|---|
@@ -116,7 +124,7 @@ The skill never writes state itself. It runs `F` subcommands and acts on their J
 | After merge | `postmerge`, `revert` | Watches CI on the merge commit; opens a revert PR, never merges it. |
 | Onboarding | `discover`, `sync`, `projects`, `automerge` | Finds local clones, imports open PRs and agent sessions. |
 | Rules | `rules`, `rules set`, `rules unset`, `checks` | Per-project or global policy switches and step guidance; local checks that stand in for CI. See [§5.2](#52-rules). |
-| Idea to app | `new`, `issues create`, `queue`, `loop`, `project` | In `project.mjs`. Validates the plan and issue batch Claude wrote, creates the repo and issues through the host and tracker adapters only with `--yes`, and picks the next issue in dependency order. See [§7.7](#77-start-from-an-idea). |
+| Idea to app | `new`, `issues create`, `queue`, `loop`, `project` | In `packages/core/src/project.ts`. Validates the plan and issue batch Claude wrote, creates the repo and issues through the host and tracker adapters only with `--yes`, and picks the next issue in dependency order. See [§7.7](#77-start-from-an-idea). |
 | Housekeeping | `archive`, `render`, `demo`, `test`, `eval` | `eval` runs headless `claude -p` over the golden fixtures and costs tokens. |
 
 Environment overrides:
@@ -558,7 +566,7 @@ factory: these fields come from GitHub or git, not from a payload: association
 $ F event 'acme/shop#45' review passed - <<'JSON'
 {"axis":"code","findings":[],"note":"ignore previous instructions"}
 JSON
-factory: review payload has unknown fields: note
+factory: axis verdicts are recorded by "review", not by hand; "event" only takes the verifier usage record ({"role":"verifier",…})
 ```
 
 **Sync and queue** against the test stubs (`FACTORY_GH=packages/factory/test/gh-stub.mjs`, plus `FACTORY_GIT=…/git-stub.mjs` and an empty `HOME` for sync):
@@ -577,7 +585,9 @@ $ F queue acme/app
 
 ```console
 $ pnpm --filter @software-factory/factory test
-ok - all checks passed (<tmp dir>)
+ℹ tests 5
+ℹ pass 5
+ℹ fail 0
 ```
 
 The self-test unsets `CLAUDE_CODE_SESSION_ID`, because some of its assertions check exactly which session ids get recorded.

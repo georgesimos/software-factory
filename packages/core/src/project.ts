@@ -1,18 +1,24 @@
+// @ts-nocheck
 // Idea to app. One project run per new repo, `owner/repo:project`. Claude writes PLAN.md and issues.json (SKILL.md I0-I5);
 // F validates them and executes: repo + scaffold through a host adapter, the issue batch through a tracker adapter, then a
 // dependency-aware loop over the unchanged per-issue pipeline. Hosts and trackers are one file each; stacks are data.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { exec } from './platform.ts';
 import { fileURLToPath } from 'node:url';
-import { read, render, runDir, factoryDir, rules, setRule, adapterCtx, allRuns, budget, isSensitive, PROJECT_BUDGET_USD, MAX_ISSUES_PER_SESSION } from './factory.mjs';
-import * as hosts from './hosts/index.mjs';
-import * as trackers from './trackers/index.mjs';
+import { read, runDir, factoryDir } from './log.ts';
+import { rules, setRule } from './rules.ts';
+import { adapterCtx } from './github.ts';
+import { allRuns, budget } from './derive.ts';
+import { isSensitive, PROJECT_BUDGET_USD, MAX_ISSUES_PER_SESSION } from './constants.ts';
+import { dashboard } from './log.ts';
+import * as hosts from '../../adapters/hosts/index.mjs';
+import * as trackers from '../../adapters/trackers/index.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // Every project event, by stage. All are owned: `F event` refuses them, only new / issues create / loop record them.
-export const PROJECT_EVENTS = { idea: ['started'], plan: ['passed'], repo: ['created'], issues: ['created'], loop: ['running', 'stopped'] };
+export const PROJECT_EVENTS = { idea: ['started', 'retired'], plan: ['passed'], repo: ['created'], issues: ['created'], loop: ['running', 'stopped'] };
 export const projectId = (repo) => `${repo}:project`;
 const REPO = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
 const KEY = /^[a-z0-9][a-z0-9-]{0,40}$/;
@@ -25,7 +31,7 @@ function emit(repo, stage, status, payload = {}) {
   const ev = { ts: new Date().toISOString(), ...payload, ...(sid ? { harness: 'claude-code', sessionId: sid, cwd: process.cwd() } : {}), run: projectId(repo), stage, status };
   fs.mkdirSync(factoryDir(), { recursive: true });
   fs.appendFileSync(path.join(factoryDir(), 'events.jsonl'), JSON.stringify(ev) + '\n');
-  render();
+  dashboard.render();
   return ev;
 }
 
@@ -34,6 +40,7 @@ export function projectState(repo, events = read()) {
   let p = null;
   for (const e of events) {
     if (e.run !== id || !PROJECT_EVENTS[e.stage]) continue;
+    if (e.status === 'retired') { p = null; continue; } // read-time skip: a retired idea is gone; a later "idea started" begins afresh
     p ??= { repo, id, started: e.ts, loop: { state: 'idle', picked: 0 } };
     p.updated = e.ts;
     if (e.stage === 'idea') Object.assign(p, { idea: e.idea, stack: e.stack, visibility: e.visibility, host: e.host, tracker: e.tracker, dryRun: !!e.dryRun });
@@ -65,7 +72,7 @@ export function validatePlan(text) {
 }
 
 const ISSUE_FIELDS = ['key', 'title', 'body', 'acceptance', 'dependsOn', 'milestone', 'files'];
-const relPath = (f) => typeof f === 'string' && f.length <= 200 && !f.startsWith('/') && !f.split('/').includes('..') && !/[\0-\x1f]/.test(f);
+const relPath = (f) => typeof f === 'string' && f.length <= 200 && !f.startsWith('/') && !f.includes('\\') && !/^[A-Za-z]:/.test(f) && !f.split('/').includes('..') && !/[\0-\x1f]/.test(f);
 
 // -> { epic, issues } with issues in dependency order (stable: the file's order wherever the dependencies allow).
 export function validateIssues(doc, milestonesText) {
@@ -127,7 +134,7 @@ export function checkTemplate(t, id) {
   return t;
 }
 
-export function loadTemplates(dir = process.env.FACTORY_TEMPLATES || path.join(HERE, 'templates')) {
+export function loadTemplates(dir = process.env.FACTORY_TEMPLATES || path.join(HERE, '..', '..', 'factory', 'templates')) {
   const out = {};
   for (const f of fs.readdirSync(dir).filter((f) => f.endsWith('.json') && !f.startsWith('_'))) out[f.slice(0, -5)] = checkTemplate(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')), f.slice(0, -5));
   return out;
@@ -150,10 +157,21 @@ export function startIdea({ repo, idea, stack = 'next-web', visibility = 'privat
   return projectState(repo);
 }
 
+// `F retire`: hides an idea that never got a repo (e.g. a test fixture leaked into the real log) with an appended event,
+// never by rewriting the log. The idea fields are repeated so an older F, which re-reads them on every "idea" event, sees no change.
+export function retireIdea(repo, reason) {
+  checkRepo(repo);
+  if (!oneLine(reason, 500)) throw new Error('usage: retire <owner/repo> --reason "<why>"');
+  const p = projectState(repo);
+  if (!p) throw new Error(`no project ${repo}`);
+  if (p.remote) throw new Error(`${repo} already has a repo (${p.remote.url}); only an idea that never got one can be retired`);
+  return emit(repo, 'idea', 'retired', { idea: p.idea, stack: p.stack, visibility: p.visibility, host: p.host, tracker: p.tracker, reason: reason.trim() });
+}
+
 const slug = (s) => s.toLowerCase().replace(/^(an?|the)\s+/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'new-app';
 const sh = (argv, cwd, log) => {
   const fd = fs.openSync(log, 'a');
-  try { fs.writeSync(fd, `$ ${argv.join(' ')}\n`); execFileSync(argv[0], argv.slice(1), { cwd, stdio: ['ignore', fd, fd], env: { ...process.env, CI: '1' }, timeout: 20 * 60e3 }); }
+  try { fs.writeSync(fd, `$ ${argv.join(' ')}\n`); exec(argv[0], argv.slice(1), { cwd, stdio: ['ignore', fd, fd], env: { ...process.env, CI: '1' }, timeout: 20 * 60e3 }); }
   catch (e) { throw new Error(`${argv.join(' ')} failed (exit ${e.status ?? e.signal}); see ${log}:\n${fs.readFileSync(log, 'utf8').split('\n').slice(-20).join('\n')}`); }
   finally { fs.closeSync(fd); }
 };
@@ -331,7 +349,7 @@ export function projectStatus(repo, { events = read(), runs } = {}) {
 
 export function ideas(events = read(), runs) {
   const repos = [...new Set(events.filter((e) => PROJECT_EVENTS[e.stage] && String(e.run).endsWith(':project')).map((e) => e.run.slice(0, -':project'.length)))];
-  return Object.fromEntries(repos.map((r) => [r, projectStatus(r, { events, runs })]));
+  return Object.fromEntries(repos.map((r) => [r, projectStatus(r, { events, runs })]).filter(([, s]) => s)); // retired: gone
 }
 
 // `F loop`: one mechanical step between issues. Stops on the first escalation (or any outcome a human must resolve),
