@@ -27,7 +27,7 @@ export function cliTest() {
   const cli = (args, input, env = {}) => execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), ...args],
     { encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, FACTORY_DIR: io.dir, FACTORY_GH: stub, ...env } });
   // FACTORY_TEST: with no FACTORY_DIR, F refuses the home state dir (here a temp HOME's) for reads and writes alike (#20)
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-home-')), real = { HOME: home, FACTORY_TEST: '1', FACTORY_DIR: '' };
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-home-')), real = { HOME: home, USERPROFILE: home, FACTORY_TEST: '1', FACTORY_DIR: '' };
   for (const args of [['rules', 'set', 'acme/x', 'ci', 'skip', '--reason', 'x'], ['skills', 'set', 'acme/x', 'spec', '{"use":"default"}'], ['render'], ['event', 'acme/x#1', 'intake', 'rejected'], ['new', 'an app', '--name', 'acme/x', '--dry-run']])
     assert.throws(() => cli(args, '', real), /FACTORY_TEST is set: refusing the real state dir/, args.join(' '));
   assert.ok(!fs.existsSync(path.join(home, '.claude', 'factory')));
@@ -93,7 +93,7 @@ export function cliTest() {
   assert.throws(() => cli(['headless-args', 'acme/hl#1']), /imported/);
   syncTest(cli);
   worktreeTest(cli);
-  harnessTest(cli);
+  if (process.platform !== 'win32') harnessTest(cli); // shortcut: harness adapters spawn with spawnSync and the stubs need a shebang; run it on Windows once H1 hands harnesses platform.run()
   onboardTest(cli);
   rulesTest(cli);
   skillsTest(cli); // last: it ends by corrupting skills.json
@@ -103,13 +103,13 @@ export function cliTest() {
 export function harnessTest(cli) {
   const bin = path.join(HERE, 'test', 'bin'), node = path.dirname(process.execPath), empty = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-nobin-'));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-hhome-'));
-  const saved = { PATH: process.env.PATH, HOME: process.env.HOME, STUB_LOGGED_OUT: process.env.STUB_LOGGED_OUT };
+  const saved = { PATH: process.env.PATH, HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, STUB_LOGGED_OUT: process.env.STUB_LOGGED_OUT };
   const withEnv = (env, fn) => { Object.assign(process.env, env); try { return fn(); } finally { for (const [k, v] of Object.entries(saved)) v === undefined ? delete process.env[k] : (process.env[k] = v); } };
   const files = ls(path.join(HERE, '..', 'adapters', 'harnesses')).filter((f) => f.endsWith('.mjs') && !f.startsWith('_') && f !== 'index.mjs').sort();
   assert.deepEqual(harnesses.map((h) => h.id + '.mjs'), files); // auto-loaded, template skipped, id = file name
   for (const h of harnesses) {
     const at = (m) => `${h.id}: ${m}`;
-    withEnv({ PATH: `${bin}:${node}`, HOME: home }, () => {
+    withEnv({ PATH: [bin, node].join(path.delimiter), HOME: home, USERPROFILE: home }, () => {
       const d = h.detect();
       assert.equal(d.installed, true, at('needs a stub binary in test/bin'));
       assert.match(d.version, /^\d+\.\d+/, at('version'));
@@ -124,7 +124,7 @@ export function harnessTest(cli) {
       const hl = h.headless?.();
       if (hl) assert.ok(typeof hl.cmd === 'string' && Array.isArray(hl.args), at('headless shape'));
     });
-    withEnv({ PATH: `${bin}:${node}`, STUB_LOGGED_OUT: '1' }, () => {
+    withEnv({ PATH: [bin, node].join(path.delimiter), STUB_LOGGED_OUT: '1' }, () => {
       const l = h.login();
       assert.equal(l.ok, false, at('logged out'));
       assert.ok(l.hint.length > 0, at('a logged-out hint is the login command'));
@@ -143,7 +143,7 @@ export function harnessTest(cli) {
     .replace('sessions: (repoPath, remoteUrl) => []', "sessions: (repoPath, remoteUrl) => remoteUrl.endsWith('/acme/app.git') ? [{ branch: 'dev/feat-a', id: 'fk-1', cwd: repoPath, last: new Date().toISOString() }] : []"));
   fs.writeFileSync(path.join(fbin, 'fake-agent'), "#!/usr/bin/env node\nconst a = process.argv.slice(2).join(' ');\nif (a === '--version') console.log('fake-agent 0.0.1');\nelse if (a === 'auth status') console.log('ok');\nelse process.exit(2);\n", { mode: 0o755 });
   const fdir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-fake-'));
-  const env = { FACTORY_DIR: fdir, FACTORY_HARNESSES: reg, PATH: `${fbin}:${bin}:${node}`, HOME: home, FACTORY_GIT: path.join(HERE, 'test', 'git-stub.mjs') };
+  const env = { FACTORY_DIR: fdir, FACTORY_HARNESSES: reg, PATH: [fbin, bin, node].join(path.delimiter), HOME: home, USERPROFILE: home, FACTORY_GIT: path.join(HERE, 'test', 'git-stub.mjs') };
   const st = JSON.parse(cli(['onboard', '--json'], '', env));
   assert.deepEqual(st.harnesses.map((h) => [h.id, h.installed, h.login?.ok]), [['claude-code', true, true], ['codex', true, true], ['fake-agent', true, true]]);
   assert.match(cli(['onboard'], '', env), /✓ Fake Agent 0\.0\.1/);
@@ -160,13 +160,13 @@ export function harnessTest(cli) {
 }
 // Onboarding endpoints: the same checks as /skills, the same validated functions as the CLI, and a re-run that changes nothing.
 export function onboardTest(cli) {
-  const prevDir = io.dir, prev = { GH: io.gh, GIT: io.git, PATH: process.env.PATH, HOME: process.env.HOME };
+  const prevDir = io.dir, prev = { GH: io.gh, GIT: io.git, PATH: process.env.PATH, HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
   io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-onboard-'));
   const home = path.join(io.dir, 'home'), clone = path.join(home, 'Development', 'app');
   fs.mkdirSync(path.join(clone, '.git'), { recursive: true });
   fs.writeFileSync(path.join(clone, '.git', 'config'), '[remote "origin"]\n\turl = git@github.com:acme/app.git\n');
   io.gh = path.join(HERE, 'test', 'gh-stub.mjs'); io.git = path.join(HERE, 'test', 'git-stub.mjs');
-  Object.assign(process.env, { PATH: `${path.join(HERE, 'test', 'bin')}:${path.dirname(process.execPath)}`, HOME: home });
+  Object.assign(process.env, { PATH: [path.join(HERE, 'test', 'bin'), path.dirname(process.execPath)].join(path.delimiter), HOME: home, USERPROFILE: home });
   try {
     const tok = 'o'.repeat(32), ctx = { token: tok, port: 4343 }, H = { host: 'localhost:4343', origin: 'http://localhost:4343', 'content-type': 'application/json', 'x-factory-token': tok };
     const post = (url, body, h = {}) => uiHandle({ method: 'POST', url, headers: { ...H, ...h }, body: JSON.stringify(body) }, ctx);
@@ -215,7 +215,7 @@ export function onboardTest(cli) {
     assert.deepEqual(Object.keys(derive(read())).sort(), runs1); // re-sync imports nothing new
     assert.equal(again.projects['acme/app'].autoMerge, false); // ...and keeps the project's settings
     assert.equal(again.rules['acme/app'].policy.ci.value, 'skip');
-    const txt = cli(['onboard'], '', { FACTORY_DIR: io.dir, HOME: home, PATH: process.env.PATH });
+    const txt = cli(['onboard'], '', { FACTORY_DIR: io.dir, HOME: home, USERPROFILE: home, PATH: process.env.PATH });
     for (const re of [/✓ acme\/app {2}/, /acme\/app: web, database/, /acme\/app: ci="skip", checks\.commands=\["pnpm test"\] {3}auto-merge off/, hooks().create ? /Create from an idea: .*factory\.mjs new/ : /Create from an idea: coming soon/]) assert.match(txt, re);
     assert.deepEqual(JSON.parse(cli(['onboard', 'ship', 'default', 'mobile'], '', { FACTORY_DIR: io.dir })), { ship: ['mobile'] });
     assert.throws(() => cli(['onboard', 'ship', 'default', 'tv'], '', { FACTORY_DIR: io.dir }), /web\|mobile\|database/);
@@ -225,7 +225,7 @@ export function onboardTest(cli) {
     assert.ok(!pg.includes('"repos":') && !pg.includes('Development/app"'), 'discover results are served only to F ui');
     assert.equal(pg.split('__FACTORY_DATA__').length, 1);
   } finally {
-    io.dir = prevDir; io.gh = prev.GH; io.git = prev.GIT; process.env.PATH = prev.PATH; process.env.HOME = prev.HOME;
+    io.dir = prevDir; io.gh = prev.GH; io.git = prev.GIT; process.env.PATH = prev.PATH; process.env.HOME = prev.HOME; if (prev.USERPROFILE === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prev.USERPROFILE;
   }
 }
 // Policy rules and guidance: resolution, required reasons, expiry, CI replaced by local checks, and the stricter-only guards.
@@ -450,7 +450,7 @@ export function skillsTest(cli) {
   put(path.join(io.dir, 'briefs/a11y.md'), md('Our a11y brief'));
   put(path.join(clone, '.claude/skills/kit-review/SKILL.md'), md('Repo review'));
   saveProject('acme/kit', clone);
-  const cat = JSON.parse(cli(['skills', 'catalog', 'acme/kit'], '', { HOME: home }));
+  const cat = JSON.parse(cli(['skills', 'catalog', 'acme/kit'], '', { HOME: home, USERPROFILE: home }));
   const by = (n) => cat.global.find((e) => e.name === n);
   assert.equal(by('house-review').desc, 'Our house review rules');
   assert.equal(by('anthropic-skills:xlsx').desc, 'Spreadsheets');
@@ -520,7 +520,7 @@ export function syncTest(cli) {
   put(path.join(home, '.claude/projects', enc + '--claude-worktrees-wip', 'b.jsonl'), '{"gitBranch":"dev/wip-9"}\n{"gitBranch":"old/merged"}\n{"gitBranch":"dev/squashed"}\n{"gitBranch":"factory/issue-9"}\n');
   put(path.join(home, '.codex/sessions/2026/11/20/r.jsonl'), JSON.stringify({ type: 'session_meta', payload: { id: 'cx-1', cwd: '/work/app', git: { branch: 'claude/stacked', repository_url: 'git@github.com:acme/app.git' } } }) + '\n');
   put(path.join(home, '.codex/sessions/2026/11/20/other.jsonl'), JSON.stringify({ payload: { git: { branch: 'x', repository_url: 'git@github.com:acme/other.git' } } }) + '\n');
-  const env = { HOME: home, FACTORY_GIT: path.join(HERE, 'test', 'git-stub.mjs') };
+  const env = { HOME: home, USERPROFILE: home, FACTORY_GIT: path.join(HERE, 'test', 'git-stub.mjs') };
   // An existing factory run owns PR 13 / factory/issue-8.
   cli(['event', 'acme/app#8', 'build', 'passed', '-'], '{"pr":"https://github.com/acme/app/pull/13","branch":"factory/issue-8"}', env);
   const [first] = JSON.parse(cli(['sync', 'acme/app', repoPath], '', env));

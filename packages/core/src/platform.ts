@@ -26,6 +26,7 @@ function findOnPath(cmd: string, env: Env, isFile: (p: string) => boolean, skip?
 
 // The file and argv to hand to execFile/spawn for `cmd args` on this platform.
 export function command(cmd: string, args: string[] = [], { platform = process.platform, env = process.env, isFile = isFileSync }: Resolve = {}): Command {
+  if (/\.[cm]?js$/i.test(cmd)) return { file: process.execPath, args: [cmd, ...args] }; // a script override (FACTORY_GH=stub.mjs) runs under this node: no shebang on Windows
   if (platform !== 'win32') return { file: cmd, args };
   const file = findOnPath(cmd, env, isFile);
   if (!file) return { file: cmd, args }; // not found: let the spawn fail with ENOENT, as on POSIX ("not installed")
