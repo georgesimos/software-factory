@@ -1,13 +1,18 @@
 // Template for a new AI harness. Copy to harnesses/<id>.mjs (the id must equal the file name), fill in, and add
 // test/bin/<binary> as its stub. Skipped by the registry because the name starts with "_". See HARNESSES.md.
-// Import only node: builtins and core/src/platform.ts, never factory.mjs. detect() and login() must never throw.
-import { run as spawnRun } from '../../core/src/platform.ts';
+// Import only node: builtins, never factory.mjs. detect() and login() must never throw.
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const BIN = 'my-agent';
-// Both streams: some CLIs print status to stderr. No shell, argv only, bounded by a timeout. platform.run() finds BIN on
-// PATH only (on Windows, never in the current folder) and runs a .cmd shim safely.
+// On Windows only an .exe found on PATH: a bare name would be looked up in the current folder (maybe an untrusted clone)
+// first. Bare spawns only ever found .com/.exe there, so nothing else is lost. Not found: reported as not installed.
+const which = (name) => process.platform !== 'win32' ? name : (process.env.PATH || '').split(';').map((d) => d && path.win32.join(d, `${name}.exe`)).find((f) => f && fs.existsSync(f));
+// Both streams: some CLIs print status to stderr. No shell, argv only, bounded by a timeout.
 const run = (args) => {
-  const r = spawnRun(BIN, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000 });
+  const file = which(BIN);
+  const r = file ? spawnSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000 }) : { error: true };
   return { code: r.error ? -1 : r.status ?? -1, out: `${r.stdout || ''}${r.stderr || ''}` };
 };
 

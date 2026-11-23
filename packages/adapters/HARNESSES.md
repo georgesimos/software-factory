@@ -5,8 +5,8 @@ loads every `harnesses/*.mjs` by itself. The runner validation, the Skills catal
 stamp, the sensitive paths, `F onboard` and the setup wizard all read it, so nothing else in the repo changes.
 
 1. **Copy the template.** `cp harnesses/_template.mjs harnesses/<id>.mjs`. The `id` must equal the file name. Files starting
-   with `_` are never loaded. Import only `node:` builtins and `core/src/platform.ts`, never `factory.mjs`. Spawn the CLI through platform.ts `run()`: on Windows a bare name would be looked up in the current folder first.
-2. **Fill in the contract.** Run the CLI only through platform.ts `run()` with an argv array and a timeout, and read both streams,
+   with `_` are never loaded. Import only `node:` builtins, never `factory.mjs`.
+2. **Fill in the contract.** Run the CLI only through `spawnSync` with an argv array and a timeout, on Windows only from the template's `which()` (an `.exe` on PATH, never a bare name that Windows looks up in the current folder first), and read both streams,
    since some CLIs print status to stderr. `detect()` and `login()` must never throw.
 
    | field | required | what it is |

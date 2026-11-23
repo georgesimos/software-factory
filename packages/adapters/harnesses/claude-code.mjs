@@ -2,12 +2,15 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { run as spawnRun } from '../../core/src/platform.ts';
+import { spawnSync } from 'node:child_process';
 
-// Both streams: some CLIs print status to stderr. No shell, argv only, bounded by a timeout. Through platform.run(), which on
-// Windows finds claude on PATH only, never in the current folder, and runs a .cmd shim safely.
+// On Windows only an .exe found on PATH: a bare name would be looked up in the current folder (maybe an untrusted clone)
+// first. Bare spawns only ever found .com/.exe there, so nothing else is lost. Not found: reported as not installed.
+const which = (name) => process.platform !== 'win32' ? name : (process.env.PATH || '').split(';').map((d) => d && path.win32.join(d, `${name}.exe`)).find((f) => f && fs.existsSync(f));
+// Both streams: some CLIs print status to stderr. No shell, argv only, bounded by a timeout.
 const run = (args) => {
-  const r = spawnRun('claude', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000 });
+  const file = which('claude');
+  const r = file ? spawnSync(file, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000 }) : { error: true };
   return { code: r.error ? -1 : r.status ?? -1, out: `${r.stdout || ''}${r.stderr || ''}` };
 };
 const ls = (d) => { try { return fs.readdirSync(d); } catch { return []; } };

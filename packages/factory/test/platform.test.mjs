@@ -37,11 +37,11 @@ test('Windows: not found on PATH throws ENOENT "not installed", never hands spaw
   assert.equal(run('factory-no-such-binary', ['--version'], {}).error.code, 'ENOENT'); // on this OS too, a missing binary is r.error
 });
 
-test('the claude and codex harnesses spawn through platform.run(), never by bare name', () => {
+test('the claude and codex harnesses never spawn a bare name: on Windows only an .exe found on PATH', () => {
   for (const f of ['claude-code', 'codex', '_template']) {
     const src = fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'adapters', 'harnesses', `${f}.mjs`), 'utf8');
-    assert.match(src, /import \{ run as spawnRun \} from '\.\.\/\.\.\/core\/src\/platform\.ts';/, f);
-    assert.doesNotMatch(src, /\bspawnSync\(|\bspawn\(|execFile/, f);
+    assert.match(src, /const which = \(name\) => process\.platform !== 'win32' \? name : .*`\$\{name\}\.exe`/, f);
+    assert.doesNotMatch(src, /spawnSync\(\s*['"`A-Z]/, f); // only spawnSync(file, …) from which()
   }
 });
 
