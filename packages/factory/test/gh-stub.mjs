@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
+import { command } from '../../core/src/platform.ts';
 // Fake `gh` for factory.mjs self-tests. Answers only the calls the factory makes.
 const args = process.argv.slice(2);
 const a = args.join(' ');
@@ -24,7 +26,15 @@ else if (args[0] === 'run' && args[1] === 'list') out([{ status: 'completed', co
 else if (args[0] === 'pr' && args[1] === 'create') out('https://github.com/acme/wt/pull/99\n');
 else if (args[0] === 'pr' && args[1] === 'ready') out('');
 else if (args[0] === 'pr' && args[1] === 'merge') { if (!a.includes('--match-head-commit abc123')) { process.stderr.write('merge without the reviewed sha'); process.exit(3); } out(''); }
-else if (args[0] === 'issue' && args[1] === 'edit') out('');
+else if (/^api -X (POST|DELETE) repos\/[\w.-]+\/[\w.-]+\/issues\/\d+\/labels/.test(a)) { // label calls, logged to STUB_LABEL_LOG
+  try { command('gh', args, { platform: 'win32', env: { PATH: 'C:\\gh', PATHEXT: '.CMD' }, isFile: () => true }); } // must pass a Windows gh.cmd shim
+  catch (e) { process.stderr.write(e.message); process.exit(2); }
+  const post = args[2] === 'POST', fail = process.env.STUB_LABEL_FAIL; // post: the POST answers 500; 500: the DELETE does
+  if (process.env.STUB_LABEL_LOG) fs.appendFileSync(process.env.STUB_LABEL_LOG, `${a}${post ? ' ' + fs.readFileSync(0, 'utf8') : ''}\n`);
+  if (post && fail === 'post' || !post && fail === '500') { process.stderr.write('gh: Server Error (HTTP 500)'); process.exit(1); }
+  if (!post) { process.stderr.write('gh: Label does not exist (HTTP 404)'); process.exit(1); } // as for an issue without the label
+  out('[]');
+}
 else if (args[0] === 'issue' && args[1] === 'list') out(a.includes('factory:ready') ? [{ number: 40, title: 'ready one', labels: [{ name: 'factory:ready' }] }]
   : [{ number: 40, title: 'ready one', labels: [{ name: 'factory:ready' }] }, { number: 41, title: 'new one', labels: [] }, { number: 7, title: 'known', labels: [] }]);
 else if (a.startsWith('api --paginate repos/acme/app/issues/21/comments')) out([
