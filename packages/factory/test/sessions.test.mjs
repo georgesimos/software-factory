@@ -9,7 +9,7 @@ import { setup } from './setup.mjs';
 import { COST_CAP, TOKEN_CAP } from '../../core/src/constants.ts';
 import { HERE } from '../factory.mjs';
 import { record } from '../../core/src/log.ts';
-import { saveProject } from '../../core/src/workspace.ts';
+import { projects, saveProject } from '../../core/src/workspace.ts';
 import { command, opener } from '../../core/src/platform.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { MAX_BYTES, killTree, listSessions, resolveSpec, startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
@@ -23,7 +23,7 @@ const claude = harnesses.find((h) => h.id === 'claude-code');
 const finished = (s) => new Promise((resolve) => { const ev = []; subscribe(s, (e) => { ev.push(e); if (e.type === 'exit') resolve(ev); }); });
 const LOCAL = 'local_0123abcd-0123-4567-89ab-0123456789ab';
 
-test('claude-code launch(): headless pins stream-json --verbose with the prompt on stdin; terminal is plain claude', () => {
+test('claude-code launch(): headless pins stream-json --verbose with the prompt on stdin; terminal is plain claude; sdk gets the same policy as options', () => {
   const h = claude.launch({ mode: 'headless', prompt: '/software-factory acme/app#3', budget: 4.5, write: true });
   assert.equal(h.cmd, 'claude');
   assert.equal(h.args[0], '-p');
@@ -35,8 +35,29 @@ test('claude-code launch(): headless pins stream-json --verbose with the prompt 
   assert.deepEqual(claude.launch({ mode: 'terminal', resume: 'abc' }), { cmd: 'claude', args: ['--resume', 'abc'] });
   assert.throws(() => claude.launch({ mode: 'terminal', prompt: 'fix #3' }), /takes no prompt/, 'never a prompt in argv: a .cmd shim could not pass it');
   assert.throws(() => claude.launch({ mode: 'headless' }), /needs a prompt/);
-  assert.throws(() => claude.launch({ mode: 'sdk', prompt: 'x' }), /no sdk mode/);
+  const sd = claude.launch({ mode: 'sdk', prompt: 'x', budget: 2 });
+  assert.deepEqual([sd.module, sd.prompt, sd.options.permissionMode, sd.options.maxBudgetUsd, sd.options.strictMcpConfig], ['@anthropic-ai/claude-agent-sdk', 'x', 'default', 2, true], 'read-only: the CLI\'s manual mode');
+  assert.deepEqual([claude.launch({ mode: 'sdk', prompt: 'x', write: true }).options.permissionMode, claude.launch({ mode: 'sdk', prompt: 'x', write: true }).options.allowedTools], ['auto', undefined]);
+  assert.equal(sd.options.permissionPrompts, 'none', 'no prompt can stall an sdk run');
+  assert.throws(() => claude.launch({ mode: 'sdk' }), /needs a prompt/);
+  assert.throws(() => startSession(claude, { mode: 'terminal', budget: 3 }, { cwd: home }), /no budget cap/);
+  assert.throws(() => claude.launch({ mode: 'nope', prompt: 'x' }), /no nope mode/);
   assert.ok(claude.headlessArgs().includes('json') && !claude.headlessArgs().includes('stream-json'), 'F headless-args is unchanged');
+});
+
+// The sdk options are checked against the installed SDK's types: an option it doesn't declare would be dropped silently.
+test('the sdk launch options are ones the installed Agent SDK declares', (t) => {
+  const root = path.join(HERE, '..', '..', 'node_modules', '.pnpm');
+  const dir = fs.existsSync(root) && fs.readdirSync(root).find((d) => d.startsWith('@anthropic-ai+claude-agent-sdk@'));
+  if (!dir) return t.skip('the Agent SDK is not installed here');
+  const dts = fs.readFileSync(path.join(root, dir, 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'sdk.d.ts'), 'utf8');
+  const modes = /export declare type PermissionMode = ([^;]+);/.exec(dts)[1];
+  for (const write of [false, true]) {
+    const { options } = claude.launch({ mode: 'sdk', prompt: 'x', budget: 2, resume: 'abc', write });
+    for (const k of Object.keys(options)) assert.match(dts, new RegExp(`\\n\\s+${k}\\?:`), `Options.${k}`);
+    assert.ok(modes.includes(`'${options.permissionMode}'`), options.permissionMode);
+  }
+  assert.match(dts, /permissionPrompts\?: 'host' \| 'none';/);
 });
 
 test('Windows: a headless launch runs through npm\'s claude.cmd, because the prompt (space, #) goes on stdin', () => {
@@ -66,7 +87,6 @@ test('startSession() runs a headless launch and streams NDJSON events, text, std
   assert.deepEqual(ev.map((e) => e.n), ev.map((_, i) => i), 'events are numbered in order');
   const late = []; subscribe(s, (e) => late.push(e), 3); // a reconnect replays from Last-Event-ID + 1
   assert.deepEqual(late.map((e) => e.n), ev.slice(3).map((e) => e.n));
-  assert.throws(() => startSession(claude, { mode: 'terminal' }, { cwd: home }), /not available yet/);
   const sub = []; subscribe({ events: [{ n: 7 }, { n: 8 }], state: 'exited', listeners: new Set() }, (e) => sub.push(e), 2);
   assert.deepEqual(sub, [{ type: 'dropped', from: 2, first: 7 }, { n: 7 }, { n: 8 }], 'a replay past the buffer says what was lost');
   const none = startSession(claude, { mode: 'headless', prompt: 'x' }, { cwd: home, env: { ...stubEnv, PATH: fs.mkdtempSync(path.join(os.tmpdir(), 'factory-nobin-')) } });
@@ -119,7 +139,7 @@ test('launchSession(): an attached repo and an issue number only; #25\'s refusal
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 3 }), /not attached/);
   saveProject('acme/app', clone);
   for (const [x, re] of [[{ repo: 'acme/app', issue: '3' }, /positive issue number/], [{ repo: 'acme/app', issue: 0 }, /positive issue number/], [{ repo: '../x', issue: 3 }, /owner\/repo/],
-    [{ repo: 'acme/app', issue: 3, mode: 'sdk' }, /modes are headless, terminal/], [{ repo: 'acme/app', issue: 3, harness: 'codex' }, /cannot launch/], [{ repo: 'acme/app', issue: 3, harness: 'nope' }, /cannot launch/]]) {
+    [{ repo: 'acme/app', issue: 3, mode: 'nope' }, /modes are headless, terminal, sdk/], [{ repo: 'acme/app', issue: 3, harness: 'codex' }, /cannot launch/], [{ repo: 'acme/app', issue: 3, harness: 'nope' }, /cannot launch/]]) {
     assert.throws(() => launchSession(x), re, JSON.stringify(x));
   }
   record('acme/app#4', 'intake', 'started', {});
@@ -219,4 +239,113 @@ test('F ui streams a live session over HTTP as server-sent events, to the end', 
     assert.deepEqual(blocks.map((b) => JSON.parse(b.split('data: ')[1]).type).at(-1), 'exit');
     assert.match(blocks[0], /^id: 0\ndata: /);
   } finally { console.log = log; server.closeAllConnections(); server.close(); }
+});
+
+// Stand-ins for node-pty and the Agent SDK: the host passes these in, so no real module or binary is touched.
+const PTY = 'node-pty', SDK = '@anthropic-ai/claude-agent-sdk'; // host modules are keyed by package name
+function fakePty(spawnError) {
+  const rec = {};
+  return { rec, spawn(file, args, opts) {
+    if (spawnError) throw new Error(spawnError);
+    Object.assign(rec, { file, args, cwd: opts.cwd });
+    let data, exit;
+    setTimeout(() => data('ready\r\n'), 5);
+    return { onData: (f) => { data = f; }, onExit: (f) => { exit = f; }, write: (x) => { (rec.writes ||= []).push(x); data(`echo:${x}`); if (x === 'exit\r') exit({ exitCode: 0 }); }, resize: (c, r) => { rec.size = [c, r]; }, kill: () => exit({ exitCode: null }) };
+  } };
+}
+const fakeSdk = (fail, result = { type: 'result', subtype: 'success' }) => ({ rec: {}, async *query(q) { this.rec.q = q; yield { type: 'system', subtype: 'init', session_id: 'sdk-1' }; if (fail) throw new Error('boom'); if (result) yield result; } });
+
+test('terminal mode: a pseudo-terminal from the host, with input and resize through /api/sessions/input', async () => {
+  const pty = fakePty();
+  const s = startSession(claude, { mode: 'terminal', resume: 'abc' }, { cwd: home, env: stubEnv, modules: { [PTY]: pty } });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual([pty.rec.file, pty.rec.args, pty.rec.cwd], ['claude', ['--resume', 'abc'], home]);
+  const tok = 't'.repeat(32), H = { host: '127.0.0.1:4646', origin: 'http://127.0.0.1:4646', 'content-type': 'application/json', 'x-factory-token': tok };
+  const input = (body) => uiHandle({ method: 'POST', url: '/api/sessions/input', headers: H, body: JSON.stringify(body) }, { token: tok, port: 4646 });
+  assert.equal(input({ id: s.id, cols: 100, rows: 30 }).status, 200);
+  assert.deepEqual(pty.rec.size, [100, 30]);
+  for (const bad of [{ id: s.id, data: 7 }, { id: s.id, data: 'x'.repeat(32769) }, { id: s.id, cols: 0, rows: 5 }, { id: 'nope', data: 'x' }]) assert.equal(input(bad).status, 400, JSON.stringify(bad));
+  const writes = []; const w = s.write; s.write = (x) => writes.push(x);
+  assert.equal(input({ id: s.id, data: 'ls\r', cols: 0, rows: 5 }).status, 400);
+  assert.deepEqual([writes, pty.rec.size], [[], [100, 30]], 'a bad size applies none of the request');
+  s.write = w;
+  const done = finished(s);
+  assert.equal(input({ id: s.id, data: 'exit\r' }).status, 200);
+  const ev = await done;
+  assert.deepEqual(ev.filter((e) => e.type === 'output').map((e) => e.data), ['ready\r\n', 'echo:exit\r']);
+  assert.deepEqual(ev.at(-1).code, 0);
+  assert.equal(input({ id: s.id, data: 'x' }).status, 400, 'an exited session takes no input');
+});
+
+test('sdk mode: query() from the host, one event per message; a failure or a missing module ends with an error event', async () => {
+  const sdk = fakeSdk();
+  const ev = await finished(startSession(claude, { mode: 'sdk', prompt: 'hi', budget: 3 }, { cwd: home, modules: { [SDK]: sdk } }));
+  assert.deepEqual(ev.map((e) => e.data?.type ?? e.type), ['system', 'result', 'exit']);
+  assert.deepEqual([sdk.rec.q.prompt, sdk.rec.q.options.cwd, sdk.rec.q.options.maxBudgetUsd, sdk.rec.q.options.abortController instanceof AbortController], ['hi', home, 3, true]);
+  const bad = await finished(startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { [SDK]: fakeSdk(true) } }));
+  assert.deepEqual(bad.slice(-2).map((e) => [e.type, e.message ?? e.code]), [['error', 'boom'], ['exit', null]]);
+  const nomod = { id: 'x', modes: ['sdk'], launch: () => ({ module: '@nope/none', prompt: 'p', options: {} }) };
+  assert.match((await finished(startSession(nomod, { mode: 'sdk' }, { cwd: home }))).find((e) => e.type === 'error').message, /sdk mode needs @nope\/none, which is not installed/);
+});
+
+test('terminal on Windows: npm\'s claude.cmd goes to node-pty as one cmd.exe line, not quoted twice', async () => {
+  const pty = fakePty(), win = { platform: 'win32', env: { PATH: 'C:\\npm', PATHEXT: '.EXE;.CMD', ComSpec: 'C:\\Windows\\system32\\cmd.exe' }, isFile: (p) => p.toLowerCase() === 'c:\\npm\\claude.cmd' };
+  const s = startSession(claude, { mode: 'terminal', resume: 'abc' }, { cwd: home, env: stubEnv, modules: { [PTY]: pty }, resolve: win });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual([pty.rec.file, pty.rec.args], ['C:\\Windows\\system32\\cmd.exe', '/d /s /c ""C:\\npm\\claude.cmd" --resume abc"']);
+  s.stop(); await finished(s);
+});
+
+test('a stop while node-pty or the SDK loads is kept: nothing starts', async () => {
+  const pty = fakePty(), sdk = fakeSdk();
+  const t = startSession(claude, { mode: 'terminal' }, { cwd: home, modules: { [PTY]: pty } }); t.stop();
+  const q = startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { [SDK]: sdk } }); q.stop();
+  assert.deepEqual([(await finished(t)).at(-1).code, (await finished(q)).at(-1).code], ['stopped', 'stopped']);
+  assert.deepEqual([pty.rec.file, sdk.rec.q], [undefined, undefined]);
+});
+
+test('sdk mode: the host env reaches the SDK, and a failed result exits 1', async () => {
+  const sdk = fakeSdk(), env = { ...stubEnv, FACTORY_MARK: 'x' };
+  await finished(startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, env, modules: { [SDK]: sdk } }));
+  assert.equal(sdk.rec.q.options.env, env);
+  for (const [result, code] of [[{ type: 'result', subtype: 'success' }, 0], [{ type: 'result', subtype: 'error_max_budget_usd' }, 1], [{ type: 'result', subtype: 'success', is_error: true }, 1], [null, 1]]) {
+    assert.equal((await finished(startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { [SDK]: fakeSdk(false, result) } }))).at(-1).code, code, JSON.stringify(result));
+  }
+});
+
+test('a stop mid-run ends as stopped, in a terminal and in the SDK; a missing binary in a pty is "not installed"', async () => {
+  const pty = fakePty(), t = startSession(claude, { mode: 'terminal' }, { cwd: home, modules: { [PTY]: pty } });
+  await new Promise((r) => setTimeout(r, 20));
+  const tEnd = finished(t); t.stop();
+  assert.equal((await tEnd).at(-1).code, 'stopped');
+  t.write('late'); t.resize(1, 1);
+  assert.deepEqual([pty.rec.writes, pty.rec.size], [undefined, undefined], 'a stopped pty takes no input');
+  const waiting = { async *query(q) { yield { type: 'system', subtype: 'init' }; await new Promise((_, no) => q.options.abortController.signal.addEventListener('abort', () => no(Object.assign(new Error('aborted'), { name: 'AbortError' })))); } };
+  const q = startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { [SDK]: waiting } });
+  await new Promise((r) => { const off = subscribe(q, (e) => { if (e.data?.subtype === 'init') { off(); r(); } }); });
+  const qEnd = finished(q); q.stop();
+  assert.deepEqual((await qEnd).slice(-1).map((e) => [e.type, e.code]), [['exit', 'stopped']], 'no error event for our own abort');
+  const nowhere = { PATH: fs.mkdtempSync(path.join(os.tmpdir(), 'factory-nopath-')) };
+  const gone = await finished(startSession(claude, { mode: 'terminal' }, { cwd: home, env: nowhere, modules: { [PTY]: fakePty('posix_spawnp failed.') } }));
+  assert.deepEqual(gone.slice(-2).map((e) => e.message ?? e.code), ['claude is not installed', null]);
+  if (process.platform !== 'win32') { // the stub is a shell script, found on stubEnv's PATH
+    const other = await finished(startSession(claude, { mode: 'terminal' }, { cwd: home, env: stubEnv, modules: { [PTY]: fakePty('posix_spawnp failed.') } }));
+    assert.equal(other.find((e) => e.type === 'error').message, 'posix_spawnp failed.', 'claude is there: the pty error passes through');
+  }
+});
+
+test('launchSession() never starts a terminal session for a factory run: it would have no budget cap', () => {
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 9, mode: 'terminal' }, stubEnv, { [PTY]: fakePty() }), /no budget cap/);
+});
+
+test('launchSession() refuses sdk mode up front while no host supplies the SDK (apps/desktop is not built yet)', () => {
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 9, mode: 'sdk' }, stubEnv), /needs the desktop app \(not built yet\), which supplies @anthropic-ai\/claude-agent-sdk/);
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 9, mode: 'sdk' }, stubEnv, { 'node-pty': fakePty() }), /needs the desktop app/, 'node-pty alone is not the SDK');
+});
+
+test('launchSession() passes the host modules on: an sdk run in the attached clone with the run budget and write mode', async () => {
+  const sdk = fakeSdk();
+  await finished(launchSession({ repo: 'acme/app', issue: 8, mode: 'sdk' }, stubEnv, { [SDK]: sdk }));
+  const { prompt, options } = sdk.rec.q;
+  assert.deepEqual([prompt, options.cwd, options.maxBudgetUsd, options.permissionMode], ['/software-factory acme/app#8', projects()['acme/app'].path, COST_CAP, 'auto']);
 });

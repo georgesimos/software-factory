@@ -81,6 +81,16 @@ export const UI_ROUTES = {
   },
   '/onboard/automerge': ({ repo, on }) => { setAutoMerge(repo, on); return onboardConfig(); },
   '/sessions': (x) => ({ session: launchSession(x).id }),
+  '/sessions/input': ({ id, data, cols, rows }) => { // keystrokes and size for a terminal session
+    const s = getSession(id);
+    if (!s?.write || s.state !== 'running') throw new Error('no running terminal session with that id');
+    const size = cols !== undefined || rows !== undefined; // all checked before any is applied
+    if (data !== undefined && (typeof data !== 'string' || data.length > 32768)) throw new Error('data must be a string up to 32 KB'); // JSON escaping can double it: the body cap is 64K
+    if (size && ![cols, rows].every((n) => Number.isInteger(n) && n > 0 && n <= 1000)) throw new Error('cols and rows must be 1-1000');
+    if (data !== undefined) s.write(data);
+    if (size) s.resize(cols, rows);
+    return { ok: true };
+  },
   '/sessions/stop': ({ id }) => { const s = getSession(id); if (s?.state !== 'running') throw new Error('no running session with that id'); s.stop(); return { ok: true }; },
   '/sessions/open': ({ harness = 'claude-code', id }) => { // the desktop app's own link for a session, when the harness has one
     const h = harnesses.find((y) => y.id === harness), url = h?.openDesktop?.(id);
@@ -102,10 +112,17 @@ export function resumeFor(r, last) {
 }
 // What the run may still spend: COST_CAP less the dollars, and less the share of TOKEN_CAP used, for usage with no price.
 export const budgetLeft = (b) => b ? Math.min(COST_CAP - b.usd, COST_CAP * (1 - b.tokens / TOKEN_CAP)) : COST_CAP;
-export function launchSession({ harness = 'claude-code', mode = 'headless', repo, issue }, env = process.env) {
+// node-pty and the SDK for terminal and sdk sessions, keyed by package name. Empty until a host that ships them (apps/desktop,
+// not built yet) sets them: packages/adapters' lazy import() can't see apps/desktop's dependencies under pnpm (ADR 0001).
+export const hostModules = {};
+export function launchSession({ harness = 'claude-code', mode = 'headless', repo, issue }, env = process.env, modules = hostModules) {
+
   const h = harnesses.find((y) => y.id === harness);
   if (!h?.launch) throw new Error(`harness ${String(harness).slice(0, 40)} cannot launch sessions`);
   if (!(h.modes || []).includes(mode)) throw new Error(`${h.id} modes are ${(h.modes || []).join(', ')}`);
+  if (mode === 'terminal') throw new Error('factory runs are headless or sdk: a terminal session has no budget cap or pinned policy'); // a person drives terminal mode
+  const need = mode === 'sdk' && h.launch({ mode, prompt: 'x' }).module;
+  if (need && !modules[need]) throw new Error(`${mode} mode needs the desktop app (not built yet), which supplies ${need}: run headless`);
   const [owner, name, extra] = typeof repo === 'string' ? repo.split('/') : [];
   if (extra !== undefined || !LOGIN.test(owner || '') || !/^(?!\.\.?$)[\w.-]{1,100}$/.test(name || '')) throw new Error('repo must be owner/repo');
   const cwd = projects()[repo]?.path;
@@ -127,7 +144,7 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
     if (!l.ok) throw new Error(`${h.label} is not signed in: ${l.hint}`);
     harnessReady.set(h.id, Date.now()); // only a success is cached, so a fresh sign-in counts at once
   }
-  return startSession(h, { mode, prompt: `/software-factory ${id}`, resume, budget: budgetLeft(b), write: true }, { cwd, env, label: id });
+  return startSession(h, { mode, prompt: `/software-factory ${id}`, resume, budget: budgetLeft(b), write: true }, { cwd, env, label: id, modules });
 }
 
 export function ui(port = 0) {
