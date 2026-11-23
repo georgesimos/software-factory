@@ -62,7 +62,10 @@ export default {
       if (!prompt) throw new Error('a headless launch needs a prompt');
       return { cmd: 'claude', args: [...res, '-p', ...headlessArgs({ budget, write, stream: true })], stdin: prompt }; // the prompt on stdin: npm's claude.cmd can't take it as an argument
     }
-    if (mode === 'terminal') return { cmd: 'claude', args: [...res, ...(prompt ? [prompt] : [])] };
+    if (mode === 'terminal') { // a person types the prompt: as an argument, a .cmd shim (Windows) could not pass a space
+      if (prompt) throw new Error('terminal mode takes no prompt: type it in the session');
+      return { cmd: 'claude', args: res };
+    }
     throw new Error(`claude-code has no ${mode} mode`);
   },
   // The desktop app's own link for one of its sessions. Observed, not documented (ADR §5): best effort; callers fall back

@@ -11,8 +11,8 @@ import { record } from '../../core/src/log.ts';
 import { saveProject } from '../../core/src/workspace.ts';
 import { command, opener } from '../../core/src/platform.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
-import { startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
-import { launchSession, ui, uiHandle } from '../../server/src/server.ts';
+import { MAX_BYTES, killTree, resolveSpec, startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
+import { harnessReady, launchSession, ui, uiHandle } from '../../server/src/server.ts';
 
 setup();
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-shome-'));
@@ -32,6 +32,7 @@ test('claude-code launch(): headless pins stream-json --verbose with the prompt 
   assert.deepEqual([h.args[h.args.indexOf('--permission-mode') + 1], h.args[h.args.indexOf('--max-budget-usd') + 1]], ['auto', '4.5']);
   assert.deepEqual(claude.launch({ mode: 'headless', prompt: 'x', resume: 'abc' }).args.slice(0, 2), ['--resume', 'abc']);
   assert.deepEqual(claude.launch({ mode: 'terminal', resume: 'abc' }), { cmd: 'claude', args: ['--resume', 'abc'] });
+  assert.throws(() => claude.launch({ mode: 'terminal', prompt: 'fix #3' }), /takes no prompt/, 'never a prompt in argv: a .cmd shim could not pass it');
   assert.throws(() => claude.launch({ mode: 'headless' }), /needs a prompt/);
   assert.throws(() => claude.launch({ mode: 'sdk', prompt: 'x' }), /no sdk mode/);
   assert.ok(claude.headlessArgs().includes('json') && !claude.headlessArgs().includes('stream-json'), 'F headless-args is unchanged');
@@ -84,6 +85,31 @@ test('a session killed by a signal ends: exit carries the signal, and stop() is 
   assert.match((await finished(refused)).find((e) => e.type === 'error').message, /not installed/);
 });
 
+test('Windows: stop() ends the whole tree with taskkill, since kill() would end only cmd.exe; never pid 0', () => {
+  const calls = [], run = (...a) => { calls.push(a.slice(0, 2)); return { on: () => {} }; };
+  let killed = 0; const child = { pid: 4242, kill: () => { killed++; } };
+  killTree(child, 'win32', run);
+  assert.deepEqual([calls, killed], [[['taskkill', ['/pid', '4242', '/T', '/F']]], 0]);
+  killTree(child, 'darwin', run);
+  killTree({ pid: 0, kill: () => { killed += 10; } }, 'darwin', run); killTree({ pid: 0 }, 'win32', run);
+  assert.deepEqual([calls.length, killed], [1, 1]);
+});
+
+test('the command is found on the PATH and PATHEXT the session gets, not this process\'s', () => {
+  const env = { PATH: 'D:\\tools', PATHEXT: '.EXE' }, resolve = { platform: 'win32', isFile: (p) => p.toLowerCase() === 'd:\\tools\\claude.exe' };
+  assert.equal(resolveSpec({ cmd: 'claude', args: ['-p'] }, env, resolve).file, 'D:\\tools\\claude.exe');
+  assert.equal(resolveSpec({ cmd: 'claude', args: ['-p'] }, { PATH: 'C:\\other' }, resolve).file, 'claude', 'not found there: left for ENOENT');
+});
+
+test('a session keeps at most MAX_BYTES of events and says what it dropped', async () => {
+  const s = startSession(claude, { mode: 'headless', prompt: 'x' }, { cwd: home, env: { ...stubEnv, STUB_BIG: '80' }, label: 'big' }); // ~5 MB
+  await finished(s);
+  assert.ok(s.events.reduce((n, e) => n + JSON.stringify(e).length, 0) <= MAX_BYTES);
+  assert.ok(s.events[0].n > 0 && s.events.at(-1).type === 'exit');
+  const sub = []; subscribe(s, (e) => sub.push(e), 0);
+  assert.deepEqual(sub[0], { type: 'dropped', from: 0, first: s.events[0].n });
+});
+
 test('launchSession(): an attached repo and an issue number only; #25\'s refusals', async () => {
   const clone = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-sclone-'));
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 3 }), /not attached/);
@@ -96,13 +122,24 @@ test('launchSession(): an attached repo and an issue number only; #25\'s refusal
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 4 }), /already has an active run/);
   record('acme/app#5', 'intake', 'started', { imported: true });
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 5 }), /imported/);
-  process.env.STUB_LOGGED_OUT = '1';
+  process.env.STUB_LOGGED_OUT = '1'; harnessReady.clear();
   try { assert.throws(() => launchSession({ repo: 'acme/app', issue: 3 }), /not signed in: claude auth login/); } finally { delete process.env.STUB_LOGGED_OUT; }
   const s = launchSession({ repo: 'acme/app', issue: 3 }, stubEnv);
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 3 }, stubEnv), /already has a running session/, 'a second POST before the run records anything');
   const ev = await finished(s);
   assert.equal(ev.find((e) => e.data?.type === 'assistant').data.message.content[0].text, 'prompt: /software-factory acme/app#3', 'the prompt is built by the server');
   assert.equal(fs.realpathSync(ev.find((e) => e.data?.subtype === 'init').data.cwd), fs.realpathSync(clone), 'runs in the attached clone');
+});
+
+test('launchSession(): a run left active by a stopped session resumes that harness session; a running one is still refused', async () => {
+  const s = launchSession({ repo: 'acme/app', issue: 10 }, { ...stubEnv, STUB_HANG: '1' });
+  await new Promise((r) => { const off = subscribe(s, (e) => { if (e.data?.subtype === 'init') { off(); r(); } }); });
+  record('acme/app#10', 'intake', 'started', {}); // what the session writes as it works
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 10 }, stubEnv), /already has a running session/);
+  const end = finished(s); s.stop(); await end;
+  const again = await finished(launchSession({ repo: 'acme/app', issue: 10 }, stubEnv));
+  assert.deepEqual(again.find((e) => e.data?.subtype === 'init').data.argv.slice(0, 2), ['--resume', 'stub-session']);
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 10 }, stubEnv), /active run/, 'it exited 0: the run is active for its own reasons');
 });
 
 test('/api/sessions: POST starts one behind the token and Origin checks; GET lists; events come back as a stream', async () => {
