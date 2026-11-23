@@ -32,7 +32,14 @@ describe('loadData', () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ runs: [RUN] }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     expect(await loadData()).toEqual({ runs: [RUN] });
-    expect(fetchMock).toHaveBeenCalledWith('./api/runs', { headers: { 'x-factory-token': 'tok123' } });
+    expect(fetchMock).toHaveBeenCalledWith('/api/runs', { headers: { 'x-factory-token': 'tok123' } });
+  });
+
+  it('falls through to GET /api/runs when the #data tag holds broken JSON', async () => {
+    document.body.innerHTML = '<script type="application/json" id="data">{"runs": [</script>';
+    history.replaceState(null, '', '/?t=tok');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ runs: [RUN] }), { status: 200 })));
+    expect(await loadData()).toEqual({ runs: [RUN] });
   });
 
   it('never fetches without a token, and falls back to the fixture in dev', async () => {
