@@ -69,7 +69,7 @@ export function derive(events) {
       const r = Object.hasOwn(runs, e.run) ? runs[e.run] : undefined; // a hand-edited "__proto__" note can't break derive()
       if (r) r.events.push(e);
       if (r && e.status === 'pending') (r.notes ??= []).push({ id: e.id, step: e.step, text: e.text, by: e.by, ts: e.ts, state: 'pending' });
-      if (r && e.status === 'applied') for (const n of r.notes || []) if (e.notes?.includes(n.id) && n.state === 'pending') Object.assign(n, { state: 'applied', appliedTo: n.step === 'next' ? e.steps : [n.step], appliedAt: e.ts });
+      if (r && e.status === 'applied') for (const n of r.notes || []) if (e.notes?.includes(n.id) && n.state === 'pending') Object.assign(n, { state: 'applied', appliedTo: n.step === 'next' ? e.steps : [n.step], appliedAt: e.ts, claim: e.claim }); // the first claim in the log wins
       continue;
     }
     const r = (runs[e.run] ??= { id: e.run, iteration: 0, reviews: {}, loopbacks: [], events: [], outcome: 'in-progress' });
