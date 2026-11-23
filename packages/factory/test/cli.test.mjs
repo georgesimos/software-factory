@@ -708,6 +708,11 @@ export function syncTest(cli) {
   record(H, 'build', 'passed', { pr: HP, branch: 'factory/issue-16' });
   record(H, 'approve', 'decided', { action: 'escalate', reasons: ['axes not passed: ui'] });
   record(H, 'approve', 'escalated');
+  for (const [id, pr] of [['acme/app#17', 'https://github.com/acme/app/pull/18'], ['acme/app#19', 'https://github.com/evil/app/pull/19']]) { // a PR on another branch, or in another repo
+    record(id, 'intake', 'started', { title: 'g', association: 'OWNER' });
+    record(id, 'build', 'passed', { pr });
+    record(id, 'approve', 'escalated');
+  }
   record('acme/app#11', 'approve', 'escalated'); // imported: decide always escalates it, and a merge elsewhere is not the factory's
   const hsync = (env2) => JSON.parse(cli(['sync', 'acme/app'], '', { ...env, STUB_CLOSED: '10,11,15', ...env2 }))[0].humanMerged;
   assert.deepEqual(hsync({}), []); // still open
