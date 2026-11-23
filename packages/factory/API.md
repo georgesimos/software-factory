@@ -40,6 +40,8 @@ curl -s -X POST -H "x-factory-token: $T" -H "Origin: http://127.0.0.1:$P" -H 'Co
 
 None of them returns the `F ui` token.
 
+`GET /app/` serves the apps/web build (`pnpm --filter @software-factory/web build`), the React dashboard that replaces `dashboard.html` (#55). Open it as `/app/?t=<token>`; `F ui` prints that URL too. Its files carry no data and need no token: the page reads `GET /api/state` and writes through the routes below. Only files in the build are served, matched by exact name; `/app` redirects to `/app/`.
+
 ## Writes
 
 Every write is also served at its original path without `/api` (for example `POST /skills`), which the dashboard uses.
