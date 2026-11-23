@@ -134,7 +134,7 @@ export function sync(repo: string, repoPath?: string) {
     let p: { state: string; mergedAt: string; mergedBy?: { login: string } | null; mergeCommit?: { oid: string } | null; headRefName: string; isCrossRepository?: boolean };
     try { p = JSON.parse(gh('pr', 'view', m[2] as string, '-R', repo, '--json', 'state,mergedAt,mergedBy,mergeCommit,headRefName,isCrossRepository')); }
     catch (e: any) { humanMergeErrors.push({ run: r.id, error: String(e?.stderr || e?.message || e).trim().split('\n')[0] as string }); continue; }
-    if (p.state !== 'MERGED' || p.isCrossRepository !== false || p.headRefName !== `factory/issue-${r.id.split('#')[1]}` || !(Date.parse(p.mergedAt) > Date.parse(since as string))) continue; // no since: NaN, never later, so skipped // a fork's factory/issue-N branch never counts
+    if (p.state !== 'MERGED' || p.isCrossRepository !== false || p.headRefName !== `factory/issue-${r.id.split('#')[1]}` || !(Date.parse(p.mergedAt) > Date.parse(since as string))) continue; // a fork's factory/issue-N branch never counts; no since: NaN, never later, so skipped
     record(r.id, 'approve', 'merged', { by: 'human', mergedBy: p.mergedBy?.login || null, sha: p.mergeCommit?.oid || null });
     relabelMerged(r.id);
     humanMerged.push(r.id);

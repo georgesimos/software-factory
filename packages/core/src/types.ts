@@ -1,6 +1,6 @@
 // The event log's shapes and the Run that derive() builds from them. Types only: no runtime code, no imports.
 // Events come from events.jsonl (JSON.parse): F validates what it records, but a hand-edited log can hold anything, so
-// every event field is optional and readers keep their guards.
+// every event field but ts, run, stage and status (which record() always writes) is optional, and readers keep their guards.
 
 export type Severity = 'high' | 'medium' | 'low';
 export type Route = 'spec' | 'build';
