@@ -11,9 +11,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { chromium } from 'playwright-core';
 import { findChrome } from '../../../scripts/chrome.mjs';
-import { WEB_DIST } from '../../server/src/server.ts';
 
 const HERE = path.join(import.meta.dirname, '..');
+const WEB_DIST = path.join(HERE, '..', '..', 'apps', 'web', 'dist'); // not imported from the server: that loads its whole graph here, with the real HOME
 if (!fs.existsSync(path.join(WEB_DIST, 'index.html'))) { console.error('apps/web is not built: run pnpm --filter @software-factory/web build'); process.exit(1); }
 const SHOTS = path.resolve(process.argv[2] || fs.mkdtempSync(path.join(os.tmpdir(), 'factory-web-shots-')));
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-web-e2e-'));
@@ -27,14 +27,8 @@ delete env.CLAUDE_CODE_SESSION_ID;
 const json = (f) => JSON.parse(fs.readFileSync(path.join(DIR, f), 'utf8')), skills = () => json('skills.json');
 
 const server = spawn(process.execPath, [path.join(HERE, 'factory.mjs'), 'ui', '0'], { env, stdio: ['ignore', 'pipe', 'inherit'] });
-const url = await new Promise((resolve, reject) => {
-  let out = '';
-  server.stdout.on('data', (c) => { out += c; const m = /http:\/\/127\.0\.0\.1:\d+\/app\/\?t=[\w-]+/.exec(out); if (m) resolve(m[0]); });
-  server.on('exit', (code) => reject(new Error('F ui exited ' + code)));
-});
-const browser = await chromium.launch({ executablePath: findChrome() });
 const errors = [], shots = [];
-let last;
+let last, url, browser;
 const open = async (width, scheme) => {
   const ctx = await browser.newContext({ viewport: { width, height: width < 600 ? 812 : 860 }, colorScheme: scheme, reducedMotion: 'reduce' });
   const page = (last = await ctx.newPage());
@@ -48,6 +42,13 @@ const shot = async (page, name) => { const f = path.join(SHOTS, name + '.png'); 
 const noOverflow = async (page, what) => assert.ok(await page.evaluate(() => [document.documentElement, document.querySelector('dialog[open]')].filter(Boolean).every((n) => n.scrollWidth <= n.clientWidth)), `${what}: no horizontal scroll`);
 
 try {
+  url = await new Promise((resolve, reject) => {
+    let out = '';
+    const t = setTimeout(() => reject(new Error('F ui printed no /app/ URL within 30 s')), 30_000);
+    server.stdout.on('data', (c) => { out += c; const m = /http:\/\/127\.0\.0\.1:\d+\/app\/\?t=[\w-]+/.exec(out); if (m) { clearTimeout(t); resolve(m[0]); } });
+    server.on('exit', (code) => { clearTimeout(t); reject(new Error('F ui exited ' + code)); });
+  });
+  browser = await chromium.launch({ executablePath: findChrome() });
   // 1280 light: no project yet, so the wizard opens by itself; each step writes through /api/onboard/*.
   {
     const { ctx, page } = await open(1280, 'light');
@@ -222,6 +223,6 @@ try {
   try { await last?.screenshot({ path: path.join(SHOTS, 'FAILED.png') }); console.error('page at failure: ' + path.join(SHOTS, 'FAILED.png')); } catch { /* the page is gone */ }
   process.exitCode = 1;
 } finally {
-  await browser.close();
+  await browser?.close();
   server.kill();
 }

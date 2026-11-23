@@ -27,13 +27,18 @@ export const same = (a, b) => typeof a === 'string' && a.length === b.length && 
 export const WEB_DIST = path.join(import.meta.dirname, '..', '..', '..', 'apps', 'web', 'dist');
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.woff': 'font/woff' }; // nosniff: a wrong type blanks the page
-const listFiles = (dir, pre = '') => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? listFiles(path.join(dir, e.name), `${pre}${e.name}/`) : [pre + e.name]));
+// Plain files and folders only: a symlink could point outside the build.
+const listFiles = (dir, pre = '') => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isSymbolicLink() ? [] : e.isDirectory() ? listFiles(path.join(dir, e.name), `${pre}${e.name}/`) : e.isFile() ? [pre + e.name] : []));
+const listed = new Map(); // build dir -> its files; listed again on a miss, so a rebuild's new hashed names are found
+const filesOf = (web, fresh) => { if (fresh || !listed.has(web)) { try { listed.set(web, listFiles(web)); } catch { listed.set(web, []); } } return listed.get(web); };
 function webApp(pathname, search, web) {
   if (pathname === '/app') return { status: 308, type: 'text/plain; charset=utf-8', body: '', location: '/app/' + search }; // base './' needs the slash
-  let files = [];
-  try { files = listFiles(web); } catch { /* not built */ }
-  const f = pathname.slice('/app/'.length) || 'index.html', type = TYPES[path.extname(f)];
-  if (files.includes(f) && type) return { status: 200, type, body: fs.readFileSync(path.join(web, ...f.split('/'))) };
+  let f = null;
+  try { f = (pathname.slice('/app/'.length) || 'index.html').split('/').map((x) => { const d = decodeURIComponent(x); if (/[/\\]/.test(d)) throw 0; return d; }).join('/'); } catch { /* malformed, or an encoded separator */ }
+  const type = f && TYPES[path.extname(f)];
+  const found = () => filesOf(web, false).includes(f) || filesOf(web, true).includes(f);
+  if (type && found()) return { status: 200, type, body: fs.readFileSync(path.join(web, ...f.split('/'))), ...(f.startsWith('assets/') && { cache: 'public, max-age=31536000, immutable' }) }; // hashed names
+  const files = filesOf(web, false);
   return { status: 404, type: 'application/json', body: JSON.stringify({ error: files.length ? 'not found' : 'apps/web is not built: run pnpm --filter @software-factory/web build' }) };
 }
 
@@ -175,7 +180,7 @@ export function ui(port = 0) {
     req.on('end', () => {
       let r;
       try { r = uiHandle({ method: req.method, url: req.url, headers: req.headers, body }, { token, port: server.address().port }); } catch (e) { r = { status: 500, type: 'application/json', body: JSON.stringify({ error: e.message }) }; }
-      res.writeHead(r.status, { 'content-type': r.type, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', ...(r.location && { location: r.location }) });
+      res.writeHead(r.status, { 'content-type': r.type, 'cache-control': r.cache || 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', ...(r.location && { location: r.location }) });
       if (!r.stream) return res.end(r.body);
       let stop = () => {};
       res.on('close', () => stop()); // first, so a client gone mid-replay unsubscribes; not req: its close fires once the body is read

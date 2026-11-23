@@ -70,3 +70,13 @@ describe('loadData', () => {
     await expect(loadData()).rejects.toThrow(/no `F ui` token/);
   });
 });
+
+describe('a poll that started before a write', () => {
+  it('takes the fresh runs but keeps what the write patched', async () => {
+    const { merged } = await import('../src/App.tsx');
+    const prev = { runs: [], skills: { steps: ['new'] }, generated: 'a' } as never, poll = { runs: [{ id: 'x' }], skills: { steps: ['old'] }, generated: 'b' } as never;
+    expect(merged(prev, poll, ['skills'])).toEqual({ runs: [{ id: 'x' }], skills: { steps: ['new'] }, generated: 'b' });
+    expect(merged(prev, poll, [])).toBe(poll);
+    expect(merged(undefined, poll, ['skills'])).toBe(poll);
+  });
+});
