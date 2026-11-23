@@ -7,13 +7,13 @@ import { COST_CAP } from '../../core/src/constants.ts';
 import { approval, facts, intake, merge, postmerge, revert } from '../../core/src/github.ts';
 import { archive, io, read, record, runDir } from '../../core/src/log.ts';
 import { budget, budgetWhy, derive, getRun } from '../../core/src/derive.ts';
-import { catalog, setSkill, skills } from '../../core/src/skills.ts';
+import { DEFAULT_PRESET, PRESETS, applyPreset, availablePlan, catalog, setSkill, skills } from '../../core/src/skills.ts';
 import { decide, gate, reviewAxes, risk } from '../../core/src/gate.ts';
 import { demo } from '../../core/src/demo.ts';
 import { deps, gc, git, localChecks, projects, worktree, wtInfo } from '../../core/src/workspace.ts';
 import { discover, sync } from '../../core/src/sync.ts';
 import { evals } from '../../core/src/eval.ts';
-import { headlessArgs, reviewFromText } from '../../core/src/review.ts';
+import { headlessArgs, reviewFromText, stepModel } from '../../core/src/review.ts';
 import { issuesCreate, loop, newProject, projectStatus, queue, retireIdea } from '../../core/src/project.ts';
 import { loadShip, ship } from '../../core/src/ship.ts';
 import { onboardState, onboardText, setShip } from '../../core/src/onboard.ts';
@@ -60,10 +60,11 @@ export async function main(argv) {
         record(run, 'review', status, payload, { fallback });
         out({ status, findings: payload.findings }); break;
       }
-      case 'skills': { // skills <owner/repo> | skills set|unset <owner/repo|default> <step> [json] | skills catalog [owner/repo]
+      case 'skills': { // skills <owner/repo> | skills set|unset <owner/repo|default> <step> [json] | skills preset <name> [scope] | skills catalog [owner/repo]
         if (run === 'catalog') { out(catalog(rest)); break; }
         if (run === 'unset') { out(setSkill(rest[0], rest[1], undefined)); break; }
-        if (run !== 'set') { out(skills(run || '')); break; }
+        if (run === 'preset') { out(applyPreset(rest[0], rest[1])); break; }
+        if (run !== 'set') { const k = skills(run || ''); out({ ...k, plan: availablePlan(k.plan), extra: Object.values(availablePlan({ ...k.extra })) }); break; }
         const [scope, key, spec] = rest;
         if (!scope || !key || !spec) throw new Error('usage: skills set <owner/repo|default> <step> <json runner>');
         out(setSkill(scope, key, json(spec))); break;
@@ -156,8 +157,8 @@ export async function main(argv) {
         const r = getRun(run), b = budget(r);
         if (r.imported) throw new Error(`${run} is imported: never run claude -p in its checkout`);
         if (b.over) throw new Error(`run budget exceeded ${budgetWhy(b)}`);
-        const si = rest.indexOf('--share'), share = si < 0 ? 1 : Number(rest[si + 1]);
-        out(headlessArgs({ schema: rest.includes('--review') ? JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'factory', 'references', 'review.schema.json'), 'utf8')) : undefined, budget: COST_CAP - b.usd, write: rest.includes('--write'), share }));
+        const si = rest.indexOf('--share'), share = si < 0 ? 1 : Number(rest[si + 1]), st = rest.indexOf('--step');
+        out(headlessArgs({ ...(st >= 0 && stepModel(run, rest[st + 1])), schema: rest.includes('--review') ? JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'factory', 'references', 'review.schema.json'), 'utf8')) : undefined, budget: COST_CAP - b.usd, write: rest.includes('--write'), share }));
         break;
       }
       case 'dir': console.log(runDir(run)); break;
@@ -202,6 +203,7 @@ export async function main(argv) {
   skills <owner/repo>                     print who runs each step (default, skill, brief or provider)
   skills set <owner/repo|default> <step> <json>  configure one step (intake, spec, build, review.<axis>, verifier, postmerge, axes.extra)
   skills unset <owner/repo|default> <step>       drop a step's choice (a project then inherits the global one)
+  skills preset <name> [owner/repo|default]  set every Claude-run step's model, effort and fallback from a preset; a project only on steps it sets (${Object.keys(PRESETS).join(', ')}; built-in: ${DEFAULT_PRESET})
   skills catalog [owner/repo...]          every runner on this machine: built-in, harness tools, global, project, your briefs
   ui     [port]                           serve the dashboard on 127.0.0.1 with a token, so the Skills sheet and setup wizard can save
   rules  <owner/repo>                     print the policy rules, warnings and per-step guidance that apply
@@ -230,7 +232,7 @@ export async function main(argv) {
   eval   [fixture]                        score intake on evals/golden with headless claude (costs tokens)
   state  <run>                            print derived run state
   usage  [run]                            token burn by stage, iteration and axis: measured from transcripts, else reported
-  headless-args <run> [--review|--write] [--share N]  pinned claude -p flags (read-only unless --write) for a provider runner, with the run's remaining budget split N ways (JSON array)
+  headless-args <run> [--review|--write] [--share N] [--step <step>]  pinned claude -p flags (read-only unless --write) for a provider runner, with the run's remaining budget split N ways and the step's model, effort and fallback (JSON array)
   dir    <run>                            print the run's artifact folder
   open   [dashboard|url]                  open the dashboard (default) or an https:, file: or claude-cli: URL with the OS opener
   install-skill                          link ~/.claude/skills/software-factory to this checkout (a junction on Windows)

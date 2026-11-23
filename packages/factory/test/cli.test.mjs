@@ -7,10 +7,10 @@ import { COST_CAP } from '../../core/src/constants.ts';
 import { HERE } from '../factory.mjs';
 import { SUB_AXIS } from '../../core/src/burn.ts';
 import { axesFor, decide, risk } from '../../core/src/gate.ts';
-import { checkRunner } from '../../core/src/skills.ts';
+import { PRESETS, availablePlan, checkRunner, older } from '../../core/src/skills.ts';
 import { derive } from '../../core/src/derive.ts';
 import { relabelMerged } from '../../core/src/github.ts';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { hooks } from '../../core/src/ship.ts';
 import { io, read, record, runDir } from '../../core/src/log.ts';
@@ -390,6 +390,84 @@ export function rulesTest(cli) {
   cli(['rules', 'unset', 'acme/rr', 'artifact']);
 }
 // Per-step runners: config resolution and validation, extra axes, F-stamped runner, invalid output = failed review.
+// Per-step models: field-by-field fill, presets, the CLI version fallback, the headless flags and the verifier stamp.
+function modelsTest(cli, R, stub) {
+  const set = (scope, key, v) => cli(['skills', 'set', scope, key, JSON.stringify(v)]);
+  const plan = (repo = 'acme/kit') => JSON.parse(cli(['skills', repo], '', stub)).plan;
+  set('acme/kit', 'review.docs', { use: 'default', model: 'sonnet' });
+  set('acme/kit', 'review.seo', { use: 'default', fallback: ['haiku'] });
+  let p = plan();
+  assert.deepEqual(p['review.docs'], { use: 'default', model: 'sonnet', effort: 'medium', fallback: ['opus'] }); // effort from the preset, fallback follows the model
+  assert.deepEqual(p['review.seo'], { use: 'default', model: 'haiku', effort: 'medium' }); // a fallback equal to the model is dropped
+  assert.deepEqual(p.build, { use: 'provider', harness: 'codex' });
+  // Version fallback is a pure function of the plan and the CLI version; an unknown version counts as new enough.
+  const r = { use: 'default', model: 'fable', effort: 'high', fallback: ['opus', 'sonnet'] };
+  assert.deepEqual(availablePlan({ s: r }, () => '2.1.321').s, r);
+  assert.deepEqual(availablePlan({ s: r }, () => '2.10.0').s, r);
+  assert.deepEqual(availablePlan({ s: r }, () => null).s, r);
+  assert.deepEqual(availablePlan({ s: r }, () => '2.1.40').s, { use: 'default', model: 'opus', effort: 'high', fallback: ['sonnet'], modelFallback: { from: 'fable', reason: 'Claude Code 2.1.40 is older than 2.1.321, which fable needs' } });
+  assert.deepEqual(availablePlan({ s: { use: 'default', model: 'fable' } }, () => '1.0.0').s.model, undefined); // nothing left: the session's model
+  assert.deepEqual(availablePlan({ s: { use: 'default', model: 'opus', fallback: ['fable', 'sonnet'] } }, () => '2.1.304').s, { use: 'default', model: 'opus', fallback: ['sonnet'] }); // fallbacks are checked too
+  let calls = 0;
+  availablePlan({ a: { use: 'default', model: 'opus' }, b: { use: 'provider', harness: 'codex' } }, () => ++calls);
+  assert.equal(calls, 0); // no fable, no `claude --version`
+  // Extra axes get the version check too.
+  set('acme/kit', 'axes.extra', [{ axis: 'perf', when: ['src/hot/**'], use: 'skill', name: 'perf-review', model: 'fable' }]);
+  assert.equal(JSON.parse(cli(['skills', 'acme/kit'], '', stub)).extra.find((x) => x.axis === 'perf').modelFallback.from, 'fable');
+  // Presets keep who runs each step, skip non-Claude runners and leave one audit line.
+  assert.throws(() => cli(['skills', 'preset', 'max-quality', 'acme/kit']), /unknown preset "max-quality" \(all-claude\|all-claude-lean\)/);
+  assert.throws(() => cli(['skills', 'preset', 'all-claude', 'acme']), /scope "acme"/);
+  const file = path.join(io.dir, 'skills.json'), cfgNow = () => JSON.parse(fs.readFileSync(file, 'utf8'));
+  const own = Object.keys(cfgNow()['acme/kit']), keys = Object.keys(PRESETS['all-claude-lean']);
+  const out = JSON.parse(cli(['skills', 'preset', 'all-claude-lean', 'acme/kit']));
+  assert.deepEqual(out.skipped, ['build']);
+  assert.deepEqual(out.applied, keys.filter((k) => own.includes(k) && k !== 'build'));
+  assert.deepEqual(out.inherited, keys.filter((k) => !own.includes(k))); // a project preset leaves unset steps following global
+  assert.ok(out.inherited.includes('review.code'));
+  p = plan();
+  assert.deepEqual(p.spec, { use: 'skill', name: 'my-planner', model: 'opus', effort: 'high', fallback: ['sonnet'] });
+  assert.deepEqual(p['review.code'], { use: 'skill', name: 'house-review', model: 'opus', effort: 'high', modelFallback: p.intake.modelFallback }); // still global's: fable, too old here
+  assert.deepEqual(p['review.docs'], { use: 'default', model: 'haiku', effort: 'medium', fallback: ['sonnet'] }); // the preset replaces the step's own model
+  assert.deepEqual(p.intake.modelFallback, { from: 'fable', reason: 'Claude Code 2.1.304 is older than 2.1.321, which fable needs' });
+  assert.deepEqual(read().filter((e) => e.stage === 'rules' && e.key === 'preset').map((e) => [e.run, e.value]), [['acme/kit', 'all-claude-lean']]);
+  assert.equal(JSON.parse(cli(['skills', 'acme/other'], '', stub)).plan['review.code'].model, 'opus'); // other projects keep the default preset (fable, too old here)
+  // Version strings: missing parts are 0; anything that doesn't start with a number is unknown, i.e. new enough.
+  assert.deepEqual(['2.2', '2.1', '2.1.304 (Claude Code)', 'v2.1.400', 'dev-build', '', null].map((v) => older(v, '2.1.321')), [false, true, true, false, false, false, false]);
+  // Headless runs get the step's flags, after the version check; without --step nothing changes.
+  const flag = (a, f) => (a.includes(f) ? a[a.indexOf(f) + 1] : null);
+  const sp = JSON.parse(cli(['headless-args', R, '--step', 'spec'], '', stub));
+  assert.deepEqual([flag(sp, '--model'), flag(sp, '--effort'), flag(sp, '--fallback-model')], ['opus', 'high', 'sonnet']);
+  const sec = JSON.parse(cli(['headless-args', R, '--review', '--step', 'intake'], '', stub));
+  assert.deepEqual([flag(sec, '--model'), flag(sec, '--fallback-model')], ['opus', null]); // fable fell back to the end of its chain
+  assert.equal(sec.at(-1), 'Glob'); // the variadic allowlist stays last
+  assert.equal(flag(JSON.parse(cli(['headless-args', R], '', stub)), '--model'), null);
+  assert.equal(flag(JSON.parse(cli(['headless-args', R, '--step', 'review.perf'], '', stub)), '--model'), null); // extra axis: fable, nothing left
+  assert.throws(() => cli(['headless-args', R, '--step', 'review.lint'], '', stub), /unknown step "review.lint"/);
+  // The verifier's usage event carries the configured verifier next to its measured model.
+  cli(['event', R, 'review', 'passed', '-'], '{"role":"verifier","tokens":7,"model":"claude-opus-5-5"}');
+  assert.deepEqual(read().findLast((e) => e.role === 'verifier').runner, { use: 'provider', harness: 'claude-code', name: 'pr-review-toolkit:code-reviewer', model: 'opus', effort: 'medium', fallback: ['sonnet'] });
+  // A global preset reaches a project that swaps only the runner: unset fields come from the global step first.
+  const before = fs.readFileSync(file, 'utf8');
+  set('acme/gp', 'review.code', { use: 'skill', name: 'gp-review' });
+  assert.equal(JSON.parse(cli(['skills', 'preset', 'all-claude-lean', 'default'])).scope, 'default');
+  assert.deepEqual(plan('acme/gp')['review.code'], { use: 'skill', name: 'gp-review', model: 'sonnet', effort: 'high', fallback: ['opus'] });
+  set('acme/gp', 'review.code', { use: 'skill', name: 'gp-review', model: 'haiku' });
+  assert.deepEqual(plan('acme/gp')['review.code'], { use: 'skill', name: 'gp-review', model: 'haiku', effort: 'high', fallback: ['sonnet'] }); // own model: its own chain
+  // A model alias a harness drops later is ignored on read with a warning, not fatal; writes still refuse it.
+  const cfg = cfgNow();
+  cfg['acme/gp']['review.code'] = { use: 'default', model: 'claude-9', effort: 'huge', fallback: ['opus', 'claude-8'] };
+  cfg['acme/gp']['review.docs'] = { use: 'default', model: 'opus', fallback: ['opus', 'sonnet'] };
+  fs.writeFileSync(file, JSON.stringify(cfg));
+  const res = spawnSync(process.execPath, [path.join(HERE, 'factory.mjs'), 'skills', 'acme/gp'], { encoding: 'utf8', env: { ...process.env, FACTORY_DIR: io.dir, ...stub } });
+  assert.equal(res.status, 0, res.stderr);
+  assert.deepEqual(JSON.parse(res.stdout).plan['review.code'], { use: 'default', model: 'sonnet', effort: 'high', fallback: ['opus'] }); // global's lean fields
+  assert.match(res.stderr, /skills\.json acme\/gp\.review\.code: ignoring model claude-9, effort huge, fallback claude-8 \(Claude Code offers [a-z|]+\); the next settings change removes it from the file/);
+  assert.match(res.stderr, /skills\.json acme\/gp\.review\.docs: ignoring fallback opus \(same as the model\); the next/);
+  assert.deepEqual(JSON.parse(res.stdout).plan['review.docs'].fallback, ['sonnet']);
+  assert.throws(() => set('acme/gp', 'review.docs', { use: 'default', model: 'claude-9' }), /model must be one of/);
+  fs.writeFileSync(file, before); // later checks expect the global config as it was
+}
+
 export function skillsTest(cli) {
   const R = 'acme/kit#1';
   const set = (scope, key, v) => cli(['skills', 'set', scope, key, JSON.stringify(v)]);
@@ -399,10 +477,14 @@ export function skillsTest(cli) {
   set('acme/kit', 'build', { use: 'provider', harness: 'codex' });
   set('default', 'axes.extra', [{ axis: 'a11y', when: ['**/*.tsx'], use: 'brief', path: '~/.claude/factory/briefs/a11y.md' }]);
   set('acme/kit', 'axes.extra', [{ axis: 'perf', when: ['src/hot/**'], use: 'skill', name: 'perf-review' }]);
-  const { plan, extra, required } = JSON.parse(cli(['skills', 'acme/kit']));
+  const stub = { PATH: `${path.join(HERE, 'test', 'bin')}${path.delimiter}${path.dirname(process.execPath)}` }; // claude 2.1.304: too old for fable
+  const { plan, extra, required } = JSON.parse(cli(['skills', 'acme/kit'], '', stub));
   assert.equal(plan.spec.name, 'my-planner'); // project beats global
   assert.equal(plan['review.code'].name, 'house-review'); // global fills the rest
-  assert.deepEqual(plan['review.security'], { use: 'default' });
+  const tooOld = { from: 'fable', reason: 'Claude Code 2.1.304 is older than 2.1.321, which fable needs' };
+  assert.deepEqual(plan['review.security'], { use: 'default', model: 'opus', effort: 'high', modelFallback: tooOld }); // all-claude, fable -> opus
+  assert.deepEqual(plan.build, { use: 'provider', harness: 'codex' }); // codex declares no models: nothing filled
+  assert.deepEqual(plan.postmerge, { use: 'default' });
   assert.deepEqual(extra.map((x) => x.axis), ['a11y', 'perf']);
   assert.deepEqual(required, ['code', 'security']);
   assert.equal(JSON.parse(cli(['skills', 'acme/other'])).plan.spec.name, 'global-planner');
@@ -416,6 +498,14 @@ export function skillsTest(cli) {
     ['review.code', { use: 'skill', name: 'x', note: 'hi' }, /unknown fields note/],
     ['axes.extra', [{ axis: 'security', when: ['**'], use: 'skill', name: 'lenient' }], /new lowercase name/],
     ['axes.extra', [{ axis: 'a11y', when: [], use: 'skill', name: 'x' }], /needs "when"/],
+    ['review.code', { use: 'default', model: 'gpt-6' }, /model must be one of fable\|opus\|sonnet\|haiku/],
+    ['review.code', { use: 'default', model: 'claude-opus-5-5' }, /model must be one of/], // aliases only: the Agent tool takes no ids
+    ['review.code', { use: 'default', effort: 'turbo' }, /effort must be one of low\|medium\|high\|xhigh\|max/],
+    ['review.code', { use: 'default', model: 'opus', fallback: ['opus'] }, /fallback must be 1-3 distinct/],
+    ['review.code', { use: 'default', fallback: 'opus' }, /fallback must be/],
+    ['review.code', { use: 'default', fallback: ['opus', 'sonnet', 'haiku', 'fable'] }, /fallback must be/],
+    ['review.code', { use: 'default', fallback: ['gpt-6'] }, /fallback must be/], // stays inside Claude
+    ['build', { use: 'provider', harness: 'codex', model: 'opus' }, /Codex runners can't set model/],
   ]) assert.throws(() => set('acme/kit', key, v), re);
   assert.throws(() => set('acme', 'spec', { use: 'default' }), /scope "acme"/);
   // Required axes are always selected; extra axes only add, by glob.
@@ -427,7 +517,7 @@ export function skillsTest(cli) {
   cli(['event', R, 'spec', 'passed', '-'], '{"spec":"s"}');
   cli(['event', R, 'build', 'started', '--fallback', 'codex not installed']);
   let r = derive(read())[R];
-  assert.deepEqual(r.runners.spec, { use: 'skill', name: 'my-planner' });
+  assert.deepEqual(r.runners.spec, { use: 'skill', name: 'my-planner', model: 'fable', effort: 'high', fallback: ['opus'] }); // configured, not version-checked
   assert.deepEqual(r.runners.build, { use: 'default', fallback: { from: { use: 'provider', harness: 'codex' }, reason: 'codex not installed' } });
   assert.ok(!('runner' in r.events[0]));
   assert.ok(!('runner' in record(R, 'build', 'passed'))); // in-process records (sync imports, demo) never claim a runner
@@ -443,12 +533,16 @@ export function skillsTest(cli) {
   r = derive(read())[R];
   assert.equal(r.reviews[1].code.runner.name, 'house-review');
   assert.equal(r.reviews[1].a11y.runner.use, 'brief');
-  assert.equal(r.reviews[1].security.runner, undefined);
+  assert.deepEqual(r.reviews[1].security.runner, { use: 'default', model: 'fable', effort: 'high', fallback: ['opus'] });
   assert.deepEqual(Object.values(r.reviews[1]).map((v) => v.verdict), ['passed', 'failed', 'failed', 'failed', 'failed']);
   assert.equal(r.tokens, 1200); // usage survives an invalid reply
   // Usage flags go through record()'s usage checks; the reviewer's own text can't set them.
   cli(['review', R, 'ui', '--tokens', '5', '--model', 'claude-sonnet-5-5', '--usage', '{"input":10,"output":20,"cacheRead":30,"cacheWrite":40}'], '{"axis":"ui","verdict":"passed","findings":[],"tokens":0,"usage":{"input":0}}');
   assert.deepEqual([derive(read())[R].tokens, derive(read())[R].burn.byAxis.ui.tokens], [1300, 100]);
+  const uiEv = read().findLast((e) => e.run === R && e.axis === 'ui');
+  assert.deepEqual([uiEv.model, uiEv.runner.model, uiEv.runner.effort], ['claude-sonnet-5-5', 'sonnet', 'high']); // measured next to configured
+  const ui = derive(read())[R].burn.byAxis.ui; // what served the axis: 100 tokens less 30 cache reads, from a subagent's result
+  assert.deepEqual([ui.models, ui.subModels], [{ 'claude-sonnet-5-5': 70 }, { 'claude-sonnet-5-5': 70 }]);
   assert.throws(() => cli(['review', R, 'ui'], '{"axis":"ui","verdict":"passed","findings":[]}'), /already recorded/); // invalid→valid once, then final
   assert.throws(() => cli(['review', R, 'ux', '--usage', '{"prompt":1}'], '{}'), /usage has unknown fields: prompt/); // ux is still invalid, so replaceable
   assert.throws(() => cli(['review', R, 'ux', '--model', 'a b'], '{}'), /short model id/);
@@ -506,7 +600,9 @@ export function skillsTest(cli) {
   const saved = post({}, ui1);
   assert.equal(saved.status, 200);
   assert.equal(JSON.parse(saved.body).plans['acme/kit'].plan['review.ui'].name, 'brand-review');
-  assert.deepEqual(JSON.parse(post({}, { ...ui1, runner: null }).body).plans['acme/kit'].plan['review.ui'], { use: 'default' }); // unset -> inherits
+  assert.deepEqual(JSON.parse(post({}, { ...ui1, runner: null }).body).plans['acme/kit'].plan['review.ui'], { use: 'default', model: 'sonnet', effort: 'high', fallback: ['opus'] }); // unset -> inherits
+  assert.equal(post({}, { ...ui1, runner: { use: 'default', model: 'gpt-6' } }).status, 400);
+  modelsTest(cli, R, stub);
   assert.equal(JSON.parse(cli(['skills', 'unset', 'acme/kit', 'build'])).build, undefined);
   assert.ok(!fs.readFileSync(render(), 'utf8').includes(tok), 'the written dashboard never carries the ui token');
   // /api/*: the same routes and checks under one prefix, plus token-guarded reads of the run list.

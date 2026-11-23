@@ -60,7 +60,7 @@ In the commands below:
    for l in factory:in-progress factory:needs-info factory:rejected factory:needs-human factory:merged factory:ready factory:needs-approval; do gh label create "$l" -R OWNER/REPO --force --color BFD4F2 >/dev/null; done
    ```
    **Every "add" or "remove" of a label below, on an issue or a PR, goes through the REST labels endpoint:** `gh api -X POST repos/OWNER/REPO/issues/<n>/labels -f 'labels[]=<label>'` to add, `gh api -X DELETE repos/OWNER/REPO/issues/<n>/labels/<label>` to remove. Your shell quotes the brackets; `F` itself sends `{"labels":[…]}` on stdin with `--input -`, because a Windows `gh.cmd` shim can't pass them. A 404 from the DELETE that says `Label does not exist` only means it wasn't there; any other 404, and every 404 from the POST, is a real error (wrong repo or number, or no access): stop and check. Never `gh issue edit` or `gh pr edit` with `--add-label`/`--remove-label`: they fail on current `gh` (Projects classic deprecation).
-3. Run `F skills OWNER/REPO` and keep its `plan`, `extra` and `guide` for this run. Each step below follows its runner as described in [Runners](#runners-who-does-each-step).
+3. Run `F skills OWNER/REPO` and keep its `plan`, `extra` and `guide` for this run. Each step below follows its runner as described in [Runners](#runners-who-does-each-step), on the model its runner names (see [Models](#models-per-step)).
    Then run `F rules OWNER/REPO` and keep its `policy`. Tell the user every line of `warnings` (an expired or expiring rule) before going on.
 4. Run `F state RUN` and act on what it shows:
 
@@ -156,9 +156,9 @@ Then run `F risk RUN <files to touch…>`.
    4. for a re-review, its own findings from last time.
    
    Do not pass it your build notes.
-   - Use model `sonnet` for the `ui`, `seo` and `docs` axes. Use the default model for `code`, `security` and `ux`.
+   - Spawn each with the Agent `model` and `effort` set to its runner's `model` and `effort` from the plan (see [Models](#models-per-step)); for headless reviewers, add `--step review.<axis>` to `F headless-args`.
    - Set each Agent `description` to `<axis> review RUN` (for example `security review acme/shop#41`). `F` reads that first word to give each subagent transcript's tokens to its axis.
-3. **Verify blocking findings.** Collect every high and medium finding. Send them all to one `sonnet` verifier subagent with the verifier brief in reviewers.md, or to `plan.verifier` when it isn't default. If the verifier's reply isn't the verifier JSON, dismiss nothing. For each finding the verifier rejects, add `"dismissed": "<its reason>"` to that finding. Dismissed findings stay visible but do not block. Its Agent `description` is `verifier RUN`. Record its usage with `F event RUN review passed -` and `{"role":"verifier","tokens":<n>,"model":"<id>"}`, plus `"usage"` when the split is known.
+3. **Verify blocking findings.** Collect every high and medium finding. Send them all to one verifier subagent, on `plan.verifier`'s model and effort, with the verifier brief in reviewers.md, or to `plan.verifier`'s runner when it isn't default. If the verifier's reply isn't the verifier JSON, dismiss nothing. For each finding the verifier rejects, add `"dismissed": "<its reason>"` to that finding. Dismissed findings stay visible but do not block. Its Agent `description` is `verifier RUN`. Record its usage with `F event RUN review passed -` and `{"role":"verifier","tokens":<n>,"model":"<id>"}`, plus `"usage"` when the split is known.
 4. Record each axis with `F review RUN <axis> --tokens <n> --model <id> [--usage '{"input":…,"output":…,"cacheRead":…,"cacheWrite":…}'] [--cost-usd <x>] -`, passing the reviewer's reply on stdin with only the verifier's `dismissed` marks added. The flags carry that reviewer's usage from its Agent result (`--usage` when the split is known; `tokens` then becomes its sum). It is the reported fallback for the budget cap, counts even when the reply is invalid, and any usage fields in the reply itself are ignored. `F` turns anything outside the contract into a **failed** review with a "reviewer output invalid" finding:
    - not a JSON object, or the wrong `axis`;
    - unknown fields;
@@ -225,7 +225,7 @@ The page shows every attached project, as the owner approved; the rule only deci
 | `{"use":"default"}` | The built-in brief in this file or in reviewers.md. |
 | `{"use":"skill","name":"x"}` | Invoke the Skill `x` in a fresh subagent, giving it the step's inputs and its output contract. |
 | `{"use":"brief","path":"…md"}` | Spawn a fresh subagent with that file as its brief, in place of the built-in one. |
-| `{"use":"provider","harness":"claude-code","name":"x"}` | If `x` is one of your Agent subagent types (such as `pr-review-toolkit:code-reviewer`), spawn that agent. Otherwise run the skill headless in WT with pinned flags: `(cd WT && claude -p "/x" <args>)`, where `<args>` is the JSON array from `F headless-args RUN [--review|--write] [--share N]`, each element single-quoted as one shell word. For reviewers started together, pass `--share <number of headless reviewers in that message>`. See [Headless Claude Code runs](#headless-claude-code-runs). |
+| `{"use":"provider","harness":"claude-code","name":"x"}` | If `x` is one of your Agent subagent types (such as `pr-review-toolkit:code-reviewer`), spawn that agent. Otherwise run the skill headless in WT with pinned flags: `(cd WT && claude -p "/x" <args>)`, where `<args>` is the JSON array from `F headless-args RUN [--review|--write] [--share N] --step <step>`, each element single-quoted as one shell word. For reviewers started together, pass `--share <number of headless reviewers in that message>`. See [Headless Claude Code runs](#headless-claude-code-runs). |
 | `{"use":"provider","harness":"codex"}` | Run Codex headless in WT. Review and verifier steps use `-s read-only` and build uses `-s workspace-write`; never pass `--dangerously-bypass-approvals-and-sandbox`. Review: `codex exec -C WT -s read-only --output-schema ~/.claude/skills/software-factory/references/review.schema.json -o DIR/<axis>.json "<brief>"`. With `"name":"review"`, run `codex review --base BASE` in WT and pass its prose through the adapter. Any other `name` is ignored. |
 
 - **Same contract as the default.**
@@ -237,12 +237,24 @@ The page shows every attached project, as the owner approved; the rule only deci
 - **Fallback.** Use the default only when the configured runner can't run: the skill isn't listed, the brief file is missing, or `codex` isn't installed or logged in. Then add `--fallback "<why>"` to that step's `F event`, `F review` or `F gate` call. A runner that ran and failed is not a fallback: record its result.
 - **What config can't change.** `code` and `security` are always reviewed, and extra axes only add to the selection. `F gate`, `F decide`, `F merge`, the caps, the trusted associations and the sensitive paths are the same whoever runs a step. A diff touching `.claude/**`, `.codex/` or `.mcp.json` is a sensitive path, because headless runners in WT load that branch's agent config, and `claude -p` runs its hooks and MCP servers with no trust prompt.
 
+### Models per step
+
+Each Claude-run step's runner in `plan` carries `model` (an alias: `fable`, `opus`, `sonnet` or `haiku`), `effort` and an optional `fallback` chain. Steps that don't set them get them from the built-in **All-Claude** preset (Fable for intake, spec, `code` and `security` review and the verifier; Opus for build; Sonnet for `ux` and `ui`; Haiku for `seo` and `docs`). Runners on another harness (Codex) carry none.
+
+- **Subagents:** pass the runner's `model` and `effort` as the Agent tool's `model` and `effort`. If the call is refused because that model is unavailable, overloaded or over a plan limit, retry it once on each `fallback` alias in order. The measured model on the event shows which one ran.
+- **This session:** intake, spec and build under the default runner run in this session, so on this session's model. When the plan's model for one of them differs from yours, do that step in a fresh subagent on its model instead (intake and spec), or tell the user to start the session as `claude --model <build model>` (build).
+- **Headless:** `F headless-args RUN … --step <step>` adds `--model`, `--effort` and `--fallback-model`.
+- **Too old for the model.** `F skills` and `F headless-args` check the installed `claude --version` against each model's minimum (Fable needs 2.1.321). An older CLI moves the step down its `fallback` chain and notes `modelFallback: {from, reason}` in the plan; tell the user once.
+- **Presets.** `F skills preset <all-claude|all-claude-lean> [owner/repo|default]` sets every Claude-run step of that scope at once (for a project, only the steps it already sets; the rest follow global). Run it, or `F skills set` with a `model`, only when the user asks in chat.
+- **Recorded.** `F` stamps the configured `model`, `effort` and `fallback` in each event's `runner`; the payload's `model` (from usage) is what ran.
+
 ### Headless Claude Code runs
 
-`F headless-args RUN [--review|--write] [--share N]` prints the flags as a JSON array. They are pinned, so a run never depends on `-p`'s defaults:
+`F headless-args RUN [--review|--write] [--share N] [--step <step>]` prints the flags as a JSON array. They are pinned, so a run never depends on `-p`'s defaults:
 - `--output-format json`, plus `--json-schema <review.schema.json>` with `--review`.
 - `--permission-prompts none`. With `--write` (build only): `--permission-mode auto`. Every other step is read-only: `--permission-mode manual` with a `git diff`/`git log`/Read/Grep/Glob allowlist, so anything else is denied (auto mode's classifier could approve other commands).
 - **No `--bare`, on purpose.** It would skip the `/x` skill being run and needs `ANTHROPIC_API_KEY`. The repo's hooks and `.mcp.json` servers are cut by `--setting-sources user` and `--strict-mcp-config` instead.
+- `--model`, `--effort` and `--fallback-model a,b` from `--step <step>`'s runner, after the version check.
 - `--max-budget-usd` set to what is left of the run's $5 budget. Reviewers started in the same message spend it at once, so pass `--share <number of parallel headless reviewers>`: each gets an equal cut, in whole cents rounded down. `F` refuses when the budget is spent or a cut would be under $0.05; go to Approve, which escalates.
 
 Never run `claude -p` in an imported or untrusted checkout, only in this run's own WT; `F headless-args` refuses imported runs.

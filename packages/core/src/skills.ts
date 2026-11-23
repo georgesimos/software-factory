@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ls, projects } from './workspace.ts';
-import { checkGuide, checkRules, rules } from './rules.ts';
+import { audit, checkGuide, checkRules, checkScope, rules, whoami } from './rules.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { stateDir } from './log.ts';
 
@@ -15,18 +15,43 @@ export const STEP_KEYS = ['intake', 'spec', 'build', ...BUILTIN_AXES.map((a) => 
 export const harnessIds = () => harnesses.map((h) => h.id);
 export const NAME = /^[\w.-]+(:[\w.-]+)?$/; // skill, plugin:skill or agent type; it ends up in a command line
 export const skillsFile = () => path.join(stateDir(), 'skills.json');
+
+// Per-step models (docs/research/model-routing.md §1-2). [model, effort] per step; aliases, which the Agent tool takes.
+export const PRESETS = {
+  'all-claude': { intake: ['fable', 'medium'], spec: ['fable', 'high'], build: ['opus', 'high'], 'review.code': ['fable', 'high'], 'review.security': ['fable', 'high'],
+    'review.ux': ['sonnet', 'high'], 'review.ui': ['sonnet', 'high'], 'review.seo': ['haiku', 'medium'], 'review.docs': ['haiku', 'medium'], verifier: ['fable', 'medium'] },
+  'all-claude-lean': { intake: ['fable', 'medium'], spec: ['opus', 'high'], build: ['opus', 'high'], 'review.code': ['sonnet', 'high'], 'review.security': ['opus', 'high'],
+    'review.ux': ['sonnet', 'high'], 'review.ui': ['sonnet', 'high'], 'review.seo': ['haiku', 'medium'], 'review.docs': ['haiku', 'medium'], verifier: ['opus', 'medium'] },
+};
+export const DEFAULT_PRESET = 'all-claude'; // the built-in plan; 'all-claude-lean' is the open alternative
+const FALLBACK = { fable: ['opus'], opus: ['sonnet'], sonnet: ['opus'], haiku: ['sonnet'] }; // overloaded or unavailable: stay inside Claude
+const MODEL_KEYS = ['model', 'effort', 'fallback'];
+// Default, skill and brief runners run on the host harness (Claude Code); a provider on its own. Only a harness with models() takes a model.
+const runsOn = (s) => harnesses.find((h) => (s.use === 'provider' ? h.id === s.harness : h.host));
+const presetRunner = (name, key, base) => {
+  const [model, effort] = PRESETS[name][key];
+  return { ...base, model, effort, fallback: FALLBACK[model] };
+};
 // A brief must live outside any worktree, so a branch can't supply it: an absolute path, or ~. The Windows forms only on
 // Windows, because on macOS and Linux `C:\x.md` and `~\x.md` are relative paths.
 const BRIEF = { posix: /^(\/|~\/).*\.md$/, win32: /^(\/|~[\\/]|[A-Za-z]:[\\/]).*\.md$/ };
 export function checkRunner(s, at, more = [], platform = process.platform) {
   if (!s || typeof s !== 'object' || Array.isArray(s)) throw new Error(`${at}: a runner must be a JSON object`);
-  const bad = Object.keys(s).filter((k) => !['use', 'name', 'path', 'harness', ...more].includes(k));
+  const bad = Object.keys(s).filter((k) => !['use', 'name', 'path', 'harness', ...MODEL_KEYS, ...more].includes(k));
   if (bad.length) throw new Error(`${at}: unknown fields ${bad.join(', ')}`);
   const ok = s.use === 'default' && !s.name && !s.path && !s.harness
     || s.use === 'skill' && NAME.test(s.name || '') && !s.path && !s.harness
     || s.use === 'brief' && BRIEF[platform === 'win32' ? 'win32' : 'posix'].test(s.path || '') && !s.name && !s.harness
     || s.use === 'provider' && harnessIds().includes(s.harness) && (s.name === undefined || NAME.test(s.name)) && !s.path;
   if (!ok) throw new Error(`${at}: expected {"use":"default"}, {"use":"skill","name"}, {"use":"brief","path":"/abs/or/~/….md"} or {"use":"provider","harness":"${harnessIds().join('|')}","name"?}`);
+  if (s.model === undefined && s.effort === undefined && s.fallback === undefined) return;
+  const h = runsOn(s), ids = (h?.models?.() || []).map((m) => m.alias);
+  if (!ids.length) throw new Error(`${at}: ${h?.label || s.harness} runners can't set model, effort or fallback`);
+  if (s.model !== undefined && !ids.includes(s.model)) throw new Error(`${at}: model must be one of ${ids.join('|')}`);
+  if (s.effort !== undefined && !(h.efforts || []).includes(s.effort)) throw new Error(`${at}: effort must be one of ${(h.efforts || []).join('|') || 'nothing for ' + h.label}`);
+  const fb = s.fallback;
+  if (fb !== undefined && !(Array.isArray(fb) && fb.length >= 1 && fb.length <= 3 && fb.every((m) => ids.includes(m)) && new Set(fb).size === fb.length && !fb.includes(s.model)))
+    throw new Error(`${at}: fallback must be 1-3 distinct ${h.label} models (${ids.join('|')}), not the model itself`);
 }
 export function checkStep(key, v, at) {
   if (key === 'rules') return checkRules(v, at);
@@ -52,8 +77,36 @@ export function checkSkills(cfg) {
   }
   return cfg;
 }
+// On read, a model, effort or fallback the harness no longer offers is dropped with a warning instead of failing every
+// command; setSkill and applyPreset still refuse them, since writeSkills checks strictly. The next write saves the drop.
+const warned = new Set();
+export function dropUnknownModels(cfg) {
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return cfg;
+  const drop = (r, at) => {
+    if (!r || typeof r !== 'object' || Array.isArray(r) || (r.model === undefined && r.effort === undefined && r.fallback === undefined)) return r;
+    const h = runsOn(r), ids = (h?.models?.() || []).map((m) => m.alias);
+    if (!ids.length) return r; // checkRunner names the real problem
+    const out = { ...r }, gone = [];
+    if (r.model !== undefined && !ids.includes(r.model)) { gone.push(`model ${r.model}`); delete out.model; }
+    if (r.effort !== undefined && !(h.efforts || []).includes(r.effort)) { gone.push(`effort ${r.effort}`); delete out.effort; }
+    let same = '';
+    if (Array.isArray(r.fallback)) {
+      const keep = r.fallback.filter((m) => ids.includes(m) && m !== out.model), unknown = r.fallback.filter((m) => !ids.includes(m));
+      if (unknown.length) gone.push(`fallback ${unknown.join(',')}`);
+      if (keep.length + unknown.length < r.fallback.length) same = `fallback ${out.model} (same as the model)`;
+      if (keep.length) out.fallback = keep; else delete out.fallback;
+    }
+    const what = [gone.length && `${gone.join(', ')} (${h.label} offers ${ids.join('|')})`, same].filter(Boolean).join('; ');
+    const msg = `skills.json ${at}: ignoring ${what}; the next settings change removes it from the file`;
+    if (what && !warned.has(msg)) { warned.add(msg); console.error(msg); }
+    return out;
+  };
+  return Object.fromEntries(Object.entries(cfg).map(([scope, steps]) => [scope, !steps || typeof steps !== 'object' || Array.isArray(steps) ? steps
+    : Object.fromEntries(Object.entries(steps).map(([k, v]) => [k, k === 'rules' || k === 'guide' ? v
+      : k === 'axes.extra' ? (Array.isArray(v) ? v.map((x) => drop(x, `${scope}.${k}`)) : v) : drop(v, `${scope}.${k}`)]))]));
+}
 export function readSkills() {
-  try { return checkSkills(JSON.parse(fs.readFileSync(skillsFile(), 'utf8'))); } catch (e) {
+  try { return checkSkills(dropUnknownModels(JSON.parse(fs.readFileSync(skillsFile(), 'utf8')))); } catch (e) {
     if (e.code === 'ENOENT') return {};
     throw new Error(e.message.startsWith('skills.json') ? e.message : `skills.json: ${e.message}`);
   }
@@ -61,7 +114,17 @@ export function readSkills() {
 // The resolved plan: per step the project's runner, else the global one, else the built-in. Extra axes add up, project wins per axis.
 export function skills(repo, cfg = readSkills()) {
   const g = cfg.default || {}, p = cfg[repo] || {};
-  const plan = Object.fromEntries(STEP_KEYS.map((k) => [k, p[k] || g[k] || { use: 'default' }]));
+  // Claude-run steps fill what they don't set, field by field, from the global step (so a global preset reaches a project
+  // that only swaps the runner), then the default preset. A fallback follows its model and can't be the chosen model.
+  const fill = (k, r) => {
+    if (!PRESETS[DEFAULT_PRESET][k] || !runsOn(r)?.models) return r;
+    const up = r !== g[k] && runsOn(g[k] || { use: 'default' }) === runsOn(r) ? g[k] || {} : {};
+    const d = presetRunner(DEFAULT_PRESET, k, {}), model = r.model || up.model || d.model;
+    const fallback = (r.fallback || (!r.model && up.model && up.fallback) || FALLBACK[model]).filter((m) => m !== model);
+    const { fallback: _f, ...rest } = r;
+    return { ...rest, model, effort: r.effort || up.effort || d.effort, ...(fallback.length && { fallback }) };
+  };
+  const plan = Object.fromEntries(STEP_KEYS.map((k) => [k, fill(k, p[k] || g[k] || { use: 'default' })]));
   const all = [...(g['axes.extra'] || []), ...(p['axes.extra'] || [])];
   const extra = all.filter((x, i) => all.findLastIndex((y) => y.axis === x.axis) === i);
   return { repo, plan, extra, required: REQUIRED_AXES, guide: rules(repo, cfg).guide };
@@ -83,6 +146,54 @@ export function setSkill(scope, key, value) {
   writeSkills(cfg);
   return cfg[scope] || {};
 }
+// The preset's model, effort and fallback on each step of a scope, keeping who runs the step. Non-Claude runners are skipped.
+// A project gets them only on steps it already sets; the rest keep inheriting global (and its preset) as it changes.
+export function applyPreset(name, scope = 'default') {
+  if (!PRESETS[name]) throw new Error(`unknown preset "${name}" (${Object.keys(PRESETS).join('|')})`);
+  checkScope(scope);
+  const cfg = readSkills(), s = { ...cfg[scope] }, applied = [], skipped = [], inherited = [];
+  for (const key of Object.keys(PRESETS[name])) {
+    if (scope !== 'default' && !s[key]) { inherited.push(key); continue; }
+    const { model: _m, effort: _e, fallback: _f, ...base } = s[key] || { use: 'default' };
+    if (!runsOn(base)?.models) { skipped.push(key); continue; }
+    s[key] = presetRunner(name, key, base);
+    applied.push(key);
+  }
+  const setBy = whoami();
+  cfg[scope] = s;
+  writeSkills(cfg);
+  audit(scope, 'set', { key: 'preset', value: name, setBy });
+  return { scope, preset: name, applied, skipped, inherited };
+}
+
+// A model the installed CLI is too old for (Fable needs 2.1.321) moves the step down its fallback chain, noted as
+// modelFallback; fallback entries it is too old for are dropped too. Nothing left: no model (the session's own) and the
+// reason. An unknown or non-numeric version counts as new enough; missing parts are 0 (2.2 is 2.2.0).
+export const older = (v, min) => {
+  const m = /^\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(String(v ?? ''));
+  if (!m) return false;
+  const a = m.slice(1).map((n) => Number(n || 0)), b = [...min.split('.').map(Number), 0, 0, 0].slice(0, 3);
+  const i = b.findIndex((n, j) => a[j] !== n);
+  return i >= 0 && a[i] < b[i];
+};
+export function availablePlan(plan, version = (h) => h.detect().version) {
+  const seen = new Map(), ver = (h) => (seen.has(h.id) ? seen.get(h.id) : seen.set(h.id, version(h)).get(h.id));
+  return Object.fromEntries(Object.entries(plan).map(([k, r]) => {
+    const h = r.model && runsOn(r);
+    if (!h?.models) return [k, r];
+    const min = (m) => h.models().find((x) => x.alias === m)?.minVersion, ok = (m) => !min(m) || !ver(h) || !older(ver(h), min(m));
+    const { model, fallback = [], ...rest } = r, left = fallback.filter(ok);
+    if (ok(model)) return [k, { ...rest, model, ...(left.length && { fallback: left }) }];
+    const modelFallback = { from: model, reason: `${h.label} ${ver(h)} is older than ${min(model)}, which ${model} needs` };
+    return [k, { ...rest, ...(left[0] && { model: left[0] }), ...(left.length > 1 && { fallback: left.slice(1) }), modelFallback }];
+  }));
+}
+// Every step the session runs, keyed like the plan: built-in steps and extra axes as review.<axis>, after the version check.
+export const resolvedSteps = (repo) => {
+  const { plan, extra } = skills(repo);
+  return availablePlan({ ...plan, ...Object.fromEntries(extra.map(({ axis, when: _w, ...x }) => [`review.${axis}`, x])) });
+};
+
 // Every runner the picker can offer, by where it comes from. Descriptions come from front matter and are display-only.
 export const front = (file) => {
   let t = '';
@@ -152,6 +263,7 @@ export function skillsData(repos = []) {
     const cfg = readSkills();
     const scopes = [...new Set([...Object.keys(projects()), ...repos, ...Object.keys(cfg)])].filter((s) => s !== 'default').sort();
     return { steps: STEP_KEYS, required: REQUIRED_AXES, config: cfg, scopes,
-      plans: Object.fromEntries(['default', ...scopes].map((s) => [s, skills(s === 'default' ? '' : s, cfg)])), catalog: catalog(scopes) };
+      plans: Object.fromEntries(['default', ...scopes].map((s) => [s, skills(s === 'default' ? '' : s, cfg)])), catalog: catalog(scopes),
+      models: (harnesses.find((h) => h.host)?.models?.() || []).map((m) => m.alias), preset: DEFAULT_PRESET, presets: PRESETS };
   } catch (e) { return { error: e.message }; } // a bad skills.json must not break rendering an event that was already appended
 }

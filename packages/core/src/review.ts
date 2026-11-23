@@ -3,7 +3,7 @@ import { INVALID, assertReviewOpen, derive, validateReview } from './derive.ts';
 import { blocking } from './constants.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { read } from './log.ts';
-import { skills } from './skills.ts';
+import { resolvedSteps, skills } from './skills.ts';
 
 // Pinned unattended flags come from the harness that runs the skill (claude-code.mjs: `claude -p`), so F names no harness.
 // `share`: how many headless runs spend the remaining budget at once (parallel reviewers). Each gets an equal cut,
@@ -22,13 +22,20 @@ export function headlessArgs({ share = 1, ...opts } = {}) {
   return h.headlessArgs(opts);
 }
 // F, not the payload, says who did the work. Default runners leave events unchanged; a fallback can only downgrade to default.
-export function runnerStamp(run, stage, axis, fallback) {
-  const key = stage === 'review' ? (axis && `review.${axis}`) : stage === 'gate' ? 'verifier' : ['intake', 'spec', 'build'].includes(stage) ? stage : null;
+export function runnerStamp(run, stage, axis, fallback, role) {
+  const key = stage === 'review' ? (role === 'verifier' ? 'verifier' : axis && `review.${axis}`) : stage === 'gate' ? 'verifier' : ['intake', 'spec', 'build'].includes(stage) ? stage : null;
   if (!key) return {};
   const { plan, extra } = skills(run.split(/[#:]/)[0]);
   const { axis: _a, when: _w, ...runner } = plan[key] || extra.find((x) => x.axis === axis) || { use: 'default' };
   if (fallback) return { runner: { use: 'default', fallback: { from: runner, reason: String(fallback).slice(0, 200) } } };
-  return runner.use === 'default' ? {} : { runner };
+  return runner.use === 'default' && !runner.model ? {} : { runner }; // the configured model; the payload's `model` is the measured one
+}
+// The flags a headless run of one step gets from its resolved runner: model, effort and fallback after the version check.
+export function stepModel(run, key) {
+  const all = resolvedSteps(run.split(/[#:]/)[0]);
+  if (!all[key]) throw new Error(`unknown step "${key}" (${Object.keys(all).join('|')})`);
+  const { model, effort, fallback } = all[key];
+  return { model, effort, fallback };
 }
 // Reviewer output from any runner is untrusted text: anything outside the contract is a failed review, never a pass.
 export function reviewFromText(run, axis, text) {

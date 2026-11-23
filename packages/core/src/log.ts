@@ -46,7 +46,7 @@ export function record(run, stage, status, payload = {}, cli) { // cli: {fallbac
   }
   payload = validateUsage(payload);
   const me = stage === 'ship' ? null : harnesses.find((h) => h.current?.()); // the harness F runs inside, if any; lets the UI link back to the driving session
-  const ev = { ts: new Date().toISOString(), ...payload, ...(me ? { harness: me.id, sessionId: me.current(), cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback)), run, stage, status };
+  const ev = { ts: new Date().toISOString(), ...payload, ...(me ? { harness: me.id, sessionId: me.current(), cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback, payload.role)), run, stage, status };
   fs.mkdirSync(stateDir(), { recursive: true });
   fs.appendFileSync(log(), JSON.stringify(ev) + '\n');
   if (TERMINAL.includes(status) || status === 'needs-info') { // a finished (or parked) run gives back its worktree

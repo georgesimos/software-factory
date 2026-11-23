@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { archive, io, log, read, record } from '../../core/src/log.ts';
-import { budget, derive, getRun } from '../../core/src/derive.ts';
+import { addBurn, budget, burnOf, derive, finishBurn, getRun } from '../../core/src/derive.ts';
 import { decide } from '../../core/src/gate.ts';
 import { facts } from '../../core/src/github.ts';
 import { main } from '../../cli/src/main.ts';
@@ -54,6 +54,21 @@ export function usageTest() {
   assert.deepEqual(Object.fromEntries(Object.entries(b.byIteration).map(([k, c]) => [k, c.tokens])), { 0: 1_100_000, 1: 2_321_000 });
   assert.deepEqual(Object.fromEntries(Object.entries(b.byAxis).map(([k, c]) => [k, c.tokens])), { code: 200_000, verifier: 10_000, other: 10_000 });
   assert.equal(b.reported.tokens, 5000);
+  // What served each step, per model id and without cache reads (m3's 1M read): the dashboard shows the top one next to
+  // the configured model, from the subagent's rows alone when the step ran in one.
+  assert.deepEqual(b.byStage.build.models, { 'claude-opus-5-5': 1_000_000, 'claude-mystery-9': 1000, 'claude-fable-5-2': 100_000 });
+  assert.deepEqual([b.byStage.build.subModels, b.byStage.review.subModels], [{}, { 'claude-sonnet-5-5': 220_000 }]);
+  assert.deepEqual([b.byStage.build.used, b.byStage.review.used, b.byAxis.code.used], ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-sonnet-5-5']);
+  // A session-run step that spawns a small helper keeps the session's model; a step run in a subagent gets the subagent's,
+  // even when the orchestrator's cache reads around it are larger (they don't count as served).
+  const hb = burnOf(), at1 = (stage, axis) => ({ stage, iteration: 1, axis });
+  addBurn(hb, at1('build'), 1_000_000, 0, 0, 'claude-opus-5-5');
+  addBurn(hb, at1('build', 'other'), 50_000, 0, 0, 'claude-haiku-4-5', true);
+  addBurn(hb, at1('spec'), 900_000, 0, 880_000, 'claude-opus-5-5');
+  addBurn(hb, at1('spec', 'other'), 300_000, 0, 0, 'claude-fable-5-2', true);
+  finishBurn(hb);
+  assert.deepEqual([hb.byStage.build.used, hb.byStage.spec.used, hb.byAxis.other.used], ['claude-opus-5-5', 'claude-fable-5-2', 'claude-fable-5-2']);
+  assert.deepEqual([b.byAxis.code.models, b.byAxis.verifier.models], [{ 'claude-sonnet-5-5': 200_000 }, { 'claude-sonnet-5-5': 10_000 }]);
   assert.equal(getRun(P).burn.total.tokens, 1000);
   assert.equal(getRun(I).burn, undefined);
   assert.ok(!fs.readFileSync(usageFile(), 'utf8').includes('secret prompt'));
@@ -76,6 +91,7 @@ export function usageTest() {
   for (const [p, re] of [[{ usage: { input: -1 } }, /non-negative integer/], [{ usage: { input: 1.5 } }, /non-negative integer/], [{ usage: { prompt: 'x' } }, /unknown fields: prompt/],
     [{ usage: [1] }, /must be an object/], [{ model: 'x'.repeat(65) }, /short model id/], [{ model: 'a b' }, /short model id/], [{ tokens: '9' }, /tokens must be/]]) assert.throws(() => record(R, 'build', 'passed', p), re);
   record(R, 'review', 'passed', { role: 'verifier', tokens: 10, model: 'claude-sonnet-5-5' });
+  assert.deepEqual(derive(read())[R].burn.byAxis.verifier.models, { 'claude-sonnet-5-5': 10 }); // reported usage: the payload's model
   assert.throws(() => record(R, 'review', 'passed', { role: 'judge' }), /role must be/);
   assert.throws(() => record(R, 'review', 'passed', { role: 'verifier', findings: [] }), /unknown fields: findings/);
   assert.equal(derive(read())[R].burn.byAxis.verifier.tokens, 10);

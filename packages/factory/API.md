@@ -45,7 +45,7 @@ Every write is also served at its original path without `/api` (for example `POS
 
 | Route | Body | Returns | CLI |
 |---|---|---|---|
-| `POST /api/skills` | `{"scope": "owner/repo"\|"default", "step": "<step>", "runner": {…}\|null}` (`null` unsets) | the Skills sheet data | `F skills set\|unset` |
+| `POST /api/skills` | `{"scope": "owner/repo"\|"default", "step": "<step>", "runner": {…}\|null}` (`null` unsets) | the Skills sheet data (runners with `model`, `effort`, `fallback`, plus `models`, `preset` and `presets`) | `F skills set\|unset` |
 | `POST /api/idea` | `{"repo": "owner/repo", "idea": "…", "stack": "<id>"}` | `{"run", "next"}`; records the idea only | `F new "<idea>" --name owner/repo --stack <id>` |
 | `POST /api/onboard` | `{}` | setup state (harnesses, logins, repos, runners, rules); reads only | `F onboard --json` |
 | `POST /api/onboard/sync` | `{"repo": "owner/repo", "path": "<absolute clone path>"}` | onboarding config | `F sync owner/repo <path>` |
