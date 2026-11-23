@@ -3,6 +3,7 @@
 // sdk the harness's SDK. Neither is a dependency of F: the host passes them in, keyed by package name (modules['node-pty'],
 // modules['@anthropic-ai/claude-agent-sdk']), else they are imported lazily by name. argv only, never a shell (core/src/platform.ts).
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
 import { command } from '../core/src/platform.ts';
@@ -14,7 +15,9 @@ const KEEP_EXITED = 20; // finished sessions kept for replay; older ones are for
 const sessions = new Map();
 
 export const getSession = (id) => sessions.get(id);
-export const listSessions = () => [...sessions.values()].map(({ id, harness, mode, label, state, exit, started }) => ({ id, harness, mode, label, state, exit, started }));
+export const listSessions = () => [...sessions.values()].map(({ id, harness, mode, label, state, exit, started, ended, harnessSession }) => ({ id, harness, mode, label, state, exit, started, ended, harnessSession }));
+// A run that a killed session leaves active is resumed from it (server.ts), so its newest one is never forgotten, only emptied.
+const resumable = (x) => x.exit !== 0 && x.harnessSession && [...sessions.values()].filter((y) => y.label === x.label).at(-1) === x;
 
 function emit(s, e) {
   const ev = { n: s.next++, at: new Date().toISOString(), ...e };
@@ -35,41 +38,48 @@ export function subscribe(s, fn, from = 0) {
 // The file and argv for a spec, found on the PATH (and PATHEXT) that the spawn gets, not this process's.
 export const resolveSpec = (spec, env, resolve) => command(spec.cmd, spec.args, { env, ...resolve });
 
-// Stops a child and, on Windows, everything under it: through a .cmd shim, kill() would end cmd.exe and leave the paid
-// claude run going. A spawn that failed with ENOENT keeps pid 0, and kill(0) would signal our whole process group.
-export function killTree(child, platform = process.platform, run = spawn) {
+// Stops a child and everything under it (claude's Bash tools: dev servers, watchers). Windows: taskkill /T, since through a
+// .cmd shim kill() would end only cmd.exe. POSIX: the child leads its own process group (spawned detached), so the group
+// gets SIGTERM. A spawn that failed with ENOENT keeps pid 0, and kill(0) or kill(-0) would signal our own group.
+export function killTree(child, platform = process.platform, run = spawn, kill = process.kill) {
   if (!child.pid) return;
   if (platform === 'win32') run('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => { /* taskkill missing: nothing else to try */ });
-  else child.kill();
+  else try { kill(-child.pid, 'SIGTERM'); } catch { child.kill(); } // the group is gone: the child alone, if it is not
 }
+// Detached children don't get the terminal's Ctrl-C, so a running session is stopped when this process ends.
+const stopAll = () => { for (const s of sessions.values()) if (s.state === 'running') s.stop(); };
+process.once('exit', stopAll);
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(sig, () => { stopAll(); process.kill(process.pid, sig); }); // then the default action
 
 // h: the harness adapter; opts go to h.launch(); cwd and env are the host's, never the request's. resolve is for tests:
 // command()'s platform and file lookup (core/src/platform.ts).
 export function startSession(h, opts, { cwd, env = process.env, label = '', modules = {}, resolve }) {
   if (typeof h.launch !== 'function' || !(h.modes || []).includes(opts.mode)) throw new Error(`${h.id} cannot launch in ${opts.mode} mode`);
   const spec = h.launch(opts);
-  const s = { id: crypto.randomUUID(), harness: h.id, mode: opts.mode, label, state: 'running', exit: null, started: new Date().toISOString(), events: [], next: 0, listeners: new Set(), bytes: 0, stop: () => {} };
+  const s = { id: crypto.randomUUID(), harness: h.id, mode: opts.mode, label, state: 'running', exit: null, started: new Date().toISOString(), events: [], next: 0, listeners: new Set(), bytes: 0, stop: () => {}, harnessSession: undefined, ended: null };
   sessions.set(s.id, s);
   const done = (exit) => {
     if (s.state !== 'running') return;
-    s.state = 'exited'; s.exit = exit;
+    s.state = 'exited'; s.exit = exit; s.ended = new Date().toISOString();
     emit(s, { type: 'exit', code: exit });
     s.listeners.clear(); s.stop = () => {};
     const old = [...sessions.values()].filter((x) => x.state !== 'running');
-    for (const x of old.slice(0, -KEEP_EXITED)) sessions.delete(x.id);
+    for (const x of old.slice(0, -KEEP_EXITED)) if (resumable(x)) Object.assign(x, { events: [], bytes: 0 }); else sessions.delete(x.id);
   };
   const fail = (e) => { emit(s, { type: 'error', message: e.message }); done(null); };
+  if (cwd && !fs.existsSync(cwd)) { fail(new Error(`the folder ${cwd} does not exist`)); return s; } // else ENOENT reads as "not installed"
   if (opts.mode === 'terminal') { terminal(s, spec, { cwd, env, modules, resolve, done }).catch(fail); return s; }
   if (opts.mode === 'sdk') { sdk(s, spec, { cwd, env, modules, done }).catch(fail); return s; }
   let c;
   try { c = resolveSpec(spec, env, resolve); } catch (e) { fail(e); return s; }
   // spec.stdin carries the prompt: as an argument its space and # would need cmd.exe quoting, which a .cmd shim can't get
-  const child = spawn(c.file, c.args, { cwd, env, stdio: [spec.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], windowsVerbatimArguments: !!c.windowsVerbatimArguments });
+  const child = spawn(c.file, c.args, { cwd, env, stdio: [spec.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsVerbatimArguments: !!c.windowsVerbatimArguments });
   if (spec.stdin !== undefined) child.stdin.on('error', () => { /* exited before reading it: reported by close */ }).end(spec.stdin);
   s.stop = () => killTree(child);
   readline.createInterface({ input: child.stdout }).on('line', (line) => {
     let data;
     try { data = JSON.parse(line); } catch { return emit(s, { type: 'text', data: line }); }
+    if (s.harnessSession === undefined && typeof data?.session_id === 'string') s.harnessSession = data.session_id; // kept past the event caps
     emit(s, { type: 'event', data });
   });
   readline.createInterface({ input: child.stderr }).on('line', (line) => emit(s, { type: 'stderr', data: line }));

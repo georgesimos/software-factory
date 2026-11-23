@@ -101,15 +101,22 @@ export const UI_ROUTES = {
 // POST /api/sessions: start the factory on one issue in an attached clone (#25's checks). The request names a repo and an
 // issue only; the folder comes from projects() and the prompt is built here, so no request text reaches the harness.
 export const harnessReady = new Map(); // harness id -> when detect() and login() last passed
-// The harness's own session id from a finished session's events (Claude Code's init event), if it got that far.
-const harnessSessionId = (sid) => {
-  const v = getSession(sid)?.events.find((e) => typeof e.data?.session_id === 'string')?.data.session_id;
-  return /^[\w-]{1,100}$/.test(v || '') ? v : undefined; // plain: it becomes an argument
-};
+// The harness session to resume for a run, or undefined. Only a run that is still active and that the stopped or crashed
+// session last wrote: its last event falls inside that session's life. Anything else, such as a terminal /software-factory
+// run that has owned the issue since, is refused as an active run.
+export function resumeFor(r, last) {
+  if (!r || TERMINAL.includes(r.outcome) || !last || last.state === 'running' || last.exit === 0) return undefined;
+  const at = Date.parse(r.events.at(-1)?.ts || 0), from = Date.parse(last.started), to = Date.parse(last.ended) + 5_000; // its last lines land just after
+  const v = last.harnessSession;
+  return at >= from && at <= to && /^[\w-]{1,100}$/.test(v || '') ? v : undefined; // plain: it becomes an argument
+}
+// What the run may still spend: COST_CAP less the dollars, and less the share of TOKEN_CAP used, for usage with no price.
+export const budgetLeft = (b) => b ? Math.min(COST_CAP - b.usd, COST_CAP * (1 - b.tokens / TOKEN_CAP)) : COST_CAP;
 // node-pty and the SDK for terminal and sdk sessions, keyed by package name. A host that ships them (the desktop app) must set
 // them: packages/adapters' lazy import() can't see apps/desktop's dependencies under pnpm (ADR 0001).
 export const hostModules = {};
 export function launchSession({ harness = 'claude-code', mode = 'headless', repo, issue }, env = process.env, modules = hostModules) {
+
   const h = harnesses.find((y) => y.id === harness);
   if (!h?.launch) throw new Error(`harness ${String(harness).slice(0, 40)} cannot launch sessions`);
   if (!(h.modes || []).includes(mode)) throw new Error(`${h.id} modes are ${(h.modes || []).join(', ')}`);
@@ -124,7 +131,7 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
   const mine = listSessions().filter((x) => x.label === id);
   if (mine.some((x) => x.state === 'running')) throw new Error(`${id} already has a running session`); // before its first event lands
   // A run left active by a session that was stopped or crashed here resumes that harness session instead of staying stuck.
-  const last = mine.at(-1), resume = last && last.exit !== 0 ? harnessSessionId(last.id) : undefined;
+  const resume = resumeFor(r, mine.at(-1));
   if (r && !TERMINAL.includes(r.outcome) && !resume) throw new Error(`${id} already has an active run (${r.outcome || r.stage})`);
   const b = r ? budget(r) : null;
   if (b?.over) throw new Error(`run budget exceeded ${budgetWhy(b)}`);
@@ -135,7 +142,7 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
     if (!l.ok) throw new Error(`${h.label} is not signed in: ${l.hint}`);
     harnessReady.set(h.id, Date.now()); // only a success is cached, so a fresh sign-in counts at once
   }
-  return startSession(h, { mode, prompt: `/software-factory ${id}`, resume, budget: COST_CAP - (b?.usd || 0), write: true }, { cwd, env, label: id, modules });
+  return startSession(h, { mode, prompt: `/software-factory ${id}`, resume, budget: budgetLeft(b), write: true }, { cwd, env, label: id, modules });
 }
 
 export function ui(port = 0) {
@@ -148,9 +155,11 @@ export function ui(port = 0) {
       try { r = uiHandle({ method: req.method, url: req.url, headers: req.headers, body }, { token, port: server.address().port }); } catch (e) { r = { status: 500, type: 'application/json', body: JSON.stringify({ error: e.message }) }; }
       res.writeHead(r.status, { 'content-type': r.type, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY' });
       if (!r.stream) return res.end(r.body);
-      const stop = subscribe(r.stream, (e) => { res.write(`${e.n === undefined ? '' : `id: ${e.n}\n`}data: ${JSON.stringify(e)}\n\n`); if (e.type === 'exit') res.end(); }, r.from);
+      let stop = () => {};
+      res.on('close', () => stop()); // first, so a client gone mid-replay unsubscribes; not req: its close fires once the body is read
+      stop = subscribe(r.stream, (e) => { if (res.destroyed) return; res.write(`${e.n === undefined ? '' : `id: ${e.n}\n`}data: ${JSON.stringify(e)}\n\n`); if (e.type === 'exit') res.end(); }, r.from);
+      if (res.destroyed) stop();
       if (r.stream.state !== 'running') res.end();
-      res.on('close', stop); // not req: its close fires once the request body is read
     });
   });
   server.listen(port, '127.0.0.1', () => console.log(`factory ui: http://127.0.0.1:${server.address().port}/?t=${token}\nOnly this URL can change settings (skills.json, rules, projects). Ctrl-C to stop.`));
