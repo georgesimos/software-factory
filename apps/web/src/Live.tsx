@@ -76,7 +76,12 @@ export function LiveSessions({ open, onClose, token, repos, terminal }: { open: 
   useEffect(() => { if (!open) return; void load(); const t = setInterval(load, 3_000); return () => clearInterval(t); }, [open, token]); // eslint-disable-line react-hooks/exhaustive-deps
   const act = async (route: string, body: object, done: string) => {
     setMsg(null);
-    try { const x = await post<{ session?: string }>(route, body, token); setMsg({ text: done }); if (x.session) show(x.session); await load(); }
+    try {
+      const x = await post<{ session?: string; resume?: { command: string; cwd?: string } }>(route, body, token);
+      setMsg({ text: x.resume ? `No desktop session for it: run ${x.resume.command} in a terminal${x.resume.cwd ? ` in ${x.resume.cwd}` : ''}.` : done }); // started outside the desktop app
+      if (x.session) show(x.session);
+      await load();
+    }
     catch (e) { setMsg({ text: (e as Error).message, bad: true }); }
   };
   const cur = list.find((s) => s.id === shown), sel = repos.includes(repo) ? repo : repos[0] ?? ''; // repos may arrive after mount

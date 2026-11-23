@@ -12,9 +12,11 @@ import { loginPath } from './login-path.ts';
 let win: BrowserWindow | undefined;
 let close: (() => void) | undefined;
 
-// Off-origin links (GitHub PRs, issues) open in the browser; claude-cli://open opens a Claude Code terminal. Nothing else.
+// Off-origin links (GitHub PRs, issues) open in the browser; claude-cli://open opens a Claude Code terminal, and one desktop
+// session link (#26) opens that session in the Claude app. Nothing else.
+const DESKTOP = /^claude:\/\/claude\.ai\/epitaxy\/local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const external = (url: string) => {
-  if (url.startsWith('https://') || url.startsWith('claude-cli://open?')) void shell.openExternal(url);
+  if (url.startsWith('https://') || url.startsWith('claude-cli://open?') || DESKTOP.test(url)) void shell.openExternal(url);
 };
 const originOf = (url: string) => { try { return new URL(url).origin; } catch { return ''; } };
 

@@ -17,7 +17,7 @@ import { headlessArgs, reviewFromText, stepModel } from '../../core/src/review.t
 import { issuesCreate, loop, newProject, projectStatus, queue, retireIdea } from '../../core/src/project.ts';
 import { loadShip, loadShipList, ship } from '../../core/src/ship.ts';
 import { claudeDir, onboardState, onboardText, setShip } from '../../core/src/onboard.ts';
-import { artifact, render, ui } from '../../server/src/server.ts';
+import { artifact, openSession, render, ui } from '../../server/src/server.ts';
 import { rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
 import { note, takeNotes } from '../../core/src/notes.ts';
 import { withMeasured } from '../../core/src/burn.ts';
@@ -41,9 +41,9 @@ export async function main(argv) {
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
         if (stage === 'review' && p.role !== 'verifier') throw new Error('axis verdicts are recorded by "review", not by hand; "event" only takes the verifier usage record ({"role":"verifier",…})');
         if (stage === 'note') throw new Error('"note" is recorded by "note" and "notes", not by hand');
-        const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'cwd', 'runner', 'localChecks', 'mergedBy',
+        const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'hostSessionId', 'cwd', 'runner', 'localChecks', 'mergedBy',
           'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // the last row: set by ship connectors only
-        if (typed.length) throw new Error(`these fields come from GitHub, git or a ship connector, not from a payload: ${typed.join(', ')}`);
+        if (typed.length) throw new Error(`these fields come from GitHub, git, the environment or a ship connector, not from a payload: ${typed.join(', ')}`);
         record(run, stage, status, p, { fallback }); break;
       }
       case 'review': { // raw reviewer output on stdin, from any runner; invalid output is recorded as a failed review
@@ -170,7 +170,8 @@ export async function main(argv) {
         console.log(`${rest[0]}: ${Buffer.byteLength(html)} bytes, ${JSON.parse(html.match(/<script type="application\/json" id="data">([^<]*)<\/script>/)[1]).runs.length} runs`);
         break;
       }
-      case 'open': { // open [dashboard|<https:|file:|claude-cli: URL>]: the OS opener, never a shell
+      case 'open': { // open [dashboard|<https:|file:|claude-cli: URL>|<session id>]: the OS opener, never a shell
+        if (run && run !== 'dashboard' && !run.includes(':')) { out(openSession({ id: run, ...(rest[0] && { harness: rest[0] }) })); break; } // a session: the desktop app, or how to resume it
         const target = !run || run === 'dashboard' ? pathToFileURL(render()).href : run;
         out({ opened: open(target) }); break;
       }
@@ -241,6 +242,7 @@ export async function main(argv) {
   headless-args <run> [--review|--write] [--share N] [--step <step>]  pinned claude -p flags (read-only unless --write) for a provider runner, with the run's remaining budget split N ways and the step's model, effort and fallback (JSON array)
   dir    <run>                            print the run's artifact folder
   open   [dashboard|url]                  open the dashboard (default) or an https:, file: or claude-cli: URL with the OS opener
+  open   <session id> [harness]           open a session in the Claude desktop app (its local_ id, or the one recorded with its events); else print how to resume it
   install-cli                             put a \`factory\` command for this copy in ~/.local/bin (or ~/bin); prints the PATH line if needed
   install-skill [--codex]                link ~/.claude/skills/software-factory ($CLAUDE_CONFIG_DIR/skills when set; Codex: ~/.agents/skills) to this checkout (a junction on Windows)
   render [--artifact <out>]              rewrite dashboard.html, or write the claude.ai Artifact page to <out>

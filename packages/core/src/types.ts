@@ -15,14 +15,14 @@ export interface Usage { input?: number; output?: number; cacheRead?: number; ca
 export interface LocalChecks { sha?: string; state?: string; commands?: { cmd: string; exit: number }[] }
 export interface Deploy { connector?: string; kind?: string; env?: string; state?: string; status?: string; url?: string; sha?: string | null; at?: string; detail?: string; creator?: string; ts?: string }
 export interface Note { id?: string; step?: string; text?: string; by?: string; ts?: string; state: 'pending' | 'applied'; appliedTo?: string[]; appliedAt?: string; claim?: unknown }
-export interface Session { agent?: string; id: string; cwd?: string; last?: string }
+export interface Session { agent?: string; id: string; cwd?: string; last?: string; hostId?: string } // hostId: the Claude desktop app's session (local_<uuid>)
 
 /** One line of events.jsonl. */
 export interface FactoryEvent {
   ts: string; run: string; stage: string; status: string;
   title?: string; url?: string; pr?: string; branch?: string; spec?: string; issues?: number[]; children?: string[];
   author?: string; association?: string; source?: string; imported?: boolean; origin?: string; originAssociation?: string;
-  harness?: string; sessionId?: string; cwd?: string;
+  harness?: string; sessionId?: string; hostSessionId?: string; cwd?: string; // hostSessionId: from CLAUDE_CODE_HOST_SESSION_ID only
   costUsd?: number; tokens?: number; usage?: Usage; model?: string;
   axis?: string; axes?: string[]; role?: string; sha?: string | null; findings?: Finding[]; runner?: Runner; localChecks?: LocalChecks;
   next?: string; reasons?: string[]; action?: string; by?: string; mergedBy?: string | null; reason?: string;

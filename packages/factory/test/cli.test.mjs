@@ -60,6 +60,9 @@ export function cliTest() {
   assert.throws(() => cli(['event', RUN, 'spec', 'passed', '-'], '{"association":"OWNER"}'), /not from a payload: association/);
   assert.throws(() => cli(['event', RUN, 'gate', 'passed']), /recorded by "gate"/);
   assert.throws(() => cli(['event', RUN, 'spec', 'passed', '-'], '{"sessionId":"spoof"}'), /not from a payload: sessionId/);
+  assert.throws(() => cli(['event', RUN, 'spec', 'passed', '-'], '{"hostSessionId":"local_0123abcd-0123-4567-89ab-0123456789ab"}'), /not from a payload: hostSessionId/); // #26: the env only
+  assert.deepEqual(JSON.parse(cli(['open', 'sess-plain'])), { resume: { command: 'claude --resume sess-plain' } }, 'F open <session id>: no desktop id, so how to resume it');
+  assert.throws(() => cli(['open', '--resume']), /id must be a session id/);
   cli(['event', RUN, 'spec', 'passed'], '', { CLAUDE_CODE_SESSION_ID: 'sess-1' });
   assert.deepEqual(derive(read())[RUN].sessions.map((x) => [x.agent, x.id]), [['claude-code', 'sess-1']]);
   assert.throws(() => record(RUN, 'review', 'failed', { axis: 'code', findings: [{ severity: 'low', issue: 'nit', route: 'build' }] }), /failed review needs/);

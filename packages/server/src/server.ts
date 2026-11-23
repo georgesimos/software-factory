@@ -13,7 +13,7 @@ import { ideas, startIdea } from '../../core/src/project.ts';
 import { metrics } from '../../core/src/gate.ts';
 import { fCmd, onboardConfig, onboardState, readOnboard, setShip } from '../../core/src/onboard.ts';
 import { projects, wtInfo } from '../../core/src/workspace.ts';
-import { dashboard, read, readArchive, sessionsFile, stateDir } from '../../core/src/log.ts';
+import { HOST_ID, dashboard, read, readArchive, sessionsFile, stateDir } from '../../core/src/log.ts';
 import { applyPreset, readSkills, setSkill, skillsData } from '../../core/src/skills.ts';
 import { sync } from '../../core/src/sync.ts';
 import { measure, withMeasured } from '../../core/src/burn.ts';
@@ -108,11 +108,7 @@ export const UI_ROUTES = {
     return { ok: true };
   },
   '/sessions/stop': ({ id }) => { const s = getSession(id); if (s?.state !== 'running') throw new Error('no running session with that id'); s.stop(); return { ok: true }; },
-  '/sessions/open': ({ harness = 'claude-code', id }) => { // the desktop app's own link for a session, when the harness has one
-    const h = harnesses.find((y) => y.id === harness), url = h?.openDesktop?.(id);
-    if (!url) throw new Error(`no desktop link for ${String(id).slice(0, 60)}: run claude --resume <id> in a terminal instead`);
-    return { opened: open(url) };
-  },
+  '/sessions/open': (x) => openSession(x),
 };
 // POST /api/sessions: start the factory on one issue in an attached clone (#25's checks). The request names a repo and an
 // issue only; the folder comes from projects() and the prompt is built here, so no request text reaches the harness.
@@ -200,6 +196,22 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
     harnessReady.set(h.id, Date.now()); // only a success is cached, so a fresh sign-in counts at once
   }
   return startSession(h, { mode, prompt: `/software-factory ${id}`, resume, budget: budgetLeft(b), write: true }, { cwd, env, label: id, modules });
+}
+
+// F open <session> and POST /api/sessions/open (#26): a session in the Claude desktop app on this machine when it has a
+// desktop id, its own (local_<uuid>) or the one F recorded with a CLI session's events; else how to resume it, and where.
+// Nothing here runs a shell: the opener gets one validated claude:// link, and the resume command is only shown.
+export function openSession({ harness = 'claude-code', id }: { harness?: string; id?: unknown }, opener: (url: string) => string = open) {
+  const h = harnesses.find((y) => y.id === harness);
+  if (!h) throw new Error(`no harness ${String(harness).slice(0, 40)}`);
+  const sid = typeof id === 'string' ? id : '';
+  if (!HOST_ID.test(sid) && !SESSION_ID.test(sid)) throw new Error('id must be a session id');
+  const seen = Object.values(derive(read())).flatMap((r) => r.sessions ?? []).filter((x) => x.id === sid && (!x.agent || x.agent === h.id));
+  const url = h.openDesktop?.(HOST_ID.test(sid) ? sid : seen.map((x) => x.hostId).filter(Boolean).at(-1) ?? ''), cwd = seen.at(-1)?.cwd;
+  if (url) return { opened: opener(url) };
+  if (!h.modes?.includes('terminal')) throw new Error(`${h.id} has no desktop link or terminal resume for ${sid}`);
+  const spec = h.launch({ mode: 'terminal', resume: sid });
+  return { resume: { command: [spec.cmd, ...spec.args].join(' '), ...(cwd && { cwd }) } }; // started outside the desktop app
 }
 
 // The F ui server, unprinted: the desktop main loads `url` in its window; F ui prints it. Resolves once listening.

@@ -91,5 +91,8 @@ describe('run detail parity', () => {
     expect(openInClaude({ ...r, worktree: '/a/../b', sessions: [] })).toBeNull();
     expect(openInClaude({ ...r, worktree: '//server/share', sessions: [] })).toBeNull();
     expect(openInClaude({ ...r, id: "a/b#1'; rm" })).toBeNull();
+    const host = 'local_0123abcd-0123-4567-89ab-0123456789ab'; // #26: a run driven from the desktop app opens that session there
+    expect(openInClaude({ ...r, sessions: [{ agent: 'claude-code', id: 'cli-1', hostId: host }, { agent: 'claude-code', id: 'cli-2' }] })).toBe(`claude://claude.ai/epitaxy/${host}`);
+    expect(openInClaude({ ...r, sessions: [{ agent: 'claude-code', id: 'cli-1', hostId: `${host}/../x` }] })).toMatch(/^claude-cli:\/\/open\?/);
   });
 });
