@@ -1,7 +1,8 @@
 // @ts-nocheck
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { approvalVote } from '../../core/src/github.ts';
+import { approvalVote, postmerge, revert } from '../../core/src/github.ts';
+import { io, record } from '../../core/src/log.ts';
 import { setup } from './setup.mjs';
 
 setup();
@@ -15,4 +16,14 @@ test('spec approval counts only a trusted comment from a later second than the w
   assert.deepEqual(approvalVote([c('2026-11-23T10:00:01Z'), c('2026-11-23T10:00:02Z', '/factory reject')], since), { decision: 'reject', by: 'acme' }); // the latest wins
   assert.deepEqual(approvalVote([c('2026-11-23T10:00:00Z')], '2026-11-23T10:00:00.000Z'), { decision: 'waiting' }); // same second, even at .000
   assert.deepEqual(approvalVote([c('2026-11-23T10:00:05Z', '/factory approve', 'NONE'), c('not a date')], since), { decision: 'waiting' });
+});
+
+test('postmerge and revert on a run with no recorded PR say so, without asking gh about "undefined"', () => {
+  const gh = io.gh;
+  io.gh = '/nonexistent/gh'; // any gh call would throw
+  try {
+    record('acme/app#9', 'intake', 'started', { title: 't' });
+    assert.deepEqual(postmerge('acme/app#9'), { state: 'no-pr', reason: 'no PR recorded for this run' });
+    assert.throws(() => revert('acme/app#9', 'red'), /^Error: no PR recorded for this run$/);
+  } finally { io.gh = gh; }
 });

@@ -147,7 +147,8 @@ export function approvalVote(comments: GhComment[], since: string) {
 export function postmerge(run: string): PostMerge {
   const r = getRun(run);
   const { repo } = parseRun(run);
-  const sha: string | undefined = JSON.parse(gh('pr', 'view', r.pr as string, '-R', repo, '--json', 'mergeCommit')).mergeCommit?.oid;
+  if (!r.pr) return { state: 'no-pr', reason: 'no PR recorded for this run' }; // never `gh pr view undefined`
+  const sha: string | undefined = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'mergeCommit')).mergeCommit?.oid;
   if (!sha) return { state: 'not-merged' };
   const ship = shipTrack([{ run, repo, sha, path: projects()[repo]?.path }]), deploys = ship?.recorded.length ? { deploys: ship.recorded } : {}; // production deploy of the merge commit, when a connector reports one
   const ci = rules(repo).policy.ci?.value;
@@ -162,7 +163,7 @@ export function revert(run: string, reason: string) {
   const r = getRun(run);
   const { repo, n } = parseRun(run);
   const pm = postmerge(run);
-  if (!pm.sha) throw new Error('run has no merge commit');
+  if (!pm.sha) throw new Error(pm.reason || 'run has no merge commit');
   const repoPath = projects()[repo]?.path;
   if (!repoPath) throw new Error(`no local clone registered for ${repo}`);
   const base = gh('repo', 'view', repo, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name').trim();
