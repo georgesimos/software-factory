@@ -38,7 +38,7 @@ function headlessArgs({ schema, budget, write = false, model, effort, fallback }
     '--permission-mode', write ? 'auto' : 'manual', '--permission-prompts', 'none',
     ...(usd != null ? ['--max-budget-usd', String(usd)] : []),
     ...(model ? ['--model', model] : []), ...(effort ? ['--effort', effort] : []),
-    ...(fallback?.length ? ['--fallback-model', fallback.join(',')] : []),
+    ...(fallback?.length ? ['--fallback-model', fallback.join(',')] : []), // `claude --help`: a comma-separated list, tried in order
     ...(schema ? ['--json-schema', typeof schema === 'string' ? schema : JSON.stringify(schema)] : []),
     ...(write ? [] : ['--allowedTools', 'Bash(git diff:*)', 'Bash(git log:*)', 'Read', 'Grep', 'Glob']), // variadic: keep last
   ];

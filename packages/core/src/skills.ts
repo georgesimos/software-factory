@@ -77,8 +77,33 @@ export function checkSkills(cfg) {
   }
   return cfg;
 }
+// On read, a model, effort or fallback the harness no longer offers is dropped with a warning instead of failing every
+// command; setSkill and applyPreset still refuse them, since writeSkills checks strictly.
+const warned = new Set();
+export function dropUnknownModels(cfg) {
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return cfg;
+  const drop = (r, at) => {
+    if (!r || typeof r !== 'object' || Array.isArray(r) || (r.model === undefined && r.effort === undefined && r.fallback === undefined)) return r;
+    const h = runsOn(r), ids = (h?.models?.() || []).map((m) => m.alias);
+    if (!ids.length) return r; // checkRunner names the real problem
+    const out = { ...r }, gone = [];
+    if (r.model !== undefined && !ids.includes(r.model)) { gone.push(`model ${r.model}`); delete out.model; }
+    if (r.effort !== undefined && !(h.efforts || []).includes(r.effort)) { gone.push(`effort ${r.effort}`); delete out.effort; }
+    if (Array.isArray(r.fallback)) {
+      const keep = r.fallback.filter((m) => ids.includes(m) && m !== out.model);
+      if (keep.length < r.fallback.length) gone.push(`fallback ${r.fallback.filter((m) => !keep.includes(m)).join(',')}`);
+      if (keep.length) out.fallback = keep; else delete out.fallback;
+    }
+    const msg = `skills.json ${at}: ignoring ${gone.join(', ')} (${h.label} offers ${ids.join('|')})`;
+    if (gone.length && !warned.has(msg)) { warned.add(msg); console.error(msg); }
+    return out;
+  };
+  return Object.fromEntries(Object.entries(cfg).map(([scope, steps]) => [scope, !steps || typeof steps !== 'object' || Array.isArray(steps) ? steps
+    : Object.fromEntries(Object.entries(steps).map(([k, v]) => [k, k === 'rules' || k === 'guide' ? v
+      : k === 'axes.extra' ? (Array.isArray(v) ? v.map((x) => drop(x, `${scope}.${k}`)) : v) : drop(v, `${scope}.${k}`)]))]));
+}
 export function readSkills() {
-  try { return checkSkills(JSON.parse(fs.readFileSync(skillsFile(), 'utf8'))); } catch (e) {
+  try { return checkSkills(dropUnknownModels(JSON.parse(fs.readFileSync(skillsFile(), 'utf8')))); } catch (e) {
     if (e.code === 'ENOENT') return {};
     throw new Error(e.message.startsWith('skills.json') ? e.message : `skills.json: ${e.message}`);
   }
@@ -86,12 +111,15 @@ export function readSkills() {
 // The resolved plan: per step the project's runner, else the global one, else the built-in. Extra axes add up, project wins per axis.
 export function skills(repo, cfg = readSkills()) {
   const g = cfg.default || {}, p = cfg[repo] || {};
-  // Claude-run steps fill what they don't set, field by field, from the default preset; a fallback can't be the chosen model.
+  // Claude-run steps fill what they don't set, field by field, from the global step (so a global preset reaches a project
+  // that only swaps the runner), then the default preset. A fallback follows its model and can't be the chosen model.
   const fill = (k, r) => {
     if (!PRESETS[DEFAULT_PRESET][k] || !runsOn(r)?.models) return r;
-    const d = presetRunner(DEFAULT_PRESET, k, {}), model = r.model || d.model, fallback = (r.fallback || FALLBACK[model]).filter((m) => m !== model);
+    const up = r !== g[k] && runsOn(g[k] || { use: 'default' }) === runsOn(r) ? g[k] || {} : {};
+    const d = presetRunner(DEFAULT_PRESET, k, {}), model = r.model || up.model || d.model;
+    const fallback = (r.fallback || (!r.model && up.model && up.fallback) || FALLBACK[model]).filter((m) => m !== model);
     const { fallback: _f, ...rest } = r;
-    return { ...rest, model, effort: r.effort || d.effort, ...(fallback.length && { fallback }) };
+    return { ...rest, model, effort: r.effort || up.effort || d.effort, ...(fallback.length && { fallback }) };
   };
   const plan = Object.fromEntries(STEP_KEYS.map((k) => [k, fill(k, p[k] || g[k] || { use: 'default' })]));
   const all = [...(g['axes.extra'] || []), ...(p['axes.extra'] || [])];
@@ -116,12 +144,14 @@ export function setSkill(scope, key, value) {
   return cfg[scope] || {};
 }
 // The preset's model, effort and fallback on each step of a scope, keeping who runs the step. Non-Claude runners are skipped.
+// A project gets them only on steps it already sets; the rest keep inheriting global (and its preset) as it changes.
 export function applyPreset(name, scope = 'default') {
   if (!PRESETS[name]) throw new Error(`unknown preset "${name}" (${Object.keys(PRESETS).join('|')})`);
   checkScope(scope);
-  const cfg = readSkills(), s = { ...cfg[scope] }, g = cfg.default || {}, applied = [], skipped = [];
+  const cfg = readSkills(), s = { ...cfg[scope] }, applied = [], skipped = [], inherited = [];
   for (const key of Object.keys(PRESETS[name])) {
-    const { model: _m, effort: _e, fallback: _f, ...base } = s[key] || (scope !== 'default' && g[key]) || { use: 'default' };
+    if (scope !== 'default' && !s[key]) { inherited.push(key); continue; }
+    const { model: _m, effort: _e, fallback: _f, ...base } = s[key] || { use: 'default' };
     if (!runsOn(base)?.models) { skipped.push(key); continue; }
     s[key] = presetRunner(name, key, base);
     applied.push(key);
@@ -130,14 +160,16 @@ export function applyPreset(name, scope = 'default') {
   cfg[scope] = s;
   writeSkills(cfg);
   audit(scope, 'set', { key: 'preset', value: name, setBy });
-  return { scope, preset: name, applied, skipped };
+  return { scope, preset: name, applied, skipped, inherited };
 }
 
 // A model the installed CLI is too old for (Fable needs 2.1.321) moves the step down its fallback chain, noted as
 // modelFallback; fallback entries it is too old for are dropped too. Nothing left: no model (the session's own) and the
-// reason. An unknown version counts as new enough.
-const older = (v, min) => {
-  const a = String(v).split('.').map((n) => parseInt(n, 10) || 0), b = min.split('.').map(Number);
+// reason. An unknown or non-numeric version counts as new enough; missing parts are 0 (2.2 is 2.2.0).
+export const older = (v, min) => {
+  const m = /^\s*v?(\d+)(?:\.(\d+))?(?:\.(\d+))?/.exec(String(v ?? ''));
+  if (!m) return false;
+  const a = m.slice(1).map((n) => Number(n || 0)), b = [...min.split('.').map(Number), 0, 0, 0].slice(0, 3);
   const i = b.findIndex((n, j) => a[j] !== n);
   return i >= 0 && a[i] < b[i];
 };

@@ -229,7 +229,7 @@ Each Claude-run step's runner in `plan` carries `model` (an alias: `fable`, `opu
 - **This session:** intake, spec and build under the default runner run in this session, so on this session's model. When the plan's model for one of them differs from yours, do that step in a fresh subagent on its model instead (intake and spec), or tell the user to start the session as `claude --model <build model>` (build).
 - **Headless:** `F headless-args RUN … --step <step>` adds `--model`, `--effort` and `--fallback-model`.
 - **Too old for the model.** `F skills` and `F headless-args` check the installed `claude --version` against each model's minimum (Fable needs 2.1.321). An older CLI moves the step down its `fallback` chain and notes `modelFallback: {from, reason}` in the plan; tell the user once.
-- **Presets.** `F skills preset <all-claude|all-claude-lean> [owner/repo|default]` sets every Claude-run step of that scope at once. Run it, or `F skills set` with a `model`, only when the user asks in chat.
+- **Presets.** `F skills preset <all-claude|all-claude-lean> [owner/repo|default]` sets every Claude-run step of that scope at once (for a project, only the steps it already sets; the rest follow global). Run it, or `F skills set` with a `model`, only when the user asks in chat.
 - **Recorded.** `F` stamps the configured `model`, `effort` and `fallback` in each event's `runner`; the payload's `model` (from usage) is what ran.
 
 ### Headless Claude Code runs

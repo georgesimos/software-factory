@@ -54,8 +54,10 @@ export function usageTest() {
   assert.deepEqual(Object.fromEntries(Object.entries(b.byIteration).map(([k, c]) => [k, c.tokens])), { 0: 1_100_000, 1: 2_321_000 });
   assert.deepEqual(Object.fromEntries(Object.entries(b.byAxis).map(([k, c]) => [k, c.tokens])), { code: 200_000, verifier: 10_000, other: 10_000 });
   assert.equal(b.reported.tokens, 5000);
-  // What served each step, per model id: the dashboard shows the top one next to the configured model.
-  assert.deepEqual(b.byStage.build.models, { 'claude-opus-5-5': 2_000_000, 'claude-mystery-9': 1000, 'claude-fable-5-2': 100_000 });
+  // What served each step, per model id and without cache reads (m3's 1M read): the dashboard shows the top one next to
+  // the configured model, from the subagent's rows alone when the step ran in one.
+  assert.deepEqual(b.byStage.build.models, { 'claude-opus-5-5': 1_000_000, 'claude-mystery-9': 1000, 'claude-fable-5-2': 100_000 });
+  assert.deepEqual([b.byStage.build.subModels, b.byStage.review.subModels], [{}, { 'claude-sonnet-5-5': 220_000 }]);
   assert.deepEqual([b.byAxis.code.models, b.byAxis.verifier.models], [{ 'claude-sonnet-5-5': 200_000 }, { 'claude-sonnet-5-5': 10_000 }]);
   assert.equal(getRun(P).burn.total.tokens, 1000);
   assert.equal(getRun(I).burn, undefined);

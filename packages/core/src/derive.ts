@@ -18,13 +18,15 @@ export function validateUsage(p) {
   return u ? { ...p, tokens: Object.values(u).reduce((s, n) => s + n, 0) } : p;
 }
 // Burn cells: tokens, dollars where the model is priced, cache reads (cheap; left out of the token cap) and unpriced tokens.
-export const cell = () => ({ tokens: 0, costUsd: 0, cacheRead: 0, unpriced: 0, models: {} }); // models: tokens per model id, i.e. what served the step
+// models: tokens per model id without cache reads, i.e. what served the step; subModels: the same from subagent rows only
+export const cell = () => ({ tokens: 0, costUsd: 0, cacheRead: 0, unpriced: 0, models: {}, subModels: {} });
 export const burnOf = () => ({ measured: false, total: cell(), byStage: {}, byIteration: {}, byAxis: {} });
-export function addBurn(b, { stage, iteration, axis }, tokens, usd, cacheRead = 0, model = null) {
+export function addBurn(b, { stage, iteration, axis }, tokens, usd, cacheRead = 0, model = null, sub = false) {
+  const served = Math.max(0, tokens - cacheRead);
   for (const c of [b.total, (b.byStage[stage] ??= cell()), (b.byIteration[iteration] ??= cell()), axis ? (b.byAxis[axis] ??= cell()) : null]) {
     if (!c) continue;
     c.tokens += tokens; c.cacheRead += cacheRead;
-    if (model) c.models[model] = (c.models[model] || 0) + tokens;
+    if (model) for (const m of sub ? [c.models, c.subModels] : [c.models]) m[model] = (m[model] || 0) + served;
     if (usd == null) c.unpriced += tokens; else c.costUsd += usd;
   }
 }
@@ -83,7 +85,7 @@ export function derive(events) {
     if (e.tokens || e.costUsd) { // reported: what the orchestrator copied from a subagent result
       const u = e.usage || {};
       const usd = e.costUsd ?? (e.usage ? costOf(e.model, [u.input || 0, u.output || 0, u.cacheRead || 0, 0, u.cacheWrite || 0]) : null); // shortcut: reported cache writes priced at the 1h rate Claude Code uses
-      addBurn((r.burn ??= burnOf()), { stage: e.stage, iteration: r.iteration, axis: e.axis || e.role }, e.tokens || 0, usd, u.cacheRead || 0, e.model);
+      addBurn((r.burn ??= burnOf()), { stage: e.stage, iteration: r.iteration, axis: e.axis || e.role }, e.tokens || 0, usd, u.cacheRead || 0, e.model, true); // a subagent's result
     }
     if (e.stage === 'build' && e.localChecks) r.localChecks = e.localChecks; // only "F checks" records it
     if (e.stage === 'review' && e.status === 'started') { r.axes = { ...r.axes, [r.iteration]: e.axes }; if (e.sha) r.reviewedSha = e.sha; }

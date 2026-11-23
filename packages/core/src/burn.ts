@@ -103,7 +103,7 @@ export function withMeasured(runs, events, by = measure(events)) {
         const at = f.sub ? first : slot(list, Date.parse(ts));
         if (!at || !runs[at.run] || runs[at.run].imported) continue; // the factory did not drive an imported run: sync's events only close windows
         const t = rest.slice(0, 5);
-        addBurn((got[at.run] ||= burnOf()), { stage: at.stage, iteration: at.iteration, axis: f.sub ? f.axis : null }, t.reduce((s, n) => s + n, 0), costOf(model, t, rest[5]), t[2], model);
+        addBurn((got[at.run] ||= burnOf()), { stage: at.stage, iteration: at.iteration, axis: f.sub ? f.axis : null }, t.reduce((s, n) => s + n, 0), costOf(model, t, rest[5]), t[2], model, f.sub);
       }
     }
   }

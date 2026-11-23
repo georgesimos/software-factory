@@ -605,8 +605,9 @@ const runHref = (id) => '#' + encodeURIComponent(id);
 const chip = (text, tone) => el('span', { class: 'chip' + (tone ? ' ' + tone : '') }, text);
 // Who did a step, when it wasn't the built-in brief. Text and title only; `short` drops the kind for the narrow pipeline track.
 // The model that served most of a burn cell's tokens (transcripts first, reported usage as fallback), as an alias.
-const alias = (id) => (/^claude-([a-z]+)/.exec(String(id)) || [])[1] || String(id);
-const usedModel = (c) => { const m = Object.entries(obj(obj(c).models)).filter(([, n]) => num(n)).sort((a, b) => b[1] - a[1])[0]; return m ? alias(m[0]) : ''; };
+const alias = (id) => (/(fable|opus|sonnet|haiku)/.exec(String(id)) || [])[1] || String(id);
+// A step run in a subagent is that subagent's model, not the orchestrator's around it; otherwise the session's own.
+const usedModel = (c) => { const sub = obj(obj(c).subModels), m = Object.entries(Object.keys(sub).length ? sub : obj(obj(c).models)).filter(([, n]) => num(n)).sort((a, b) => b[1] - a[1])[0]; return m ? alias(m[0]) : ''; };
 const capital = (m) => m.charAt(0).toUpperCase() + m.slice(1);
 // `fallback` is either the runner downgrade ({from, reason}) or the model's fallback chain (an array); `model` is the configured one, `used` what ran.
 const runnerChip = (x, short, what = 'Run by', used = '') => {
@@ -640,8 +641,9 @@ const pct = (x) => (num(x) ? [String(Math.round(x * 100)), '%'] : null);
 const money = (x) => (num(x) ? '$' + (x >= 1000 ? Math.round(x).toLocaleString() : x.toFixed(2)) : null);
 const tokens = (x) => (!num(x) ? null : x >= 1e6 ? (x / 1e6).toFixed(1) + 'M' : x >= 1e3 ? Math.round(x / 1e3) + 'k' : String(x));
 const costTxt = (c) => (c.costUsd == null ? '—' : money(c.costUsd) + (c.unpriced ? '+' : '')); // "+": some tokens ran on a model with no price
+const modelsN = (m) => Object.fromEntries(Object.entries(obj(m)).filter(([k, n]) => /^[\w.:[\]-]{1,64}$/.test(k) && num(n)));
 const cellN = (c) => (num(obj(c).tokens) ? { tokens: c.tokens, costUsd: num(c.costUsd) ? c.costUsd : null, unpriced: num(c.unpriced) ? c.unpriced : 0,
-  models: Object.fromEntries(Object.entries(obj(c.models)).filter(([k, n]) => /^[\w.:[\]-]{1,64}$/.test(k) && num(n))) } : null);
+  models: modelsN(c.models), subModels: modelsN(c.subModels) } : null);
 const cellsN = (m) => Object.fromEntries(Object.entries(obj(m)).map(([k, v]) => [k, cellN(v)]).filter(([, v]) => v));
 const burnN = (b) => (cellN(obj(b).total) ? { measured: b.measured === true, total: cellN(b.total), byStage: cellsN(b.byStage), byIteration: cellsN(b.byIteration), byAxis: cellsN(b.byAxis), reported: cellN(b.reported) } : null);
 
@@ -1350,14 +1352,13 @@ function fillSkills(d, msg) {
       modelCell(step, r, label),
       el('td', { class: 'sk-act' }, change, reset));
   };
-  // Model per Claude-run step (the resolved plan has one). The empty choice inherits: the global model in a project that
-  // doesn't set this step, else the preset's. Choosing a model resets fallback to that model's chain; inheriting drops effort too.
+  // Model per Claude-run step (the resolved plan has one). The empty choice inherits: in a project, the global step's model
+  // when it sets one, else the preset's. Choosing a model resets fallback to that model's chain; inheriting drops effort too.
   const modelCell = (step, r, label) => {
     if (!r.model) return el('td', { class: 'sk-model' });
     const here = step in mine, own = obj(mine[step]), set = here && typeof own.model === 'string' ? own.model : '';
-    const { model: _a, effort: _b, fallback: _c, ...ownBase } = { use: 'default', ...own }, g = obj(glob[step]);
-    const unsets = !here || (Object.keys(ownBase).length === 1 && ownBase.use === 'default'); // inheriting would drop this scope's entry
-    const fromGlobal = scope !== 'default' && unsets && typeof g.model === 'string';
+    const g = obj(glob[step]);
+    const fromGlobal = scope !== 'default' && typeof g.model === 'string'; // a project's runner takes a model it doesn't set from global
     const presetModel = arr(obj(obj(S.presets)[S.preset])[step])[0] || '';
     const inherit = fromGlobal ? 'Global (' + g.model + ')' : 'Preset' + (presetModel ? ' (' + presetModel + ')' : '');
     const sel = el('select', { class: 'sk-input', 'data-k': 'sk-model:' + step, 'aria-label': 'Model for ' + label },
@@ -1368,7 +1369,7 @@ function fillSkills(d, msg) {
       const next = v ? { ...base, ...(effort && { effort }), model: v } : base;
       act(step, Object.keys(next).length === 1 && next.use === 'default' ? null : next, 'sk-model:' + step);
     };
-    const why = set ? 'set here' : !here && fromGlobal ? 'from global' : 'preset ' + (S.preset || '');
+    const why = set ? 'set here' : fromGlobal ? 'from global' : 'preset ' + (S.preset || '');
     return el('td', { class: 'sk-model' }, sel, el('span', { class: 'sk-from' }, [r.effort && r.effort + ' effort', Array.isArray(r.fallback) && 'fallback ' + r.fallback.join(' → '), why].filter(Boolean).join(' · ')));
   };
   const steps = arr(S.steps);

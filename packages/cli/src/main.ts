@@ -189,7 +189,7 @@ export async function main(argv) {
   skills <owner/repo>                     print who runs each step (default, skill, brief or provider)
   skills set <owner/repo|default> <step> <json>  configure one step (intake, spec, build, review.<axis>, verifier, postmerge, axes.extra)
   skills unset <owner/repo|default> <step>       drop a step's choice (a project then inherits the global one)
-  skills preset <name> [owner/repo|default]  set every Claude-run step's model, effort and fallback from a preset (${Object.keys(PRESETS).join(', ')}; built-in: ${DEFAULT_PRESET})
+  skills preset <name> [owner/repo|default]  set every Claude-run step's model, effort and fallback from a preset; a project only on steps it sets (${Object.keys(PRESETS).join(', ')}; built-in: ${DEFAULT_PRESET})
   skills catalog [owner/repo...]          every runner on this machine: built-in, harness tools, global, project, your briefs
   ui     [port]                           serve the dashboard on 127.0.0.1 with a token, so the Skills sheet and setup wizard can save
   rules  <owner/repo>                     print the policy rules, warnings and per-step guidance that apply
