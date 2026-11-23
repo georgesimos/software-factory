@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cliDir, cliShims, command, installCli, windowsPath, linkSkill, open, opener, posixShell, run } from '../../core/src/platform.ts';
+import { cliDir, cliShims, command, installCli, psAddToPath, windowsPath, linkSkill, open, opener, posixShell, run } from '../../core/src/platform.ts';
 import { checkRunner } from '../../core/src/skills.ts';
 import { evalCommand } from '../../core/src/eval.ts';
 
@@ -25,6 +25,7 @@ test('Windows: an .exe on PATH runs directly, with any arguments', () => {
 test('Windows: a .cmd shim runs through cmd.exe /d /s /c, verbatim, with plain arguments only', () => {
   assert.deepEqual(command('npm', ['ci', '--prefer-offline'], win), {
     file: 'C:\\Windows\\system32\\cmd.exe', args: ['/d', '/s', '/c', '""C:\\Program Files\\nodejs\\npm.cmd" ci --prefer-offline"'], windowsVerbatimArguments: true,
+    env: { NoDefaultCurrentDirectoryInExePath: '1' }, // the shim's bare `node` is never looked up in the current folder (the worktree)
   });
   assert.equal(command('x', ['create-next-app@15', '.'], win).args[3], '""C:\\tools\\x.bat" create-next-app@15 ."');
   for (const bad of ['a b', 'a&b', 'a|b', '"q"', '%PATH%', '!x!', '(x)', 'a^b', '<x', '']) {
@@ -32,8 +33,47 @@ test('Windows: a .cmd shim runs through cmd.exe /d /s /c, verbatim, with plain a
   }
 });
 
-test('Windows: not found stays as given, so the spawn fails with ENOENT ("not installed")', () => {
-  assert.deepEqual(command('codex', ['--version'], win), { file: 'codex', args: ['--version'] });
+test('Windows: not found on PATH throws ENOENT "not installed", never hands spawn the bare name (it would look in the current folder first)', () => {
+  assert.throws(() => command('codex', ['--version'], win), { code: 'ENOENT', message: 'codex is not installed' });
+  assert.equal(run('factory-no-such-binary', ['--version'], {}).error.code, 'ENOENT'); // on this OS too, a missing binary is r.error
+});
+
+test('claude-code notes(): an npm .cmd claude passes --version but not the headless flags, so the wizard says so', async () => {
+  const { default: claude } = await import('../../adapters/harnesses/claude-code.mjs');
+  const env = { PATH: 'C:\\npm', SystemRoot: 'C:\\Windows' }, shim = (n) => n.find((x) => x.label === 'headless runs');
+  assert.equal(shim(claude.notes('win32', env, (p) => p === 'C:\\npm\\claude.cmd'))?.ok, false);
+  assert.equal(shim(claude.notes('win32', env, (p) => p === 'C:\\npm\\claude.exe')), undefined);
+  assert.equal(shim(claude.notes('linux', env, () => true)), undefined);
+});
+
+test('harnesses (claude, codex, the template) spawn on Windows only a file found on PATH: .exe directly, npm .cmd via cmd.exe, else not installed', async () => {
+  for (const f of ['claude-code', 'codex', '_template']) {
+    const src = fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'adapters', 'harnesses', `${f}.mjs`), 'utf8');
+    assert.doesNotMatch(src, /spawnSync\(\s*['"`A-Z]/, f); // only spawnSync(s[0], …) from spawnFor()
+    const { spawnFor } = await import(`../../adapters/harnesses/${f}.mjs`);
+    const at = (...files) => (p) => files.includes(p);
+    const env = { PATH: '"C:\\Tools\\x bin";C:\\npm', SystemRoot: 'D:\\WIN' }; // a quoted entry is valid on Windows
+    assert.deepEqual(spawnFor('x', ['--version'], 'darwin', env, at()), ['x', ['--version'], {}], f);
+    assert.deepEqual(spawnFor('x', ['--version'], 'win32', env, at('C:\\Tools\\x bin\\x.exe')), ['C:\\Tools\\x bin\\x.exe', ['--version'], {}], f);
+    assert.deepEqual(spawnFor('x', ['auth', 'status'], 'win32', env, at('C:\\npm\\x.cmd')), ['D:\\WIN\\System32\\cmd.exe', ['/d', '/s', '/c', '""C:\\npm\\x.cmd" auth status"'],
+      { windowsVerbatimArguments: true, cwd: 'C:\\npm', env: { ...env, NoDefaultCurrentDirectoryInExePath: '1' } }], f); // the shim's `node`: not from the current folder
+    for (const bad of [['a b'], ['%PATH%'], ['Bash(git diff:*)'], ['']]) assert.equal(spawnFor('x', bad, 'win32', env, at('C:\\npm\\x.cmd')), null, `${f} ${bad}`); // never quoted for cmd.exe
+    assert.equal(spawnFor('x', ['a b'], 'win32', env, at('C:\\npm\\x.exe')).length, 3, f); // an .exe takes any argv
+    assert.equal(spawnFor('x', ['--version'], 'win32', { PATH: '.;bin' }, at('x.exe', 'bin\\x.exe', '.\\x.cmd')), null, f); // relative entries never count
+    assert.equal(spawnFor('x', ['--version'], 'win32', env, at()), null, f); // not installed: never the bare name
+    assert.equal(spawnFor('x', ['--version'], 'win32', { PATH: 'C:\\100%' }, at('C:\\100%\\x.cmd')), null, f);
+  }
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-which-')); fs.mkdirSync(path.join(d, 'x.exe')); // a folder named x.exe is not the CLI
+  const { spawnFor } = await import('../../adapters/harnesses/codex.mjs');
+  assert.equal(spawnFor('x', [], 'win32', { PATH: d }), null);
+  fs.rmSync(d, { recursive: true });
+});
+
+test('Windows: a quoted PATH entry is found, and a .cmd shim runs through %SystemRoot%\\System32\\cmd.exe when COMSPEC is unset', () => {
+  const isFile = (p) => p === 'C:\\Tools\\gh bin\\gh.exe' || p === 'C:\\n\\npm.cmd';
+  assert.equal(command('gh', ['pr'], { platform: 'win32', env: { PATH: '"C:\\Tools\\gh bin";C:\\x' }, isFile }).file, 'C:\\Tools\\gh bin\\gh.exe');
+  assert.equal(command('npm', ['ci'], { platform: 'win32', env: { PATH: 'C:\\n', SystemRoot: 'E:\\W' }, isFile }).file, 'E:\\W\\System32\\cmd.exe');
+  assert.throws(() => command('gh', [], { platform: 'win32', env: { PATH: '.;bin;C:bin' }, isFile: () => true }), { code: 'ENOENT' }); // relative entries never count
 });
 
 test('run() spawns the resolved command', () => {
@@ -69,6 +109,14 @@ test('opener: https, file and claude-cli URLs only, through the OS opener with n
 
 test('open() refuses when this machine has no opener, instead of reporting success', () => {
   assert.throws(() => open('https://x.test', { platform: 'linux', env: { PATH: '/usr/bin' }, isFile: () => false }), /no xdg-open here/);
+});
+
+test('open() spawns the opener by the full path it found, never the bare name', () => {
+  const got = [], launch = (file, args) => { got.push([file, args]); return { on() { return this; }, unref() {} }; };
+  open('https://x.test', { platform: 'win32', env: { SystemRoot: 'D:\\WIN', PATH: '.;C:\\x' }, isFile: (p) => ['D:\\WIN\\explorer.exe', '.\\explorer.exe', 'C:\\x\\explorer.exe'].includes(p) }, launch);
+  open('https://x.test', { platform: 'win32', env: { SystemRoot: 'D:\\WIN', PATH: 'C:\\x' }, isFile: (p) => p === 'C:\\x\\explorer.exe' }, launch);
+  open('https://x.test', { platform: 'linux', env: { PATH: '.:bin:/usr/bin' }, isFile: (p) => ['xdg-open', 'bin/xdg-open', '/usr/bin/xdg-open'].includes(p) }, launch);
+  assert.deepEqual(got.map((g) => g[0]), ['D:\\WIN\\explorer.exe', 'C:\\x\\explorer.exe', '/usr/bin/xdg-open']);
 });
 
 test('linkSkill: links once, is idempotent, and never overwrites a real folder', () => {
@@ -193,8 +241,20 @@ test('Windows: on-PATH is judged from the registry Path a new cmd.exe or PowerSh
   assert.deepEqual(spawned, ['D:\\WIN\\System32\\reg.exe', 'D:\\WIN\\System32\\reg.exe']); // never a bare "reg", which could resolve from the current folder
   windowsPath({}, (file) => { spawned.push(file); return ''; });
   assert.equal(spawned.at(-1), 'C:\\Windows\\System32\\reg.exe');
-  assert.equal(winPath, 'C:\\Users\\J\\AppData\\Local\\Microsoft\\WindowsApps;%NOPE%\\x;C:\\Windows\\system32;C:\\Program Files\\Git\\cmd');
+  assert.equal(winPath, 'C:\\Windows\\system32;C:\\Program Files\\Git\\cmd;C:\\Users\\J\\AppData\\Local\\Microsoft\\WindowsApps;%NOPE%\\x'); // machine, then user
+  const sz = windowsPath(env, (f, [, k]) => k.startsWith('HKCU') ? '    Path    REG_SZ    %USERPROFILE%\\bin\r\n' : ''); // REG_SZ: %VARS% stay literal, as in Windows
+  assert.equal(sz, ';%USERPROFILE%\\bin');
+  assert.deepEqual(cliDir('C:\\Users\\J', sz, 'win32').onPath, false);
+  assert.deepEqual(cliDir('C:\\Users\\J', '~\\bin;~/.local/bin', 'win32').onPath, false); // cmd.exe and PowerShell don't expand ~
   assert.deepEqual(cliDir('C:\\Users\\J', winPath, 'win32'), { dir: 'C:\\Users\\J\\.local\\bin', onPath: false }); // so the PowerShell line is printed
   assert.equal(windowsPath(env, () => { throw new Error('no reg'); }), ';'); // no registry: nothing counts as on Path
   assert.deepEqual(cliDir('C:\\Users\\J', windowsPath(env, (f, [, k]) => k.startsWith('HKCU') ? '    Path    REG_SZ    C:\\Users\\J\\.local\\bin\r\n' : ''), 'win32'), { dir: 'C:\\Users\\J\\.local\\bin', onPath: true });
+});
+
+test('psAddToPath keeps the user Path a REG_EXPAND_SZ: reads it unexpanded, adds the folder only when missing, writes ExpandString', () => {
+  const line = psAddToPath("C:\\Users\\O'Neil\\.local\\bin");
+  assert.match(line, /\.GetValue\('Path', '', 'DoNotExpandEnvironmentNames'\)/);
+  assert.match(line, /-notcontains 'C:\\Users\\O''Neil\\\.local\\bin'/); // PowerShell single quotes: ' doubled
+  assert.match(line, /Set-ItemProperty \$k Path .* -Type ExpandString;/);
+  assert.doesNotMatch(line, /GetEnvironmentVariable\('Path'/); // that one returns the value with %VARS% expanded
 });

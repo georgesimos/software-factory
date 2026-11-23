@@ -4,9 +4,31 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+// What to spawn for `name args`. On Windows only a file found on PATH (quoted entries unquoted), never the bare name, which
+// Windows looks up in the current folder (maybe an untrusted clone) first: an .exe directly, an npm .cmd shim through
+// cmd.exe /d /s /c like sessions do, only with plain args (no cmd.exe quoting is attempted). The shim runs a bare `node`, which
+// cmd.exe would look for in the current folder first: run it from the shim's own folder with that lookup off. Relative PATH
+// entries never count. null: not installed, or not runnable safely. Kept in this file: a harness is one file with node: builtins only.
+const isFile = (f) => { try { return fs.statSync(f).isFile(); } catch { return false; } };
+const PLAIN = /^[\w\-.,:/\\=@+~]+$/; // what cmd.exe passes as is: core/src/platform.ts command()'s rule
+export function spawnFor(name, args, platform = process.platform, env = process.env, exists = isFile) {
+  if (platform !== 'win32') return [name, args, {}];
+  for (const d of String(env.PATH ?? env.Path ?? '').split(';').map((x) => x.trim().replace(/^"(.*)"$/, '$1')).filter((x) => path.win32.isAbsolute(x))) {
+    for (const ext of ['.exe', '.cmd']) {
+      const f = path.win32.join(d, name + ext);
+      if (!exists(f)) continue;
+      if (ext === '.exe') return [f, args, {}];
+      if (/["%]/.test(f) || !args.every((a) => PLAIN.test(a))) return null; // would need cmd.exe quoting
+      return [env.ComSpec || env.COMSPEC || path.win32.join(env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows', 'System32', 'cmd.exe'), ['/d', '/s', '/c', `""${f}" ${args.join(' ')}"`],
+        { windowsVerbatimArguments: true, cwd: d, env: { ...env, NoDefaultCurrentDirectoryInExePath: '1' } }];
+    }
+  }
+  return null;
+}
 // Both streams: some CLIs print status to stderr. No shell, argv only, bounded by a timeout.
 const run = (args) => {
-  const r = spawnSync('claude', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000 });
+  const s = spawnFor('claude', args);
+  const r = s ? spawnSync(s[0], s[1], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000, ...s[2] }) : { error: true };
   return { code: r.error ? -1 : r.status ?? -1, out: `${r.stdout || ''}${r.stderr || ''}` };
 };
 const ls = (d) => { try { return fs.readdirSync(d); } catch { return []; } };
@@ -97,9 +119,12 @@ export default {
   // to `claude --resume <id>` in a terminal when this returns null.
   openDesktop: (id) => (/^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(String(id)) ? `claude://claude.ai/epitaxy/${id}` : null),
   providerTools: () => TOOLS,
-  notes() {
+  notes(platform = process.platform, env = process.env, exists = isFile) {
+    // An npm .cmd shim answers --version, so detect() says ready, but headless runs pass flags (Bash(git diff:*), a prompt) cmd.exe would need quoted.
+    const shim = spawnFor('claude', ['--version'], platform, env, exists)?.[2].windowsVerbatimArguments
+      ? [{ label: 'headless runs', ok: false, hint: `claude here is an npm .cmd shim, which can't take the headless review flags: install the native build (irm https://claude.ai/install.ps1 | iex)` }] : [];
     const label = 'claude-cli:// links ("Open in Claude")', hint = 'Run claude and send one message in an interactive session; that registers the link handler.';
-    if (process.platform !== 'darwin') return [{ label, ok: null, hint }];
+    if (platform !== 'darwin') return [{ label, ok: null, hint }, ...shim];
     const ok = fs.existsSync(path.join(os.homedir(), 'Applications', 'Claude Code URL Handler.app'));
     return [{ label, ok, hint: ok ? 'handler registered' : hint }];
   },
