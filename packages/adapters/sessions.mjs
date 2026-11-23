@@ -1,7 +1,7 @@
 // Runs what a harness's launch() describes and keeps its events in memory for the server to stream (ADR §5).
 // Outside harnesses/, so the registry never loads it as a harness. headless spawns the CLI; terminal needs node-pty and
-// sdk the harness's SDK. Neither is a dependency of F: the host passes them in (modules.pty, modules.sdk), else they are
-// imported lazily by name. argv only, never a shell (core/src/platform.ts).
+// sdk the harness's SDK. Neither is a dependency of F: the host passes them in, keyed by package name (modules['node-pty'],
+// modules['@anthropic-ai/claude-agent-sdk']), else they are imported lazily by name. argv only, never a shell (core/src/platform.ts).
 import crypto from 'node:crypto';
 import readline from 'node:readline';
 import { spawn } from 'node:child_process';
@@ -78,42 +78,49 @@ export function startSession(h, opts, { cwd, env = process.env, label = '', modu
   return s;
 }
 
-const load = async (given, name, what) => {
-  if (given) return given;
+// The host's module (modules keyed by package name), else an import() by name. Under pnpm that import resolves from
+// packages/adapters only, so a host that ships the module (apps/desktop) must pass it in (ADR 0001).
+const load = async (modules, name, what) => {
+  if (modules[name]) return modules[name];
   try { return await import(name); } catch (e) {
-    if (['ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND'].includes(e.code)) throw new Error(`${what} needs ${name}, which is not installed here`);
-    throw new Error(`${what}: loading ${name} failed: ${e.message}`);
+    const missing = ['ERR_MODULE_NOT_FOUND', 'MODULE_NOT_FOUND'].includes(e.code) && String(e.message).includes(`'${name}'`); // not a dependency of it
+    throw new Error(missing ? `${what} needs ${name}, which is not installed here` : `${what}: loading ${name} failed: ${e.message}`);
   }
 };
 
 // An interactive harness in a pseudo-terminal (ConPTY on Windows). Output is raw terminal data for xterm.js; input and
-// resize come back through write() and resize().
+// resize come back through write() and resize(). Exit: 'stopped' after stop(), else the signal, else the exit code.
 async function terminal(s, spec, { cwd, env, modules, resolve, done }) {
   let stopped = false;
   s.stop = () => { stopped = true; }; // a stop while node-pty loads
-  const pty = await load(modules.pty, 'node-pty', 'terminal mode');
+  const pty = await load(modules, 'node-pty', 'terminal mode');
   if (stopped) return done('stopped');
-  const c = command(spec.cmd, spec.args, resolve);
+  const c = resolveSpec(spec, env, resolve);
+  let p;
   // A .cmd shim's cmd.exe line goes to node-pty as one string: given an array, node-pty quotes each argument again.
-  const p = pty.spawn(c.file, c.windowsVerbatimArguments ? c.args.join(' ') : c.args, { name: 'xterm-256color', cols: 120, rows: 32, cwd, env });
+  try { p = pty.spawn(c.file, c.windowsVerbatimArguments ? c.args.join(' ') : c.args, { name: 'xterm-256color', cols: 120, rows: 32, cwd, env }); } catch (e) {
+    throw /ENOENT|posix_spawnp|not found/i.test(e.message) ? new Error(`${spec.cmd} is not installed`) : e;
+  }
   s.write = (data) => p.write(data);
   s.resize = (cols, rows) => p.resize(cols, rows);
-  s.stop = () => p.kill();
+  s.stop = () => { stopped = true; p.kill(); };
   p.onData((data) => emit(s, { type: 'output', data }));
-  p.onExit(({ exitCode }) => done(exitCode));
+  p.onExit(({ exitCode, signal }) => done(stopped ? 'stopped' : signal || exitCode));
 }
 
 // The harness's SDK in this process (it runs its own CLI binary as a child, with the host's env). Each SDK message is one
-// event. The exit code comes from the last result message: 0 for a success, 1 for an error subtype, is_error, or none.
+// event. Exit: 'stopped' after stop(); else 0 for a success result, 1 for an error subtype, is_error, or no result.
 async function sdk(s, spec, { cwd, env, modules, done }) {
-  const abortController = new AbortController();
+  const abortController = new AbortController(), aborted = () => abortController.signal.aborted;
   s.stop = () => abortController.abort(); // before the await, so a stop while the SDK loads is kept
-  const mod = await load(modules.sdk, spec.module, 'sdk mode');
-  if (abortController.signal.aborted) return done('stopped');
+  const mod = await load(modules, spec.module, 'sdk mode');
+  if (aborted()) return done('stopped');
   let result;
-  for await (const m of mod.query({ prompt: spec.prompt, options: { ...spec.options, cwd, env, abortController } })) {
-    if (m?.type === 'result') result = m;
-    emit(s, { type: 'event', data: m });
-  }
-  done(result?.subtype === 'success' && !result.is_error ? 0 : 1);
+  try {
+    for await (const m of mod.query({ prompt: spec.prompt, options: { ...spec.options, cwd, env, abortController } })) {
+      if (m?.type === 'result') result = m;
+      emit(s, { type: 'event', data: m });
+    }
+  } catch (e) { if (!aborted()) throw e; } // an abort ends the iterator with an AbortError
+  done(aborted() ? 'stopped' : result?.subtype === 'success' && !result.is_error ? 0 : 1);
 }

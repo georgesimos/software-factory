@@ -186,9 +186,11 @@ test('F ui streams a live session over HTTP as server-sent events, to the end', 
 });
 
 // Stand-ins for node-pty and the Agent SDK: the host passes these in, so no real module or binary is touched.
-function fakePty() {
+const PTY = 'node-pty', SDK = '@anthropic-ai/claude-agent-sdk'; // host modules are keyed by package name
+function fakePty(spawnError) {
   const rec = {};
   return { rec, spawn(file, args, opts) {
+    if (spawnError) throw new Error(spawnError);
     Object.assign(rec, { file, args, cwd: opts.cwd });
     let data, exit;
     setTimeout(() => data('ready\r\n'), 5);
@@ -199,7 +201,7 @@ const fakeSdk = (fail, result = { type: 'result', subtype: 'success' }) => ({ re
 
 test('terminal mode: a pseudo-terminal from the host, with input and resize through /api/sessions/input', async () => {
   const pty = fakePty();
-  const s = startSession(claude, { mode: 'terminal', resume: 'abc' }, { cwd: home, env: stubEnv, modules: { pty } });
+  const s = startSession(claude, { mode: 'terminal', resume: 'abc' }, { cwd: home, env: stubEnv, modules: { [PTY]: pty } });
   await new Promise((r) => setTimeout(r, 20));
   assert.deepEqual([pty.rec.file, pty.rec.args, pty.rec.cwd], ['claude', ['--resume', 'abc'], home]);
   const tok = 't'.repeat(32), H = { host: '127.0.0.1:4646', origin: 'http://127.0.0.1:4646', 'content-type': 'application/json', 'x-factory-token': tok };
@@ -221,10 +223,10 @@ test('terminal mode: a pseudo-terminal from the host, with input and resize thro
 
 test('sdk mode: query() from the host, one event per message; a failure or a missing module ends with an error event', async () => {
   const sdk = fakeSdk();
-  const ev = await finished(startSession(claude, { mode: 'sdk', prompt: 'hi', budget: 3 }, { cwd: home, modules: { sdk } }));
+  const ev = await finished(startSession(claude, { mode: 'sdk', prompt: 'hi', budget: 3 }, { cwd: home, modules: { [SDK]: sdk } }));
   assert.deepEqual(ev.map((e) => e.data?.type ?? e.type), ['system', 'result', 'exit']);
   assert.deepEqual([sdk.rec.q.prompt, sdk.rec.q.options.cwd, sdk.rec.q.options.maxBudgetUsd, sdk.rec.q.options.abortController instanceof AbortController], ['hi', home, 3, true]);
-  const bad = await finished(startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { sdk: fakeSdk(true) } }));
+  const bad = await finished(startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { [SDK]: fakeSdk(true) } }));
   assert.deepEqual(bad.slice(-2).map((e) => [e.type, e.message ?? e.code]), [['error', 'boom'], ['exit', null]]);
   const nomod = { id: 'x', modes: ['sdk'], launch: () => ({ module: '@nope/none', prompt: 'p', options: {} }) };
   assert.match((await finished(startSession(nomod, { mode: 'sdk' }, { cwd: home }))).find((e) => e.type === 'error').message, /sdk mode needs @nope\/none, which is not installed/);
@@ -232,7 +234,7 @@ test('sdk mode: query() from the host, one event per message; a failure or a mis
 
 test('terminal on Windows: npm\'s claude.cmd goes to node-pty as one cmd.exe line, not quoted twice', async () => {
   const pty = fakePty(), win = { platform: 'win32', env: { PATH: 'C:\\npm', PATHEXT: '.EXE;.CMD', ComSpec: 'C:\\Windows\\system32\\cmd.exe' }, isFile: (p) => p.toLowerCase() === 'c:\\npm\\claude.cmd' };
-  const s = startSession(claude, { mode: 'terminal', resume: 'abc' }, { cwd: home, env: stubEnv, modules: { pty }, resolve: win });
+  const s = startSession(claude, { mode: 'terminal', resume: 'abc' }, { cwd: home, env: stubEnv, modules: { [PTY]: pty }, resolve: win });
   await new Promise((r) => setTimeout(r, 20));
   assert.deepEqual([pty.rec.file, pty.rec.args], ['C:\\Windows\\system32\\cmd.exe', '/d /s /c ""C:\\npm\\claude.cmd" --resume abc"']);
   s.stop(); await finished(s);
@@ -240,28 +242,42 @@ test('terminal on Windows: npm\'s claude.cmd goes to node-pty as one cmd.exe lin
 
 test('a stop while node-pty or the SDK loads is kept: nothing starts', async () => {
   const pty = fakePty(), sdk = fakeSdk();
-  const t = startSession(claude, { mode: 'terminal' }, { cwd: home, modules: { pty } }); t.stop();
-  const q = startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { sdk } }); q.stop();
+  const t = startSession(claude, { mode: 'terminal' }, { cwd: home, modules: { [PTY]: pty } }); t.stop();
+  const q = startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { [SDK]: sdk } }); q.stop();
   assert.deepEqual([(await finished(t)).at(-1).code, (await finished(q)).at(-1).code], ['stopped', 'stopped']);
   assert.deepEqual([pty.rec.file, sdk.rec.q], [undefined, undefined]);
 });
 
 test('sdk mode: the host env reaches the SDK, and a failed result exits 1', async () => {
   const sdk = fakeSdk(), env = { ...stubEnv, FACTORY_MARK: 'x' };
-  await finished(startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, env, modules: { sdk } }));
+  await finished(startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, env, modules: { [SDK]: sdk } }));
   assert.equal(sdk.rec.q.options.env, env);
   for (const [result, code] of [[{ type: 'result', subtype: 'success' }, 0], [{ type: 'result', subtype: 'error_max_budget_usd' }, 1], [{ type: 'result', subtype: 'success', is_error: true }, 1], [null, 1]]) {
-    assert.equal((await finished(startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { sdk: fakeSdk(false, result) } }))).at(-1).code, code, JSON.stringify(result));
+    assert.equal((await finished(startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { [SDK]: fakeSdk(false, result) } }))).at(-1).code, code, JSON.stringify(result));
   }
 });
 
+test('a stop mid-run ends as stopped, in a terminal and in the SDK; a missing binary in a pty is "not installed"', async () => {
+  const pty = fakePty(), t = startSession(claude, { mode: 'terminal' }, { cwd: home, modules: { [PTY]: pty } });
+  await new Promise((r) => setTimeout(r, 20));
+  const tEnd = finished(t); t.stop();
+  assert.equal((await tEnd).at(-1).code, 'stopped');
+  const waiting = { async *query(q) { yield { type: 'system', subtype: 'init' }; await new Promise((_, no) => q.options.abortController.signal.addEventListener('abort', () => no(Object.assign(new Error('aborted'), { name: 'AbortError' })))); } };
+  const q = startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { [SDK]: waiting } });
+  await new Promise((r) => { const off = subscribe(q, (e) => { if (e.data?.subtype === 'init') { off(); r(); } }); });
+  const qEnd = finished(q); q.stop();
+  assert.deepEqual((await qEnd).slice(-1).map((e) => [e.type, e.code]), [['exit', 'stopped']], 'no error event for our own abort');
+  const gone = await finished(startSession(claude, { mode: 'terminal' }, { cwd: home, modules: { [PTY]: fakePty('posix_spawnp failed.') } }));
+  assert.deepEqual(gone.slice(-2).map((e) => e.message ?? e.code), ['claude is not installed', null]);
+});
+
 test('launchSession() never starts a terminal session for a factory run: it would have no budget cap', () => {
-  assert.throws(() => launchSession({ repo: 'acme/app', issue: 9, mode: 'terminal' }, stubEnv, { pty: fakePty() }), /no budget cap/);
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 9, mode: 'terminal' }, stubEnv, { [PTY]: fakePty() }), /no budget cap/);
 });
 
 test('launchSession() passes the host modules on: an sdk run in the attached clone with the run budget and write mode', async () => {
   const sdk = fakeSdk();
-  await finished(launchSession({ repo: 'acme/app', issue: 8, mode: 'sdk' }, stubEnv, { sdk }));
+  await finished(launchSession({ repo: 'acme/app', issue: 8, mode: 'sdk' }, stubEnv, { [SDK]: sdk }));
   const { prompt, options } = sdk.rec.q;
   assert.deepEqual([prompt, options.cwd, options.maxBudgetUsd, options.permissionMode], ['/software-factory acme/app#8', projects()['acme/app'].path, COST_CAP, 'auto']);
 });

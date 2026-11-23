@@ -95,7 +95,7 @@ The harness adapter contract (`packages/adapters/harnesses`) gains an optional `
 - never `--dangerously-bypass-approvals-and-sandbox`;
 - budget flags come from `F`.
 
-`node-pty` and the SDKs are dependencies of `apps/desktop`, which hands them to the session runner (`packages/adapters/sessions.mjs`, through the server's `hostModules`). `adapters` stays dependency-free and otherwise imports them lazily by name, so `F` itself stays zero-dependency. Decided in H1 (#79): the Agent SDK pulls a 361 MB platform binary into every install, and pnpm 10 blocks `node-pty`'s build script unless the root config allows it.
+`node-pty` and the SDKs are dependencies of `apps/desktop`, which hands them to the session runner (`packages/adapters/sessions.mjs`, through the server's `hostModules`). `adapters` stays dependency-free, so `F` itself stays zero-dependency. The host must pass them in, keyed by package name: under pnpm, `adapters`' fallback `import()` resolves from `packages/adapters` and can't see `apps/desktop`'s dependencies. Decided in H1 (#79): the Agent SDK pulls a 361 MB platform binary into every install, and pnpm 10 blocks `node-pty`'s build script unless the root config allows it.
 
 `node-pty` notes:
 - It is an N-API native module, so one build works in Node and in Electron.
