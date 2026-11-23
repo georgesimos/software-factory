@@ -1,12 +1,13 @@
 // Template for a new AI harness. Copy to harnesses/<id>.mjs (the id must equal the file name), fill in, and add
 // test/bin/<binary> as its stub. Skipped by the registry because the name starts with "_". See HARNESSES.md.
-// Import only node: builtins, never factory.mjs. detect() and login() must never throw.
-import { spawnSync } from 'node:child_process';
+// Import only node: builtins and core/src/platform.ts, never factory.mjs. detect() and login() must never throw.
+import { run as spawnRun } from '../../core/src/platform.ts';
 
 const BIN = 'my-agent';
-// Both streams: some CLIs print status to stderr. No shell, argv only, bounded by a timeout.
+// Both streams: some CLIs print status to stderr. No shell, argv only, bounded by a timeout. platform.run() finds BIN on
+// PATH only (on Windows, never in the current folder) and runs a .cmd shim safely.
 const run = (args) => {
-  const r = spawnSync(BIN, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000 });
+  const r = spawnRun(BIN, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000 });
   return { code: r.error ? -1 : r.status ?? -1, out: `${r.stdout || ''}${r.stderr || ''}` };
 };
 

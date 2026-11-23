@@ -2,11 +2,12 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { run as spawnRun } from '../../core/src/platform.ts';
 
-// Both streams: some CLIs print status to stderr. No shell, argv only, bounded by a timeout.
+// Both streams: some CLIs print status to stderr. No shell, argv only, bounded by a timeout. Through platform.run(), which on
+// Windows finds claude on PATH only, never in the current folder, and runs a .cmd shim safely.
 const run = (args) => {
-  const r = spawnSync('claude', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000 });
+  const r = spawnRun('claude', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000 });
   return { code: r.error ? -1 : r.status ?? -1, out: `${r.stdout || ''}${r.stderr || ''}` };
 };
 const ls = (d) => { try { return fs.readdirSync(d); } catch { return []; } };

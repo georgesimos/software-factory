@@ -124,7 +124,7 @@ test('Windows: stop() ends the whole tree with taskkill, since kill() would end 
 test('the command is found on the PATH and PATHEXT the session gets, not this process\'s', () => {
   const env = { PATH: 'D:\\tools', PATHEXT: '.EXE' }, resolve = { platform: 'win32', isFile: (p) => p.toLowerCase() === 'd:\\tools\\claude.exe' };
   assert.equal(resolveSpec({ cmd: 'claude', args: ['-p'] }, env, resolve).file, 'D:\\tools\\claude.exe');
-  assert.equal(resolveSpec({ cmd: 'claude', args: ['-p'] }, { PATH: 'C:\\other' }, resolve).file, 'claude', 'not found there: left for ENOENT');
+  assert.throws(() => resolveSpec({ cmd: 'claude', args: ['-p'] }, { PATH: 'C:\\other' }, resolve), { code: 'ENOENT', message: 'claude is not installed' }); // never the bare name, which Windows looks up in the current folder first
 });
 
 test('a session keeps at most MAX_BYTES of events and says what it dropped', async () => {

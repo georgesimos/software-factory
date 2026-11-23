@@ -29,7 +29,8 @@ export function command(cmd: string, args: string[] = [], { platform = process.p
   if (/\.[cm]?js$/i.test(cmd)) return { file: process.execPath, args: [cmd, ...args] }; // a script override (FACTORY_GH=stub.mjs) runs under this node: no shebang on Windows
   if (platform !== 'win32') return { file: cmd, args };
   const file = findOnPath(cmd, env, isFile);
-  if (!file) return { file: cmd, args }; // not found: let the spawn fail with ENOENT, as on POSIX ("not installed")
+  // Not found: never hand the bare name to spawn, which on Windows looks in the current folder (maybe an untrusted clone) first.
+  if (!file) throw Object.assign(new Error(`${cmd} is not installed`), { code: 'ENOENT' });
   if (!/\.(cmd|bat)$/i.test(file)) return { file, args };
   const bad = args.find((a) => !PLAIN.test(a));
   if (bad !== undefined || /["%]/.test(file)) {
@@ -116,26 +117,42 @@ export function cliShims(entry: string, platform: NodeJS.Platform = process.plat
 // The Path a new cmd.exe or PowerShell starts with: the registry user and machine values, with %VARS% expanded. Not this
 // process's PATH: Git Bash, where Claude Code runs F on Windows, adds ~/bin and other folders Windows itself never sees.
 // reg.exe by full path: a bare 'reg' may resolve from the current folder first, and F can run inside an untrusted clone.
+// Machine Path, then user Path, as Windows builds it. %VARS% are expanded only in a REG_EXPAND_SZ value, as Windows does.
+// shortcut: reg.exe writes the OEM code page and this reads UTF-8, so a non-ASCII folder never matches; that fails safe (the
+// folder counts as not on Path and the PowerShell line, which adds it only when missing, is printed). Upgrade: chcp 65001.
 export function windowsPath(env: Env = process.env, run: (file: string, args: string[], o: object) => string = execFileSync as never) {
   const reg = path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', 'System32', 'reg.exe');
-  const read = (key: string) => { try { return /^\s*Path\s+REG_(?:EXPAND_)?SZ\s+(.*)$/im.exec(run(reg, ['query', key, '/v', 'Path'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))?.[1]?.trim() ?? ''; } catch { return ''; } };
-  return [read('HKCU\\Environment'), read('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment')].join(';')
-    .replace(/%([^%;]+)%/g, (m, v) => envGet(env, v) ?? m);
+  const read = (key: string) => {
+    let m;
+    try { m = /^\s*Path\s+REG_(EXPAND_)?SZ\s+(.*)$/im.exec(run(reg, ['query', key, '/v', 'Path'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })); } catch { return ''; }
+    const v = m?.[2]?.trim() ?? '';
+    return m?.[1] ? v.replace(/%([^%;]+)%/g, (x, name) => envGet(env, name) ?? x) : v;
+  };
+  return [read('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment'), read('HKCU\\Environment')].join(';');
 }
 
 // Where install-cli writes: whichever of ~/.local/bin and ~/bin comes first on PATH, else ~/.local/bin (not yet on PATH).
-// PATH entries are judged as absolute paths only, with a leading ~ meaning home; relative ones never count.
+// PATH entries are judged as absolute paths only, with a leading ~ meaning home on POSIX (cmd.exe and PowerShell don't
+// expand it); relative ones never count.
 export function cliDir(home: string, pathList: string, platform: NodeJS.Platform = process.platform) {
   const p = platform === 'win32' ? path.win32 : path.posix;
   const norm = (d: string) => { const n = p.normalize(d).replace(/[\\/]+$/, ''); return platform === 'win32' ? n.toLowerCase() : n; };
   const local = p.join(home, '.local', 'bin'), dirs = [local, p.join(home, 'bin')];
   for (const e of pathList.split(platform === 'win32' ? ';' : ':')) {
-    const abs = /^~(?=[\\/]|$)/.test(e) ? p.join(home, e.slice(1)) : e;
+    const abs = platform !== 'win32' && /^~(?=\/|$)/.test(e) ? p.join(home, e.slice(1)) : e;
     const hit = p.isAbsolute(abs) && dirs.find((d) => norm(d) === norm(abs));
     if (hit) return { dir: hit, onPath: true };
   }
   return { dir: local, onPath: false };
 }
+
+// The PowerShell line that adds dir to the user Path. It reads the raw value (DoNotExpandEnvironmentNames) and writes it back
+// as REG_EXPAND_SZ, so %USERPROFILE%-style entries stay unexpanded, adds dir only when missing, then sets and clears a
+// throwaway user variable so Windows broadcasts the change to new terminals. Not yet run on real Windows.
+export const psAddToPath = (dir: string) => {
+  const q = `'${dir.replace(/'/g, "''")}'`;
+  return `$k = 'HKCU:\\Environment'; $p = (Get-Item $k).GetValue('Path', '', 'DoNotExpandEnvironmentNames'); if (($p -split ';') -notcontains ${q}) { Set-ItemProperty $k Path (($p.TrimEnd(';') + ';' + ${q}).TrimStart(';')) -Type ExpandString; [Environment]::SetEnvironmentVariable('FACTORY_PATH_REFRESH', '1', 'User'); [Environment]::SetEnvironmentVariable('FACTORY_PATH_REFRESH', $null, 'User') }   # PowerShell, then open a new terminal`;
+};
 
 export function installCli(entry: string, { home, platform = process.platform, env = process.env, pathList }: { home: string; platform?: NodeJS.Platform; env?: Env; pathList?: string }) {
   const p = platform === 'win32' ? path.win32 : path.posix;
@@ -150,7 +167,7 @@ export function installCli(entry: string, { home, platform = process.platform, e
   if (platform !== 'win32') fs.chmodSync(p.join(dir, 'factory'), 0o755); // mode is ignored when the file already exists
   const fish = /(^|\/)fish$/.test(envGet(env, 'SHELL') || '');
   const addToPath = onPath ? undefined : platform === 'win32'
-    ? `[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';${dir.replace(/'/g, "''")}', 'User')   # PowerShell, then open a new terminal`
+    ? psAddToPath(dir)
     : fish ? `fish_add_path '${dir.replace(/['\\]/g, '\\$&')}'   # run once in fish`
     : `export PATH="${dir.replace(/["$`\\]/g, '\\$&')}:$PATH"   # add this line to your shell profile (~/.zshrc, ~/.bashrc), then open a new terminal`;
   return { dir, files: Object.keys(shims).map((n) => p.join(dir, n)), entry, ...(addToPath ? { onPath: false, addToPath } : { onPath: true }) };

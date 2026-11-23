@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cliDir, cliShims, command, installCli, windowsPath, linkSkill, open, opener, posixShell, run } from '../../core/src/platform.ts';
+import { cliDir, cliShims, command, installCli, psAddToPath, windowsPath, linkSkill, open, opener, posixShell, run } from '../../core/src/platform.ts';
 import { checkRunner } from '../../core/src/skills.ts';
 import { evalCommand } from '../../core/src/eval.ts';
 
@@ -32,8 +32,17 @@ test('Windows: a .cmd shim runs through cmd.exe /d /s /c, verbatim, with plain a
   }
 });
 
-test('Windows: not found stays as given, so the spawn fails with ENOENT ("not installed")', () => {
-  assert.deepEqual(command('codex', ['--version'], win), { file: 'codex', args: ['--version'] });
+test('Windows: not found on PATH throws ENOENT "not installed", never hands spawn the bare name (it would look in the current folder first)', () => {
+  assert.throws(() => command('codex', ['--version'], win), { code: 'ENOENT', message: 'codex is not installed' });
+  assert.equal(run('factory-no-such-binary', ['--version'], {}).error.code, 'ENOENT'); // on this OS too, a missing binary is r.error
+});
+
+test('the claude and codex harnesses spawn through platform.run(), never by bare name', () => {
+  for (const f of ['claude-code', 'codex', '_template']) {
+    const src = fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'adapters', 'harnesses', `${f}.mjs`), 'utf8');
+    assert.match(src, /import \{ run as spawnRun \} from '\.\.\/\.\.\/core\/src\/platform\.ts';/, f);
+    assert.doesNotMatch(src, /\bspawnSync\(|\bspawn\(|execFile/, f);
+  }
 });
 
 test('run() spawns the resolved command', () => {
@@ -193,8 +202,20 @@ test('Windows: on-PATH is judged from the registry Path a new cmd.exe or PowerSh
   assert.deepEqual(spawned, ['D:\\WIN\\System32\\reg.exe', 'D:\\WIN\\System32\\reg.exe']); // never a bare "reg", which could resolve from the current folder
   windowsPath({}, (file) => { spawned.push(file); return ''; });
   assert.equal(spawned.at(-1), 'C:\\Windows\\System32\\reg.exe');
-  assert.equal(winPath, 'C:\\Users\\J\\AppData\\Local\\Microsoft\\WindowsApps;%NOPE%\\x;C:\\Windows\\system32;C:\\Program Files\\Git\\cmd');
+  assert.equal(winPath, 'C:\\Windows\\system32;C:\\Program Files\\Git\\cmd;C:\\Users\\J\\AppData\\Local\\Microsoft\\WindowsApps;%NOPE%\\x'); // machine, then user
+  const sz = windowsPath(env, (f, [, k]) => k.startsWith('HKCU') ? '    Path    REG_SZ    %USERPROFILE%\\bin\r\n' : ''); // REG_SZ: %VARS% stay literal, as in Windows
+  assert.equal(sz, ';%USERPROFILE%\\bin');
+  assert.deepEqual(cliDir('C:\\Users\\J', sz, 'win32').onPath, false);
+  assert.deepEqual(cliDir('C:\\Users\\J', '~\\bin;~/.local/bin', 'win32').onPath, false); // cmd.exe and PowerShell don't expand ~
   assert.deepEqual(cliDir('C:\\Users\\J', winPath, 'win32'), { dir: 'C:\\Users\\J\\.local\\bin', onPath: false }); // so the PowerShell line is printed
   assert.equal(windowsPath(env, () => { throw new Error('no reg'); }), ';'); // no registry: nothing counts as on Path
   assert.deepEqual(cliDir('C:\\Users\\J', windowsPath(env, (f, [, k]) => k.startsWith('HKCU') ? '    Path    REG_SZ    C:\\Users\\J\\.local\\bin\r\n' : ''), 'win32'), { dir: 'C:\\Users\\J\\.local\\bin', onPath: true });
+});
+
+test('psAddToPath keeps the user Path a REG_EXPAND_SZ: reads it unexpanded, adds the folder only when missing, writes ExpandString', () => {
+  const line = psAddToPath("C:\\Users\\O'Neil\\.local\\bin");
+  assert.match(line, /\.GetValue\('Path', '', 'DoNotExpandEnvironmentNames'\)/);
+  assert.match(line, /-notcontains 'C:\\Users\\O''Neil\\\.local\\bin'/); // PowerShell single quotes: ' doubled
+  assert.match(line, /Set-ItemProperty \$k Path .* -Type ExpandString;/);
+  assert.doesNotMatch(line, /GetEnvironmentVariable\('Path'/); // that one returns the value with %VARS% expanded
 });
