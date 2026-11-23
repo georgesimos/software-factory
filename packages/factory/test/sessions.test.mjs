@@ -13,7 +13,7 @@ import { projects, saveProject } from '../../core/src/workspace.ts';
 import { command, opener } from '../../core/src/platform.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { MAX_BYTES, killTree, listSessions, resolveSpec, startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
-import { budgetLeft, harnessReady, launchSession, resumeFor, ui, uiHandle } from '../../server/src/server.ts';
+import { budgetLeft, harnessReady, launchSession, resumeFor, serve, uiHandle } from '../../server/src/server.ts';
 
 setup();
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-shome-'));
@@ -231,11 +231,8 @@ test('/api/sessions: POST starts one behind the token and Origin checks; GET lis
 });
 
 test('F ui streams a live session over HTTP as server-sent events, to the end', async () => {
-  const log = console.log; let url;
-  console.log = (x) => { url = /http:\S+/.exec(String(x))?.[0] ?? url; };
-  const server = ui(0);
+  const { server, url } = await serve(0);
   try {
-    await new Promise((r) => server.once('listening', r));
     const u = new URL(url), t = u.searchParams.get('t'), H = { 'x-factory-token': t, origin: u.origin, 'content-type': 'application/json' };
     const { session } = await (await fetch(`${u.origin}/api/sessions`, { method: 'POST', headers: H, body: JSON.stringify({ repo: 'acme/app', issue: 7 }) })).json();
     const signal = AbortSignal.timeout(10_000); // a stream that never ends fails here instead of hanging the run
@@ -244,7 +241,7 @@ test('F ui streams a live session over HTTP as server-sent events, to the end', 
     const blocks = (await es.text()).split('\n\n').filter(Boolean);
     assert.deepEqual(blocks.map((b) => JSON.parse(b.split('data: ')[1]).type).at(-1), 'exit');
     assert.match(blocks[0], /^id: 0\ndata: /);
-  } finally { console.log = log; server.closeAllConnections(); server.close(); }
+  } finally { server.closeAllConnections(); server.close(); }
 });
 
 // Stand-ins for node-pty and the Agent SDK: the host passes these in, so no real module or binary is touched.

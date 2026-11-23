@@ -18,7 +18,7 @@ import { stateDir } from './log.ts';
 export function fCmd(platform = process.platform, home = os.homedir(), entry = path.join(import.meta.dirname, '..', '..', 'factory', 'factory.mjs')) {
   const linked = path.join(home, '.claude', 'skills', 'software-factory', 'factory.mjs');
   let here = entry, viaLink = false;
-  try { here = fs.realpathSync(entry); viaLink = fs.realpathSync(linked) === here; } catch {}
+  try { here = fs.realpathSync(entry); viaLink = fs.realpathSync(linked) === here; } catch { viaLink = !fs.existsSync(entry) && fs.existsSync(linked); } // the desktop build ships no factory.mjs: the installed skill's
   if (platform === 'win32') return `node "${viaLink ? linked : here}"`;
   return viaLink ? 'node ~/.claude/skills/software-factory/factory.mjs' : `node ${shq(here)}`;
 }

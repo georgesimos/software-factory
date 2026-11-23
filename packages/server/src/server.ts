@@ -5,7 +5,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { CAP, COST_CAP, TERMINAL, TOKEN_CAP } from '../../core/src/constants.ts';
-import { hooks } from '../../core/src/ship.ts';
+import { hooks, loadShipList } from '../../core/src/ship.ts';
 import { LOGIN, rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
 import { budget, budgetWhy, derive } from '../../core/src/derive.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
@@ -161,7 +161,9 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
   return startSession(h, { mode, prompt: `/software-factory ${id}`, resume, budget: budgetLeft(b), write: true }, { cwd, env, label: id, modules });
 }
 
-export function ui(port = 0) {
+// The F ui server, unprinted: the desktop main loads `url` in its window; F ui prints it. Resolves once listening.
+export async function serve(port = 0) {
+  await loadShipList(); // the wizard's ship step lists packages/ship's connectors
   const token = crypto.randomBytes(24).toString('base64url');
   const server = http.createServer((req, res) => {
     let body = '';
@@ -178,9 +180,12 @@ export function ui(port = 0) {
       if (r.stream.state !== 'running') res.end();
     });
   });
-  server.listen(port, '127.0.0.1', () => console.log(`factory ui: http://127.0.0.1:${server.address().port}/?t=${token}\nOnly this URL can change settings (skills.json, rules, projects). Ctrl-C to stop.`));
-  return server;
+  return new Promise<{ server: http.Server; token: string; url: string }>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => resolve({ server, token, url: `http://127.0.0.1:${server.address().port}/?t=${token}` }));
+  });
 }
+export const ui = (port = 0) => serve(port).then(({ url }) => console.log(`factory ui: ${url}\nOnly this URL can change settings (skills.json, rules, projects). Ctrl-C to stop.`));
 export const runRepos = () => [...new Set([...Object.keys(derive(read())), ...readArchive().map((a) => a.id)].map((id) => id.split(/[#:]/)[0]))];
 export function render() {
   const out = path.join(stateDir(), 'dashboard.html');
