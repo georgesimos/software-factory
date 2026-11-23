@@ -1,4 +1,4 @@
-import { Dot, EmptyState, Skeleton, ThemeToggle, formatAgo } from '@software-factory/design-system';
+import { Dot, EmptyState, Skeleton, ThemeToggle, formatClock } from '@software-factory/design-system';
 import { useEffect, useState } from 'react';
 import { Board } from './Board.tsx';
 import { loadData, type FactoryData } from './data.ts';
@@ -16,7 +16,7 @@ export function App({ load = loadData }: { load?: () => Promise<FactoryData> }) 
     <>
       <header className="web-top">
         <span className="web-brand"><span className="sf-mark" aria-hidden="true" />Software Factory</span>
-        {data?.generated ? <span className="web-updated"><Dot tone="ok" />Updated {formatAgo(data.generated)}</span> : null}
+        {data?.generated ? <span className="web-updated"><Dot tone="ok" />Updated {formatClock(data.generated)}</span> : null}
         <ThemeToggle />
       </header>
       <main className="web-main" aria-busy={!data && !error}>

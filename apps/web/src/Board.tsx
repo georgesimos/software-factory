@@ -21,7 +21,7 @@ export function Board({ data }: { data: FactoryData }) {
   return (
     <>
       <Tabs label="Project" value={project} onChange={setProject} className="web-tabs"
-        items={[{ id: '', label: 'All', count: data.runs.length }, ...projectsOf(data).map((p) => ({ id: p, prefix: p.split('/')[0] + '/', label: p.split('/')[1]! }))]}>
+        items={[{ id: '', label: 'All', count: data.runs.length }, ...projectsOf(data).map((p) => ({ id: p, prefix: p.includes('/') ? p.split('/')[0] + '/' : undefined, label: p.split('/')[1] ?? p }))]}>
         {runs.length ? (
           <>
             {M ? (
