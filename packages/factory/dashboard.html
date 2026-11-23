@@ -1252,7 +1252,7 @@ document.addEventListener('keydown', (e) => {
 // ---- Skills: who runs each step. `F ui` serves this page with a token so changes save; a plain file offers the command instead.
 const SK = { token: obj(DATA.ui).token || null, scope: 'default' };
 const skData = () => obj(DATA.skills);
-const F_CMD = 'node ~/.claude/skills/software-factory/factory.mjs';
+const F_CMD = typeof DATA.fCmd === 'string' && DATA.fCmd ? DATA.fCmd : 'node ~/.claude/skills/software-factory/factory.mjs'; // a plugin install's real path, from F
 const STEP_LABEL = { intake: 'Intake', spec: 'Spec', build: 'Build', verifier: 'Verifier', postmerge: 'Post-merge' };
 const stepLabel = (k) => STEP_LABEL[k] || (String(k).startsWith('review.') ? 'Review · ' + k.slice(7) : String(k));
 const SK_SOURCES = [['all', 'All'], ['builtin', 'Built-in'], ['system', 'Harness tools'], ['global', 'Global'], ['project', 'Project'], ['yours', 'Your briefs']];
