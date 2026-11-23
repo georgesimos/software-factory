@@ -211,7 +211,7 @@ export async function projectTest({ uiHandle, read, project: { validateIssues, v
   assert.deepEqual([s.phase, s.milestones[0], s.burn.usd, s.next.key, s.epic.id], ['stopped', { name: 'M1 Track', merged: 3, total: 6 }, 2, 'transaction-list', '13']);
   assert.deepEqual(s.issues.slice(0, 5).map((i) => i.state), ['merged', 'escalated', 'merged', 'merged', 'ready']);
   const html = fs.readFileSync(path.join(dir, 'dashboard.html'), 'utf8');
-  assert.equal(html.split('__FACTORY_DATA__').length, 1);
+  assert.ok(!html.includes('id="data">__FACTORY_DATA__'));
   assert.match(html, /"ideas":\{"acme\/budget":\{"run":"acme\/budget:project"/);
   // a merged run reverted after merge stops the loop once, and keeps blocking its dependents
   run(['rules', 'unset', 'acme/budget', 'project.maxIssuesPerSession']);

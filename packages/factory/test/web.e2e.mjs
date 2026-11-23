@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-// Drives apps/web as `F ui` serves it (/app/): the setup wizard end to end, then the Skills sheet, at 1280 and 375 px in light
-// and dark, and read-only without a token. A temp FACTORY_DIR, a fake HOME and stubbed gh, git, claude and codex (the
-// environment onboard.e2e.cjs used for dashboard.html) keep it off real repos, GitHub and ~/.claude/factory.
-// Asserts what each write leaves on disk. Needs the build: pnpm --filter @software-factory/web build. Set CHROME to pick a browser.
-// Run: pnpm --filter @software-factory/factory e2e:web [screenshot dir]
+// Drives the app (packages/factory/app.html) as `F ui` serves it: the setup wizard end to end, then the Skills sheet, at 1280
+// and 375 px in light and dark; then read-only, as F render writes it, over file://. A temp FACTORY_DIR, a fake HOME and
+// stubbed gh, git, claude and codex keep it off real repos, GitHub and ~/.claude/factory.
+// Asserts what each write leaves on disk. Rebuild the app with pnpm --filter @software-factory/web dashboard. Set CHROME to pick a browser.
+// Run: pnpm --filter @software-factory/factory e2e [screenshot dir]
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,8 +13,6 @@ import { chromium } from 'playwright-core';
 import { findChrome } from '../../../scripts/chrome.mjs';
 
 const HERE = path.join(import.meta.dirname, '..');
-const WEB_DIST = path.join(HERE, '..', '..', 'apps', 'web', 'dist'); // not imported from the server: that loads its whole graph here, with the real HOME
-if (!fs.existsSync(path.join(WEB_DIST, 'index.html'))) { console.error('apps/web is not built: run pnpm --filter @software-factory/web build'); process.exit(1); }
 const SHOTS = path.resolve(process.argv[2] || fs.mkdtempSync(path.join(os.tmpdir(), 'factory-web-shots-')));
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-web-e2e-'));
 const DIR = path.join(root, 'factory'), HOME = path.join(root, 'home'), clone = path.join(HOME, 'Development', 'app');
@@ -44,8 +42,8 @@ const noOverflow = async (page, what) => assert.ok(await page.evaluate(() => [do
 try {
   url = await new Promise((resolve, reject) => {
     let out = '';
-    const t = setTimeout(() => reject(new Error('F ui printed no /app/ URL within 30 s')), 30_000);
-    server.stdout.on('data', (c) => { out += c; const m = /http:\/\/127\.0\.0\.1:\d+\/app\/\?t=[\w-]+/.exec(out); if (m) { clearTimeout(t); resolve(m[0]); } });
+    const t = setTimeout(() => reject(new Error('F ui printed no URL within 30 s')), 30_000);
+    server.stdout.on('data', (c) => { out += c; const m = /http:\/\/127\.0\.0\.1:\d+\/\?t=[\w-]+/.exec(out); if (m) { clearTimeout(t); resolve(m[0]); } });
     server.on('exit', (code) => { clearTimeout(t); reject(new Error('F ui exited ' + code)); });
   });
   browser = await chromium.launch({ executablePath: findChrome() });
@@ -194,10 +192,9 @@ try {
   // Read-only: the page data injected the way a host does, no token. Every step offers the command and nothing is written.
   {
     const { ctx, page } = await open(1280, 'light');
-    const [, port, tok] = /:(\d+)\/app\/\?t=([\w-]+)/.exec(url);
-    const state = await (await fetch(`http://127.0.0.1:${port}/api/state`, { headers: { 'x-factory-token': tok } })).json();
-    await ctx.addInitScript((d) => { window.__FACTORY_DATA__ = d; }, state);
-    await page.goto(url.replace(/\?t=.*/, ''));
+    execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), 'render'], { env }); // the file every record() rewrites
+    await page.goto('file://' + path.join(DIR, 'dashboard.html').replace(/\\/g, '/'));
+    await page.getByRole('tab', { name: /app/ }).waitFor(); // the run data is inlined; nothing loads from anywhere
     await page.getByRole('button', { name: 'Set up' }).click();
     const wiz = page.getByRole('dialog', { name: 'Set up the factory' });
     assert.match(await wiz.innerText(), /Read-only page[^]*npm install -g @openai\/codex[^]*onboard/);
@@ -209,13 +206,9 @@ try {
     await shot(page, '1280-light-static-3');
     await ctx.close();
   }
-  // Without the token the page can't read /api/state, and says so instead of showing anyone's data.
-  {
-    const { ctx, page } = await open(1280, 'light');
-    await page.goto(url.replace(/\?t=.*/, ''));
-    await page.getByText('Could not load runs').waitFor();
-    await ctx.close();
-  }
+  // Without the token F ui serves nothing, and the API refuses.
+  assert.equal((await fetch(url.replace(/\?t=.*/, ''))).status, 403);
+  assert.equal((await fetch(url.replace(/\?t=.*/, 'api/state'))).status, 403);
   assert.deepEqual(errors, []);
   console.log(`ok - web e2e passed; ${shots.length} screenshots in ${SHOTS}`);
 } catch (e) {

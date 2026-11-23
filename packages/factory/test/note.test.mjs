@@ -1,7 +1,6 @@
 // @ts-nocheck
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import vm from 'node:vm';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
@@ -98,17 +97,4 @@ test('notes: verifier and postmerge map to their own events', () => {
   cli(['event', R, 'review', 'passed', '-'], '{"role":"verifier","tokens":10}');
   assert.match(note('verifier').warning, /verifier already ran/);
   assert.equal(note('postmerge').warning, undefined); // not merged yet
-});
-
-// The dashboard timeline row for a note shows its step and text, and where it went.
-test('notes: dashboard timeline rows', () => {
-  const html = fs.readFileSync(path.join(HERE, 'dashboard.html'), 'utf8');
-  const src = /^function timeline\(r\) \{[^]*?^\}$/m.exec(html)[0];
-  const text = (x) => (x == null || x === false ? '' : Array.isArray(x) ? x.map(text).join('') : String(x));
-  const ctx = { el: (tag, attrs, ...kids) => text(kids) + ' ', section: (t, body) => text(body), clock: () => '', dot: () => '', money: String, tokens: String,
-    num: (x) => typeof x === 'number', arr: (x) => (Array.isArray(x) ? x : []), obj: (x) => x || {} };
-  vm.runInNewContext(src, ctx);
-  const out = ctx.timeline({ events: [{ stage: 'note', status: 'pending', step: 'build', text: 'use the helper' }, { stage: 'note', status: 'applied', steps: ['build', 'review.code'] }] });
-  assert.match(out, /note\s+· pending\s+for build: use the helper/);
-  assert.match(out, /note\s+· applied\s+handed to build, review\.code/);
 });

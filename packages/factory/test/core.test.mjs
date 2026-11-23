@@ -122,7 +122,8 @@ export function coreTest() {
   assert.equal(read().filter((e) => e.stage === 'rules').length, 5); // the rule audit trail survives archiving
   const page = fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8');
   assert.match(page, /"merged":3,/); // metrics.all counts the archived merges
-  assert.equal(page.split('__FACTORY_DATA__').length, 1);
+  assert.ok(!page.includes('id="data">__FACTORY_DATA__'));
+  assert.match(page, /"reload":10000/); // the file re-reads itself
   assert.match(page, /"ruleHistory":\[\{[^\]]*"key":"ci","value":"skip"/);
   assert.match(page, /"id":"acme\/shop#47"[^]*?"parent":"acme\/shop#46"/); // parent survives archiving
   fs.mkdirSync(runDir('acme/shop#45'), { recursive: true });
@@ -136,7 +137,7 @@ export function coreTest() {
   assert.ok(!html.includes('</script><script>alert'));
 }
 
-// The claude.ai Artifact page (#18): no skeleton, no reload timer, no local path, nothing dashboard.html doesn't carry, never a token.
+// The claude.ai Artifact page (#18): no skeleton, no reload, no local path, nothing the local dashboard doesn't carry, never a token.
 // It runs on a copy of the demo state, so the paths it plants never reach the other tests.
 export function artifactTest() {
   const prev = io.dir;
@@ -160,7 +161,10 @@ export function artifactTest() {
     assert.equal(fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), before); // the local dashboard is left alone
     const art = fs.readFileSync(out, 'utf8'), a = dataOf(art), full = dataOf(page());
     assert.match(line, new RegExp(`artifact\\.html: ${Buffer.byteLength(art)} bytes, ${full.runs.length} runs`));
-    assert.ok(!/<!doctype|<html|<head>|<\/head>|<body|<\/body>|<\/html>|<meta charset|<meta name="viewport"|setTimeout\(tick, 10000\);/i.test(art));
+    assert.ok(!/<!doctype|<html|<head>|<\/head>|<body|<meta charset|<meta name="viewport"/i.test(art.slice(0, art.indexOf('<script type="module">'))), 'no skeleton before the script');
+    assert.ok(!/<\/body>|<\/html>/i.test(art.slice(art.lastIndexOf('</script>'))), 'nor after it');
+    assert.match(art, /^<title>[^]*<style>[^]*<div id="root"><\/div>[^]*<script type="module">[^]*<\/script>\s*$/); // the app, inlined: nothing to load
+    assert.ok(!/\s(?:src|href)="(?!data:)/.test(art.replace(/<script type="module">[^]*<\/script>/, '')), 'no external file');
     assert.match(art, /<script type="application\/json" id="data">/);
     assert.ok(!art.includes('</script><script>alert')); // a kept run's title still can't break out of the JSON tag
     assert.deepEqual(Object.keys(a), Object.keys(full).filter((k) => k !== 'fCmd')); // nothing beyond what the dashboard shows; F's local path stays home
@@ -186,7 +190,9 @@ export function artifactTest() {
     assert.throws(() => artifact(page({ ui: { token: 'secret' } })), /built for F ui|carries a token/);
     assert.throws(() => artifact(page({ auth: { accessToken: 'x' } })), /carries a token/); // any key ending in token
     assert.throws(() => artifact('<p>no skeleton</p>'), /no longer has/);
-    assert.throws(() => artifact(page().replace('setTimeout(tick, 10000);', '')), /exactly once/);
+    assert.equal(dataOf(artifact(page({ reload: 10_000 }))).reload, undefined, 'updates arrive by republish');
+    const tail = page().replace(/<\/body>\s*<\/html>\s*$/, '');
+    assert.throws(() => artifact(tail), /no longer has/, 'a missing </body> is not taken from inside the script');
   } finally {
     fs.rmSync(io.dir, { recursive: true, force: true });
     io.dir = prev;

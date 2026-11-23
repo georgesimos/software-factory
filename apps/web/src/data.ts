@@ -42,6 +42,8 @@ export interface FactoryData {
   onboard?: Record<string, { ship?: string[] }>;
   /** How to run F here: a plugin install's real path. The Artifact drops it (a path), so use F_CMD then. */
   fCmd?: string;
+  /** F render's file: reload every this many ms to pick up new runs (the Artifact strips it). */
+  reload?: number;
   /** Under F ui: runs whose session here stopped or crashed, which POST /api/sessions would resume. */
   resumable?: string[];
   /** Per attached project: false when auto-merge is off. */
@@ -100,8 +102,6 @@ export const uiToken = () => new URLSearchParams(location.search).get('t') || un
  * token from `?t=`, then the fixture in dev. A production build never shows fixture runs.
  */
 export async function loadData(): Promise<FactoryData> {
-  // shortcut: the bundle contains the placeholder's name, and page() fills only the first occurrence; a single-file build (W3)
-  // must inline this script after the #data tag or rename the placeholder.
   if (isData(window.__FACTORY_DATA__)) return normData(window.__FACTORY_DATA__);
   let why = 'No run data was injected and no `F ui` token is in the URL.';
   const tag = document.getElementById('data')?.textContent?.trim() ?? '';

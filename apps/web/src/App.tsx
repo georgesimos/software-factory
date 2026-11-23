@@ -35,6 +35,10 @@ export function App({ load = loadData }: { load?: () => Promise<FactoryData> }) 
       if (ignore) return;
       settle(w, data);
       if (data.token) later(); // F ui: live; injected data is a snapshot
+      else if (first && data.reload) { // F render's file: re-read it, but never under an open sheet or dialog
+        const tick = () => { timer = setTimeout(() => (document.querySelector('dialog[open]') ? tick() : location.reload()), data.reload); };
+        tick();
+      }
     }, (e: unknown) => {
       if (ignore) return;
       if (first) setState({ error: String((e as Error)?.message ?? e ?? 'Unknown error') });

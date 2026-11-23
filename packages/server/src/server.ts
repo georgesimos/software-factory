@@ -22,39 +22,19 @@ import { getSession, listSessions, startSession, subscribe } from '../../adapter
 
 // `F ui`: the dashboard on a loopback port, where the Skills sheet can save. Pure, so the self-test can drive it.
 export const same = (a, b) => typeof a === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
-// apps/web's build, served at /app/ beside the dashboard until it replaces it (#55). A request is matched against a listing of
-// the build, never joined into a path, so no URL can reach a file outside it. Its own data comes from GET /api/state.
-export const WEB_DIST = path.join(import.meta.dirname, '..', '..', '..', 'apps', 'web', 'dist');
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json',
-  '.svg': 'image/svg+xml', '.png': 'image/png', '.webp': 'image/webp', '.ico': 'image/x-icon', '.woff2': 'font/woff2', '.woff': 'font/woff' }; // nosniff: a wrong type blanks the page
-// Plain files and folders only: a symlink could point outside the build.
-const listFiles = (dir, pre = '') => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isSymbolicLink() ? [] : e.isDirectory() ? listFiles(path.join(dir, e.name), `${pre}${e.name}/`) : e.isFile() ? [pre + e.name] : []));
-const listed = new Map(); // build dir -> its files; listed again on a miss, so a rebuild's new hashed names are found
-const filesOf = (web, fresh) => { if (fresh || !listed.has(web)) { try { listed.set(web, listFiles(web)); } catch { listed.set(web, []); } } return listed.get(web); };
-function webApp(pathname, search, web) {
-  if (pathname === '/app') return { status: 308, type: 'text/plain; charset=utf-8', body: '', location: '/app/' + search }; // base './' needs the slash
-  let f = null;
-  try { f = (pathname.slice('/app/'.length) || 'index.html').split('/').map((x) => { const d = decodeURIComponent(x); if (/[/\\]/.test(d)) throw 0; return d; }).join('/'); } catch { /* malformed, or an encoded separator */ }
-  const type = f && TYPES[path.extname(f)];
-  const found = () => filesOf(web, false).includes(f) || filesOf(web, true).includes(f);
-  if (type && found()) {
-    try { return { status: 200, type, body: fs.readFileSync(path.join(web, ...f.split('/'))), ...(f.startsWith('assets/') && { cache: 'public, max-age=31536000, immutable' }) }; } // hashed names
-    catch (e) { if (e.code !== 'ENOENT') throw e; listed.delete(web); } // deleted since it was listed: a 404, never a 500 naming the path
-  }
-  const files = filesOf(web, false);
-  return { status: 404, type: 'application/json', body: JSON.stringify({ error: files.length ? 'not found' : 'apps/web is not built: run pnpm --filter @software-factory/web build' }) };
-}
-
-export function uiHandle({ method, url, headers = {}, body = '' }, { token, port, web = WEB_DIST }) {
+// apps/web's single-file build (#55), committed so plugin and skill installs need no build step: `pnpm --filter
+// @software-factory/web dashboard` rebuilds it. F render fills its #data tag; F ui serves it unfilled, and it reads GET /api/state.
+export const APP_HTML = path.join(import.meta.dirname, '..', '..', 'factory', 'app.html');
+export function uiHandle({ method, url, headers = {}, body = '' }, { token, port }) {
   const reply = (status, x) => ({ status, type: 'application/json', body: JSON.stringify(x) });
   const hosts = [`127.0.0.1:${port}`, `localhost:${port}`];
   if (!hosts.includes(headers.host)) return reply(403, { error: 'unexpected Host header' }); // DNS rebinding
   const u = new URL(url, 'http://local');
   if (method === 'GET' && u.pathname === '/') {
     if (!same(u.searchParams.get('t'), token)) return reply(403, { error: 'open the URL that `F ui` printed' });
-    return { status: 200, type: 'text/html; charset=utf-8', body: page({ ui: { token } }) };
+    return { status: 200, type: 'text/html; charset=utf-8', body: fs.readFileSync(APP_HTML, 'utf8') }; // no data: injected data would be a snapshot the page never refreshes
   }
-  if (method === 'GET' && (u.pathname === '/app' || u.pathname.startsWith('/app/'))) return webApp(u.pathname, u.search, web);
+  if (method === 'GET' && (u.pathname === '/app' || u.pathname.startsWith('/app/'))) return { status: 308, type: 'text/plain; charset=utf-8', body: '', location: '/' + u.search }; // the preview URL before #55
   const route = u.pathname.startsWith('/api/') ? u.pathname.slice(4) : u.pathname; // /api/<p> and the original <p> are one route
   if (method === 'GET' && u.pathname.startsWith('/api/')) { // reads: same token; browsers omit Origin on same-origin GETs, so only a foreign one is refused
     if (!same(headers['x-factory-token'], token)) return reply(403, { error: 'missing or wrong token' });
@@ -189,7 +169,7 @@ export function ui(port = 0) {
     req.on('end', () => {
       let r;
       try { r = uiHandle({ method: req.method, url: req.url, headers: req.headers, body }, { token, port: server.address().port }); } catch (e) { r = { status: 500, type: 'application/json', body: JSON.stringify({ error: e.message }) }; }
-      res.writeHead(r.status, { 'content-type': r.type, 'cache-control': r.cache || 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', ...(r.location && { location: r.location }) });
+      res.writeHead(r.status, { 'content-type': r.type, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', ...(r.location && { location: r.location }) });
       if (!r.stream) return res.end(r.body);
       let stop = () => {};
       res.on('close', () => stop()); // first, so a client gone mid-replay unsubscribes; not req: its close fires once the body is read
@@ -198,14 +178,14 @@ export function ui(port = 0) {
       if (r.stream.state !== 'running') res.end();
     });
   });
-  server.listen(port, '127.0.0.1', () => console.log(`factory ui: http://127.0.0.1:${server.address().port}/?t=${token}\nweb app (preview): http://127.0.0.1:${server.address().port}/app/?t=${token}\nOnly these URLs can change settings (skills.json, rules, projects). Ctrl-C to stop.`));
+  server.listen(port, '127.0.0.1', () => console.log(`factory ui: http://127.0.0.1:${server.address().port}/?t=${token}\nOnly this URL can change settings (skills.json, rules, projects). Ctrl-C to stop.`));
   return server;
 }
 export const runRepos = () => [...new Set([...Object.keys(derive(read())), ...readArchive().map((a) => a.id)].map((id) => id.split(/[#:]/)[0]))];
 export function render() {
   const out = path.join(stateDir(), 'dashboard.html');
   fs.mkdirSync(stateDir(), { recursive: true });
-  fs.writeFileSync(out, page()); // never carries a ui token: that exists only in what `F ui` serves
+  fs.writeFileSync(out, page({ reload: 10_000 })); // never carries a ui token; reload: the file:// page re-reads itself, as the Artifact can't
   return out;
 }
 dashboard.render = render; // core calls dashboard.render() after every state change
@@ -238,11 +218,12 @@ export function pageData(extra = {}) {
     autoMerge: Object.fromEntries(Object.entries(projects()).map(([r, p]) => [r, p?.autoMerge !== false])), ...idea, ...extra };
 }
 export function page(extra = {}) {
-  const data = JSON.stringify(pageData(extra)).replace(/</g, '\\u003c');
-  return fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'factory', 'dashboard.html'), 'utf8').replace('__FACTORY_DATA__', () => data);
+  const data = JSON.stringify(pageData(extra)).replace(/</g, '\\u003c'), html = fs.readFileSync(APP_HTML, 'utf8');
+  if (!DATA_TAG.test(html)) throw new Error(`${APP_HTML} has no data tag: rebuild it with pnpm --filter @software-factory/web dashboard`);
+  return html.replace(DATA_TAG, (_, open, _old, close) => open + data + close);
 }
 
-// The claude.ai Artifact page (#18): the host adds the document skeleton, updates arrive by republish (no reload timer),
+// The claude.ai Artifact page (#18): the host adds the document skeleton, updates arrive by republish (no reload),
 // no local path leaves this machine, and it refuses to ship a token. Throws when the dashboard markup drifts, so a
 // broken page is never published.
 // No local path leaves the machine: the keys that only hold one ("Open in Claude" cwds) go, and every string is
@@ -287,22 +268,21 @@ export function residue(json, raw, me = machine()) {
 }
 const DATA_TAG = /(<script type="application\/json" id="data">)([^<]*)(<\/script>)/;
 export function artifact(html = page()) {
-  for (const re of [/^<!doctype html>\s*/i, /<html[^>]*>\s*/i, /<head>\s*/i, /<\/head>\s*/i, /<body[^>]*>\s*/i, /<\/body>\s*/i, /<\/html>\s*/i,
-    /<meta charset="utf-8">\s*/i, /<meta name="viewport"[^>]*>\s*/i]) {
-    if (!re.test(html)) throw new Error(`artifact: the dashboard no longer has ${re}`);
-    html = html.replace(re, '');
+  // Opening tags and metas come before the inlined script, so their first match is the tag; closing tags come after it, so their last.
+  for (const [re, last] of [[/^<!doctype html>\s*/i], [/<html[^>]*>\s*/i], [/<head>\s*/i], [/<meta charset="utf-8">\s*/i], [/<meta name="viewport"[^>]*>\s*/i],
+    [/<\/head>\s*/i], [/<body[^>]*>\s*/i], [/<\/body>\s*/gi, true], [/<\/html>\s*/gi, true]]) {
+    const hits = [...html.matchAll(new RegExp(re.source, 'gi'))], m = last ? hits.at(-1) : hits[0];
+    if (!m) throw new Error(`artifact: the dashboard no longer has ${re}`);
+    html = html.slice(0, m.index) + html.slice(m.index + m[0].length);
   }
-  const reload = 'setTimeout(tick, 10000);';
-  if (html.split(reload).length !== 2) throw new Error('artifact: the reload timer is not in the dashboard exactly once');
-  html = html.replace(reload, '/* Artifact: updates arrive by republish, so no reload timer. */');
   const m = html.match(DATA_TAG);
   if (!m) throw new Error('artifact: the dashboard no longer has its data tag');
   const raw = JSON.parse(m[2]), d = scrub(raw);
   if (d.ui) throw new Error('artifact: refusing to publish a page built for F ui');
+  delete d.reload; // updates arrive by republish
   if (d.skills?.catalog) d.skills.catalog = { global: [], projects: {} }; // install paths; the Skills sheet can't save there anyway
   const json = JSON.stringify(d), left = residue(json, raw);
   if (left.length) throw new Error(`artifact: refusing to publish: after scrubbing, the page still carries ${left.join(', ')}`);
-  html = html.replace(DATA_TAG, (_, open, _old, close) => open + json.replace(/</g, '\\u003c') + close);
-  if (/"[^"]*token"\s*:/i.test(html)) throw new Error('artifact: refusing to publish a page that carries a token'); // a key ending in token; tokens/tokenCap are counts
-  return html;
+  if (/"[^"]*token"\s*:/i.test(json)) throw new Error('artifact: refusing to publish a page that carries a token'); // a key ending in token; tokens/tokenCap are counts
+  return html.replace(DATA_TAG, (_, open, _old, close) => open + json.replace(/</g, '\\u003c') + close);
 }
