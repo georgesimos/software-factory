@@ -73,6 +73,15 @@ test('metrics: burn, cache hits, outcomes and timing from fixture events', () =>
   const b = logMetrics(events, { measured, archive, project: 'acme/b' });
   assert.deepEqual([b.total.tokens, b.total.costUsd, b.cacheHitRatio, b.outcomes.merged, b.costPerMergedPrUsd, b.medianIntakeToMergeMs], [500, 0.01, null, 0, null, null]);
   assert.throws(() => logMetrics(events, { since: 'yesterday' }), RangeError);
+  // Passing on the last allowed iteration is not a cap hit. A measured run with no subagent axes keeps its reported axis (as
+  // F usage shows it); a provider runner's harness gets its reported burn.
+  const c = (ts, stage, status, p) => ev(`2026-11-23T0${ts}:00:00.000Z`, 'acme/c#1', stage, status, { harness: 'claude-code', sessionId: 'sc', ...p });
+  const last = [c(1, 'intake', 'started'), c(2, 'build', 'started'), c(3, 'build', 'started'), c(4, 'build', 'started'),
+    c(5, 'review', 'passed', { axis: 'code', findings: [], tokens: 70, runner: { use: 'provider', harness: 'codex' } }), c(6, 'gate', 'passed'), c(7, 'approve', 'merged')];
+  const lm = logMetrics(last, { measured: { sc: [{ sub: false, rows: [['2026-11-23T01:30:00.000Z', 'x', 'claude-opus-5-5', 10, 0, 0, 0, 0, 0]] }] } });
+  assert.deepEqual([lm.capHitShare, lm.total.tokens, tok(lm.byAxis), tok(lm.byHarness)], [0, 10, { code: 70 }, { 'claude-code': 10 }]);
+  const rp = logMetrics(last);
+  assert.deepEqual([rp.total.tokens, tok(rp.byHarness)], [70, { codex: 70 }]);
   assert.equal(logMetrics([]).total.costUsd, 0);
 });
 

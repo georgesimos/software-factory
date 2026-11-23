@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { CAP, TERMINAL, costOf } from './constants.ts';
+import { TERMINAL, costOf } from './constants.ts';
 import { budget, derive } from './derive.ts';
 import { attribute, withMeasured } from './burn.ts';
 
@@ -37,15 +37,20 @@ export function logMetrics(events, { project, since, measured = {}, archive = []
       axis ? by.axis[axis] ??= cell() : null, model ? by.model[model] ??= cell() : null, harness ? by.harness[harness] ??= cell() : null]) if (c) fill(c);
   };
   // Measured burn replaces reported burn per run, as in withMeasured: never both for one run.
+  const subAxes = new Set(); // measured runs with subagent axis cells; the others keep their reported axes, as withMeasured does
   attribute(runs, events, measured, (at, [ts, , model, ...rest], f) => {
     const t = rest.slice(0, 5), usd = costOf(model, t, rest[5]);
+    if (f.sub && f.axis) subAxes.add(at.run);
     put(ts, at.run, { stage: at.stage, axis: f.sub ? f.axis : null, model, harness: at.harness }, (c) => add(c, t.reduce((s, n) => s + n, 0), t, usd, false));
   }, archive);
   for (const e of events) {
-    if (!(e.tokens || e.costUsd) || !runs[e.run] || runs[e.run].burn?.measured) continue;
+    if (!(e.tokens || e.costUsd) || !runs[e.run]) continue;
     const u = e.usage || {}, t = [u.input || 0, u.output || 0, u.cacheRead || 0, 0, u.cacheWrite || 0];
-    const usd = e.costUsd ?? (e.usage ? costOf(e.model, t) : null); // as derive() prices it
-    put(e.ts, e.run, { stage: e.stage, axis: e.axis || e.role, model: e.model, harness: e.harness }, (c) => add(c, e.tokens || 0, t, usd, true));
+    const usd = e.costUsd ?? (e.usage ? costOf(e.model, t) : null), axis = e.axis || e.role; // as derive() prices it
+    const fill = (c) => add(c, e.tokens || 0, t, usd, true);
+    if (runs[e.run].burn?.measured) { if (axis && !subAxes.has(e.run) && inScope(e.run) && after(e.ts)) fill(by.axis[axis] ??= cell()); continue; }
+    // A provider runner names the harness that ran the step; e.harness is the orchestrating session's.
+    put(e.ts, e.run, { stage: e.stage, axis, model: e.model, harness: (e.runner?.use === 'provider' && e.runner.harness) || e.harness }, fill);
   }
   // shortcut: an archived run keeps run-level burn cells only, so it lands on its last day with no split, model or harness (cache
   // reads stay out, or the hit ratio would count them against no input). Upgrade: keep per-day cells in the archive summary.
@@ -79,7 +84,8 @@ export function logMetrics(events, { project, since, measured = {}, archive = []
     // shortcut: cost per merged PR divides all spend in the window (escalated runs included) by the merges in it, as gate's metrics() does
     costPerMergedPrUsd: merged.length && total.costUsd != null ? +(total.costUsd / merged.length).toFixed(2) : null,
     loopsPerRun: avg(built.map((r) => (r.loopbacks || []).length)), // gate loop-backs to spec or build, per finished build
-    capHitShare: avg(built.map((r) => (r.iteration >= CAP || budget(r).over ? 1 : 0))), // ran into the loop cap or the run budget
+    // Stopped by the loop cap or the run budget: gate() sends a failing run to approve only for those; budget() catches an overrun at approve.
+    capHitShare: avg(built.map((r) => ((r.events || []).some((e) => e.stage === 'gate' && e.status === 'failed' && e.next === 'approve') || budget(r).over ? 1 : 0))),
     medianIntakeToMergeMs: toMerge.length ? toMerge[Math.floor(toMerge.length / 2)] : null,
     measuredRuns: Object.values(runs).filter((r) => inScope(r.id) && r.burn?.measured).length,
   };
