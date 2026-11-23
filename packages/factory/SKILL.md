@@ -55,6 +55,7 @@ In the commands below:
    ```bash
    for l in factory:in-progress factory:needs-info factory:rejected factory:needs-human factory:merged factory:ready factory:needs-approval; do gh label create "$l" -R OWNER/REPO --force --color BFD4F2 >/dev/null; done
    ```
+   **Every "add" or "remove" of a label below, on an issue or a PR, goes through the REST labels endpoint:** `gh api -X POST repos/OWNER/REPO/issues/<n>/labels -f 'labels[]=<label>'` to add, `gh api -X DELETE repos/OWNER/REPO/issues/<n>/labels/<label>` to remove (a 404 there means the label wasn't on it). Never `gh issue edit` or `gh pr edit` with `--add-label`/`--remove-label`: they fail on current `gh` (Projects classic deprecation).
 3. Run `F skills OWNER/REPO` and keep its `plan`, `extra` and `guide` for this run. Each step below follows its runner as described in [Runners](#runners-who-does-each-step).
    Then run `F rules OWNER/REPO` and keep its `policy`. Tell the user every line of `warnings` (an expired or expiring rule) before going on.
 4. Run `F state RUN` and act on what it shows:
@@ -187,11 +188,11 @@ Run `F gate RUN`. Its `next` decides where the run goes:
    If they hold, it marks the PR ready, squash-merges it and labels the issue.
 2. **`merged: false`, or `F merge` fails with an error:** escalate. Never retry the merge by hand.
    1. `gh pr ready <pr>`.
-   2. `gh api -X POST repos/OWNER/REPO/issues/<pr number>/labels -f 'labels[]=factory:needs-human'`. Not `gh pr edit --add-label`, which fails on current `gh` (Projects classic deprecation); this endpoint labels PRs and issues alike.
+   2. Add `factory:needs-human` to the PR: `gh api -X POST repos/OWNER/REPO/issues/<pr number>/labels -f 'labels[]=factory:needs-human'`.
    3. `gh pr comment <pr>` with the reasons and the open findings.
    4. `F event RUN approve escalated`.
    
-   If there is no PR, do the comment and label on the issue instead.
+   If there is no PR, do the comment and label on the issue instead (same endpoint, with the issue number).
 
 ## 7. Watch main after a merge
 

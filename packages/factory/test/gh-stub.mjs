@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
 // Fake `gh` for factory.mjs self-tests. Answers only the calls the factory makes.
 const args = process.argv.slice(2);
 const a = args.join(' ');
@@ -24,7 +25,11 @@ else if (args[0] === 'run' && args[1] === 'list') out([{ status: 'completed', co
 else if (args[0] === 'pr' && args[1] === 'create') out('https://github.com/acme/wt/pull/99\n');
 else if (args[0] === 'pr' && args[1] === 'ready') out('');
 else if (args[0] === 'pr' && args[1] === 'merge') { if (!a.includes('--match-head-commit abc123')) { process.stderr.write('merge without the reviewed sha'); process.exit(3); } out(''); }
-else if (/^api -X (POST|DELETE) repos\/[\w.-]+\/[\w.-]+\/issues\/\d+\/labels/.test(a)) out('[]');
+else if (/^api -X (POST|DELETE) repos\/[\w.-]+\/[\w.-]+\/issues\/\d+\/labels/.test(a)) { // label calls: logged for the merge test; DELETE answers 404 like an absent label
+  if (process.env.STUB_LABEL_LOG) fs.appendFileSync(process.env.STUB_LABEL_LOG, a + '\n');
+  if (args[2] === 'DELETE') { process.stderr.write('gh: Label does not exist (HTTP 404)'); process.exit(1); }
+  out('[]');
+}
 else if (args[0] === 'issue' && args[1] === 'list') out(a.includes('factory:ready') ? [{ number: 40, title: 'ready one', labels: [{ name: 'factory:ready' }] }]
   : [{ number: 40, title: 'ready one', labels: [{ name: 'factory:ready' }] }, { number: 41, title: 'new one', labels: [] }, { number: 7, title: 'known', labels: [] }]);
 else if (a.startsWith('api --paginate repos/acme/app/issues/21/comments')) out([

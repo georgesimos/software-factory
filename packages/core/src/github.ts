@@ -93,9 +93,10 @@ export function merge(run) {
   gh('pr', 'ready', r.pr, '-R', repo);
   gh('pr', 'merge', r.pr, '-R', repo, '--squash', '--delete-branch', '--match-head-commit', r.reviewedSha);
   record(run, 'approve', 'merged');
-  // REST labels endpoint: `gh issue edit --add-label` fails on current gh (Projects classic deprecation). Labels are cosmetic.
-  try { gh('api', '-X', 'POST', `repos/${repo}/issues/${n}/labels`, '-f', 'labels[]=factory:merged'); } catch { /* cosmetic */ }
-  try { gh('api', '-X', 'DELETE', `repos/${repo}/issues/${n}/labels/factory:in-progress`); } catch { /* absent label: 404 */ }
+  // REST labels endpoint: `gh issue edit --add-label` fails on current gh (Projects classic deprecation). Labels are cosmetic: warn, never fail the merge.
+  const warn = (e) => console.error(`factory: label update on ${run} failed: ${String(e?.stderr || e?.message || e).trim().split('\n')[0]}`);
+  try { gh('api', '-X', 'POST', `repos/${repo}/issues/${n}/labels`, '-f', 'labels[]=factory:merged'); } catch (e) { warn(e); }
+  try { gh('api', '-X', 'DELETE', `repos/${repo}/issues/${n}/labels/factory:in-progress`); } catch (e) { if (!/HTTP 404/.test(String(e?.stderr))) warn(e); } // 404: label wasn't on it
   return { merged: true, ...d };
 }
 // Spec approval: a trusted "/factory approve" (or "/factory reject") comment after the run started waiting.

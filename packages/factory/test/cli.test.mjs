@@ -76,7 +76,10 @@ export function cliTest() {
   assert.throws(() => cli(['event', RUN, 'deploy', 'passed']), /unknown stage/);
   assert.throws(() => cli(['event', RUN, 'ship', 'passed', '-'], '{"connector":"x","env":"preview","state":"ready"}'), /recorded by "ship"/);
   for (const k of ['connector', 'kind', 'env', 'state', 'url', 'sha']) assert.throws(() => cli(['event', RUN, 'build', 'passed', '-'], JSON.stringify({ [k]: 'https://evil.example' })), new RegExp(`not from a payload: ${k}`));
-  assert.equal(JSON.parse(cli(['merge', RUN], '', { STUB_CHECKS: '1' })).merged, true); // stub fails unless --match-head-commit abc123
+  const labelLog = path.join(io.dir, 'labels.log');
+  assert.equal(JSON.parse(cli(['merge', RUN], '', { STUB_CHECKS: '1', STUB_LABEL_LOG: labelLog })).merged, true); // stub fails unless --match-head-commit abc123
+  assert.deepEqual(fs.readFileSync(labelLog, 'utf8').trim().split('\n'), [ // relabels the run's issue through the REST endpoint; the DELETE's 404 doesn't fail the merge
+    'api -X POST repos/acme/shop/issues/7/labels -f labels[]=factory:merged', 'api -X DELETE repos/acme/shop/issues/7/labels/factory:in-progress']);
   const st = JSON.parse(cli(['state', RUN]));
   assert.equal(st.outcome, 'merged');
   assert.equal(st.spec, nasty);
