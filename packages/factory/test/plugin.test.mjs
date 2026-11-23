@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { fCmd, pluginEntry } from '../../core/src/onboard.ts';
+import { claudeDir, fCmd, fFound, pluginEntry } from '../../core/src/onboard.ts';
 
 const ROOT = path.join(import.meta.dirname, '..', '..', '..');
 const json = (f) => JSON.parse(fs.readFileSync(path.join(ROOT, f), 'utf8'));
@@ -102,7 +102,25 @@ test('pluginEntry treats installed_plugins.json as untrusted: only a software-fa
   }
   reg({ 'software-factory@m': [{ scope: 'user', installPath: outside }, { scope: 'user', installPath: inside }] });
   assert.equal(pluginEntry(home, {}), insideF);
+  for (const lastUpdated of [{ toString: 1 }, 5, null, ['2026']]) { // Date.parse({toString:1}) throws: not a string counts as oldest, never a throw
+    reg({ 'software-factory@m': [{ scope: 'user', installPath: inside, lastUpdated }] });
+    assert.equal(pluginEntry(home, {}), insideF, JSON.stringify(lastUpdated));
+    assert.equal(fFound('darwin', home, path.join(d, 'gone.mjs'), {})?.via, 'plugin');
+  }
   const cfg = path.join(d, 'cfg'), cfgF = put(path.join(cfg, 'plugins', 'c', 'sf'));
   reg({ 'software-factory@m': [{ scope: 'user', installPath: path.join(cfg, 'plugins', 'c', 'sf') }] }, path.join(cfg, 'plugins'));
   assert.equal(pluginEntry(home, { CLAUDE_CONFIG_DIR: cfg }), cfgF); // Claude Code's config dir, when set
+});
+
+test('install-skill links into CLAUDE_CONFIG_DIR when set, where fCmd looks; a relative one resolves from the current folder', (t) => {
+  const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'factory-cfgdir-'))), cfg = path.join(d, 'cfg');
+  t.after(() => fs.rmSync(d, { recursive: true, force: true }));
+  assert.equal(claudeDir('/h', {}), path.join('/h', '.claude'));
+  assert.equal(claudeDir('/h', { CLAUDE_CONFIG_DIR: 'rel' }), path.resolve('rel'));
+  const entry = path.join(ROOT, 'packages', 'factory', 'factory.mjs');
+  const r = spawnSync(process.execPath, [entry, 'install-skill'], { encoding: 'utf8', cwd: d, env: { ...process.env, CLAUDE_CONFIG_DIR: 'cfg', FACTORY_DIR: path.join(d, 'state') } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(fs.realpathSync(path.join(cfg, 'skills', 'software-factory')), fs.realpathSync(path.dirname(entry)));
+  assert.deepEqual(fFound('linux', path.join(d, 'nohome'), entry, { CLAUDE_CONFIG_DIR: cfg }), { cmd: `node ${path.join(cfg, 'skills', 'software-factory', 'factory.mjs')}`, via: 'skill' });
+  assert.equal(fFound('linux', path.join(d, 'nohome'), entry, {})?.via, 'self'); // not linked: this file
 });
