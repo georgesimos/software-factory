@@ -92,6 +92,8 @@ importers:
 
   packages/factory: {}
 
+  packages/server: {}
+
   packages/ship: {}
 
 packages:

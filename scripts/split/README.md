@@ -73,3 +73,9 @@ git mv packages/factory/project.mjs packages/core/src/project.ts
 $M packages/core/src/onboard.ts F_CMD,shq,onboardFile,SHIP_KINDS,readOnboard,setShip,onboardConfig,onboardState,onboardText
 $M packages/core/src/demo.ts demo,demoTranscripts
 ```
+
+**S9** (#45). Create `packages/server/package.json` (no dependencies) and run `pnpm install` for its lockfile entry. `hooks` stays in `factory.mjs` until S10 because it reads `factory.mjs`'s own source. After the move, the one hand edit is the dashboard path in `page()`: `path.join(HERE, 'dashboard.html')` becomes `path.join(import.meta.dirname, '..', '..', 'factory', 'dashboard.html')`, so the server no longer imports `HERE`:
+
+```bash
+$M packages/server/src/server.ts same,uiHandle,UI_ROUTES,ui,runRepos,render,runsData,page
+```
