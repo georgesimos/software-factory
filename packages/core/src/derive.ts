@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { COST_CAP, FINDING_KEYS, OUTCOMES, REVIEW_KEYS, SEVERITIES, TOKEN_CAP, USAGE_KEYS, blocking, costOf } from './constants.ts';
-import { PROJECT_EVENTS } from '../../factory/project.mjs';
+import { PROJECT_EVENTS } from './project.ts';
 import { read, readArchive } from './log.ts';
 import { withMeasured } from './burn.ts';
 

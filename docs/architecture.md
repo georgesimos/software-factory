@@ -34,7 +34,7 @@ software-factory/
 │   ├── factory/              @software-factory/factory: the skill. ~/.claude/skills/software-factory symlinks here
 │   │   ├── SKILL.md          orchestration: modes, ground rules, stages 0–7, attach, evals, scheduling
 │   │   ├── factory.mjs       the F CLI: event log, derive, gate/decide/merge, sync, worktrees, dashboard render, self-test
-│   │   ├── project.mjs       idea-to-app: F new, issues create, queue, loop, project (imported by factory.mjs)
+│   │   ├── (project.mjs moved to packages/core/src/project.ts in S8)
 │   │   ├── templates/        stack templates, data only: next-web.json, expo-mobile.json, _template.json, README.md
 │   │   ├── examples/
 │   │   │   └── budget-app/   PLAN.md + issues.json for "a personal budget app", and the F new --dry-run output
@@ -119,7 +119,7 @@ The skill never writes state itself. It runs `F` subcommands and acts on their J
 | After merge | `postmerge`, `revert` | Watches CI on the merge commit; opens a revert PR, never merges it. |
 | Onboarding | `discover`, `sync`, `projects`, `automerge` | Finds local clones, imports open PRs and agent sessions. |
 | Rules | `rules`, `rules set`, `rules unset`, `checks` | Per-project or global policy switches and step guidance; local checks that stand in for CI. See [§5.2](#52-rules). |
-| Idea to app | `new`, `issues create`, `queue`, `loop`, `project` | In `project.mjs`. Validates the plan and issue batch Claude wrote, creates the repo and issues through the host and tracker adapters only with `--yes`, and picks the next issue in dependency order. See [§7.7](#77-start-from-an-idea). |
+| Idea to app | `new`, `issues create`, `queue`, `loop`, `project` | In `packages/core/src/project.ts`. Validates the plan and issue batch Claude wrote, creates the repo and issues through the host and tracker adapters only with `--yes`, and picks the next issue in dependency order. See [§7.7](#77-start-from-an-idea). |
 | Housekeeping | `archive`, `render`, `demo`, `test`, `eval` | `eval` runs headless `claude -p` over the golden fixtures and costs tokens. |
 
 Environment overrides:

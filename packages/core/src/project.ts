@@ -1,3 +1,4 @@
+// @ts-nocheck
 // Idea to app. One project run per new repo, `owner/repo:project`. Claude writes PLAN.md and issues.json (SKILL.md I0-I5);
 // F validates them and executes: repo + scaffold through a host adapter, the issue batch through a tracker adapter, then a
 // dependency-aware loop over the unchanged per-issue pipeline. Hosts and trackers are one file each; stacks are data.
@@ -6,9 +7,14 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { read, dashboard, runDir, factoryDir, rules, setRule, adapterCtx, allRuns, budget, isSensitive, PROJECT_BUDGET_USD, MAX_ISSUES_PER_SESSION } from './factory.mjs';
-import * as hosts from '../adapters/hosts/index.mjs';
-import * as trackers from '../adapters/trackers/index.mjs';
+import { read, runDir, factoryDir } from './log.ts';
+import { rules, setRule } from './rules.ts';
+import { adapterCtx } from './github.ts';
+import { allRuns, budget } from './derive.ts';
+import { isSensitive, PROJECT_BUDGET_USD, MAX_ISSUES_PER_SESSION } from './constants.ts';
+import { dashboard } from '../../factory/factory.mjs';
+import * as hosts from '../../adapters/hosts/index.mjs';
+import * as trackers from '../../adapters/trackers/index.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // Every project event, by stage. All are owned: `F event` refuses them, only new / issues create / loop record them.
@@ -128,7 +134,7 @@ export function checkTemplate(t, id) {
   return t;
 }
 
-export function loadTemplates(dir = process.env.FACTORY_TEMPLATES || path.join(HERE, 'templates')) {
+export function loadTemplates(dir = process.env.FACTORY_TEMPLATES || path.join(HERE, '..', '..', 'factory', 'templates')) {
   const out = {};
   for (const f of fs.readdirSync(dir).filter((f) => f.endsWith('.json') && !f.startsWith('_'))) out[f.slice(0, -5)] = checkTemplate(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')), f.slice(0, -5));
   return out;
