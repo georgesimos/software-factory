@@ -197,16 +197,16 @@ Run `F gate RUN`. Its `next` decides where the run goes:
 ## 7. Watch main after a merge
 
 1. Under `ci=skip`, `F postmerge RUN` returns `"state":"skipped"` at once: don't poll, and tell the user main's CI wasn't watched. Otherwise poll `F postmerge RUN` about every 2 minutes, for at most 20 minutes. If `plan.postmerge` isn't default, also run it once CI passes, on the base branch at the merge commit. It can only add a failure, never clear one.
-2. If `state` is `fail` and `advisory` isn't `true`, or the postmerge runner reports a failure, run `F revert RUN "<one line: which check failed>"`. It opens a revert PR labelled `factory:needs-human` and **never merges it**. Tell the user.
+2. If `state` is `fail` and `advisory` isn't `true`, or the postmerge runner reports a failure, run `F revert RUN "<one line: which check failed>"`. It opens a revert PR labelled `factory:needs-human` and **never merges it**. [Publish](#publish-to-the-artifact), then tell the user.
 
 Finally, report the outcome with its links, and give the dashboard path, `~/.claude/factory/dashboard.html`. On the first run, open the dashboard with `F open dashboard`.
 
 ## Publish to the Artifact
 
-The owner watches from phone and web through a private claude.ai Artifact, because `F ui` is loopback-only. Watching a run live happens in its Claude app session, so the page only needs to be current when the owner has to act: republish it **only** when a run reaches `merged`, `escalated`, `rejected`, `needs-info` or `awaiting-approval`, about twice per run. Never at other stage events, and never on a timer.
+The owner watches from phone and web through a private claude.ai Artifact, because `F ui` is loopback-only. Watching a run live happens in its Claude app session, so the page only needs to be current when the owner has to act: republish it **only** when a run reaches `merged`, `escalated`, `rejected`, `needs-info`, `awaiting-approval` or `reverted`, about twice per run. Never at other stage events, and never on a timer.
 
 1. Skip this under `--dry-run`, when `policy.artifact` from `F rules OWNER/REPO` is unset (publishing is opt-in per repo), or when this session has no Artifact tool.
-2. After the run's final event is recorded, run `F render --artifact DIR/artifact.html`. It builds the page from the same data as `dashboard.html`, so nothing more is published. It strips the document skeleton (the host adds one), drops the 10 s reload timer, strips local paths (run worktrees, session folders and the skills catalog; any other home-folder path becomes `~`), and refuses a page that carries a token. If it fails, tell the user and don't publish.
+2. After the run's final event is recorded, run `F render --artifact DIR/artifact.html`. It builds the page from the same data as `dashboard.html`, so nothing more is published. It strips the document skeleton (the host adds one), drops the 10 s reload timer, strips local paths (run worktrees, session folders and the skills catalog; any other absolute path in the data becomes `[local path]`), and refuses a page that carries a token. If it fails, tell the user and don't publish.
 3. Publish that file with the Artifact tool to `policy.artifact.value`, the same URL every time. In a session that hasn't read or published that Artifact yet, read it first (`action: "read"`).
 
 The page shows every attached project, as the owner approved; the rule only decides which repos' runs trigger a publish. An escalated run links to its PR so the owner can review and merge on GitHub. The page never takes an approval.

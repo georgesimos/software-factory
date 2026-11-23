@@ -362,6 +362,12 @@ export function rulesTest(cli) {
   record('acme/rr#2', 'intake', 'started', { title: 't' });
   assert.match(fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), /"rulesError":"skills.json acme\/rr.rules.ci: needs a reason/);
   fs.rmSync(path.join(io.dir, 'skills.json'));
+  // A hand-edited default artifact rule never opts every repo in: rules() skips it and says so.
+  fs.writeFileSync(path.join(io.dir, 'skills.json'), JSON.stringify({ default: { rules: { artifact: { value: 'https://claude.ai/artifact/x', reason: 'r', setBy: 'me', setAt: '2026-01-01' } } } }));
+  const hand = JSON.parse(cli(['rules', 'acme/rr']));
+  assert.equal(hand.policy.artifact, undefined);
+  assert.ok(hand.warnings.some((w) => /artifact is a per-repo opt-in/.test(w)));
+  fs.rmSync(path.join(io.dir, 'skills.json'));
   assert.throws(() => set('default', 'artifact', 'https://claude.ai/artifact/FEMb-sU_9', '--reason', 'x'), /per-repo opt-in/); // publishing off the machine is never global
   assert.equal(set('acme/rr', 'artifact', 'https://claude.ai/artifact/FEMb-sU_9', '--reason', 'phone view').policy.artifact.value, 'https://claude.ai/artifact/FEMb-sU_9'); // opt-in per repo
   cli(['rules', 'unset', 'acme/rr', 'artifact']);

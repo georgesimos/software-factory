@@ -60,6 +60,7 @@ export function rules(repo, cfg = readSkills(), now = Date.now()) {
   for (const scope of [...new Set([repo, 'default'])]) {
     for (const [key, x] of Object.entries(cfg[scope]?.rules || {})) {
       const what = `${key}=${JSON.stringify(x.value)} (${scope}: ${x.reason})`;
+      if (key === 'artifact' && scope === 'default') { warnings.push(`${what} is ignored: artifact is a per-repo opt-in`); continue; } // hand-edited skills.json
       if (x.until && x.until < today) { expired.push({ key, scope, ...x }); warnings.push(`${what} expired on ${x.until} and no longer applies; unset it or set it again with a new --until`); continue; }
       if (policy[key]) continue;
       policy[key] = { ...x, scope };

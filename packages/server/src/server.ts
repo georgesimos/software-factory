@@ -2,7 +2,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
-import os from 'node:os';
 import path from 'node:path';
 import { CAP, COST_CAP, TOKEN_CAP } from '../../core/src/constants.ts';
 import { hooks } from '../../core/src/ship.ts';
@@ -128,6 +127,13 @@ export function page(extra = {}) {
 // The claude.ai Artifact page (#18): the host adds the document skeleton, updates arrive by republish (no reload timer),
 // no local path leaves this machine, and it refuses to ship a token. Throws when the dashboard markup drifts, so a
 // broken page is never published.
+// No local path leaves the machine: the keys that only hold one ("Open in Claude" cwds) go, and any absolute path left
+// in a string (POSIX, C:\ or C:/, ~/…) becomes "[local path]". URLs survive: their slashes follow ':', '/' or a word.
+const PATH_ONLY = new Set(['worktree', 'cwd', 'installPath', 'projectPath']);
+const LOCAL_PATH = /(?<![\w.:\/~<-])(?:[A-Za-z]:[\\/]|~?[\\/](?![\\/\s]))[^\s"'`()<>,;|*?]*/g;
+const scrub = (v) => typeof v === 'string' ? v.replace(LOCAL_PATH, '[local path]')
+  : Array.isArray(v) ? v.map(scrub)
+  : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([k]) => !PATH_ONLY.has(k)).map(([k, x]) => [k, scrub(x)])) : v;
 const DATA_TAG = /(<script type="application\/json" id="data">)([^<]*)(<\/script>)/;
 export function artifact(html = page()) {
   for (const re of [/^<!doctype html>\s*/i, /<html[^>]*>\s*/i, /<head>\s*/i, /<\/head>\s*/i, /<body[^>]*>\s*/i, /<\/body>\s*/i, /<\/html>\s*/i,
@@ -140,13 +146,9 @@ export function artifact(html = page()) {
   html = html.replace(reload, '/* Artifact: updates arrive by republish, so no reload timer. */');
   const m = html.match(DATA_TAG);
   if (!m) throw new Error('artifact: the dashboard no longer has its data tag');
-  const d = JSON.parse(m[2]);
-  for (const r of d.runs || []) { delete r.worktree; for (const s of r.sessions || []) delete s.cwd; } // "Open in Claude" is local-only
+  const d = scrub(JSON.parse(m[2]));
   if (d.skills?.catalog) d.skills.catalog = { global: [], projects: {} }; // install paths; the Skills sheet can't save there anyway
-  const home = JSON.stringify(os.homedir()).slice(1, -1).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  let json = JSON.stringify(d);
-  if (home.length > 1) json = json.replace(new RegExp(home + '(?=[/\\\\"]|$)', 'g'), '~'); // any path left in free text
-  html = html.replace(DATA_TAG, (_, open, _old, close) => open + json.replace(/</g, '\\u003c') + close);
+  html = html.replace(DATA_TAG, (_, open, _old, close) => open + JSON.stringify(d).replace(/</g, '\\u003c') + close);
   if (html.includes('"token":"')) throw new Error('artifact: refusing to publish a page that carries a token');
   return html;
 }

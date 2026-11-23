@@ -142,7 +142,12 @@ export function artifactTest() {
   const home = os.homedir();
   fs.mkdirSync(runDir('evil/x#1'), { recursive: true });
   fs.writeFileSync(wtFile('evil/x#1'), JSON.stringify({ path: path.join(home, 'wt', 'x-1'), branch: 'factory/issue-1' }));
-  record('evil/x#1', 'intake', 'passed', { summary: `see ${path.join(home, 'notes.md')}`, sessionId: 's1', cwd: path.join(home, 'src', 'x') });
+  // Paths in and outside $HOME, in free text and in the onboard and skills config: none may reach claude.ai.
+  const outside = ['/Volumes/Data/secret', 'C:/Users/bob/app', 'D:\\work\\app', '/srv/alice'];
+  record('evil/x#1', 'intake', 'passed', { summary: `see ${path.join(home, 'notes.md')}; cd ${outside[0]} && x (${outside[1]}) ${outside[2]} ${outside[3]}: done, https://github.com/evil/x/pull/2`, sessionId: 's1', cwd: path.join(home, 'src', 'x') });
+  const skillsFile = path.join(io.dir, 'skills.json'), hadSkills = fs.existsSync(skillsFile), skillsBefore = hadSkills && fs.readFileSync(skillsFile, 'utf8');
+  fs.writeFileSync(skillsFile, JSON.stringify({ ...(hadSkills ? JSON.parse(skillsBefore) : {}), 'evil/x': { spec: { use: 'brief', path: '/Volumes/Data/briefs/spec.md' } } }));
+  fs.writeFileSync(path.join(io.dir, 'onboard.json'), JSON.stringify({ default: { ship: ['web'] }, 'evil/x': { ship: ['web'], path: '/Volumes/Data/clones/x' } }));
   const before = fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), out = path.join(io.dir, 'artifact.html');
   const line = execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), 'render', '--artifact', out], { env: { ...process.env, FACTORY_DIR: io.dir }, encoding: 'utf8' });
   assert.equal(fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), before); // the local dashboard is left alone
@@ -155,6 +160,13 @@ export function artifactTest() {
   assert.deepEqual(a.runs.map((r) => r.id), full.runs.map((r) => r.id)); // every project the dashboard shows
   assert.ok(JSON.stringify(full).includes(JSON.stringify(home).slice(1, -1))); // the local dashboard does carry home paths...
   assert.ok(!JSON.stringify(a).includes(JSON.stringify(home).slice(1, -1))); // ...the published page none
+  const pub = JSON.stringify(a);
+  for (const p of [...outside, '/Volumes/Data', 'C:/Users', 'D:\\\\work']) assert.ok(!pub.includes(p), p);
+  assert.ok(JSON.stringify(full).includes('/Volumes/Data/briefs/spec.md') && JSON.stringify(full).includes('/Volumes/Data/clones/x'));
+  assert.match(pub, /\[local path\]/);
+  assert.match(a.runs.find((r) => r.id === 'evil/x#1').summary || pub, /https:\/\/github\.com\/evil\/x\/pull\/2/); // URLs survive
+  assert.deepEqual(a.runs.map((r) => r.pr), full.runs.map((r) => r.pr));
+  assert.deepEqual(a.onboard.default, { ship: ['web'] });
   const x = a.runs.find((r) => r.id === 'evil/x#1');
   assert.equal(x.worktree, undefined);
   assert.ok(x.sessions.every((s) => !('cwd' in s)));
@@ -163,6 +175,8 @@ export function artifactTest() {
   assert.throws(() => artifact('<p>no skeleton</p>'), /no longer has/);
   assert.throws(() => artifact(page().replace('setTimeout(tick, 10000);', '')), /exactly once/);
   fs.rmSync(out);
+  fs.rmSync(path.join(io.dir, 'onboard.json'));
+  if (hadSkills) fs.writeFileSync(skillsFile, skillsBefore); else fs.rmSync(skillsFile);
 }
 
 setup();
