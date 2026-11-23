@@ -1,6 +1,6 @@
 import { repoOf, type Metrics, type Run } from '@software-factory/design-system';
 
-/** The JSON `page()` in packages/factory/factory.mjs injects. `GET /api/runs` gives only `runs`. */
+/** The JSON `page()` in packages/server/src/server.ts injects. `GET /api/runs` gives only `runs`. */
 export interface FactoryData {
   runs: Run[];
   generated?: string;
@@ -10,7 +10,7 @@ export interface FactoryData {
   metrics?: { all: Metrics; byProject: Record<string, Metrics> };
 }
 
-// factory.mjs defaults, for data that does not carry them (GET /api/runs).
+// packages/core/src/constants.ts defaults, for data that does not carry them (GET /api/runs).
 export const CAP = 3;
 export const COST_CAP = 5;
 

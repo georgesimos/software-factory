@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Ship harness: reads deploy, build, store and database state through pluggable connectors (connectors/*.mjs).
 // `connectors`, `detect` and `status` only read. Recording is track(), which F sync / F postmerge / F decide call with
-// factory.mjs's own record(), so factory.mjs stays the only writer. This file imports nothing from the factory.
+// factory.mjs's own record(), so factory.mjs stays the only writer. From the factory it imports only core's no-shell spawn.
 import fs from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { exec as spawnNoShell } from '../core/src/platform.ts'; // no shell; resolves .cmd shims on Windows
 import { fileURLToPath } from 'node:url';
 import { load } from './connectors/index.mjs';
 import { normalizeRows, statusOf } from './contract.mjs';
@@ -11,7 +11,7 @@ import { normalizeRows, statusOf } from './contract.mjs';
 const REPO = /^[\w.-]+\/[\w.-]+$/, SHA = /^[0-9a-f]{40}$/; // full shas: providers report them, and rows match exactly
 
 // What connectors get as ctx.exec. FACTORY_<CMD> swaps the binary (FACTORY_GH, as in factory.mjs) so tests can stub a provider CLI.
-export const exec = (cmd, args) => execFileSync(process.env[`FACTORY_${cmd.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`] || cmd, args,
+export const exec = (cmd, args) => spawnNoShell(process.env[`FACTORY_${cmd.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`] || cmd, args,
   { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000 });
 
 let loaded = null, current = [];
