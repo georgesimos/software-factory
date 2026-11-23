@@ -64,6 +64,7 @@ describe('factory', () => {
     expect(runnerLabel({ use: 'default', model: 'fable', effort: 'high' })).toEqual({ text: 'Fable · high', title: 'Run by the built-in brief on fable (high effort) (configured; no usage yet)' });
     expect(runnerLabel({ use: 'default', model: 'fable' }, true, undefined, 'claude-opus-5-5')?.text).toBe('Fable → Opus (fallback)');
     expect(runnerLabel({ use: 'skill', name: 'acme:brand-review' }, true)?.text).toBe('brand-review');
+    expect(runnerLabel({ use: 'default', model: 'claude-opus-5-5' }, true, undefined, 'claude-opus-5-5')?.text).toBe('Opus'); // a full id is not a fallback
     expect(runnerLabel({ use: 'default', fallback: { from: { use: 'skill', name: 'x' }, reason: 'not installed' } })?.title).toBe('Configured skill: x was unavailable: not installed');
     expect(runnerLabel({ use: 'default' })).toBeNull();
   });

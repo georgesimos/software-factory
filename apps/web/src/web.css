@@ -129,6 +129,7 @@
   .web-main { padding: var(--sf-space-4) var(--sf-space-4) var(--sf-space-10); }
   .web-updated, .web-rules { display: none; }
   .web-board { grid-template-columns: repeat(var(--cols), 78vw); }
+  .web-board[data-shut] { grid-template-columns: repeat(calc(var(--cols) - 1), 78vw) minmax(96px, auto); }
   .web-d-title { font-size: 21px; }
 }
 

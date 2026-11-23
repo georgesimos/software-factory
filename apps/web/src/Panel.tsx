@@ -12,7 +12,7 @@ export function Panel({ run, onClose, children }: { run: Run | null; onClose: ()
   const [focus, setFocusState] = useState(() => store('sf.panelFocus') === '1');
   const setFocus = (f: boolean) => { store('sf.panelFocus', f ? '1' : '0'); setFocusState(f); };
   const aside = useRef<HTMLElement>(null), [now, setNow] = useState(0);
-  const width = (x: number) => { const v = clamp(x); setW(v); store('sf.panelW', String(v)); if (focus) setFocus(false); }; // a manual width ends focus mode
+  const width = (x: number, save = true) => { const v = clamp(x); setW(v); if (save) store('sf.panelW', String(v)); if (focus) setFocus(false); return v; }; // a manual width ends focus mode
   useEffect(() => { setNow(Math.round(aside.current?.getBoundingClientRect().width ?? 0)); });
   useEffect(() => { if (run) { aside.current?.scrollTo?.(0, 0); document.getElementById('d-title')?.focus({ preventScroll: true }); } }, [run?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const drag = (e: PointerEvent<HTMLDivElement>) => {
@@ -22,8 +22,9 @@ export function Panel({ run, onClose, children }: { run: Run | null; onClose: ()
     sep.setPointerCapture?.(e.pointerId);
     sep.focus({ preventScroll: true });
     document.body.dataset.dragging = '';
-    sep.onpointermove = (ev) => width(document.documentElement.clientWidth - ev.clientX);
-    sep.onpointerup = sep.onpointercancel = () => { sep.onpointermove = null; delete document.body.dataset.dragging; };
+    let last = 0; // saved once, on release
+    sep.onpointermove = (ev) => { last = width(document.documentElement.clientWidth - ev.clientX, false); };
+    sep.onpointerup = sep.onpointercancel = () => { sep.onpointermove = null; delete document.body.dataset.dragging; if (last) store('sf.panelW', String(last)); };
   };
   const key = (e: KeyboardEvent) => {
     const step = e.shiftKey ? 80 : 20, cur = aside.current?.getBoundingClientRect().width ?? MIN_W;

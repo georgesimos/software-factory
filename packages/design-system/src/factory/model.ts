@@ -218,7 +218,7 @@ export function runnerLabel(x: Runner | undefined, short = false, what = 'Run by
   if (!x || typeof x !== 'object') x = {};
   const used = usedId ? modelAlias(usedId) : '';
   const down = !!x.fallback && !Array.isArray(x.fallback), fb = down ? x.fallback as { from?: Runner; reason?: string } : {};
-  const base = down ? 'default · fallback' : runnerName(x), model = typeof x.model === 'string' ? x.model : '', fell = !!(used && model && used !== model);
+  const base = down ? 'default · fallback' : runnerName(x), model = typeof x.model === 'string' ? modelAlias(x.model) : '', fell = !!(used && model && used !== model);
   const m = fell ? `${capital(model)} → ${capital(used)} (fallback)` : capital(used || model);
   if (!base && !m) return null;
   const last = (n: string) => n.split(':').pop() ?? n;

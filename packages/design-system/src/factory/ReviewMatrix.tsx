@@ -18,7 +18,7 @@ export function ReviewMatrix({ run: r }: { run: Run }) {
       <Table aria-label="Review verdicts by axis and iteration">
         <thead><tr><th scope="col">Axis</th>{iters.map((i) => <th key={i} scope="col">Iter {i}</th>)}{hasTok ? <th scope="col">Tokens</th> : null}</tr></thead>
         <tbody>
-          {axes.map((a) => (
+          {axes.map((a) => { const lastI = iters.filter((i) => reviews[i]?.[a]).pop(); return ( // burn's used model covers the axis: shown on its latest verdict
             <tr key={a}>
               <th scope="row" className="sf-review-axis">{a}</th>
               {iters.map((i) => {
@@ -26,14 +26,14 @@ export function ReviewMatrix({ run: r }: { run: Run }) {
                 if (!v) return (axesBy[i] ?? []).includes(a)
                   ? <td key={i} className="sf-verdict" data-v="pending">… pending</td>
                   : <td key={i} className="sf-verdict" data-v="not-reviewed"><span aria-hidden="true">·</span><span className="sf-sr-only">not reviewed</span></td>;
-                const n = (v.findings ?? []).length, rn = runnerLabel(v.runner, false, undefined, ab[a]?.used ?? '');
+                const n = (v.findings ?? []).length, rn = runnerLabel(v.runner, false, undefined, i === lastI ? ab[a]?.used ?? '' : '');
                 const chip = rn ? <Badge quiet className="sf-rn" title={rn.title}>{rn.text}</Badge> : null;
                 if (!reviewFailed(v)) return <td key={i} className="sf-verdict" data-v="passed">✓ pass{n ? <span className="sf-verdict-n"> · {n}</span> : null}{chip}</td>;
                 return <td key={i} className="sf-verdict" data-v="failed">✕ {(v.findings ?? []).filter(isBlocking).length || 'fail'}{chip}</td>;
               })}
               {hasTok ? <td className="sf-review-tok" title={ab[a] ? costText(ab[a]) : undefined}>{ab[a] ? formatTokens(ab[a].tokens) : '·'}</td> : null}
             </tr>
-          ))}
+          ); })}
         </tbody>
       </Table>
       {extra.length ? <p className="sf-review-burn">{extra.map(([k, c]) => `${k} ${burnText(c)}`).join('  ·  ')}</p> : null}

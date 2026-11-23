@@ -31,7 +31,7 @@ export function RuleChips({ data, project, today = new Date().toISOString().slic
   }
   if (data.rulesError) out.unshift({ warn: true, text: 'Rules config invalid', title: data.rulesError });
   if (!out.length) return null;
-  return <div className="web-rules" role="group" aria-label="Active rules">{out.map((c) => <Badge key={c.text} tone={c.warn ? 'warn' : 'neutral'} quiet={!c.warn} title={c.title}>{c.text}</Badge>)}</div>;
+  return <div className="web-rules" role="group" aria-label="Active rules">{out.map((c, i) => <Badge key={i} tone={c.warn ? 'warn' : 'neutral'} quiet={!c.warn} title={c.title}>{c.text}</Badge>)}</div>;
 }
 
 /** Who changed which rule, when and why: the audit trail from `F rules set|unset`, newest first. */

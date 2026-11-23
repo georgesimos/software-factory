@@ -6,7 +6,7 @@ import type { Idea, IdeaIssue } from './data.ts';
 type ChipTone = Tone | 'quiet';
 const PHASE: Record<string, [string, ChipTone]> = { idea: ['Idea', 'quiet'], planned: ['Planned', 'quiet'], repo: ['Repo created', 'run'], issues: ['Issues created', 'run'], running: ['Loop running', 'run'], stopped: ['Loop stopped', 'warn'] };
 const ISSUE: Record<string, ChipTone> = { merged: 'ok', escalated: 'warn', 'needs-info': 'warn', 'awaiting-approval': 'warn', rejected: 'bad', reverted: 'bad', 'in-progress': 'run', ready: 'run' };
-const chip = (text: string, tone: ChipTone = 'quiet'): ReactNode => <Badge key={text} tone={tone === 'quiet' ? 'neutral' : tone} quiet={tone === 'quiet'}>{text}</Badge>;
+const chip = (text: string, tone: ChipTone = 'quiet', key = text): ReactNode => <Badge key={key} tone={tone === 'quiet' ? 'neutral' : tone} quiet={tone === 'quiet'}>{text}</Badge>;
 const https = (u?: string) => (/^https:\/\//.test(u ?? '') ? u : undefined);
 const Bar = ({ part = 0, whole = 0, tone }: { part?: number; whole?: number; tone?: string }) =>
   <div className="web-bar" data-tone={tone} aria-hidden="true"><i style={{ width: `${Math.min(100, whole > 0 ? (part / whole) * 100 : 0)}%` } as CSSProperties} /></div>;
@@ -27,7 +27,7 @@ export function IdeaPanel({ idea: p, has, href }: { idea: Idea; has: (id: string
       <div className="web-idea-h">
         <span className="sf-label">Project</span>
         <h2>{https(p.remote?.url) ? <a href={p.remote!.url} target="_blank" rel="noreferrer">{name}</a> : name}</h2>
-        <div className="web-chips">{[chip(phase, tone), p.stack ? chip(p.stack) : null, p.visibility ? chip(p.visibility) : null, p.dryRun && !p.remote ? chip('Dry run') : null]}</div>
+        <div className="web-chips">{[chip(phase, tone, 'phase'), p.stack ? chip(p.stack, 'quiet', 'stack') : null, p.visibility ? chip(p.visibility, 'quiet', 'vis') : null, p.dryRun && !p.remote ? chip('Dry run', 'quiet', 'dry') : null]}</div>
       </div>
       {p.idea ? <p className="web-idea-q">“{p.idea}”</p> : null}
       {p.plan?.vision ? <p className="web-idea-v">{p.plan.vision}</p> : null}
