@@ -27,7 +27,7 @@ export { MetricStat, MetricStrip, type MetricStatProps } from './factory/MetricS
 export { SourceChip, SOURCE_LABEL, sourceLabel } from './factory/SourceChip.tsx';
 export { OutcomePill } from './factory/OutcomePill.tsx';
 export { Timeline } from './factory/Timeline.tsx';
-export { SessionLink, SessionList, SessionsChip, resumeCommand, type AgentSession } from './factory/Sessions.tsx';
+export { SessionLink, SessionList, SessionsChip, resumeCommand, shq, type AgentSession } from './factory/Sessions.tsx';
 export { CommandMenu, filterCommands, type Command, type CommandMenuProps } from './factory/CommandMenu.tsx';
 
 export { ProjectPicker, type ProjectPickerProps } from './onboarding/ProjectPicker.tsx';

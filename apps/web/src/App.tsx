@@ -1,10 +1,11 @@
-import { Dot, EmptyState, IconButton, Kbd, Sheet, Skeleton, Tabs, ThemeToggle, formatAgo, formatClock, repoOf } from '@software-factory/design-system';
+import { Button, Dot, EmptyState, IconButton, Kbd, Sheet, Skeleton, Tabs, ThemeToggle, formatAgo, formatClock, repoOf } from '@software-factory/design-system';
 import { useCallback, useEffect, useState } from 'react';
 import { Board, runHref } from './Board.tsx';
 import { loadData, projectsOf, CAP, COST_CAP, type FactoryData } from './data.ts';
 import { Panel } from './Panel.tsx';
 import { RuleChips } from './Rules.tsx';
 import { RunDetail } from './RunDetail.tsx';
+import { SkillsSheet } from './Skills.tsx';
 import { store } from './store.ts';
 
 const WIDE = '(min-width: 1100px)'; // the docked panel; narrower screens open a run in a sheet
@@ -33,7 +34,8 @@ export function App({ load = loadData }: { load?: () => Promise<FactoryData> }) 
     return () => { ignore = true; clearTimeout(timer); };
   }, [load]);
   const { data, error } = state;
-  return data ? <Shell data={data} /> : (
+  const patch = useCallback((p: Partial<FactoryData>) => setState((s) => (s.data ? { data: { ...s.data, ...p } } : s)), []); // a write's reply, until the next poll
+  return data ? <Shell data={data} patch={patch} /> : (
     <>
       <header className="web-top"><span className="web-brand"><span className="sf-mark" aria-hidden="true" />Software Factory</span><ThemeToggle /></header>
       <main className="web-main" aria-busy={!error}>
@@ -43,7 +45,7 @@ export function App({ load = loadData }: { load?: () => Promise<FactoryData> }) 
   );
 }
 
-function Shell({ data }: { data: FactoryData }) {
+function Shell({ data, patch }: { data: FactoryData; patch: (p: Partial<FactoryData>) => void }) {
   const projects = projectsOf(data);
   const [project, setProjectState] = useState(() => { const p = store('sf.project') ?? ''; return projects.includes(p) ? p : ''; });
   const setProject = (p: string) => { setProjectState(p); store('sf.project', p); if (readHash()) history.replaceState(null, '', location.pathname + location.search); setHash(''); };
@@ -51,6 +53,7 @@ function Shell({ data }: { data: FactoryData }) {
   const [collapsed, setCollapsedState] = useState(() => (store('sf.panelCollapsed') ?? '1') === '1'); // closed until a run is chosen
   const setCollapsed = (c: boolean) => { store('sf.panelCollapsed', c ? '1' : '0'); setCollapsedState(c); };
   const wide = useMedia(WIDE);
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const byId = new Map(data.runs.map((r) => [r.id, r]));
   const sel = byId.get(hash) ?? null;
   const runs = data.runs.filter((r) => !project || repoOf(r.id) === project);
@@ -79,9 +82,10 @@ function Shell({ data }: { data: FactoryData }) {
   return (
     <>
       <header className="web-top">
-        <span className="web-brand"><span className="sf-mark" aria-hidden="true" />Software Factory</span>
+        <span className="web-brand"><span className="sf-mark" aria-hidden="true" /><span className="web-brand-t">Software Factory</span></span>
         <RuleChips data={data} project={project} />
         {data.generated ? <span className="web-updated"><Dot tone={fresh ? 'ok' : 'idle'} /><time dateTime={data.generated} title={formatClock(data.generated)}><span className="web-upd-word">Updated </span>{formatAgo(data.generated)}</time></span> : null}
+        {data.skills ? <Button size="sm" variant="ghost" aria-haspopup="dialog" title="Who runs each step" onClick={() => setSkillsOpen(true)}>Skills</Button> : null}
         <ThemeToggle />
         {wide && (sel || runs.length) ? (
           <IconButton label={`${shown ? 'Hide' : 'Show'} run panel (])`} aria-expanded={shown} aria-controls="detail" onClick={() => setCollapsed(shown)}>
@@ -105,6 +109,7 @@ function Shell({ data }: { data: FactoryData }) {
           </Panel>
         ) : null}
       </div>
+      {data.skills ? <SkillsSheet open={skillsOpen} onClose={() => setSkillsOpen(false)} skills={data.skills} harnesses={data.harnesses} token={data.token} scope={project} onSaved={(skills) => patch({ skills })} /> : null}
       {wide ? null : <Sheet open={!!sel} onClose={close} title={sel?.id ?? 'Run'}>{sel ? detail(sel) : null}</Sheet>}
     </>
   );

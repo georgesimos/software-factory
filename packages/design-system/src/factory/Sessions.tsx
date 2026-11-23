@@ -10,7 +10,7 @@ import { SOURCE_LABEL } from './SourceChip.tsx';
 export interface AgentSession { agent: 'claude-code' | 'codex' | (string & {}); id: string; cwd?: string; last?: string }
 
 // Paths come from local logs: single-quote them for a POSIX shell, so $, `, \ and ! stay literal.
-const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+export const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /** Shell command that resumes the session, or null for an unknown agent or an odd id (never pasted into a shell). */
 export function resumeCommand(s: AgentSession): string | null {

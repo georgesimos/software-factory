@@ -11,6 +11,18 @@ export interface Idea {
   next?: IdeaIssue; remote?: { url?: string };
 }
 export interface Harness { id: string; label?: string; install?: string }
+/** A step's runner in skills.json (packages/core/src/skills.ts checkRunner). Extra axes add `axis` and `when`. */
+export interface StepRunner { use?: string; name?: string; path?: string; harness?: string; model?: string; effort?: string; fallback?: string[]; axis?: string; when?: string[] }
+export interface CatalogEntry { source: string; group: string; name: string; kind: string; desc?: string; runner: StepRunner }
+/** skillsData(): raw config (to tell "set here" from "inherited"), resolved plans, the catalog, models and presets. */
+export interface SkillsData {
+  error?: string; steps?: string[]; required?: string[]; scopes?: string[];
+  config?: Record<string, Record<string, StepRunner | StepRunner[] | unknown>>;
+  plans?: Record<string, { plan?: Record<string, StepRunner>; extra?: StepRunner[] }>;
+  catalog?: { global?: CatalogEntry[]; projects?: Record<string, CatalogEntry[]> };
+  models?: string[]; efforts?: string[]; preset?: string; presets?: Record<string, Record<string, [string, string]>>;
+  applied?: string[]; skipped?: string[]; inherited?: string[];
+}
 
 /** What `page()` / `GET /api/state` carries (packages/server/src/server.ts pageData()). Every field but `runs` may be missing. */
 export interface FactoryData {
@@ -26,7 +38,7 @@ export interface FactoryData {
   harnesses?: Harness[];
   hooks?: { create?: boolean; ship?: boolean; connectors?: unknown };
   ideas?: Record<string, Omit<Idea, 'repo'>>;
-  skills?: Record<string, unknown>;
+  skills?: SkillsData;
   onboard?: Record<string, unknown>;
   /** The F ui token. Only set when the page was opened from `F ui`; writes need it. */
   token?: string;
@@ -65,6 +77,14 @@ export function normRun(r: Run): Run {
   return { ...r, id: String(r.id), events: arr(r.events), loopbacks: arr(r.loopbacks), children: arr(r.children), issues: arr(r.issues), burn: burnOf(r.burn), deploys, sessions };
 }
 export const normData = (d: FactoryData): FactoryData => ({ ...d, runs: d.runs.filter((r) => r && r.id != null).map(normRun) });
+
+/** A write through the F ui API: the token header, a JSON body; the browser adds Origin. Throws the server's error. */
+export async function post<T>(route: string, body: unknown, token: string): Promise<T> {
+  const res = await fetch('/api' + route, { method: 'POST', headers: { 'content-type': 'application/json', 'x-factory-token': token }, body: JSON.stringify(body) });
+  const x = await res.json().catch(() => ({})) as T & { error?: string };
+  if (!res.ok) throw new Error(x.error || `save failed (${res.status})`);
+  return x;
+}
 
 /** `?t=` from `F ui`'s URL. */
 export const uiToken = () => new URLSearchParams(location.search).get('t') || undefined;

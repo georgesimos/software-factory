@@ -14,7 +14,7 @@ import { metrics } from '../../core/src/gate.ts';
 import { onboardConfig, onboardState, readOnboard, setShip } from '../../core/src/onboard.ts';
 import { projects, wtInfo } from '../../core/src/workspace.ts';
 import { dashboard, read, readArchive, sessionsFile, stateDir } from '../../core/src/log.ts';
-import { readSkills, setSkill, skillsData } from '../../core/src/skills.ts';
+import { applyPreset, readSkills, setSkill, skillsData } from '../../core/src/skills.ts';
 import { sync } from '../../core/src/sync.ts';
 import { withMeasured } from '../../core/src/burn.ts';
 import { open } from '../../core/src/platform.ts';
@@ -65,6 +65,8 @@ export function uiHandle({ method, url, headers = {}, body = '' }, { token, port
 // Each route calls the same validated function as its CLI command.
 export const UI_ROUTES = {
   '/skills': ({ scope, step, runner }) => { setSkill(scope, step, runner === null ? undefined : runner); return skillsData(runRepos()); },
+  // applied/skipped/inherited say what changed: in a project a preset only touches the steps it already sets.
+  '/skills/preset': ({ name, scope }) => { const { applied, skipped, inherited } = applyPreset(name, scope ?? 'default'); return { ...skillsData(runRepos()), applied, skipped, inherited }; },
   // Records the idea only: repo and issue creation stay in the Claude session, behind its checkpoints. Returns an id, never
   // the idea text, since `next` is pasted into a terminal.
   '/idea': ({ repo, idea, stack }) => { const p = startIdea({ repo, idea, stack }); return { run: p.id, next: `/software-factory new ${p.repo}` }; },
