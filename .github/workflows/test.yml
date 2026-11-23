@@ -5,20 +5,29 @@ on:
     branches: [main]
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   test:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        node: [24, 26]
+        # Node 24 and 26 on Linux; macOS and Windows on one version, since their minutes cost 10x and 2x.
+        # Windows runs since X3 (#51, merged) made the tests Windows-safe; it has not been green yet, and a red run is a real failure.
+        include:
+          - { os: ubuntu-latest, node: 24 }
+          - { os: ubuntu-latest, node: 26 }
+          - { os: macos-latest, node: 24 }
+          - { os: windows-latest, node: 24 }
     runs-on: ${{ matrix.os }}
-    # Windows is known-broken until the audit fixes land (docs/plans/cross-platform-audit.md, issue #51 makes it required).
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4 # version from package.json "packageManager"
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0, version from package.json "packageManager"
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
