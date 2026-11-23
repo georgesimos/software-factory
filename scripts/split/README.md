@@ -1,6 +1,6 @@
 # Split tooling
 
-`move.ts` moves named top-level declarations out of a module into another, unchanged. It fixes up the imports on both sides. See [docs/plans/split.md](../../docs/plans/split.md), rule 5: regenerate a move PR rather than rebasing it.
+`move.ts` moves named top-level declarations out of a module into another, unchanged. It fixes up the imports on both sides. See [docs/plans/split.md](../../docs/plans/split.md), rule 5: regenerate a move PR rather than hand-merging it. A small change to `main` can be carried by `git rebase --update-refs --onto origin/main <old-base> <stack tip>`, putting each conflicting line in its moved file.
 
 ```bash
 node scripts/split/move.ts <from.mjs> <to.ts> <name,name,...>

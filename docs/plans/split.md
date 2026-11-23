@@ -86,7 +86,7 @@ The rules that follow:
    - `F demo` derives the same runs before and after: diff `F state` for each demo run, since the dashboard HTML has timestamps;
    - `git diff --color-moved=zebra -M` shows only moved lines, plus `import` and `export` lines;
    - the description lists the old line range of every moved function and where it went.
-5. **Regenerate rather than rebase.** A move is mechanical, so it is best produced by a short script, which the PR description includes. When `main` moves, re-run the script on the new `main` instead of hand-merging conflicts in a 2,500-line file.
+5. **Regenerate rather than rebase.** A move is mechanical, so it is best produced by a short script, which the PR description includes. When `main` moves, re-run the script on the new `main` instead of hand-merging conflicts in a 2,500-line file. A small change to `main` may instead be carried with `git rebase --update-refs` over the whole stack. Each conflict is resolved by putting the changed lines in the file they moved to, so every step stays a pure move. That is how #28 was carried (stack on `1542a82`). Afterwards check each resolved step with `scripts/split/check.sh` or a moved-lines diff.
 6. **The factory's gate will escalate these PRs, and a human merge is expected:**
    - the diffs are over `MAX_DIFF` (300 lines);
    - new `package.json` files match `SENSITIVE`;
