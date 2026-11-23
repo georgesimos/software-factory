@@ -12,8 +12,8 @@
 </head>
 <body>
   <div id="root"></div>
-  <!-- For a host to fill with the run data, as page() in packages/server/src/server.ts fills dashboard.html's.
-       Not wired yet: F ui still serves dashboard.html. -->
+  <!-- For a host to inline the run data, as page() in packages/server/src/server.ts does for dashboard.html.
+       F ui serves this build at /app/, which reads GET /api/state instead and leaves the placeholder. -->
   <script type="application/json" id="data">__FACTORY_DATA__</script>
   <script type="module" src="/src/main.tsx"></script>
 </body>
