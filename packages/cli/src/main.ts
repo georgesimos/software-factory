@@ -21,7 +21,7 @@ import { artifact, render, ui } from '../../server/src/server.ts';
 import { rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
 import { note, takeNotes } from '../../core/src/notes.ts';
 import { withMeasured } from '../../core/src/burn.ts';
-import { linkSkill, open } from '../../core/src/platform.ts';
+import { installCli, linkSkill, open } from '../../core/src/platform.ts';
 import { pathToFileURL } from 'node:url';
 
 export async function main(argv) {
@@ -41,7 +41,7 @@ export async function main(argv) {
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
         if (stage === 'review' && p.role !== 'verifier') throw new Error('axis verdicts are recorded by "review", not by hand; "event" only takes the verifier usage record ({"role":"verifier",…})');
         if (stage === 'note') throw new Error('"note" is recorded by "note" and "notes", not by hand');
-        const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'cwd', 'runner', 'localChecks',
+        const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'cwd', 'runner', 'localChecks', 'mergedBy',
           'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // the last row: set by ship connectors only
         if (typed.length) throw new Error(`these fields come from GitHub, git or a ship connector, not from a payload: ${typed.join(', ')}`);
         record(run, stage, status, p, { fallback }); break;
@@ -178,6 +178,9 @@ export async function main(argv) {
         if (run && run !== '--codex') throw new Error('usage: install-skill [--codex]');
         if (/[\\/]plugins[\\/]cache[\\/]/.test(import.meta.dirname)) throw new Error('this F runs from the Claude Code plugin cache, which an update replaces; the plugin already provides the skill. Link a clone instead.');
         out(linkSkill(path.join(import.meta.dirname, '..', '..', 'factory'), path.join(os.homedir(), ...(run === '--codex' ? ['.agents'] : ['.claude']), 'skills', 'software-factory'))); break;
+      case 'install-cli': // a `factory` shim in ~/.local/bin (or ~/bin) for this copy; prints the PATH line when that dir is not on PATH
+        if (run) throw new Error('usage: install-cli');
+        out(installCli(path.join(import.meta.dirname, '..', '..', 'factory', 'factory.mjs'), { home: os.homedir() })); break;
       case 'ui': await ui(Number(run) || 0); break;
       case 'demo': // never pollute the real log with fixtures
         if (!process.env.FACTORY_DIR) io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-demo-'));
@@ -189,7 +192,8 @@ export async function main(argv) {
         break;
       }
       default:
-        console.log(`usage: factory.mjs <command>
+        console.log(`usage: factory <command>        (F in SKILL.md; without install-cli: node packages/factory/factory.mjs <command>)
+  help | --help | -h                      print this list
   discover [roots...]                     find local GitHub clones for onboarding (default: ~/Development, ~/code, ...)
   sync   [owner/repo] [local clone path]  attach a project and import open PRs + agent sessions (no args: all)
   projects                                list attached projects
@@ -237,10 +241,11 @@ export async function main(argv) {
   headless-args <run> [--review|--write] [--share N] [--step <step>]  pinned claude -p flags (read-only unless --write) for a provider runner, with the run's remaining budget split N ways and the step's model, effort and fallback (JSON array)
   dir    <run>                            print the run's artifact folder
   open   [dashboard|url]                  open the dashboard (default) or an https:, file: or claude-cli: URL with the OS opener
+  install-cli                             put a \`factory\` command for this copy in ~/.local/bin (or ~/bin); prints the PATH line if needed
   install-skill [--codex]                link ~/.claude/skills/software-factory (Codex: ~/.agents/skills) to this checkout (a junction on Windows)
   render [--artifact <out>]              rewrite dashboard.html, or write the claude.ai Artifact page to <out>
   demo | test`);
-        process.exitCode = cmd ? 1 : 0;
+        process.exitCode = !cmd || ['help', '--help', '-h'].includes(cmd) ? 0 : 1;
     }
   } catch (e) {
     console.error(`factory: ${e.message}`);
