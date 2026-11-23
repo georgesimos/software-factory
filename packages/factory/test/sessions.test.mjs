@@ -9,7 +9,7 @@ import { setup } from './setup.mjs';
 import { HERE } from '../factory.mjs';
 import { record } from '../../core/src/log.ts';
 import { saveProject } from '../../core/src/workspace.ts';
-import { opener } from '../../core/src/platform.ts';
+import { command, opener } from '../../core/src/platform.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
 import { launchSession, ui, uiHandle } from '../../server/src/server.ts';
@@ -22,10 +22,12 @@ const claude = harnesses.find((h) => h.id === 'claude-code');
 const finished = (s) => new Promise((resolve) => { const ev = []; subscribe(s, (e) => { ev.push(e); if (e.type === 'exit') resolve(ev); }); });
 const LOCAL = 'local_0123abcd-0123-4567-89ab-0123456789ab';
 
-test('claude-code launch(): headless pins stream-json --verbose with the prompt before the flags; terminal is plain claude', () => {
+test('claude-code launch(): headless pins stream-json --verbose with the prompt on stdin; terminal is plain claude', () => {
   const h = claude.launch({ mode: 'headless', prompt: '/software-factory acme/app#3', budget: 4.5, write: true });
   assert.equal(h.cmd, 'claude');
-  assert.deepEqual(h.args.slice(0, 2), ['-p', '/software-factory acme/app#3']);
+  assert.equal(h.args[0], '-p');
+  assert.equal(h.stdin, '/software-factory acme/app#3');
+  assert.ok(!h.args.includes(h.stdin), 'the prompt is not an argument');
   assert.ok(h.args.join(' ').includes('--output-format stream-json --verbose'));
   assert.deepEqual([h.args[h.args.indexOf('--permission-mode') + 1], h.args[h.args.indexOf('--max-budget-usd') + 1]], ['auto', '4.5']);
   assert.deepEqual(claude.launch({ mode: 'headless', prompt: 'x', resume: 'abc' }).args.slice(0, 2), ['--resume', 'abc']);
@@ -33,6 +35,15 @@ test('claude-code launch(): headless pins stream-json --verbose with the prompt 
   assert.throws(() => claude.launch({ mode: 'headless' }), /needs a prompt/);
   assert.throws(() => claude.launch({ mode: 'sdk', prompt: 'x' }), /no sdk mode/);
   assert.ok(claude.headlessArgs().includes('json') && !claude.headlessArgs().includes('stream-json'), 'F headless-args is unchanged');
+});
+
+test('Windows: a headless launch runs through npm\'s claude.cmd, because the prompt (space, #) goes on stdin', () => {
+  const win = { platform: 'win32', env: { PATH: 'C:\\npm', PATHEXT: '.EXE;.CMD', ComSpec: 'C:\\Windows\\system32\\cmd.exe' }, isFile: (p) => p.toLowerCase() === 'c:\\npm\\claude.cmd' };
+  const h = claude.launch({ mode: 'headless', prompt: '/software-factory acme/app#3', budget: 4.5, write: true, resume: '0123abcd-0123-4567-89ab-0123456789ab' });
+  const c = command(h.cmd, h.args, win);
+  assert.equal(c.file, 'C:\\Windows\\system32\\cmd.exe');
+  assert.match(c.args[3], /^""C:\\npm\\claude\.cmd" --resume 0123abcd-\S+ -p --output-format stream-json --verbose /);
+  assert.throws(() => command(h.cmd, ['-p', h.stdin, ...h.args.slice(1)], win), /cmd\.exe quoting/, 'as an argument it would be refused');
 });
 
 test('openDesktop(): only a desktop session id gets the link, and opener() takes that one claude: URL only', () => {
@@ -54,8 +65,23 @@ test('startSession() runs a headless launch and streams NDJSON events, text, std
   const late = []; subscribe(s, (e) => late.push(e), 3); // a reconnect replays from Last-Event-ID + 1
   assert.deepEqual(late.map((e) => e.n), ev.slice(3).map((e) => e.n));
   assert.throws(() => startSession(claude, { mode: 'terminal' }, { cwd: home }), /not available yet/);
+  const sub = []; subscribe({ events: [{ n: 7 }, { n: 8 }], state: 'exited', listeners: new Set() }, (e) => sub.push(e), 2);
+  assert.deepEqual(sub, [{ type: 'dropped', from: 2, first: 7 }, { n: 7 }, { n: 8 }], 'a replay past the buffer says what was lost');
   const none = startSession(claude, { mode: 'headless', prompt: 'x' }, { cwd: home, env: { ...stubEnv, PATH: fs.mkdtempSync(path.join(os.tmpdir(), 'factory-nobin-')) } });
   assert.match((await finished(none)).find((e) => e.type === 'error').message, /claude is not installed/);
+});
+
+test('a session killed by a signal ends: exit carries the signal, and stop() is safe before, during and after', async () => {
+  const s = startSession(claude, { mode: 'headless', prompt: 'x' }, { cwd: home, env: { ...stubEnv, STUB_HANG: '1' }, label: 'hang' });
+  await new Promise((r) => { const off = subscribe(s, (e) => { if (e.data?.subtype === 'init') { off(); r(); } }); });
+  const end = finished(s);
+  s.stop();
+  const ev = await end;
+  assert.deepEqual([ev.at(-1).type, ev.at(-1).code, s.state, s.exit], ['exit', 'SIGTERM', 'exited', 'SIGTERM']);
+  s.stop(); // already exited: a no-op
+  const refused = startSession(claude, { mode: 'headless', prompt: 'x' }, { cwd: home, env: { ...stubEnv, PATH: '' } });
+  refused.stop(); // before its ENOENT lands: without the pid guard this signals the test runner's own process group
+  assert.match((await finished(refused)).find((e) => e.type === 'error').message, /not installed/);
 });
 
 test('launchSession(): an attached repo and an issue number only; #25\'s refusals', async () => {
@@ -92,6 +118,9 @@ test('/api/sessions: POST starts one behind the token and Origin checks; GET lis
   assert.ok(JSON.parse(req('GET', '/api/sessions').body).sessions.some((x) => x.id === id && x.label === 'acme/app#6' && x.state === 'exited'));
   const st = req('GET', `/api/sessions/${id}/events`, undefined, { 'last-event-id': '1' });
   assert.deepEqual([st.status, st.type, st.stream.id, st.from], [200, 'text/event-stream', id, 2]);
+  for (const bad of ['', 'x', '-1', '1e3']) assert.equal(req('GET', `/api/sessions/${id}/events`, undefined, { 'last-event-id': bad }).from, 0, `Last-Event-ID ${JSON.stringify(bad)} replays from 0`);
+  assert.match(JSON.parse(req('POST', '/api/sessions/stop', { id }).body).error, /no running session/, 'an exited session');
+  assert.equal(req('POST', '/api/sessions/stop', { id }, { 'x-factory-token': 'z'.repeat(32) }).status, 403);
   assert.equal(req('GET', `/api/sessions/${id}/events`, undefined, { 'x-factory-token': 'y'.repeat(32) }).status, 403);
   assert.equal(req('GET', '/api/sessions/00000000-0000-0000-0000-000000000000/events').status, 404);
   assert.match(JSON.parse(req('POST', '/api/sessions/open', { id: 'not-a-desktop-id' }).body).error, /claude --resume/);

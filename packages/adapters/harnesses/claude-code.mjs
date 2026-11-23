@@ -60,7 +60,7 @@ export default {
     const res = resume ? ['--resume', resume] : [];
     if (mode === 'headless') {
       if (!prompt) throw new Error('a headless launch needs a prompt');
-      return { cmd: 'claude', args: [...res, '-p', prompt, ...headlessArgs({ budget, write, stream: true })] }; // prompt before the variadic --allowedTools
+      return { cmd: 'claude', args: [...res, '-p', ...headlessArgs({ budget, write, stream: true })], stdin: prompt }; // the prompt on stdin: npm's claude.cmd can't take it as an argument
     }
     if (mode === 'terminal') return { cmd: 'claude', args: [...res, ...(prompt ? [prompt] : [])] };
     throw new Error(`claude-code has no ${mode} mode`);

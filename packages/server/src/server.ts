@@ -39,7 +39,7 @@ export function uiHandle({ method, url, headers = {}, body = '' }, { token, port
     const ev = route.match(/^\/sessions\/([0-9a-f-]{36})\/events$/);
     if (ev) { // server-sent events; ui() writes the stream. EventSource can't send x-factory-token, so clients read it with fetch.
       const s = getSession(ev[1]);
-      return s ? { status: 200, type: 'text/event-stream', stream: s, from: Number(headers['last-event-id']) + 1 || 0 } : reply(404, { error: `no session ${ev[1]}` });
+      return s ? { status: 200, type: 'text/event-stream', stream: s, from: /^\d+$/.test(headers['last-event-id'] || '') ? Number(headers['last-event-id']) + 1 : 0 } : reply(404, { error: `no session ${ev[1]}` });
     }
     const m = route.match(/^\/runs\/([^/]+)\/([^/]+)\/([^/]+)$/);
     if (!m) return reply(404, { error: 'not found' });
@@ -81,6 +81,7 @@ export const UI_ROUTES = {
   },
   '/onboard/automerge': ({ repo, on }) => { setAutoMerge(repo, on); return onboardConfig(); },
   '/sessions': (x) => ({ session: launchSession(x).id }),
+  '/sessions/stop': ({ id }) => { const s = getSession(id); if (s?.state !== 'running') throw new Error('no running session with that id'); s.stop(); return { ok: true }; },
   '/sessions/open': ({ harness = 'claude-code', id }) => { // the desktop app's own link for a session, when the harness has one
     const h = harnesses.find((y) => y.id === harness), url = h?.openDesktop?.(id);
     if (!url) throw new Error(`no desktop link for ${String(id).slice(0, 60)}: run claude --resume <id> in a terminal instead`);
@@ -106,7 +107,8 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
   if (b?.over) throw new Error(`run budget exceeded ${budgetWhy(b)}`);
   const d = h.detect();
   if (!d.installed) throw new Error(`${h.label} is not installed: ${h.install}`);
-  if (!h.login().ok) throw new Error(`${h.label} is not signed in: ${h.login().hint}`);
+  const l = h.login();
+  if (!l.ok) throw new Error(`${h.label} is not signed in: ${l.hint}`);
   return startSession(h, { mode, prompt: `/software-factory ${id}`, budget: COST_CAP - (b?.usd || 0), write: true }, { cwd, env, label: id });
 }
 
@@ -120,7 +122,7 @@ export function ui(port = 0) {
       try { r = uiHandle({ method: req.method, url: req.url, headers: req.headers, body }, { token, port: server.address().port }); } catch (e) { r = { status: 500, type: 'application/json', body: JSON.stringify({ error: e.message }) }; }
       res.writeHead(r.status, { 'content-type': r.type, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY' });
       if (!r.stream) return res.end(r.body);
-      const stop = subscribe(r.stream, (e) => { res.write(`id: ${e.n}\ndata: ${JSON.stringify(e)}\n\n`); if (e.type === 'exit') res.end(); }, r.from);
+      const stop = subscribe(r.stream, (e) => { res.write(`${e.n === undefined ? '' : `id: ${e.n}\n`}data: ${JSON.stringify(e)}\n\n`); if (e.type === 'exit') res.end(); }, r.from);
       if (r.stream.state !== 'running') res.end();
       res.on('close', stop); // not req: its close fires once the request body is read
     });
