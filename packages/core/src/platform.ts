@@ -9,7 +9,8 @@ import type { ExecFileSyncOptions, SpawnSyncOptions } from 'node:child_process';
 
 type Env = Record<string, string | undefined>;
 export interface Resolve { platform?: NodeJS.Platform; env?: Env; isFile?: (p: string) => boolean }
-export interface Command { file: string; args: string[]; windowsVerbatimArguments?: boolean }
+// env: added to the spawn's env (callers merge it over their own).
+export interface Command { file: string; args: string[]; windowsVerbatimArguments?: boolean; env?: Env }
 
 // What cmd.exe treats as plain text: no & | < > ^ " % ! ( ) or whitespace. Empty arguments need quotes, so they fail too.
 const PLAIN = /^[\w\-.,:/\\=@+~]+$/;
@@ -19,7 +20,7 @@ const isFileSync = (p: string) => { try { return fs.statSync(p).isFile(); } catc
 function findOnPath(cmd: string, env: Env, isFile: (p: string) => boolean, skip?: RegExp): string | undefined {
   const exts = (envGet(env, 'PATHEXT') || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map((e) => e.toLowerCase()); // NTFS ignores case
   const names = exts.some((e) => cmd.toLowerCase().endsWith(e)) ? [cmd, ...exts.map((e) => cmd + e)] : exts.map((e) => cmd + e);
-  const dirs = /[\\/]/.test(cmd) ? [''] : (envGet(env, 'PATH') || '').split(';').filter((d) => d && !skip?.test(d));
+  const dirs = /[\\/]/.test(cmd) ? [''] : (envGet(env, 'PATH') || '').split(';').map((d) => d.trim().replace(/^"(.*)"$/, '$1')).filter((d) => path.win32.isAbsolute(d) && !skip?.test(d)); // "C:\\Tools\\gh bin" is valid; a relative entry never counts
   for (const d of dirs) for (const n of names) { const p = d ? path.win32.join(d, n) : n; if (isFile(p)) return p; }
   return undefined;
 }
@@ -29,25 +30,30 @@ export function command(cmd: string, args: string[] = [], { platform = process.p
   if (/\.[cm]?js$/i.test(cmd)) return { file: process.execPath, args: [cmd, ...args] }; // a script override (FACTORY_GH=stub.mjs) runs under this node: no shebang on Windows
   if (platform !== 'win32') return { file: cmd, args };
   const file = findOnPath(cmd, env, isFile);
-  if (!file) return { file: cmd, args }; // not found: let the spawn fail with ENOENT, as on POSIX ("not installed")
+  // Not found: never hand the bare name to spawn, which on Windows looks in the current folder (maybe an untrusted clone) first.
+  if (!file) throw Object.assign(new Error(`${cmd} is not installed`), { code: 'ENOENT' });
   if (!/\.(cmd|bat)$/i.test(file)) return { file, args };
   const bad = args.find((a) => !PLAIN.test(a));
   if (bad !== undefined || /["%]/.test(file)) {
     throw new Error(`${path.win32.basename(file)} is a .cmd shim, and ${JSON.stringify(bad ?? file)} would need cmd.exe quoting; install a native ${cmd}.exe or run this step yourself`);
   }
-  // /s strips the outer quotes, leaving "file" args; verbatim so Node adds no quoting of its own.
-  return { file: envGet(env, 'COMSPEC') || 'cmd.exe', args: ['/d', '/s', '/c', `""${file}" ${args.join(' ')}"`], windowsVerbatimArguments: true };
+  // /s strips the outer quotes, leaving "file" args; verbatim so Node adds no quoting of its own. The shim runs a bare `node`,
+  // which cmd.exe would look for in the current folder (a run's worktree, maybe an untrusted clone) first: env turns that off.
+  return { file: envGet(env, 'COMSPEC') || path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', 'System32', 'cmd.exe'), args: ['/d', '/s', '/c', `""${file}" ${args.join(' ')}"`], windowsVerbatimArguments: true,
+    env: { NoDefaultCurrentDirectoryInExePath: '1' } };
 }
 
+const spawnOptions = <O extends { env?: NodeJS.ProcessEnv }>(c: Command, options: O): O =>
+  ({ ...options, ...(c.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}), ...(c.env ? { env: { ...(options.env ?? process.env), ...c.env } } : {}) });
 export function exec(cmd: string, args: string[] = [], options: ExecFileSyncOptions = {}) {
   const c = command(cmd, args);
-  return execFileSync(c.file, c.args, { ...options, ...(c.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}) });
+  return execFileSync(c.file, c.args, spawnOptions(c, options));
 }
 
 export function run(cmd: string, args: string[] = [], options: SpawnSyncOptions = {}) {
   let c: Command;
   try { c = command(cmd, args); } catch (error) { return { status: null, stdout: '', stderr: '', error: error as Error }; }
-  return spawnSync(c.file, c.args, { ...options, ...(c.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}) });
+  return spawnSync(c.file, c.args, spawnOptions(c, options));
 }
 
 // The POSIX shell for `checks.commands` (written for sh). On Windows that is Git Bash, the shell Claude Code uses:
@@ -77,12 +83,13 @@ export function opener(target: string, platform: NodeJS.Platform = process.platf
   if (platform === 'win32') return { file: 'explorer.exe', args: [href] };
   return { file: 'xdg-open', args: [href] };
 }
-export function open(target: string, { platform = process.platform, env = process.env, isFile = isFileSync }: Resolve = {}) {
-  const c = opener(target, platform);
-  const found = platform === 'win32' ? findOnPath(c.file, env, isFile) || isFile(path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', c.file))
-    : (envGet(env, 'PATH') || '').split(':').some((d) => d && isFile(path.join(d, c.file)));
-  if (!found) throw new Error(`no ${c.file} here to open ${target}; open it yourself`);
-  spawn(c.file, c.args, { detached: true, stdio: 'ignore' }).on('error', () => { /* reported below by the caller's hint */ }).unref();
+// The opener is spawned by the full path found, never by bare name (on Windows that is looked up in the current folder first).
+export function open(target: string, { platform = process.platform, env = process.env, isFile = isFileSync }: Resolve = {}, launch = spawn) {
+  const c = opener(target, platform), sys = path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', c.file);
+  const file = platform === 'win32' ? (isFile(sys) ? sys : findOnPath(c.file, env, isFile))
+    : (envGet(env, 'PATH') || '').split(':').filter((d) => path.posix.isAbsolute(d)).map((d) => path.posix.join(d, c.file)).find(isFile);
+  if (!file) throw new Error(`no ${c.file} here to open ${target}; open it yourself`);
+  launch(file, c.args, { detached: true, stdio: 'ignore' }).on('error', () => { /* reported below by the caller's hint */ }).unref();
   return target;
 }
 
@@ -116,26 +123,42 @@ export function cliShims(entry: string, platform: NodeJS.Platform = process.plat
 // The Path a new cmd.exe or PowerShell starts with: the registry user and machine values, with %VARS% expanded. Not this
 // process's PATH: Git Bash, where Claude Code runs F on Windows, adds ~/bin and other folders Windows itself never sees.
 // reg.exe by full path: a bare 'reg' may resolve from the current folder first, and F can run inside an untrusted clone.
+// Machine Path, then user Path, as Windows builds it. %VARS% are expanded only in a REG_EXPAND_SZ value, as Windows does.
+// shortcut: reg.exe writes the OEM code page and this reads UTF-8, so a non-ASCII folder never matches; that fails safe (the
+// folder counts as not on Path and the PowerShell line, which adds it only when missing, is printed). Upgrade: chcp 65001.
 export function windowsPath(env: Env = process.env, run: (file: string, args: string[], o: object) => string = execFileSync as never) {
   const reg = path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', 'System32', 'reg.exe');
-  const read = (key: string) => { try { return /^\s*Path\s+REG_(?:EXPAND_)?SZ\s+(.*)$/im.exec(run(reg, ['query', key, '/v', 'Path'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))?.[1]?.trim() ?? ''; } catch { return ''; } };
-  return [read('HKCU\\Environment'), read('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment')].join(';')
-    .replace(/%([^%;]+)%/g, (m, v) => envGet(env, v) ?? m);
+  const read = (key: string) => {
+    let m;
+    try { m = /^\s*Path\s+REG_(EXPAND_)?SZ\s+(.*)$/im.exec(run(reg, ['query', key, '/v', 'Path'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })); } catch { return ''; }
+    const v = m?.[2]?.trim() ?? '';
+    return m?.[1] ? v.replace(/%([^%;]+)%/g, (x, name) => envGet(env, name) ?? x) : v;
+  };
+  return [read('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment'), read('HKCU\\Environment')].join(';');
 }
 
 // Where install-cli writes: whichever of ~/.local/bin and ~/bin comes first on PATH, else ~/.local/bin (not yet on PATH).
-// PATH entries are judged as absolute paths only, with a leading ~ meaning home; relative ones never count.
+// PATH entries are judged as absolute paths only, with a leading ~ meaning home on POSIX (cmd.exe and PowerShell don't
+// expand it); relative ones never count.
 export function cliDir(home: string, pathList: string, platform: NodeJS.Platform = process.platform) {
   const p = platform === 'win32' ? path.win32 : path.posix;
   const norm = (d: string) => { const n = p.normalize(d).replace(/[\\/]+$/, ''); return platform === 'win32' ? n.toLowerCase() : n; };
   const local = p.join(home, '.local', 'bin'), dirs = [local, p.join(home, 'bin')];
   for (const e of pathList.split(platform === 'win32' ? ';' : ':')) {
-    const abs = /^~(?=[\\/]|$)/.test(e) ? p.join(home, e.slice(1)) : e;
+    const abs = platform !== 'win32' && /^~(?=\/|$)/.test(e) ? p.join(home, e.slice(1)) : e;
     const hit = p.isAbsolute(abs) && dirs.find((d) => norm(d) === norm(abs));
     if (hit) return { dir: hit, onPath: true };
   }
   return { dir: local, onPath: false };
 }
+
+// The PowerShell line that adds dir to the user Path. It reads the raw value (DoNotExpandEnvironmentNames) and writes it back
+// as REG_EXPAND_SZ, so %USERPROFILE%-style entries stay unexpanded, adds dir only when missing, then sets and clears a
+// throwaway user variable so Windows broadcasts the change to new terminals. Not yet run on real Windows.
+export const psAddToPath = (dir: string) => {
+  const q = `'${dir.replace(/'/g, "''")}'`;
+  return `$k = 'HKCU:\\Environment'; $p = (Get-Item $k).GetValue('Path', '', 'DoNotExpandEnvironmentNames'); if (($p -split ';') -notcontains ${q}) { Set-ItemProperty $k Path (($p.TrimEnd(';') + ';' + ${q}).TrimStart(';')) -Type ExpandString; [Environment]::SetEnvironmentVariable('FACTORY_PATH_REFRESH', '1', 'User'); [Environment]::SetEnvironmentVariable('FACTORY_PATH_REFRESH', $null, 'User') }   # PowerShell, then open a new terminal`;
+};
 
 export function installCli(entry: string, { home, platform = process.platform, env = process.env, pathList }: { home: string; platform?: NodeJS.Platform; env?: Env; pathList?: string }) {
   const p = platform === 'win32' ? path.win32 : path.posix;
@@ -150,7 +173,7 @@ export function installCli(entry: string, { home, platform = process.platform, e
   if (platform !== 'win32') fs.chmodSync(p.join(dir, 'factory'), 0o755); // mode is ignored when the file already exists
   const fish = /(^|\/)fish$/.test(envGet(env, 'SHELL') || '');
   const addToPath = onPath ? undefined : platform === 'win32'
-    ? `[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';${dir.replace(/'/g, "''")}', 'User')   # PowerShell, then open a new terminal`
+    ? psAddToPath(dir)
     : fish ? `fish_add_path '${dir.replace(/['\\]/g, '\\$&')}'   # run once in fish`
     : `export PATH="${dir.replace(/["$`\\]/g, '\\$&')}:$PATH"   # add this line to your shell profile (~/.zshrc, ~/.bashrc), then open a new terminal`;
   return { dir, files: Object.keys(shims).map((n) => p.join(dir, n)), entry, ...(addToPath ? { onPath: false, addToPath } : { onPath: true }) };
