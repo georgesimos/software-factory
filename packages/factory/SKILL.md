@@ -385,6 +385,7 @@ Run `F sync owner/repo <local clone path>`. Running `F sync` with no arguments l
   - `none` when no local session matches.
 - **Imports recent agent sessions with no PR** on unmerged local branches as runs with id `owner/repo:<branch>`. When such a branch later gets a PR, the PR is attached to the same run.
 - **Closes finished runs.** A run whose PR or branch finished outside the factory is marked `closed`.
+- **Records a human's merge of an escalated run.** When a human merges an escalated run's PR on GitHub after the escalation, the run becomes `merged` with `humanMerge: {by, sha}`, and `F sync` lists it under `humanMerged`. Every field comes from `gh`. The factory never merges or re-runs such a run itself, and `F intake` refuses it.
 
 The factory never imports its own `factory/*` branches. A sync only reads GitHub, and repeating it never duplicates a run.
 

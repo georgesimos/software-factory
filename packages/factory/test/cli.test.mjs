@@ -700,6 +700,32 @@ export function syncTest(cli) {
   const [last] = JSON.parse(cli(['sync', 'acme/app'], '', { ...env, STUB_CLOSED: '10,15' }));
   assert.deepEqual(last.closed, ['acme/app:dev/wip-9']); // ...and closes once that PR merges
   assert.equal(derive(read())['acme/app#10'].outcome, 'closed');
+  // #21: a human merges an escalated run's PR on GitHub. Sync records it from gh alone (state, merge time, merger, commit,
+  // head branch); an open or closed-unmerged PR, a merge before the escalation and an imported run are left alone.
+  const H = 'acme/app#16', HP = 'https://github.com/acme/app/pull/16';
+  const cliErr = (...a) => { try { cli(...a); } catch (e) { return String(e.stderr); } assert.fail(`expected ${a[0].join(' ')} to fail`); };
+  record(H, 'intake', 'started', { title: 'h', association: 'OWNER' });
+  record(H, 'build', 'passed', { pr: HP, branch: 'factory/issue-16' });
+  record(H, 'approve', 'decided', { action: 'escalate', reasons: ['axes not passed: ui'] });
+  record(H, 'approve', 'escalated');
+  record('acme/app#11', 'approve', 'escalated'); // imported: decide always escalates it, and a merge elsewhere is not the factory's
+  const hsync = (env2) => JSON.parse(cli(['sync', 'acme/app'], '', { ...env, STUB_CLOSED: '10,11,15', ...env2 }))[0].humanMerged;
+  assert.deepEqual(hsync({}), []); // still open
+  assert.deepEqual(hsync({ STUB_PR_STATE: 'CLOSED' }), []);
+  assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED', STUB_MERGED_AT: '2000-01-01T00:00:00Z' }), []); // merged before the escalation
+  assert.match(cliErr(['event', H, 'build', 'merged', '-'], '{"by":"human"}', env), /refusing "merged"/); // never by hand, on any stage
+  assert.match(cliErr(['event', H, 'approve', 'merged', '-'], '{"by":"human"}', env), /recorded by "merge"/);
+  assert.match(cliErr(['event', H, 'spec', 'passed', '-'], '{"mergedBy":"x"}', env), /mergedBy/);
+  assert.equal(derive(read())[H].outcome, 'escalated');
+  assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED' }), [H]);
+  const hm = derive(read())[H];
+  assert.equal(hm.outcome, 'merged');
+  assert.deepEqual({ ...hm.humanMerge, ts: undefined }, { by: 'octo', sha: 'f'.repeat(40), ts: undefined });
+  assert.deepEqual(read().filter((e) => e.run === H && e.status === 'merged').map(({ by, mergedBy, sha }) => ({ by, mergedBy, sha })), [{ by: 'human', mergedBy: 'octo', sha: 'f'.repeat(40) }]);
+  assert.equal(derive(read())['acme/app#11'].outcome, 'escalated');
+  assert.equal(derive(read())['acme/app#11'].humanMerge, undefined);
+  assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED' }), []); // recorded once
+  assert.match(cliErr(['intake', H], '', env), /merged by octo: it needs a human, not a new run/);
   // Intake: issue 5 is claimed by open PR 10 (exact closing ref) -> stop, record nothing; issue 8's only PR is the factory's own.
   const busy = JSON.parse(cli(['intake', 'acme/app#5'], '', env));
   assert.deepEqual(busy.inProgress, ['https://github.com/acme/app/pull/10']);

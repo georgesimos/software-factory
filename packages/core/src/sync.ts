@@ -116,6 +116,19 @@ export function sync(repo, repoPath) {
     }
     if (reason) { record(r.id, 'approve', 'closed', { reasons: [reason] }); closed.push(r.id); }
   }
+  // Escalated runs whose PR a human then merged on GitHub (#21): recorded as merged by a human. Every fact comes from
+  // GitHub (state, merge time, merger, merge commit, head branch), never from issue, PR or comment text. Record only:
+  // nothing here merges, relabels or re-runs. shortcut: archived escalated runs are not checked; they stay escalated.
+  const humanMerged = [];
+  for (const r of runs) {
+    const m = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)$/.exec(r.pr || ''); // r.pr was typed by the orchestrator
+    if (r.outcome !== 'escalated' || r.imported || !m || m[1] !== repo || open.has(r.pr)) continue; // imported runs: not the factory's work
+    const p = JSON.parse(gh('pr', 'view', m[2], '-R', repo, '--json', 'state,mergedAt,mergedBy,mergeCommit,headRefName'));
+    const escalatedAt = r.events.findLast((e) => e.status === 'escalated')?.ts;
+    if (p.state !== 'MERGED' || p.headRefName !== `factory/issue-${r.id.split('#')[1]}` || !(Date.parse(p.mergedAt) > Date.parse(escalatedAt))) continue;
+    record(r.id, 'approve', 'merged', { by: 'human', mergedBy: p.mergedBy?.login || null, sha: p.mergeCommit?.oid || null });
+    humanMerged.push(r.id);
+  }
   const links = sessionsFile();
   const prev = fs.existsSync(links) ? JSON.parse(fs.readFileSync(links, 'utf8')) : {};
   for (const r of Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') || r.id.startsWith(repo + ':'))) {
@@ -125,5 +138,5 @@ export function sync(repo, repoPath) {
   const head = new Map(prs.map((p) => [p.url, p.headRefOid])); // deploy state of each in-progress run's PR head (finished runs aren't polled)
   const ship = shipTrack(Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') && r.outcome === 'in-progress' && head.get(r.pr)).map((r) => ({ run: r.id, repo, sha: head.get(r.pr), path: repoPath })));
   dashboard.render();
-  return { repo, path: repoPath, added, attached, closed, ...(ship && { ship }) };
+  return { repo, path: repoPath, added, attached, closed, humanMerged, ...(ship && { ship }) };
 }

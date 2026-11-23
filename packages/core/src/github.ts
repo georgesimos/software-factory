@@ -20,6 +20,8 @@ export const parseRun = (run) => {
 export function intake(run) {
   const { repo, n } = parseRun(run);
   if (process.env.FACTORY_FIXTURES && repo === 'eval/golden') return intakeFixture(run, n); // offline eval: no GitHub
+  const done = derive(read())[run] || readArchive().find((a) => a.id === run);
+  if (done?.humanMerge) throw new Error(`${run} was escalated, then merged by ${done.humanMerge.by || 'a human'}: it needs a human, not a new run`);
   // Exact links only (GitHub closing references); the factory's own branch is a resume, not a clash.
   const { prs } = openPRs(repo);
   const inProgress = prs
