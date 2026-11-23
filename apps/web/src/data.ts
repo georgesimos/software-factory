@@ -42,6 +42,8 @@ export interface FactoryData {
   onboard?: Record<string, { ship?: string[] }>;
   /** How to run F here: a plugin install's real path. The Artifact drops it (a path), so use F_CMD then. */
   fCmd?: string;
+  /** Under F ui: runs whose session here stopped or crashed, which POST /api/sessions would resume. */
+  resumable?: string[];
   /** Per attached project: false when auto-merge is off. */
   autoMerge?: Record<string, boolean>;
   /** The F ui token. Only set when the page was opened from `F ui`; writes need it. */
@@ -86,7 +88,7 @@ export const normData = (d: FactoryData): FactoryData => ({ ...d, runs: d.runs.f
 export async function post<T>(route: string, body: unknown, token: string): Promise<T> {
   const res = await fetch('/api' + route, { method: 'POST', headers: { 'content-type': 'application/json', 'x-factory-token': token }, body: JSON.stringify(body) });
   const x = await res.json().catch(() => ({})) as T & { error?: string };
-  if (!res.ok) throw new Error(x.error || `save failed (${res.status})`);
+  if (!res.ok) throw new Error(x.error || `request failed (${res.status})`);
   return x;
 }
 

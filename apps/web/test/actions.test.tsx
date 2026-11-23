@@ -8,50 +8,61 @@ import { RunDetail } from '../src/RunDetail.tsx';
 
 const data = normData(state as unknown as FactoryData);
 const run = (id: string) => data.runs.find((r) => r.id === id)!;
-const detail = (id: string, start?: (id: string) => Promise<string>) => render(<RunDetail run={run(id)} cap={3} costCap={5} start={start} />);
 const wide = () => vi.stubGlobal('matchMedia', (q: string) => ({ matches: q.includes('1100'), addEventListener() {}, removeEventListener() {} }));
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); sessionStorage.clear(); history.replaceState(null, '', '/'); });
 
 describe('run actions (#27)', () => {
-  it('without F ui: the Claude Code prompt to copy, no Run button', () => {
-    detail('acme/shop#44');
-    expect(screen.getByText('/software-factory acme/shop#44')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Run factory' })).toBeNull();
+  it('an active run: the Claude Code prompt to copy; no button without F ui', () => {
+    render(<RunDetail run={run('acme/shop#45')} cap={3} costCap={5} />);
+    expect(screen.getByText('/software-factory acme/shop#45')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Resume factory/ })).toBeNull();
   });
 
-  it('merged, split and awaiting-approval runs offer no start; approving stays human-only', () => {
-    for (const id of ['acme/shop#43', 'acme/shop#46', 'acme/shop#49']) {
-      const { unmount } = detail(id);
-      expect(screen.queryByText(`/software-factory ${id}`)).toBeNull();
+  it('escalated, rejected, merged, split and awaiting-approval runs offer neither: those are a human’s call', () => {
+    for (const id of ['acme/shop#44', 'acme/shop#41', 'acme/shop#43', 'acme/shop#46', 'acme/shop#49']) {
+      const { unmount } = render(<RunDetail run={run(id)} cap={3} costCap={5} />);
+      expect(screen.queryByText(`/software-factory ${id}`), id).toBeNull();
       unmount();
     }
   });
 
-  it('shows progress, then the session or the server’s refusal', async () => {
-    let done!: (s: string) => void;
-    const start = vi.fn(() => new Promise<string>((r) => { done = r; }));
-    detail('acme/shop#44', start);
-    await userEvent.click(screen.getByRole('button', { name: 'Run factory' }));
-    expect(start).toHaveBeenCalledWith('acme/shop#44');
-    expect(screen.getByRole('button', { name: 'Starting…' })).toBeDisabled();
-    done('0f3c9a1e-1111-2222-3333-444455556666');
-    expect(await screen.findByText('Started session 0f3c9a1e. It shows here as it runs.')).toBeTruthy();
-    start.mockRejectedValueOnce(new Error('acme/shop#44 already has a running session'));
-    await userEvent.click(screen.getByRole('button', { name: 'Run factory' }));
-    expect(await screen.findByText('acme/shop#44 already has a running session')).toHaveAttribute('data-bad');
-  });
-
-  it('under F ui: POST /api/sessions with the token, the repo and the issue number only', async () => {
+  const served = (reply: () => Promise<Response>, hash: string) => {
     wide();
-    history.replaceState(null, '', '/?t=tok#' + encodeURIComponent('acme/shop#41'));
+    history.replaceState(null, '', '/?t=tok#' + encodeURIComponent(hash));
     const calls: [string, RequestInit][] = [];
-    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => { calls.push([url, init]); return new Response(JSON.stringify({ session: 'abcdef12-0000' }), { status: 200 }); }));
-    render(<App load={async () => ({ ...data, token: 'tok' })} />);
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => { calls.push([url, init]); return reply(); }));
+    render(<App load={async () => ({ ...data, token: 'tok', resumable: ['acme/shop#45'] })} />);
+    return calls;
+  };
+
+  it('under F ui: Resume only for a run the server says it can resume; POST /api/sessions with the token, repo and issue only', async () => {
+    let done!: (r: Response) => void;
+    const calls = served(() => new Promise((r) => { done = r; }), 'acme/shop#45');
     const panel = await screen.findByRole('complementary');
-    await userEvent.click(within(panel).getByRole('button', { name: 'Run factory' }));
-    expect(await within(panel).findByText(/Started session abcdef12/)).toBeTruthy();
+    await userEvent.click(within(panel).getByRole('button', { name: 'Resume factory' }));
+    expect(within(panel).getByRole('button', { name: 'Resuming…' })).toBeDisabled();
     expect(calls[0]![0]).toBe('/api/sessions');
     expect(calls[0]![1].headers).toMatchObject({ 'x-factory-token': 'tok' });
-    expect(JSON.parse(calls[0]![1].body as string)).toEqual({ repo: 'acme/shop', issue: 41 });
+    expect(JSON.parse(calls[0]![1].body as string)).toEqual({ repo: 'acme/shop', issue: 45 });
+    done(new Response(JSON.stringify({}), { status: 200 })); // no session id: still a success
+    expect(await within(panel).findByText('Resumed. It shows here as it runs.')).toBeTruthy();
+  });
+
+  it('under F ui: an active run the server would refuse gets the prompt, not a button', async () => {
+    served(async () => new Response('{}'), 'acme/shop#48');
+    const panel = await screen.findByRole('complementary');
+    expect(within(panel).getByText('/software-factory acme/shop#48')).toBeTruthy();
+    expect(within(panel).queryByRole('button', { name: /Resume factory/ })).toBeNull();
+  });
+
+  it('shows the server’s refusal, and keeps a run’s result when you switch away and back', async () => {
+    served(async () => new Response(JSON.stringify({ error: 'run budget exceeded' }), { status: 400 }), 'acme/shop#45');
+    const panel = await screen.findByRole('complementary');
+    await userEvent.click(within(panel).getByRole('button', { name: 'Resume factory' }));
+    expect(await within(panel).findByText('run budget exceeded')).toHaveAttribute('data-bad');
+    await userEvent.click(document.querySelector<HTMLAnchorElement>(`.web-board a[href="#${CSS.escape(encodeURIComponent('acme/shop#48'))}"]`)!);
+    expect(within(await screen.findByRole('complementary')).queryByText('run budget exceeded')).toBeNull();
+    await userEvent.click(document.querySelector<HTMLAnchorElement>(`.web-board a[href="#${CSS.escape(encodeURIComponent('acme/shop#45'))}"]`)!);
+    expect(await within(await screen.findByRole('complementary')).findByText('run budget exceeded')).toBeTruthy();
   });
 });

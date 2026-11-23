@@ -35,7 +35,7 @@ curl -s -X POST -H "x-factory-token: $T" -H "Origin: http://127.0.0.1:$P" -H 'Co
 | Route | Returns | Errors | CLI |
 |---|---|---|---|
 | `GET /api/runs` | `{"runs": [run…]}`: the run list `dashboard.html` embeds (live and archived runs, newest first, with linked sessions and worktree path) | – | nearest: `F state <run>` per run |
-| `GET /api/state` | everything the dashboard embeds: `runs`, `metrics`, `projects`, `rules`, `ruleHistory`, `skills`, `harnesses`, `hooks`, `onboard`, `autoMerge`, `ideas`, `generated`, `cap`, `costCap`, `tokenCap` | – | nearest: `F state`, `F rules`, `F skills` |
+| `GET /api/state` | everything the dashboard embeds: `runs`, `metrics`, `projects`, `rules`, `ruleHistory`, `skills`, `harnesses`, `hooks`, `onboard`, `autoMerge`, `ideas`, `generated`, `cap`, `costCap`, `tokenCap`, and `resumable` (runs whose session here stopped or crashed, which `POST /api/sessions` would resume) | – | nearest: `F state`, `F rules`, `F skills` |
 | `GET /api/runs/:owner/:repo/:n` | `{"run": run}` for `owner/repo#n` | `400` malformed owner, repo or number; `404` no such run | nearest: `F state owner/repo#n` (without archived runs, sessions or worktree) |
 
 None of them returns the `F ui` token.
