@@ -86,7 +86,7 @@ export function normRun(r: Run): Run {
     .map((d) => ({ ...d, connector: String(d.connector), env: String(d.env), state: String(d.state || '?'), status: String(d.status || ''), at: d.at || (d as { ts?: string }).ts }));
   const sessions = arr<NonNullable<Run['sessions']>[number]>(r.sessions).filter((s) => s && s.id != null).map((s) => ({ ...s, id: String(s.id) }))
     .sort((a, b) => (Date.parse(b.last ?? '') || 0) - (Date.parse(a.last ?? '') || 0));
-  return { ...r, id: String(r.id), events: arr(r.events), loopbacks: arr(r.loopbacks), children: arr(r.children), issues: arr(r.issues), burn: burnOf(r.burn), deploys, sessions };
+  return { ...r, id: String(r.id), events: arr(r.events), loopbacks: arr(r.loopbacks), children: arr(r.children), issues: arr(r.issues), notes: arr<NonNullable<Run['notes']>[number]>(r.notes).filter((n) => n && typeof n.text === 'string'), burn: burnOf(r.burn), deploys, sessions };
 }
 export const normData = (d: FactoryData): FactoryData => ({ ...d, runs: d.runs.filter((r) => r && r.id != null).map(normRun) });
 

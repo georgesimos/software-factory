@@ -1,4 +1,4 @@
-import { act, render, screen, within } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -91,6 +91,12 @@ describe('factory', () => {
     render(<Timeline events={[{ stage: 'note' as never, status: 'pending', step: 'build', text: 'use the v2 API' }, { stage: 'note' as never, status: 'applied', steps: ['build', 'review.code'] },
       { stage: 'gate', status: 'passed', localChecks: { state: 'passed' } }]} />);
     expect(screen.getByText('for build: use the v2 API')).toBeInTheDocument();
+    cleanup();
+    render(<Timeline events={[{ stage: 'note' as never, status: 'pending', step: 'next' }]} />); // F ui and the artifact send note events without their text
+    expect(screen.getByText('for next')).toBeInTheDocument();
+    cleanup();
+    render(<Timeline events={[{ stage: 'note' as never, status: 'pending', step: 'build', text: 'use the v2 API' }, { stage: 'note' as never, status: 'applied', steps: ['build', 'review.code'] },
+      { stage: 'gate', status: 'passed', localChecks: { state: 'passed' } }]} />);
     expect(screen.getByText('handed to build, review.code')).toBeInTheDocument(); // was dashboard.html's timeline test
     expect(screen.getByText(/local checks passed/)).toBeInTheDocument();
   });

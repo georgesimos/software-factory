@@ -21,7 +21,7 @@ export function Timeline({ events, archived, now }: { events: RunEvent[]; archiv
                 {e.localChecks && typeof e.localChecks === 'object' ? ` · local checks ${(e.localChecks as { state?: string }).state ?? '?'}` : ''}
               </div>
               {e.summary || e.reason || e.spec ? <div className="sf-tl-txt">{e.summary || e.reason || e.spec}</div> : null}
-              {(e.stage as string) === 'note' ? <div className="sf-tl-txt">{e.status === 'pending' ? `for ${String(e.step ?? '?')}: ${String(e.text ?? '')}` : `handed to ${(Array.isArray(e.steps) ? e.steps : []).join(', ')}`}</div> : null}
+              {(e.stage as string) === 'note' ? <div className="sf-tl-txt">{e.status === 'pending' ? `for ${String(e.step ?? '?')}${e.text ? `: ${String(e.text)}` : ''}` : `handed to ${(Array.isArray(e.steps) ? e.steps : []).join(', ')}`}</div> : null}
               {e.reasons?.length ? <div className="sf-tl-txt">{e.reasons.join(' · ')}</div> : null}
               {e.questions?.length ? <ul>{e.questions.map((q) => <li key={q}>{q}</li>)}</ul> : null}
             </div>
