@@ -60,7 +60,7 @@ test('metrics: burn, cache hits, outcomes and timing from fixture events', () =>
   assert.deepEqual(tok(m.byHarness), { 'claude-code': 5_100_500, codex: 6000 });
   assert.deepEqual(Object.fromEntries(Object.entries(m.byModel).map(([k, c]) => [k, [c.tokens, c.costUsd, c.source]])),
     { 'claude-opus-5-5': [4_100_000, 6.6, 'measured'], 'claude-sonnet-5-5': [1_004_000, 2.0042, 'mixed'], 'claude-mystery-9': [2000, null, 'reported'] });
-  assert.deepEqual(m.outcomes, { merged: 2, escalated: 1, rejected: 0, closed: 0, split: 0, reverted: 1 });
+  assert.deepEqual(m.outcomes, { merged: 2, humanMerged: 0, escalated: 1, rejected: 0, closed: 0, split: 0, reverted: 1 });
   assert.equal(m.costPerMergedPrUsd, 4.56);
   assert.equal(m.loopsPerRun, 0.333); // one gate loop-back over three finished builds
   assert.equal(m.capHitShare, 0.333); // a#2, sent to approve at the loop cap; a#1 is over today's $5 budget but merged, so not a hit
@@ -69,7 +69,7 @@ test('metrics: burn, cache hits, outcomes and timing from fixture events', () =>
   // since: rows and outcomes by their own time; a#1's merge (11-21 09:00) counts, its 11-20 burn does not.
   const s = logMetrics(events, { measured, archive, since: '2026-11-21' });
   assert.deepEqual([s.total.tokens, s.total.source, Object.keys(s.byDay)], [6500, 'reported', ['2026-11-21']]);
-  assert.deepEqual(s.outcomes, { merged: 1, escalated: 1, rejected: 0, closed: 0, split: 0, reverted: 1 });
+  assert.deepEqual(s.outcomes, { merged: 1, humanMerged: 0, escalated: 1, rejected: 0, closed: 0, split: 0, reverted: 1 });
   assert.equal(s.measuredRuns, 0); // a#1's rows are all before the window
   const b = logMetrics(events, { measured, archive, project: 'acme/b' });
   assert.deepEqual([b.total.tokens, b.total.costUsd, b.cacheHitRatio, b.outcomes.merged, b.costPerMergedPrUsd, b.medianIntakeToMergeMs], [500, 0.01, null, 0, null, null]);
@@ -89,8 +89,18 @@ test('metrics: burn, cache hits, outcomes and timing from fixture events', () =>
     iteration: 1, loopbacks: [], events: [{ ts: '2026-11-02T00:00:00.000Z', status: 'merged' }], tokens: 300, costUsd: 0.3 };
   const esc = { id: 'acme/d#2', outcome: 'escalated', started: '2026-11-03T00:00:00.000Z', updated: '2026-11-03T01:00:00.000Z', iteration: 1, loopbacks: [],
     decision: { action: 'escalate', reasons: ['run budget exceeded ($6, 0 tokens, measured)'] }, events: [{ ts: '2026-11-03T01:00:00.000Z', status: 'escalated' }] };
-  const ar = logMetrics([], { archive: [old, esc] });
-  assert.deepEqual([ar.total.tokens, ar.total.costUsd, ar.total.source, ar.costPerMergedPrUsd, Object.keys(ar.byDay), ar.capHitShare], [300, 0.3, 'reported', 0.3, ['2026-11-02'], 0.5]);
+  // #96: a run the gate stopped at the loop cap, escalated, then merged and reverted by a human: a human merge (escalated, no
+  // revert, not in cost per merge or time to merge) and still a cap hit.
+  const human = { id: 'acme/d#3', outcome: 'merged', humanMerge: { by: 'octo', ts: '2026-11-04T05:00:00.000Z' }, reverted: { pr: 'y' }, started: '2026-11-04T00:00:00.000Z',
+    updated: '2026-11-04T06:00:00.000Z', iteration: 3, loopbacks: [], tokens: 100, costUsd: 0.1, events: [
+      { ts: '2026-11-04T03:00:00.000Z', stage: 'gate', status: 'failed', next: 'approve', reasons: ['code: 1 blocking finding(s)', 'loop cap 3 reached'] },
+      { ts: '2026-11-04T04:00:00.000Z', stage: 'approve', status: 'escalated' }, { ts: '2026-11-04T05:00:00.000Z', stage: 'approve', status: 'merged', by: 'human' }] };
+  const ar = logMetrics([], { archive: [old, esc, human] });
+  assert.deepEqual([ar.total.tokens, ar.total.costUsd, ar.total.source, ar.costPerMergedPrUsd, Object.keys(ar.byDay), ar.capHitShare], [400, 0.4, 'reported', 0.4, ['2026-11-02', '2026-11-04'], 0.667]);
+  assert.deepEqual(ar.outcomes, { merged: 1, humanMerged: 1, escalated: 2, rejected: 0, closed: 0, split: 0, reverted: 1 });
+  assert.equal(ar.medianIntakeToMergeMs, 86_400_000); // old's alone
+  // A cap named only in the reasons (the gate event's next lost to the archive's last-five cut) still counts.
+  assert.equal(logMetrics([], { archive: [{ ...esc, decision: undefined, events: [{ ts: '2026-11-03T00:30:00.000Z', stage: 'gate', status: 'failed', reasons: ['loop cap 3 reached'] }, ...esc.events] }] }).capHitShare, 1);
   assert.deepEqual([logMetrics([], { archive: [old], since: '2026-11-21' }).total.tokens, logMetrics([], { archive: [old], since: '2026-11-21' }).outcomes.merged], [0, 0]);
   assert.equal(logMetrics([]).total.costUsd, 0);
 });

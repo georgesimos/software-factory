@@ -77,20 +77,23 @@ export function logMetrics(events, { project, since, measured = {}, archive = []
   // Outcomes count the runs that ended in the window, at the event that ended them.
   const ended = [...Object.values(runs), ...archived].filter((r) => inScope(r.id) && TERMINAL.includes(r.outcome) && after(endedAt(r)));
   const count = (o) => ended.filter((r) => r.outcome === o).length;
-  const merged = ended.filter((r) => r.outcome === 'merged');
+  // As gate's metrics() (#96): merged means the factory's own merges; one a human made after an escalation counts as escalated.
+  const merged = ended.filter((r) => r.outcome === 'merged' && !r.humanMerge), humanMerged = ended.filter((r) => r.outcome === 'merged' && r.humanMerge).length;
   const built = ended.filter((r) => !r.imported && ['merged', 'escalated'].includes(r.outcome));
   const avg = (xs) => (xs.length ? +(xs.reduce((s, n) => s + n, 0) / xs.length).toFixed(3) : null);
   const toMerge = merged.filter((r) => !r.imported).map((r) => Date.parse(endedAt(r)) - Date.parse(r.started)).sort((a, b) => a - b);
   const mid = toMerge.length >> 1;
-  // A cap hit, as recorded at the time (never recomputed from today's burn): an unmerged run the gate sent to approve for the
-  // loop cap or budget, or whose approve decision named either.
-  const capped = (r) => r.outcome !== 'merged' && ((r.events || []).some((e) => e.stage === 'gate' && e.status === 'failed' && e.next === 'approve')
-    || (r.decision?.reasons || []).some((x) => /exceeds cap|run budget exceeded/.test(x)));
+  // A cap hit, as recorded at the time (never recomputed from today's burn): a run the factory did not merge (a human may have,
+  // later) that the gate sent to approve for the loop cap or budget, or whose gate or approve reasons name either.
+  const CAP_WHY = /loop cap \d+ reached|exceeds cap|budget reached|run budget exceeded/; // gate() and decide() wording
+  const capped = (r) => !merged.includes(r) && ((r.events || []).some((e) => e.stage === 'gate' && e.status === 'failed' && (e.next === 'approve' || (e.reasons || []).some((x) => CAP_WHY.test(x))))
+    || (r.decision?.reasons || []).some((x) => CAP_WHY.test(x)));
   return {
     project: project || null, since: since || null, total, cacheHitRatio: hitRatio(total),
     byDay: Object.fromEntries(Object.entries(by.day).sort(([a], [b]) => a.localeCompare(b))),
     byProject: by.project, byStage: by.stage, byAxis: by.axis, byModel: by.model, byHarness: by.harness,
-    outcomes: { merged: merged.length, escalated: count('escalated'), rejected: count('rejected'), closed: count('closed'), split: count('split'), reverted: merged.filter((r) => r.reverted).length },
+    outcomes: { merged: merged.length, humanMerged, escalated: count('escalated') + humanMerged, rejected: count('rejected'), closed: count('closed'), split: count('split'),
+      reverted: merged.filter((r) => r.reverted).length }, // reverts of the factory's own merges
     // shortcut: cost per merged PR divides all spend in the window (escalated runs included) by the merges in it, as gate's metrics() does
     costPerMergedPrUsd: merged.length && total.costUsd != null ? +(total.costUsd / merged.length).toFixed(2) : null,
     loopsPerRun: avg(built.map((r) => (r.loopbacks || []).length)), // gate loop-backs to spec or build, per finished build
