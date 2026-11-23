@@ -9,6 +9,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
 import { findChrome } from '../../../scripts/chrome.mjs';
 
@@ -22,6 +23,7 @@ fs.mkdirSync(SHOTS, { recursive: true });
 const env = { ...process.env, FACTORY_DIR: DIR, FACTORY_TEST: '1', HOME, USERPROFILE: HOME, PATH: [path.join(HERE, 'test', 'bin'), path.dirname(process.execPath), ...(process.platform === 'win32' ? [] : ['/usr/bin', '/bin'])].join(path.delimiter),
   FACTORY_GH: path.join(HERE, 'test', 'gh-stub.mjs'), FACTORY_GIT: path.join(HERE, 'test', 'git-stub.mjs') };
 delete env.CLAUDE_CODE_SESSION_ID;
+const F = (args, input) => execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), ...args], { env, input, stdio: ['pipe', 'pipe', 'inherit'] });
 const json = (f) => JSON.parse(fs.readFileSync(path.join(DIR, f), 'utf8')), skills = () => json('skills.json');
 
 const server = spawn(process.execPath, [path.join(HERE, 'factory.mjs'), 'ui', '0'], { env, stdio: ['ignore', 'pipe', 'inherit'] });
@@ -192,8 +194,8 @@ try {
   // Read-only: the page data injected the way a host does, no token. Every step offers the command and nothing is written.
   {
     const { ctx, page } = await open(1280, 'light');
-    execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), 'render'], { env }); // the file every record() rewrites
-    await page.goto('file://' + path.join(DIR, 'dashboard.html').replace(/\\/g, '/'));
+    F(['render']); // the file every record() rewrites
+    await page.goto(pathToFileURL(path.join(DIR, 'dashboard.html')).href);
     await page.getByRole('tab', { name: /app/ }).waitFor(); // the run data is inlined; nothing loads from anywhere
     await page.getByRole('button', { name: 'Set up' }).click();
     const wiz = page.getByRole('dialog', { name: 'Set up the factory' });
@@ -204,6 +206,19 @@ try {
     assert.match(await wiz.locator('.web-ob-cmd code').first().innerText(), /onboard ship 'acme\/app' web,mobile,database$/);
     assert.equal(fs.readFileSync(path.join(DIR, 'onboard.json'), 'utf8').includes('mobile'), false); // the read-only page never writes
     await shot(page, '1280-light-static-3');
+    await wiz.getByRole('button', { name: /^Close/ }).click();
+    F(['event', 'acme/app#77', 'spec', 'started', '-'], '{"title":"Arrived after the page loaded"}'); // record() re-renders the file
+    await page.getByText('Arrived after the page loaded').first().waitFor({ timeout: 15_000 }); // the file re-reads itself every 10 s
+    await ctx.close();
+  }
+  // The claude.ai Artifact: the same app, scrubbed; the host adds the skeleton.
+  {
+    const { ctx, page } = await open(1280, 'light'), out = path.join(root, 'artifact.html'), wrapped = path.join(root, 'artifact-page.html');
+    F(['render', '--artifact', out]);
+    fs.writeFileSync(wrapped, `<!doctype html><html><head><meta charset="utf-8"></head><body>${fs.readFileSync(out, 'utf8')}</body></html>`);
+    await page.goto(pathToFileURL(wrapped).href);
+    await page.getByText('Arrived after the page loaded').first().waitFor();
+    assert.ok(!(await page.content()).includes(HOME), 'no local path in the published page');
     await ctx.close();
   }
   // Without the token F ui serves nothing, and the API refuses.
