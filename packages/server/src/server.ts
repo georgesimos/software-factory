@@ -16,7 +16,8 @@ import { projects, wtInfo } from '../../core/src/workspace.ts';
 import { dashboard, read, readArchive, sessionsFile, stateDir } from '../../core/src/log.ts';
 import { applyPreset, readSkills, setSkill, skillsData } from '../../core/src/skills.ts';
 import { sync } from '../../core/src/sync.ts';
-import { withMeasured } from '../../core/src/burn.ts';
+import { measure, withMeasured } from '../../core/src/burn.ts';
+import { logMetrics } from '../../core/src/metrics.ts';
 import { open } from '../../core/src/platform.ts';
 import { getSession, listSessions, startSession, subscribe } from '../../adapters/sessions.mjs';
 
@@ -42,6 +43,10 @@ export function uiHandle({ method, url, headers = {}, body = '' }, { token, port
     if (route === '/runs') return reply(200, { runs: runsData() });
     if (route === '/state') return reply(200, pageData({ resumable: resumable() })); // what page() embeds, for apps/web; never the token
     if (route === '/sessions') return reply(200, { sessions: listSessions() });
+    if (route === '/metrics') { // #82: burn, outcomes and timing derived from the log; ?project=owner/repo&since=<ISO date>
+      const events = read(), q = (k) => u.searchParams.get(k) || undefined;
+      try { return reply(200, logMetrics(events, { project: q('project'), since: q('since'), measured: measure(events), archive: readArchive() })); } catch (e) { if (!(e instanceof RangeError)) throw e; return reply(400, { error: e.message }); } // RangeError: a bad since
+    }
     const ev = route.match(/^\/sessions\/([0-9a-f-]{36})\/events$/);
     if (ev) { // server-sent events; ui() writes the stream. EventSource can't send x-factory-token, so clients read it with fetch.
       const s = getSession(ev[1]);
