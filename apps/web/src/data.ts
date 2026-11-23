@@ -39,7 +39,11 @@ export interface FactoryData {
   hooks?: { create?: boolean; ship?: boolean; connectors?: unknown };
   ideas?: Record<string, Omit<Idea, 'repo'>>;
   skills?: SkillsData;
-  onboard?: Record<string, unknown>;
+  onboard?: Record<string, { ship?: string[] }>;
+  /** How to run F here: a plugin install's real path. The Artifact drops it (a path), so use F_CMD then. */
+  fCmd?: string;
+  /** Per attached project: false when auto-merge is off. */
+  autoMerge?: Record<string, boolean>;
   /** The F ui token. Only set when the page was opened from `F ui`; writes need it. */
   token?: string;
 }

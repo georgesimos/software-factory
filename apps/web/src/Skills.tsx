@@ -6,9 +6,9 @@ import {
 } from './skillsModel.ts';
 
 // Who runs each step. Under `F ui` (a token) changes save through /api; otherwise each change copies the CLI command.
-const copy = async (t: string) => { try { await navigator.clipboard.writeText(t); return true; } catch { return false; } };
-type Pick = { title: string; step: string; current: StepRunner | null; axis?: StepRunner; done: (p: { runner: StepRunner; axis?: string; when?: string[] }) => void };
-interface Props { open: boolean; onClose: () => void; skills: SkillsData; harnesses?: Harness[]; token?: string; scope?: string; onSaved: (s: SkillsData) => void }
+export const copy = async (t: string) => { try { await navigator.clipboard.writeText(t); return true; } catch { return false; } };
+export type Pick = { title: string; step: string; current: StepRunner | null; axis?: StepRunner; done: (p: { runner: StepRunner; axis?: string; when?: string[] }) => void };
+interface Props { open: boolean; onClose: () => void; skills: SkillsData; harnesses?: Harness[]; token?: string; scope?: string; fCmd?: string; onSaved: (s: SkillsData) => void }
 
 export function SkillsSheet({ open, onClose, harnesses = [], ...p }: Props) {
   const tools = harnesses.map((h) => h.label).filter(Boolean).join(', ') || 'none registered';
@@ -20,7 +20,7 @@ export function SkillsSheet({ open, onClose, harnesses = [], ...p }: Props) {
   );
 }
 
-function SkillsBody({ skills: S, token, scope: first = 'default', onSaved }: Omit<Props, 'open' | 'onClose' | 'harnesses'>) {
+function SkillsBody({ skills: S, token, scope: first = 'default', fCmd, onSaved }: Omit<Props, 'open' | 'onClose' | 'harnesses'>) {
   const scopes = S.scopes ?? [];
   const [picked, setScope] = useState(first);
   const scope = picked === 'default' || scopes.includes(picked) ? picked : 'default';
@@ -42,8 +42,8 @@ function SkillsBody({ skills: S, token, scope: first = 'default', onSaved }: Omi
       setStatus({ text: said(x) });
     } catch (e) { setStatus({ text: (e as Error).message, bad: true }); }
   };
-  const save = (step: string, runner: StepRunner | StepRunner[] | null) => apply('/skills', { scope, step, runner }, skillCommand(scope, step, runner));
-  const preset = (name: string) => apply('/skills/preset', { name, scope }, presetCommand(name, scope), (x) =>
+  const save = (step: string, runner: StepRunner | StepRunner[] | null) => apply('/skills', { scope, step, runner }, skillCommand(scope, step, runner, fCmd));
+  const preset = (name: string) => apply('/skills/preset', { name, scope }, presetCommand(name, scope, fCmd), (x) =>
     [`Applied ${name} to ${x.applied?.length ?? 0} steps.`, x.skipped?.length ? `${x.skipped.length} not run by Claude kept their runner.` : '',
       x.inherited?.length ? `${x.inherited.length} this project doesn’t set follow global.` : ''].filter(Boolean).join(' '));
 
@@ -146,7 +146,7 @@ function ModelCell({ S, scope, step, r, label, save }: { S: SkillsData; scope: s
 }
 
 // Every catalog entry is offered for every step. Radios are keyed by source and runner, so a poll's new data keeps the choice.
-function Picker({ S, scope, pick, live, close }: { S: SkillsData; scope: string; pick: Pick; live: boolean; close: () => void }) {
+export function Picker({ S, scope, pick, live, close }: { S: SkillsData; scope: string; pick: Pick; live: boolean; close: () => void }) {
   const entries = entriesFor(S, scope), cur = pick.current, keyOf = (e: CatalogEntry) => e.source + '|' + runnerKey(e.runner);
   const known = cur ? entries.find((e) => runnerKey(e.runner) === runnerKey(cur)) : undefined;
   const [q, setQ] = useState(''), [filter, setFilter] = useState('all'), [msg, setMsg] = useState('');

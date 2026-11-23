@@ -5,6 +5,7 @@ import { loadData, projectsOf, CAP, COST_CAP, type FactoryData } from './data.ts
 import { Panel } from './Panel.tsx';
 import { RuleChips } from './Rules.tsx';
 import { RunDetail } from './RunDetail.tsx';
+import { SetupWizard } from './Setup.tsx';
 import { SkillsSheet } from './Skills.tsx';
 import { store } from './store.ts';
 
@@ -45,7 +46,8 @@ export function App({ load = loadData }: { load?: () => Promise<FactoryData> }) 
   }, [load, settle]);
   const { data, error } = state;
   const patch = useCallback((p: Partial<FactoryData>) => (writes.current.push(Object.keys(p)), setState((s) => (s.data ? { data: { ...s.data, ...p } } : s))), []); // a write's reply, until the next poll
-  return data ? <Shell data={data} patch={patch} /> : (
+  const refresh = useCallback(() => { const w = writes.current.length; load().then((d) => settle(w, d), () => {}); }, [load, settle]); // after a setup write
+  return data ? <Shell data={data} patch={patch} refresh={refresh} /> : (
     <>
       <header className="web-top"><span className="web-brand"><span className="sf-mark" aria-hidden="true" />Software Factory</span><ThemeToggle /></header>
       <main className="web-main" aria-busy={!error}>
@@ -55,7 +57,9 @@ export function App({ load = loadData }: { load?: () => Promise<FactoryData> }) 
   );
 }
 
-function Shell({ data, patch }: { data: FactoryData; patch: (p: Partial<FactoryData>) => void }) {
+const session = (k: string, v?: string) => { try { if (v === undefined) return sessionStorage.getItem(k); sessionStorage.setItem(k, v); } catch { /* blocked storage */ } return null; };
+
+function Shell({ data, patch, refresh }: { data: FactoryData; patch: (p: Partial<FactoryData>) => void; refresh: () => void }) {
   const projects = projectsOf(data);
   const [project, setProjectState] = useState(() => { const p = store('sf.project') ?? ''; return projects.includes(p) ? p : ''; });
   const setProject = (p: string) => { setProjectState(p); store('sf.project', p); if (readHash()) history.replaceState(null, '', location.pathname + location.search); setHash(''); };
@@ -66,7 +70,9 @@ function Shell({ data, patch }: { data: FactoryData; patch: (p: Partial<FactoryD
   });
   const setCollapsed = (c: boolean) => { store('sf.panelCollapsed', c ? '1' : '0'); setCollapsedState(c); };
   const wide = useMedia(WIDE);
-  const [skillsOpen, setSkillsOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState<string | false>(false); // the scope it opens on
+  // Nothing yet (no project, run or idea): set up first, unless it was closed in this tab. Data without a projects list never opens it.
+  const [setupOpen, setSetupOpen] = useState(() => Array.isArray(data.projects) && !projects.length && session('sf.onboardClosed') !== '1');
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 60_000); return () => clearInterval(t); }, []); // "Updated 3m ago" stays true
   const byId = new Map(data.runs.map((r) => [r.id, r]));
@@ -100,7 +106,8 @@ function Shell({ data, patch }: { data: FactoryData; patch: (p: Partial<FactoryD
         <span className="web-brand"><span className="sf-mark" aria-hidden="true" /><span className="web-brand-t">Software Factory</span></span>
         <RuleChips data={data} project={project} />
         {data.generated ? <span className="web-updated"><Dot tone={fresh ? 'ok' : 'idle'} /><time dateTime={data.generated} title={formatClock(data.generated)}><span className="web-upd-word">Updated </span>{formatAgo(data.generated)}</time></span> : null}
-        {data.skills ? <Button size="sm" variant="ghost" aria-haspopup="dialog" title="Who runs each step" onClick={() => setSkillsOpen(true)}>Skills</Button> : null}
+        {data.skills ? <Button size="sm" variant="ghost" aria-haspopup="dialog" title="Who runs each step" onClick={() => setSkillsOpen(project || 'default')}>Skills</Button> : null}
+        <Button size="sm" variant="ghost" aria-haspopup="dialog" title="Set up the factory" onClick={() => setSetupOpen(true)}>Set up</Button>
         <ThemeToggle />
         {wide && (sel || runs.length) ? (
           <IconButton label={`${shown ? 'Hide' : 'Show'} run panel (])`} aria-expanded={shown} aria-controls="detail" onClick={() => setCollapsed(shown)}>
@@ -127,7 +134,9 @@ function Shell({ data, patch }: { data: FactoryData; patch: (p: Partial<FactoryD
           </Panel>
         ) : null}
       </div>
-      {data.skills ? <SkillsSheet open={skillsOpen} onClose={() => setSkillsOpen(false)} skills={data.skills} harnesses={data.harnesses} token={data.token} scope={project} onSaved={(skills) => patch({ skills })} /> : null}
+      <SetupWizard open={setupOpen} onClose={() => { session('sf.onboardClosed', '1'); setSetupOpen(false); }} data={data} token={data.token}
+        onSkills={(skills) => patch({ skills })} refresh={refresh} openSkills={(s) => setSkillsOpen(s)} />
+      {data.skills ? <SkillsSheet open={!!skillsOpen} onClose={() => setSkillsOpen(false)} skills={data.skills} harnesses={data.harnesses} token={data.token} scope={skillsOpen || project} fCmd={data.fCmd} onSaved={(skills) => patch({ skills })} /> : null}
       {wide ? null : <Sheet open={!!sel} onClose={close} title={sel?.id ?? 'Run'}>{sel ? detail(sel) : null}</Sheet>}
     </>
   );

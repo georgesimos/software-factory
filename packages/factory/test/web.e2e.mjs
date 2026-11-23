@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Drives apps/web as `F ui` serves it (/app/), against a temp FACTORY_DIR with a fake HOME and stubbed gh, git, claude and
-// codex (the same environment as onboard.e2e.cjs), so it never touches real repos, GitHub or ~/.claude/factory.
+// Drives apps/web as `F ui` serves it (/app/): the setup wizard end to end, then the Skills sheet, at 1280 and 375 px in light
+// and dark, and read-only without a token. A temp FACTORY_DIR, a fake HOME and stubbed gh, git, claude and codex (the
+// environment onboard.e2e.cjs used for dashboard.html) keep it off real repos, GitHub and ~/.claude/factory.
 // Asserts what each write leaves on disk. Needs the build: pnpm --filter @software-factory/web build. Set CHROME to pick a browser.
 // Run: pnpm --filter @software-factory/factory e2e:web [screenshot dir]
 import assert from 'node:assert/strict';
@@ -16,13 +17,14 @@ const WEB_DIST = path.join(HERE, '..', '..', 'apps', 'web', 'dist'); // not impo
 if (!fs.existsSync(path.join(WEB_DIST, 'index.html'))) { console.error('apps/web is not built: run pnpm --filter @software-factory/web build'); process.exit(1); }
 const SHOTS = path.resolve(process.argv[2] || fs.mkdtempSync(path.join(os.tmpdir(), 'factory-web-shots-')));
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-web-e2e-'));
-const DIR = path.join(root, 'factory'), HOME = path.join(root, 'home');
-fs.mkdirSync(HOME, { recursive: true });
+const DIR = path.join(root, 'factory'), HOME = path.join(root, 'home'), clone = path.join(HOME, 'Development', 'app');
+fs.mkdirSync(path.join(clone, '.git'), { recursive: true });
+fs.writeFileSync(path.join(clone, '.git', 'config'), '[remote "origin"]\n\turl = git@github.com:acme/app.git\n');
 fs.mkdirSync(SHOTS, { recursive: true });
 const env = { ...process.env, FACTORY_DIR: DIR, FACTORY_TEST: '1', HOME, USERPROFILE: HOME, PATH: [path.join(HERE, 'test', 'bin'), path.dirname(process.execPath), ...(process.platform === 'win32' ? [] : ['/usr/bin', '/bin'])].join(path.delimiter),
   FACTORY_GH: path.join(HERE, 'test', 'gh-stub.mjs'), FACTORY_GIT: path.join(HERE, 'test', 'git-stub.mjs') };
 delete env.CLAUDE_CODE_SESSION_ID;
-const skills = () => JSON.parse(fs.readFileSync(path.join(DIR, 'skills.json'), 'utf8'));
+const json = (f) => JSON.parse(fs.readFileSync(path.join(DIR, f), 'utf8')), skills = () => json('skills.json');
 
 const server = spawn(process.execPath, [path.join(HERE, 'factory.mjs'), 'ui', '0'], { env, stdio: ['ignore', 'pipe', 'inherit'] });
 const errors = [], shots = [];
@@ -47,11 +49,83 @@ try {
     server.on('exit', (code) => { clearTimeout(t); reject(new Error('F ui exited ' + code)); });
   });
   browser = await chromium.launch({ executablePath: findChrome() });
+  // 1280 light: no project yet, so the wizard opens by itself; each step writes through /api/onboard/*.
+  {
+    const { ctx, page } = await open(1280, 'light');
+    await page.goto(url);
+    const wiz = page.getByRole('dialog', { name: 'Set up the factory' }), status = wiz.locator('.web-ob-foot [role=status]');
+    const next = () => wiz.getByRole('button', { name: 'Next' }).click();
+    const at = (name) => wiz.locator('.web-ob-rail button[aria-current="step"]', { hasText: name }).waitFor();
+    await wiz.locator('[data-harness="codex"]').waitFor();
+    assert.equal(await wiz.locator('[data-harness]').count(), 2);
+    assert.match(await wiz.locator('[data-harness="claude-code"]').innerText(), /2\.1\.304[^]*Installed[^]*Signed in/);
+    await shot(page, '1280-light-1-ai');
+    await next();
+    await wiz.getByRole('checkbox', { name: /acme\/app/ }).check();
+    await wiz.getByRole('button', { name: 'Attach 1 project' }).click();
+    await status.filter({ hasText: 'Attached acme/app' }).waitFor();
+    await wiz.locator('.sf-ingest-row[data-status="done"]').waitFor();
+    await wiz.getByRole('button', { name: 'Record idea' }).click();
+    await status.filter({ hasText: 'repo must look like owner/name' }).waitFor(); // validated by startIdea
+    await wiz.getByRole('textbox', { name: 'New repo (owner/name)' }).fill('acme/budget');
+    await wiz.getByRole('textbox', { name: 'Idea, one line' }).fill('a personal budget app');
+    await wiz.getByRole('button', { name: 'Record idea' }).click();
+    await status.filter({ hasText: 'Idea recorded for acme/budget:project' }).waitFor();
+    assert.equal(await wiz.locator('.web-ob-cmd code').last().innerText(), '/software-factory new acme/budget');
+    assert.match(fs.readFileSync(path.join(DIR, 'events.jsonl'), 'utf8'), /"stage":"idea","status":"started"/);
+    await shot(page, '1280-light-2-repo');
+    await next();
+    assert.equal(await wiz.getByRole('button', { name: 'acme/app' }).getAttribute('aria-pressed'), 'true');
+    await wiz.getByRole('checkbox', { name: /^Web/ }).check();
+    await status.filter({ hasText: 'Saved: web for acme/app' }).waitFor(); // each toggle saves
+    await wiz.getByRole('checkbox', { name: /^Database/ }).check();
+    await status.filter({ hasText: 'Saved: web, database for acme/app' }).waitFor();
+    assert.match(await wiz.locator('[data-ship="web"]').innerText(), /github-deployments/); // from packages/ship's registry
+    assert.match(await wiz.locator('[data-ship="mobile"]').innerText(), /no connector yet/);
+    await shot(page, '1280-light-3-ship');
+    await next();
+    await wiz.getByRole('button', { name: 'Change runner for Build' }).click();
+    const pick = page.getByRole('dialog', { name: 'Runner for Build' });
+    await pick.locator('label', { hasText: 'codex exec' }).click();
+    await pick.getByRole('button', { name: 'Save' }).click();
+    await status.filter({ hasText: 'Saved Build.' }).waitFor();
+    assert.match(await wiz.locator('[data-step="build"]').innerText(), /codex exec/);
+    await shot(page, '1280-light-4-flow');
+    await next();
+    await wiz.getByRole('combobox', { name: 'CI' }).selectOption('skip');
+    await wiz.getByRole('textbox', { name: /^Local check/ }).fill('pnpm test\npnpm lint');
+    await wiz.getByRole('checkbox', { name: /auto-merge/ }).uncheck();
+    await wiz.getByRole('button', { name: /Review and start/ }).click();
+    await status.filter({ hasText: 'Unsaved rule changes' }).waitFor(); // leaving by the rail doesn't drop typed rules silently
+    await at('Rules');
+    await wiz.getByRole('button', { name: 'Save rules' }).click();
+    await status.filter({ hasText: 'A reason is required' }).waitFor();
+    assert.ok(!fs.readFileSync(path.join(DIR, 'skills.json'), 'utf8').includes('"rules"'), 'nothing saved without a reason');
+    await wiz.getByRole('textbox', { name: /^Reason/ }).fill('GitHub Actions billing is failing');
+    await wiz.getByRole('button', { name: 'Save rules' }).click();
+    await status.filter({ hasText: 'Rules saved for acme/app' }).waitFor();
+    await wiz.getByText(/ci = "skip"/).waitFor();
+    assert.match(await wiz.innerText(), /ci = "skip"[^]*stub-user: GitHub Actions billing is failing/);
+    await shot(page, '1280-light-5-rules');
+    await next();
+    assert.match(await wiz.locator('[data-out="skills"]').innerText(), /"harness": "codex"/);
+    assert.match(await wiz.locator('[data-out="rules"]').innerText(), /"value": "skip"/);
+    assert.match(await wiz.innerText(), /\/software-factory acme\/app#<issue>/);
+    await shot(page, '1280-light-6-start');
+    await wiz.getByRole('button', { name: 'Finish' }).click();
+    await wiz.waitFor({ state: 'hidden' });
+    await ctx.close();
+  }
+  assert.equal(json('projects.json')['acme/app'].autoMerge, false);
+  assert.deepEqual(json('onboard.json')['acme/app'].ship, ['web', 'database']);
+  assert.deepEqual(skills()['acme/app'].build, { use: 'provider', harness: 'codex' });
+  assert.deepEqual(skills()['acme/app'].rules['checks.commands'].value, ['pnpm test', 'pnpm lint']);
+
   // 1280 light: every Skills write goes through /api and lands in skills.json.
   {
     const { ctx, page } = await open(1280, 'light');
     await page.goto(url);
-    await page.getByText('No runs yet').waitFor();
+    assert.equal(await page.getByRole('dialog', { name: 'Set up the factory' }).count(), 0, 'no auto-open once a project is attached');
     await page.getByRole('button', { name: 'Skills' }).click();
     const sheet = page.getByRole('dialog', { name: 'Skills' }), status = sheet.locator('p.web-sk-status').first(); // the sheet's; the picker has its own
     await sheet.getByText('Live: changes save').waitFor();
@@ -83,17 +157,56 @@ try {
     await sheet.waitFor({ state: 'hidden' });
     await ctx.close();
   }
-  // The other sizes and themes: the same page reads what was saved, and nothing scrolls sideways.
+  // The other sizes and themes: the saved values read back; the wizard walks by keyboard; nothing scrolls sideways.
   for (const [width, scheme] of [[1280, 'dark'], [375, 'light'], [375, 'dark']]) {
     const { ctx, page } = await open(width, scheme);
     await page.goto(url);
-    await page.getByText('No runs yet').waitFor();
+    await page.getByRole('button', { name: 'Skills' }).waitFor();
     await noOverflow(page, `${width}px board`);
     await page.getByRole('button', { name: 'Skills' }).click();
     const sheet = page.getByRole('dialog', { name: 'Skills' });
     assert.equal(await sheet.getByRole('combobox', { name: 'Model for Spec' }).inputValue(), 'opus');
     await noOverflow(page, `${width}px skills`);
     await shot(page, `${width}-${scheme}-skills`);
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Set up' }).click();
+    const wiz = page.getByRole('dialog', { name: 'Set up the factory' });
+    await wiz.locator('[data-harness="codex"]').waitFor();
+    for (let i = 0; i < 6; i++) {
+      if (i) await page.keyboard.press('Alt+ArrowRight');
+      await wiz.locator(`.web-ob-rail li:nth-child(${i + 1}) button[aria-current="step"]`).waitFor();
+      assert.doesNotMatch(await wiz.innerText(), /\b(null|undefined|NaN)\b/, `${width}px step ${i + 1}: no stray null`);
+      await noOverflow(page, `${width}px setup step ${i + 1}`);
+      await shot(page, `${width}-${scheme}-setup-${i + 1}`);
+    }
+    await page.keyboard.press('Alt+ArrowLeft');
+    await wiz.locator('.web-ob-rail li:nth-child(5) button[aria-current="step"]').waitFor();
+    await wiz.getByRole('textbox', { name: /^Reason/ }).fill('typing');
+    await page.keyboard.press('Alt+ArrowLeft'); // word navigation inside a field, not a step change
+    assert.equal(await wiz.getByRole('textbox', { name: /^Reason/ }).inputValue(), 'typing');
+    await page.reload(); // resumes where it was left
+    await page.getByRole('button', { name: 'Set up' }).click();
+    await wiz.locator('.web-ob-rail li:nth-child(5) button[aria-current="step"]').waitFor();
+    await page.keyboard.press('Escape');
+    await wiz.waitFor({ state: 'hidden' });
+    await ctx.close();
+  }
+  // Read-only: the page data injected the way a host does, no token. Every step offers the command and nothing is written.
+  {
+    const { ctx, page } = await open(1280, 'light');
+    const [, port, tok] = /:(\d+)\/app\/\?t=([\w-]+)/.exec(url);
+    const state = await (await fetch(`http://127.0.0.1:${port}/api/state`, { headers: { 'x-factory-token': tok } })).json();
+    await ctx.addInitScript((d) => { window.__FACTORY_DATA__ = d; }, state);
+    await page.goto(url.replace(/\?t=.*/, ''));
+    await page.getByRole('button', { name: 'Set up' }).click();
+    const wiz = page.getByRole('dialog', { name: 'Set up the factory' });
+    assert.match(await wiz.innerText(), /Read-only page[^]*npm install -g @openai\/codex[^]*onboard/);
+    await shot(page, '1280-light-static-1');
+    await wiz.getByRole('button', { name: /What you ship/ }).click();
+    await wiz.getByRole('checkbox', { name: /^Mobile/ }).check();
+    assert.match(await wiz.locator('.web-ob-cmd code').first().innerText(), /onboard ship 'acme\/app' web,mobile,database$/);
+    assert.equal(fs.readFileSync(path.join(DIR, 'onboard.json'), 'utf8').includes('mobile'), false); // the read-only page never writes
+    await shot(page, '1280-light-static-3');
     await ctx.close();
   }
   // Without the token the page can't read /api/state, and says so instead of showing anyone's data.

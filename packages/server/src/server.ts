@@ -37,7 +37,10 @@ function webApp(pathname, search, web) {
   try { f = (pathname.slice('/app/'.length) || 'index.html').split('/').map((x) => { const d = decodeURIComponent(x); if (/[/\\]/.test(d)) throw 0; return d; }).join('/'); } catch { /* malformed, or an encoded separator */ }
   const type = f && TYPES[path.extname(f)];
   const found = () => filesOf(web, false).includes(f) || filesOf(web, true).includes(f);
-  if (type && found()) return { status: 200, type, body: fs.readFileSync(path.join(web, ...f.split('/'))), ...(f.startsWith('assets/') && { cache: 'public, max-age=31536000, immutable' }) }; // hashed names
+  if (type && found()) {
+    try { return { status: 200, type, body: fs.readFileSync(path.join(web, ...f.split('/'))), ...(f.startsWith('assets/') && { cache: 'public, max-age=31536000, immutable' }) }; } // hashed names
+    catch (e) { if (e.code !== 'ENOENT') throw e; listed.delete(web); } // deleted since it was listed: a 404, never a 500 naming the path
+  }
   const files = filesOf(web, false);
   return { status: 404, type: 'application/json', body: JSON.stringify({ error: files.length ? 'not found' : 'apps/web is not built: run pnpm --filter @software-factory/web build' }) };
 }
@@ -225,7 +228,8 @@ export function pageData(extra = {}) {
   let idea = {};
   try { idea = { ideas: ideas(events, Object.fromEntries(runs.map((r) => [r.id, r]))) }; } catch (e) { idea = { ideasError: e.message }; } // never fail the event that triggered the render
   return { generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)),
-    harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), fCmd: F_CMD, ...idea, ...extra };
+    harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), fCmd: F_CMD,
+    autoMerge: Object.fromEntries(Object.entries(projects()).map(([r, p]) => [r, p?.autoMerge !== false])), ...idea, ...extra };
 }
 export function page(extra = {}) {
   const data = JSON.stringify(pageData(extra)).replace(/</g, '\\u003c');
