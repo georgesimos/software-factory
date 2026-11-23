@@ -1,0 +1,32 @@
+/* Metrics sheet (#82). One hue, as the run's burn bar: accent mixed into the surface, so no new colour tokens. */
+.sf-dialog.web-mx-sheet[data-variant="sheet"] { width: min(980px, 100vw); }
+.web-mx { display: grid; gap: var(--sf-space-5); min-width: 0; }
+.web-mx .sf-metrics > .sf-metric { background: var(--sf-color-surface); } /* the sheet's surface, not the page's */
+@media (min-width: 641px) { /* the sheet is narrower than the board: six tiles in two rows of three, outcomes in one row; phones keep the design system's two columns */
+  .web-mx .sf-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .web-mx .sf-metrics:not([aria-label="Outcomes"]) > .sf-metric:nth-child(3n+1) { padding-left: 0; }
+  .web-mx .sf-metrics[aria-label="Outcomes"] { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+}
+.web-mx-filters { display: flex; flex-wrap: wrap; gap: var(--sf-space-3); }
+.web-mx-filters label { display: grid; gap: 4px; font: var(--sf-weight-medium) var(--sf-text-2xs) / 1.4 var(--sf-font-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--sf-color-ink-3); }
+.web-mx-filters .sf-select { min-width: 180px; text-transform: none; letter-spacing: 0; }
+.web-mx-sec { min-width: 0; }
+.web-mx-sec > .sf-label { margin: 0 0 var(--sf-space-2); }
+.web-mx-h { display: flex; align-items: center; justify-content: space-between; gap: var(--sf-space-3); margin-bottom: var(--sf-space-2); }
+.web-mx-h .sf-label { margin: 0; }
+.web-mx-seg { display: flex; gap: 2px; }
+.web-mx-chart { display: flex; align-items: flex-end; gap: 2px; height: 140px; padding-top: var(--sf-space-2); border-bottom: 1px solid var(--sf-color-line-2); }
+.web-mx-chart i { flex: 1 1 0; min-width: 1px; max-width: 28px; min-height: 0; border-radius: 2px 2px 0 0; background: color-mix(in srgb, var(--sf-color-accent) 72%, var(--sf-color-surface)); }
+.web-mx-chart i:hover { background: var(--sf-color-accent); }
+.web-mx-axis { display: flex; justify-content: space-between; gap: var(--sf-space-2); margin-top: 6px; font: var(--sf-text-xs) var(--sf-font-mono); color: var(--sf-color-ink-3); }
+.web-mx-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--sf-space-5) var(--sf-space-6); }
+.web-mx-k { word-break: break-word; }
+.web-mx-share { width: 30%; vertical-align: middle !important; }
+.web-mx-bar { display: block; height: 6px; border-radius: 2px; background: var(--sf-color-line); overflow: hidden; }
+.web-mx-bar i { display: block; height: 100%; background: color-mix(in srgb, var(--sf-color-accent) 58%, var(--sf-color-surface)); }
+.web-mx-note { margin: 0; font-size: var(--sf-text-sm); }
+@media (max-width: 720px) {
+  .web-mx-grid { grid-template-columns: minmax(0, 1fr); }
+  .web-mx-filters label { flex: 1 1 140px; }
+  .web-mx-filters .sf-select { min-width: 0; width: 100%; }
+}
