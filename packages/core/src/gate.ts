@@ -83,6 +83,7 @@ export function decide(r: Run, f: Facts) {
   const src = (f.files || []).filter((p) => SOURCE.test(p) && !TEST.test(p));
   if (src.length && !(f.files || []).some((p) => TEST.test(p))) why.push(`source changed (${src.length} file(s)) with no test change`);
   if (!r.pr) why.push('no PR recorded');
+  if (!r.reviewedSha) why.push('no reviewed commit recorded'); // merge() merges exactly that commit: without it, a "merge" decision could never happen
   if (ciLine && local?.ok && why.length) why.push(ciLine); // context: this escalation happened under a CI rule
   // Rule deploy.preview: a ready preview of the reviewed commit from any web-deploy connector (only the normalized fields count).
   const pv = pol['deploy.preview']?.value || 'off', notes: string[] = [];
