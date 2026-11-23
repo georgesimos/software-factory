@@ -158,12 +158,14 @@ export function terminalSession({ harness = 'claude-code', repo, issue, resume }
   if (resume !== undefined && !SESSION_ID.test(String(resume))) throw new Error('resume must be a harness session id');
   const id = issue ? `${repo}#${issue}` : repo, wt = issue && wtInfo(id)?.path;
   if (wt && fs.existsSync(wt)) cwd = wt;
-  if (resume !== undefined) {
+  let label = id;
+  if (resume !== undefined) { // under the resumed session's own label, so launchSession's running check sees it
     const from = listSessions().filter((x) => x.harnessSession === resume && x.harness === h.id).at(-1);
     if (!from) throw new Error('resume a session this app started');
-    cwd = getSession(from.id).cwd ?? cwd;
+    if (listSessions().some((x) => x.state === 'running' && (x.label === from.label || x.harnessSession === resume))) throw new Error(`${from.label} already has a running session`); // one claude per harness session
+    cwd = getSession(from.id).cwd ?? cwd; label = from.label;
   }
-  return startSession(h, { mode: 'terminal', resume }, { cwd, env, label: id, modules });
+  return startSession(h, { mode: 'terminal', resume }, { cwd, env, label, modules });
 }
 export function launchSession({ harness = 'claude-code', mode = 'headless', repo, issue }, env = process.env, modules = hostModules) {
 

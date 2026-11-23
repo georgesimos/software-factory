@@ -305,11 +305,13 @@ test('terminalSession(): a person\'s own harness in the desktop app\'s pane, in 
   const run = launchSession({ repo: 'acme/term', issue: 92 }, { ...stubEnv, STUB_HANG: '1' });
   await new Promise((r) => { const off = subscribe(run, (e) => { if (e.data?.subtype === 'init') { off(); r(); } }); });
   record('acme/term#92', 'intake', 'started', {});
+  assert.throws(() => terminalSession({ repo: 'acme/term', issue: 92, resume: 'stub-session' }, stubEnv, modules), /already has a running session/, 'never two claudes on one harness session');
   end = finished(run); run.stop(); await end;
   assert.ok(resumable().includes('acme/term#92'));
-  const s = terminalSession({ repo: 'acme/term', issue: 92, resume: 'stub-session' }, stubEnv, modules);
+  const s = terminalSession({ repo: 'acme/term', resume: 'stub-session' }, stubEnv, modules); // no issue in the body: the label is the session's
   await new Promise((r) => setTimeout(r, 20));
-  assert.deepEqual([pty.rec.args, fs.realpathSync(pty.rec.cwd)], [['--resume', 'stub-session'], fs.realpathSync(clone)]);
+  assert.deepEqual([s.label, pty.rec.args, fs.realpathSync(pty.rec.cwd)], ['acme/term#92', ['--resume', 'stub-session'], fs.realpathSync(clone)]);
+  assert.throws(() => terminalSession({ repo: 'acme/term', resume: 'stub-session' }, stubEnv, modules), /acme\/term#92 already has a running session/);
   assert.throws(() => launchSession({ repo: 'acme/term', issue: 92 }, stubEnv), /already has a running session/, 'not while a person has it open');
   end = finished(s); s.stop(); assert.equal((await end).at(-1).code, 'stopped');
   assert.ok(resumable().includes('acme/term#92'), 'the terminal session doesn\'t replace the run\'s last session');
