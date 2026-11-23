@@ -2,6 +2,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { CAP, COST_CAP, TOKEN_CAP } from '../../core/src/constants.ts';
 import { hooks } from '../../core/src/ship.ts';
@@ -128,23 +129,37 @@ export function page(extra = {}) {
 // no local path leaves this machine, and it refuses to ship a token. Throws when the dashboard markup drifts, so a
 // broken page is never published.
 // No local path leaves the machine: the keys that only hold one ("Open in Claude" cwds) go, and every string is
-// scrubbed. A path starts at a file:// URL, a drive letter, ~/, a known root (/Users, /home, …) or any /a/b, and runs
-// to the next hard delimiter, spaces included ("Application Support", "Bob Smith"): over-redacting prose is the safe
-// side. URLs survive: their slashes follow a word character, ':' or '/'.
+// scrubbed. A path starts at a local URL (file:///, vscode-remote://…), a UNC or WSL share, a drive letter, ~/, a known
+// root (/Users, /home, …) or any /a/b, and runs to the next hard delimiter or URL, spaces included ("Application
+// Support", "Bob Smith"): over-redacting prose is the safe side. Web URLs survive: their slashes follow a word
+// character or '/'. Whatever the patterns miss, the residue check in artifact() refuses.
 const PATH_ONLY = new Set(['worktree', 'cwd', 'installPath', 'projectPath']);
-const STOP = '\\n\\r"\'`<>|(){}\\[\\];,&*?';
-const BODY = `(?:[^${STOP}]*[^\\s${STOP}])?`;
+const STOP = String.raw`\n\r"'\x60<>|(){}\[\];,&*?`;
+const BODY = String.raw`(?:(?:(?!\s+https?:\/\/)[^${STOP}])*[^\s${STOP}])?`;
 const ROOTS = 'Users|home|Volumes|srv|private|var|tmp|opt|mnt|media|root|usr|etc|Library|Applications|nix|workspaces?';
 const LOCAL_PATH = new RegExp([
-  `\\b[\\w.+-]+:\\/\\/(?:\\/|file\\/)[^\\s"'\`<>]*`, // file:///…, vscode://file/…
-  `(?<![A-Za-z0-9])[A-Za-z]:[\\\\/]${BODY}`, // C:\…, C:/…, D:\
-  `(?<!\\w)~[\\\\/]${BODY}`,
-  `(?<!\\w)\\/(?:${ROOTS})(?![\\w.-])${BODY}`, // also after ':' or '=' (PATH=/a:/Users/…, cwd:/Users/…)
-  `(?<![\\w.:\\/~-])\\/[^\\s\\/${STOP}]+\\/${BODY}`, // any other path with 2+ segments; "/factory approve" stays
+  String.raw`\b(?:[\w.+-]+:\/\/(?:\/|file\/)|(?:vscode|cursor|windsurf)[\w.+-]*:\/\/)[^\s"'\x60<>]*`, // file:///…, vscode://file/…, vscode-remote://…
+  String.raw`(?<![\w\\])\\\\[\w.$-]+\\${BODY}`, // \\server\share…, \\wsl.localhost\…
+  String.raw`(?<![A-Za-z0-9])[A-Za-z]:[\\/]${BODY}`, // C:\…, C:/…, D:\
+  String.raw`(?<!\w)~[\\/]${BODY}`,
+  String.raw`(?<!\w)\/(?:${ROOTS})(?![\w.-])${BODY}`, // also after ':' or '=' (PATH=/a:/Users/…, cwd:/Users/…)
+  String.raw`(?<![\w.\/~-])\/(?!api\/)[^\s\/${STOP}]+\/${BODY}`, // any other path with 2+ segments (cwd:/data/x); "/factory approve" and /api/… routes stay
 ].join('|'), 'g');
 const scrub = (v) => typeof v === 'string' ? v.replace(LOCAL_PATH, '[local path]')
   : Array.isArray(v) ? v.map(scrub)
   : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([k]) => !PATH_ONLY.has(k)).map(([k, x]) => [k, scrub(x)])) : v;
+// The backstop: what identifies this machine must not be in the page at all. Web URLs are left out of the search, since
+// the GitHub owner in them may be the login; the login itself counts only as a path segment (\bob\, /bob/).
+const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+function residue(json, raw) {
+  const text = json.replace(/https?:\/\/[^\s"]*/g, ''), jsonOf = (x) => JSON.stringify(x).slice(1, -1);
+  const { username } = os.userInfo(), host = os.hostname(), left = [];
+  const paths = [os.homedir(), ...Object.values(projects()).map((p) => p?.path), ...(raw.runs || []).flatMap((r) => [r.worktree, ...(r.sessions || []).map((s) => s.cwd)])];
+  if (paths.some((p) => typeof p === 'string' && p.length > 3 && text.includes(jsonOf(p)))) left.push('a home, clone or worktree path');
+  if (username.length >= 3 && new RegExp(String.raw`(?:\\\\|\/)${esc(username)}(?![\w.-])`, 'i').test(text)) left.push('the login name in a path');
+  if ([host, host.split('.')[0]].some((h) => h.length >= 3 && new RegExp(String.raw`(?<![\w-])${esc(h)}(?![\w-])`, 'i').test(text))) left.push('the host name');
+  return left;
+}
 const DATA_TAG = /(<script type="application\/json" id="data">)([^<]*)(<\/script>)/;
 export function artifact(html = page()) {
   for (const re of [/^<!doctype html>\s*/i, /<html[^>]*>\s*/i, /<head>\s*/i, /<\/head>\s*/i, /<body[^>]*>\s*/i, /<\/body>\s*/i, /<\/html>\s*/i,
@@ -157,10 +172,12 @@ export function artifact(html = page()) {
   html = html.replace(reload, '/* Artifact: updates arrive by republish, so no reload timer. */');
   const m = html.match(DATA_TAG);
   if (!m) throw new Error('artifact: the dashboard no longer has its data tag');
-  const d = scrub(JSON.parse(m[2]));
+  const raw = JSON.parse(m[2]), d = scrub(raw);
   if (d.ui) throw new Error('artifact: refusing to publish a page built for F ui');
   if (d.skills?.catalog) d.skills.catalog = { global: [], projects: {} }; // install paths; the Skills sheet can't save there anyway
-  html = html.replace(DATA_TAG, (_, open, _old, close) => open + JSON.stringify(d).replace(/</g, '\\u003c') + close);
+  const json = JSON.stringify(d), left = residue(json, raw);
+  if (left.length) throw new Error(`artifact: refusing to publish: after scrubbing, the page still carries ${left.join(', ')}`);
+  html = html.replace(DATA_TAG, (_, open, _old, close) => open + json.replace(/</g, '\\u003c') + close);
   if (/"[^"]*token"\s*:/i.test(html)) throw new Error('artifact: refusing to publish a page that carries a token'); // a key ending in token; tokens/tokenCap are counts
   return html;
 }

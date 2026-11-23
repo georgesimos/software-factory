@@ -144,13 +144,14 @@ export function artifactTest() {
   fs.cpSync(prev, io.dir, { recursive: true });
   try {
     const dataOf = (h) => JSON.parse(h.match(/<script type="application\/json" id="data">([^<]*)<\/script>/)[1]);
-    const home = os.homedir();
+    const home = os.homedir(), user = os.userInfo().username;
     fs.mkdirSync(runDir('evil/x#1'), { recursive: true });
     fs.writeFileSync(wtFile('evil/x#1'), JSON.stringify({ path: path.join(home, 'wt', 'x-1'), branch: 'factory/issue-1' }));
     // Paths in and outside $HOME, with spaces, in URLs and env strings, in free text and in onboard and skills config.
     const planted = [`see ${path.join(home, 'notes.md')}`, 'cd /Volumes/Data/secret && x', '(C:/Users/bob/app)', 'C:\\Users\\Bob Smith\\app', 'C:\\Users\\Bob Smith',
       'D:\\work\\app', '/srv/alice: done', '/Users/george/Library/Application Support/x', 'at file:///Users/al/x.mjs:3:9', 'vscode://file/home/al/x.ts',
-      'cwd:/Users/al/x', 'PATH=/a:/home/al/bin', '/factory approve', 'https://github.com/evil/x/pull/2'];
+      'cwd:/Users/al/x', 'PATH=/a:/home/al/bin', '/factory approve', 'https://github.com/evil/x/pull/2', `\\\\wsl.localhost\\Ubuntu\\home\\${user}\\app`,
+      '\\\\fs01\\users\\bob', 'vscode-remote://ssh-remote+box/home/al/x', 'cwd:/data/proj/x', 'src:/code/acme/x', 'see /srv/a/b.md https://github.com/evil/x/pull/3 ok', 'GET /api/runs'];
     record('evil/x#1', 'intake', 'passed', { summary: planted.join('\n'), sessionId: 's1', cwd: path.join(home, 'src', 'x') });
     fs.writeFileSync(path.join(io.dir, 'skills.json'), JSON.stringify({ 'evil/x': { spec: { use: 'brief', path: '/Volumes/Data/briefs/spec.md' } } }));
     fs.writeFileSync(path.join(io.dir, 'onboard.json'), JSON.stringify({ default: { ship: ['web'] }, 'evil/x': { ship: ['web'], path: '/Volumes/Data/clones/x' } }));
@@ -167,13 +168,18 @@ export function artifactTest() {
     assert.deepEqual(a.runs.map((r) => r.pr), full.runs.map((r) => r.pr)); // URLs survive
     const loc = JSON.stringify(full), pub = JSON.stringify(a);
     for (const p of [JSON.stringify(home).slice(1, -1), '/Volumes/Data/briefs/spec.md', '/Volumes/Data/clones/x']) assert.ok(loc.includes(p), p); // the local dashboard has them...
-    const leak = new RegExp(`${JSON.stringify(home).slice(1, -1).replace(/[\\.]/g, '\\$&')}|\\/(Users|home|Volumes|srv)\\b|(?<![A-Za-z])[A-Za-z]:(\\\\\\\\|\\/)|file:\\/\\/|Smith|Support|secret|\\/a:`);
+    const leak = new RegExp(`${JSON.stringify(home).slice(1, -1).replace(/[\\.]/g, '\\$&')}|\\/(Users|home|Volumes|srv)\\b|(?<![A-Za-z])[A-Za-z]:(\\\\\\\\|\\/)|file:\\/\\/|Smith|Support|secret|\\/a:|wsl\\.localhost|fs01|ssh-remote|\\/data\\/|\\/code\\/`);
     assert.match(loc, leak); // the check itself can see a leak
-    assert.doesNotMatch(pub, leak); // ...the published page has none, not even a fragment after a space
+    const hit = pub.match(leak);
+    assert.equal(hit, null, hit && pub.slice(Math.max(0, hit.index - 80), hit.index + 80)); // ...the published page has none, not even a fragment after a space
     const x = a.runs.find((r) => r.id === 'evil/x#1');
     assert.equal(x.worktree, undefined);
     assert.ok(x.sessions.every((s) => !('cwd' in s)));
     assert.match(pub, /\/factory approve/); // one segment, not a path
+    assert.match(pub, /GET \/api\/runs/); // a route, not a path
+    assert.match(pub, /\[local path\] https:\/\/github\.com\/evil\/x\/pull\/3 ok/); // a path stops at the URL after it
+    // The backstop: whatever the patterns miss, the login (as a path segment), the host name or a known path is refused.
+    for (const note of [`built in x\\${user}\\y`, `on ${os.hostname()}`]) assert.throws(() => artifact(page({ note })), /still carries/, note);
     assert.match(pub, /https:\/\/github\.com\/evil\/x\/pull\/2/);
     assert.deepEqual(a.skills.catalog, { global: [], projects: {} });
     assert.deepEqual(a.onboard.default, { ship: ['web'] });
