@@ -3,11 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { derive } from './derive.ts';
 import { execFileSync } from 'node:child_process';
+import { exec } from './platform.ts';
 import { gh, parseRun } from './github.ts';
 import { io, read, record, runDir, stateDir } from './log.ts';
 import { rules } from './rules.ts';
 
-export const git = (...args) => execFileSync(io.git, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+export const git = (...args) => exec(io.git, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 export const ls = (d) => { try { return fs.readdirSync(d); } catch { return []; } };
 export const projectsFile = () => path.join(stateDir(), 'projects.json');
 export const projects = () => { try { return JSON.parse(fs.readFileSync(projectsFile(), 'utf8')); } catch { return {}; } };
@@ -63,7 +64,7 @@ export function deps(run) {
   if (!w) throw new Error(`no worktree for ${run}; run "worktree" first`);
   const has = (dir, f) => fs.existsSync(path.join(dir, f));
   const sh = (cmd, args) => {
-    try { execFileSync(cmd, args, { cwd: w.path, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) {
+    try { exec(cmd, args, { cwd: w.path, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) {
       const tail = (x) => String(x || '').trim().split('\n').slice(-15).join('\n');
       throw new Error(`${cmd} ${args.join(' ')} failed:\n${tail(e.stdout)}\n${tail(e.stderr)}`);
     }

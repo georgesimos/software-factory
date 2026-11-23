@@ -33,7 +33,7 @@ software-factory/
 ├── packages/
 │   ├── factory/              @software-factory/factory: the skill. ~/.claude/skills/software-factory symlinks here
 │   │   ├── SKILL.md          orchestration: modes, ground rules, stages 0–7, attach, evals, scheduling
-│   │   ├── factory.mjs       the F entry (SKILL.md calls this path): re-exports core and server, runs packages/cli's main()
+│   │   ├── factory.mjs       the F entry (SKILL.md calls this path): checks Node, then runs packages/cli's main()
 │   │   ├── (project.mjs moved to packages/core/src/project.ts in S8)
 │   │   ├── templates/        stack templates, data only: next-web.json, expo-mobile.json, _template.json, README.md
 │   │   ├── examples/

@@ -5,7 +5,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { exec } from './platform.ts';
 import { fileURLToPath } from 'node:url';
 import { read, runDir, factoryDir } from './log.ts';
 import { rules, setRule } from './rules.ts';
@@ -171,7 +171,7 @@ export function retireIdea(repo, reason) {
 const slug = (s) => s.toLowerCase().replace(/^(an?|the)\s+/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'new-app';
 const sh = (argv, cwd, log) => {
   const fd = fs.openSync(log, 'a');
-  try { fs.writeSync(fd, `$ ${argv.join(' ')}\n`); execFileSync(argv[0], argv.slice(1), { cwd, stdio: ['ignore', fd, fd], env: { ...process.env, CI: '1' }, timeout: 20 * 60e3 }); }
+  try { fs.writeSync(fd, `$ ${argv.join(' ')}\n`); exec(argv[0], argv.slice(1), { cwd, stdio: ['ignore', fd, fd], env: { ...process.env, CI: '1' }, timeout: 20 * 60e3 }); }
   catch (e) { throw new Error(`${argv.join(' ')} failed (exit ${e.status ?? e.signal}); see ${log}:\n${fs.readFileSync(log, 'utf8').split('\n').slice(-20).join('\n')}`); }
   finally { fs.closeSync(fd); }
 };

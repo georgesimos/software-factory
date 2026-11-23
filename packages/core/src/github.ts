@@ -4,13 +4,13 @@ import path from 'node:path';
 import { TRUSTED } from './constants.ts';
 import { decide } from './gate.ts';
 import { derive, getRun } from './derive.ts';
-import { execFileSync } from 'node:child_process';
+import { exec } from './platform.ts';
 import { git, projects } from './workspace.ts';
 import { io, read, readArchive, record, runDir } from './log.ts';
 import { shipTrack } from './ship.ts';
 import { rules } from './rules.ts';
 
-export const gh = (...args) => execFileSync(io.gh, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+export const gh = (...args) => exec(io.gh, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 export const parseRun = (run) => {
   const m = /^([\w.-]+)\/([\w.-]+)#(\d+)$/.exec(run || '');
   if (!m) throw new Error(`run must look like owner/repo#N, got "${run}"`);
