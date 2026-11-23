@@ -31,7 +31,7 @@ export function Board({ data }: { data: FactoryData }) {
                 <MetricStat label="Avg iterations" value={M.avgIterations != null ? M.avgIterations.toFixed(1) : null} sub={`cap ${maxIter}`} />
                 <MetricStat label="Median cycle" value={cyc?.[0] ?? null} unit={cyc?.[1]} sub="first event → decision" />
                 <MetricStat label="Revert rate" value={rev?.[0] ?? null} unit={rev?.[1]} sub={`${M.reverts ?? 0} reverted`} />
-                <MetricStat label="Spend" prefix="$" value={M.costUsd != null ? M.costUsd.toFixed(2) : null} sub={M.costPerMergeUsd != null ? `${formatMoney(M.costPerMergeUsd)} per merge` : `cap ${formatMoney(costCap)} / run`} />
+                <MetricStat label="Spend" prefix="$" value={M.costUsd != null ? M.costUsd.toFixed(2) : null} sub={M.costPerMergeUsd != null ? `${formatMoney(M.costPerMergeUsd)} per merge` : costCap > 0 ? `cap ${formatMoney(costCap)} / run` : undefined} />
               </MetricStrip>
             ) : null}
             <div className="web-board-wrap">

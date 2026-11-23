@@ -44,7 +44,9 @@ for (const theme of ['light', 'dark']) {
     page.on('console', (m) => { if (m.type() === 'error') problems.push(`${tag}: console error: ${m.text()}`); });
     page.on('pageerror', (e) => problems.push(`${tag}: page error: ${e.message}`));
     page.on('request', (r) => { const u = new URL(r.url()); if (/^https?:$/.test(u.protocol) && !['localhost', '127.0.0.1'].includes(u.hostname)) problems.push(`${tag}: external request ${r.url()}`); });
-    await page.goto(`${URL_}?theme=${theme}`, { waitUntil: 'networkidle' });
+    const url = new URL(URL_);
+    url.searchParams.set('theme', theme);
+    await page.goto(url.href, { waitUntil: 'networkidle' });
     await page.waitForSelector('.web-col .sf-run-card');
     await page.evaluate(() => document.fonts.ready);
     const overflow = async (what) => {

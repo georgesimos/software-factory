@@ -30,17 +30,22 @@ export async function loadData(): Promise<FactoryData> {
   // shortcut: the bundle contains the placeholder's name, and page() fills only the first occurrence; a single-file build (W3)
   // must inline this script after the #data tag or rename the placeholder.
   if (isData(window.__FACTORY_DATA__)) return window.__FACTORY_DATA__;
+  let why = 'No run data was injected and no `F ui` token is in the URL.';
   const tag = document.getElementById('data')?.textContent?.trim() ?? '';
   if (tag.startsWith('{')) {
-    const d: unknown = JSON.parse(tag);
-    if (isData(d)) return d;
+    try {
+      const d: unknown = JSON.parse(tag);
+      if (isData(d)) return d;
+    } catch {
+      why = 'The injected run data is not valid JSON, and no `F ui` token is in the URL.';
+    }
   }
 
-  let why = 'No run data was injected and no `F ui` token is in the URL.';
   const token = new URLSearchParams(location.search).get('t');
   if (token) {
     try {
-      const res = await fetch('./api/runs', { headers: { 'x-factory-token': token } });
+      // The API is always at the server root (API.md), wherever the page itself is served.
+      const res = await fetch('/api/runs', { headers: { 'x-factory-token': token } });
       const body: unknown = res.ok ? await res.json().catch(() => null) : null; // a dev server may answer with index.html
       if (isData(body)) return { runs: body.runs };
       why = `GET /api/runs answered ${res.status}${res.ok ? ' without a run list' : ''}.`;
