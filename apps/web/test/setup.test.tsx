@@ -30,6 +30,14 @@ describe('Setup wizard', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('no F on this machine (the desktop app, nothing installed): says how to install it', () => {
+    const { unmount } = wizard();
+    expect(screen.queryByRole('note')).toBeNull();
+    unmount();
+    wizard({ data: { ...data, fMissing: true } });
+    expect(screen.getByRole('note')).toHaveTextContent('/plugin install software-factory@software-factory');
+  });
+
   it('rules: a rule change needs a reason, then shows its commands', async () => {
     wizard();
     await step(/^Rules/);

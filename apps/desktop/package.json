@@ -1,0 +1,23 @@
+{
+  "name": "@software-factory/desktop",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "The Electron app: F ui in-process, in a window.",
+  "type": "module",
+  "main": "dist/apps/desktop/src/main.mjs",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && vite build",
+    "start": "vite build && electron .",
+    "test": "vite build && node --test test/build.test.mjs",
+    "e2e": "vite build && node test/app.e2e.mjs"
+  },
+  "dependencies": {
+    "@software-factory/server": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "electron": "45.4.1",
+    "typescript": "~5.9.3",
+    "vite": "^8.3.8"
+  }
+}

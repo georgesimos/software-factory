@@ -34,6 +34,8 @@ test('fCmd: the short ~ form only when ~/.claude/skills/software-factory links t
   fs.symlinkSync(path.dirname(entry), path.join(home, '.claude', 'skills', 'software-factory'), process.platform === 'win32' ? 'junction' : 'dir');
   assert.equal(fCmd('linux', home, entry), 'node ~/.claude/skills/software-factory/factory.mjs');
   assert.equal(fCmd('win32', home, entry), `node "${path.join(home, '.claude', 'skills', 'software-factory', 'factory.mjs')}"`);
+  assert.equal(fCmd('darwin', home, path.join(d, 'desktop', 'factory.mjs')), 'node ~/.claude/skills/software-factory/factory.mjs', 'no F of its own (the desktop build): the installed skill');
+  assert.equal(fCmd('darwin', path.join(d, 'nobody'), path.join(d, 'desktop', 'factory.mjs')), null, 'and no skill installed: no command at all');
 });
 
 test('F runs from a copy of the tracked files, the way Claude Code copies a plugin into its cache (no node_modules, no pnpm)', (t) => {
