@@ -17,3 +17,6 @@
 .sf-find[data-dismissed] .sf-sev { opacity: 0.5; }
 .sf-find-issue { cursor: help; border-radius: var(--sf-radius-xs); }
 .sf-find-issue s { text-decoration-color: var(--sf-verdict-dismissed); }
+.sf-verdict .sf-rn { margin-left: var(--sf-space-1-5); vertical-align: 1px; }
+.sf-review-tok { font: var(--sf-text-sm) var(--sf-font-mono); color: var(--sf-color-ink-2); font-variant-numeric: tabular-nums; }
+.sf-review-burn { margin: var(--sf-space-2) 0 0; font: var(--sf-text-xs) var(--sf-font-mono); color: var(--sf-color-ink-3); }

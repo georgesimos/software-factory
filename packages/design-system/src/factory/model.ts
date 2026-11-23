@@ -23,7 +23,28 @@ export interface Finding {
   /** A string is the dismissal reason. Dismissed findings never block. */
   dismissed?: string | boolean;
 }
-export interface AxisReview { verdict?: 'passed' | 'failed'; findings?: Finding[] }
+export interface AxisReview { verdict?: 'passed' | 'failed'; findings?: Finding[]; runner?: Runner }
+/** Who runs a step (skills.json). `fallback` is the model's chain, or {from, reason} when the configured runner was unavailable. */
+export interface Runner {
+  use?: 'default' | 'skill' | 'brief' | 'provider' | (string & {});
+  name?: string;
+  harness?: string;
+  path?: string;
+  model?: string;
+  effort?: string;
+  fallback?: string[] | { from?: Runner; reason?: string };
+}
+/** Tokens and dollars for one slice of a run. `unpriced`: tokens on a model with no price. `used`: the model that served most of it. */
+export interface BurnCell { tokens: number; costUsd: number | null; unpriced?: number; used?: string | null }
+export interface Burn {
+  /** true: counted from session transcripts; false: reported by subagents. */
+  measured?: boolean;
+  total: BurnCell;
+  byStage?: Record<string, BurnCell>;
+  byIteration?: Record<string, BurnCell>;
+  byAxis?: Record<string, BurnCell>;
+  reported?: BurnCell | null;
+}
 export interface Loopback { iteration?: number; route?: 'spec' | 'build'; reasons?: string[]; ts?: string }
 
 export interface RunEvent {
@@ -78,8 +99,13 @@ export interface Run {
   durationMs?: number;
   /** Local Claude Code / Codex sessions on the run's branch. */
   sessions?: import('./Sessions.tsx').AgentSession[];
-  /** Latest deploy per "connector/env", recorded by packages/ship. Never moves the run's stage. */
-  deploys?: Record<string, Deploy>;
+  /** Latest deploy per connector and env, recorded by packages/ship. Never moves the run's stage. */
+  deploys?: Deploy[];
+  /** step → who ran it */
+  runners?: Record<string, Runner>;
+  burn?: Burn | null;
+  /** The run's local worktree (F ui only; never in an Artifact). */
+  worktree?: string;
 }
 
 export interface Deploy {
@@ -178,6 +204,36 @@ export function runTone(r: Run): { tone: Tone; live: boolean } {
   return { tone: 'run', live: state === 'active' };
 }
 
+// ---- runners and models ----
+/** A model id as its alias (claude-fable-5-2 -> fable); unknown ids stay as they are. */
+export const modelAlias = (id: string) => /(fable|opus|sonnet|haiku)/.exec(id)?.[1] ?? id;
+const capital = (m: string) => m.charAt(0).toUpperCase() + m.slice(1);
+const runnerName = (y: Runner) => y.use === 'skill' ? `skill: ${y.name}` : y.use === 'brief' ? `brief: ${String(y.path ?? '').split('/').pop()}`
+  : y.use === 'provider' ? [y.harness, y.name].filter(Boolean).join(': ') : null;
+/**
+ * Who did a step and on which model, when it wasn't the built-in brief on no known model. `short` drops the kind and the
+ * effort, for the narrow pipeline track. `used` is the model that actually served it (burn); "Fable → Opus (fallback)" when it differs.
+ */
+export function runnerLabel(x: Runner | undefined, short = false, what = 'Run by', usedId = ''): { text: string; title: string } | null {
+  if (!x || typeof x !== 'object') x = {};
+  const used = usedId ? modelAlias(usedId) : '';
+  const down = !!x.fallback && !Array.isArray(x.fallback), fb = down ? x.fallback as { from?: Runner; reason?: string } : {};
+  const base = down ? 'default · fallback' : runnerName(x), model = typeof x.model === 'string' ? x.model : '', fell = !!(used && model && used !== model);
+  const m = fell ? `${capital(model)} → ${capital(used)} (fallback)` : capital(used || model);
+  if (!base && !m) return null;
+  const last = (n: string) => n.split(':').pop() ?? n;
+  const who = !base ? '' : !short || down ? base : x.use === 'brief' ? base.slice(7) : last(String(x.name || x.harness || ''));
+  const text = [who, m + (m && !short && x.effort ? ` · ${x.effort}` : '')].filter(Boolean).join(' · ');
+  const on = m ? ` on ${used || model}${x.effort ? ` (${x.effort} effort)` : ''}${fell ? `; configured ${model}` : used ? '' : ' (configured; no usage yet)'}${Array.isArray(x.fallback) ? `; fallback chain ${x.fallback.join(' → ')}` : ''}` : '';
+  const title = down ? `Configured ${(fb.from && runnerName(fb.from)) || 'runner'} was unavailable: ${fb.reason || 'no reason given'}` : `${what} ${base || 'the built-in brief'}${on}`;
+  return { text, title };
+}
+/** Tokens and cost as one string; "+" when some tokens ran on a model with no price. */
+export const burnText = (c: BurnCell) => `${formatTokens(c.tokens)} · ${c.costUsd == null ? '—' : formatMoney(c.costUsd) + (c.unpriced ? '+' : '')}`;
+export const costText = (c: BurnCell) => (c.costUsd == null ? '—' : formatMoney(c.costUsd) + (c.unpriced ? '+' : ''));
+
+/** The latest passed preview deploy with an https URL. */
+export const previewOf = (r: Run) => r.deploys?.find((d) => d.env === 'preview' && d.status === 'passed' && /^https:\/\//.test(d.url ?? ''));
 export const repoOf = (id: string) => id.split(/[#:]/)[0] ?? id;
 export const shortId = (id: string) => id.replace(/^[^/#:]*\//, '');
 

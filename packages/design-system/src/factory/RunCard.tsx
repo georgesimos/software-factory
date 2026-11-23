@@ -5,7 +5,7 @@ import { cx } from '../components/cx.ts';
 import { OutcomePill } from './OutcomePill.tsx';
 import { SessionsChip } from './Sessions.tsx';
 import { SourceChip } from './SourceChip.tsx';
-import { formatAgo, formatClock, isDone, outcomeOf, repoOf, reviewFailed, runTone, shortId, stageOf, type Run } from './model.ts';
+import { burnText, formatAgo, formatClock, formatTokens, isDone, outcomeOf, previewOf, repoOf, reviewFailed, runTone, shortId, stageOf, type Run } from './model.ts';
 
 export interface RunCardProps {
   run: Run;
@@ -44,6 +44,8 @@ function AxesBar({ run }: { run: Run }) {
 export function RunCard({ run: r, href, onSelect, selected, showRepo, cap = 3, now }: RunCardProps) {
   const done = isDone(r), o = outcomeOf(r), { tone, live } = runTone(r);
   const repo = repoOf(r.id), iteration = r.iteration ?? 0;
+  // A plain chip: the card is itself a link, so the real preview link is in the run's Deploy section.
+  const bad = r.deploys?.find((d) => d.status === 'failed'), preview = previewOf(r);
   const foot = (
     <>
       {done ? <OutcomePill outcome={o} reverted={!!r.reverted} /> : o !== 'in-progress' ? <OutcomePill outcome={o} /> : null}
@@ -53,6 +55,9 @@ export function RunCard({ run: r, href, onSelect, selected, showRepo, cap = 3, n
       {r.imported ? <SourceChip source={r.source ?? 'none'} title="Tracked: imported, not driven by the factory" /> : null}
       {r.sessions?.length ? <SessionsChip sessions={r.sessions} /> : null}
       {r.children?.length ? <Badge quiet>{r.children.length} runs</Badge> : null}
+      {bad ? <Badge tone="bad" title={`${bad.connector} · ${bad.env}: ${bad.state}${bad.detail ? ` · ${bad.detail}` : ''}`}>Deploy failed</Badge>
+        : preview ? <Badge tone="ok" title={`Preview ready: ${preview.url}`}>Preview ↗</Badge> : null}
+      {r.burn?.total.tokens ? <Badge quiet title={`${r.burn.measured ? 'Measured' : 'Reported'}: ${burnText(r.burn.total)}`}>{formatTokens(r.burn.total.tokens)} tok</Badge> : null}
       {r.archived ? <Badge quiet>Archived</Badge> : null}
     </>
   );

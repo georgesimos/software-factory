@@ -1,6 +1,18 @@
-import { repoOf, type Metrics, type Run } from '@software-factory/design-system';
+import { repoOf, type Burn, type BurnCell, type Deploy, type Metrics, type Run } from '@software-factory/design-system';
 
-/** The JSON `page()` in packages/server/src/server.ts injects. `GET /api/runs` gives only `runs`. */
+export interface Rule { key?: string; value?: unknown; scope?: string; setBy?: string; setAt?: string; reason?: string; until?: string }
+export interface RuleChange { ts?: string; run?: string; status?: string; key?: string; value?: unknown; setBy?: string; reason?: string; until?: string }
+export interface IdeaIssue { key?: string; title?: string; state?: string; run?: string; url?: string; dependsOn?: string[] }
+export interface Idea {
+  repo: string; phase?: string; stack?: string; visibility?: string; dryRun?: boolean; idea?: string; plan?: { vision?: string };
+  milestones?: { name?: string; merged?: number; total?: number }[]; issues?: IdeaIssue[];
+  burn?: { usd?: number; budgetUsd?: number; tokens?: number; over?: boolean };
+  loop?: { state?: string; reason?: string; picked?: number; maxIssuesPerSession?: number };
+  next?: IdeaIssue; remote?: { url?: string };
+}
+export interface Harness { id: string; label?: string; install?: string }
+
+/** What `page()` / `GET /api/state` carries (packages/server/src/server.ts pageData()). Every field but `runs` may be missing. */
 export interface FactoryData {
   runs: Run[];
   generated?: string;
@@ -8,54 +20,89 @@ export interface FactoryData {
   costCap?: number;
   projects?: string[];
   metrics?: { all: Metrics; byProject: Record<string, Metrics> };
+  rules?: Record<string, { policy?: Record<string, Rule>; expired?: Rule[] }>;
+  rulesError?: string;
+  ruleHistory?: RuleChange[];
+  harnesses?: Harness[];
+  hooks?: { create?: boolean; ship?: boolean; connectors?: unknown };
+  ideas?: Record<string, Omit<Idea, 'repo'>>;
+  skills?: Record<string, unknown>;
+  onboard?: Record<string, unknown>;
+  /** The F ui token. Only set when the page was opened from `F ui`; writes need it. */
+  token?: string;
 }
 
-// packages/core/src/constants.ts defaults, for data that does not carry them (GET /api/runs).
+// packages/core/src/constants.ts defaults, for data that does not carry them.
 export const CAP = 3;
 export const COST_CAP = 5;
 
 declare global { interface Window { __FACTORY_DATA__?: unknown } }
 
 const isData = (d: unknown): d is FactoryData => !!d && typeof d === 'object' && Array.isArray((d as FactoryData).runs);
+const num = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x);
+const obj = (x: unknown): Record<string, unknown> => (x && typeof x === 'object' && !Array.isArray(x) ? x as Record<string, unknown> : {});
+const arr = <T = unknown>(x: unknown): T[] => (Array.isArray(x) ? x : []);
 
-/** Every repo with a run, plus attached projects that have none yet. */
-export const projectsOf = (d: FactoryData) => [...new Set([...(d.projects ?? []), ...d.runs.map((r) => repoOf(r.id))])];
+/** Every repo with a run, attached projects that have none yet, and F new projects. */
+export const projectsOf = (d: FactoryData) => [...new Set([...(d.projects ?? []), ...d.runs.map((r) => repoOf(r.id)), ...Object.keys(d.ideas ?? {})])];
+
+// Burn, deploys and sessions come from logs and transcripts: keep only well-formed cells, so render code can trust shapes.
+const cell = (c: unknown): BurnCell | null => {
+  const x = obj(c);
+  return num(x.tokens) ? { tokens: x.tokens, costUsd: num(x.costUsd) ? x.costUsd : null, unpriced: num(x.unpriced) ? x.unpriced : 0,
+    used: typeof x.used === 'string' && /^[\w.:[\]-]{1,64}$/.test(x.used) ? x.used : null } : null;
+};
+const cells = (m: unknown) => Object.fromEntries(Object.entries(obj(m)).map(([k, v]) => [k, cell(v)]).filter((e): e is [string, BurnCell] => !!e[1]));
+const burnOf = (b: unknown): Burn | null => {
+  const x = obj(b), total = cell(x.total);
+  return total ? { measured: x.measured === true, total, byStage: cells(x.byStage), byIteration: cells(x.byIteration), byAxis: cells(x.byAxis), reported: cell(x.reported) } : null;
+};
+export function normRun(r: Run): Run {
+  const deploys = arr<Deploy>(r.deploys).filter((d) => d && d.connector != null && d.env != null)
+    .map((d) => ({ ...d, connector: String(d.connector), env: String(d.env), state: String(d.state || '?'), status: String(d.status || ''), at: d.at || (d as { ts?: string }).ts }));
+  const sessions = arr<NonNullable<Run['sessions']>[number]>(r.sessions).filter((s) => s && s.id != null).map((s) => ({ ...s, id: String(s.id) }))
+    .sort((a, b) => (Date.parse(b.last ?? '') || 0) - (Date.parse(a.last ?? '') || 0));
+  return { ...r, id: String(r.id), events: arr(r.events), loopbacks: arr(r.loopbacks), children: arr(r.children), issues: arr(r.issues), burn: burnOf(r.burn), deploys, sessions };
+}
+export const normData = (d: FactoryData): FactoryData => ({ ...d, runs: d.runs.filter((r) => r && r.id != null).map(normRun) });
+
+/** `?t=` from `F ui`'s URL. */
+export const uiToken = () => new URLSearchParams(location.search).get('t') || undefined;
 
 /**
- * Injected data first (a host-set `window.__FACTORY_DATA__`, or the #data tag in index.html; nothing fills either yet, since
- * `F ui` still serves dashboard.html), then `GET /api/runs` with the
- * `F ui` token from `?t=`, then the playground fixture in dev. A production build never shows fixture runs.
+ * Injected data first (a host-set `window.__FACTORY_DATA__`, or the #data tag), then `GET /api/state` with the `F ui`
+ * token from `?t=`, then the fixture in dev. A production build never shows fixture runs.
  */
 export async function loadData(): Promise<FactoryData> {
   // shortcut: the bundle contains the placeholder's name, and page() fills only the first occurrence; a single-file build (W3)
   // must inline this script after the #data tag or rename the placeholder.
-  if (isData(window.__FACTORY_DATA__)) return window.__FACTORY_DATA__;
+  if (isData(window.__FACTORY_DATA__)) return normData(window.__FACTORY_DATA__);
   let why = 'No run data was injected and no `F ui` token is in the URL.';
   const tag = document.getElementById('data')?.textContent?.trim() ?? '';
   if (tag.startsWith('{')) {
     try {
       const d: unknown = JSON.parse(tag);
-      if (isData(d)) return d;
+      if (isData(d)) return normData(d);
     } catch {
       why = 'The injected run data is not valid JSON, and no `F ui` token is in the URL.';
     }
   }
 
-  const token = new URLSearchParams(location.search).get('t');
+  const token = uiToken();
   if (token) {
     try {
       // The API is always at the server root (API.md), wherever the page itself is served.
-      const res = await fetch('/api/runs', { headers: { 'x-factory-token': token } });
+      const res = await fetch('/api/state', { headers: { 'x-factory-token': token } });
       const body: unknown = res.ok ? await res.json().catch(() => null) : null; // a dev server may answer with index.html
-      if (isData(body)) return { runs: body.runs };
-      why = `GET /api/runs answered ${res.status}${res.ok ? ' without a run list' : ''}.`;
+      if (isData(body)) return { ...normData(body), token };
+      why = `GET /api/state answered ${res.status}${res.ok ? ' without a run list' : ''}.`;
     } catch (e) {
-      why = `GET /api/runs failed: ${(e as Error).message}`;
+      why = `GET /api/state failed: ${(e as Error).message}`;
     }
   }
   if (import.meta.env.DEV) {
-    const f = await import('../../playground/src/fixtures/index.ts');
-    return { runs: f.RUNS, cap: f.CAP, costCap: f.COST_CAP, projects: f.PROJECTS, metrics: { all: f.METRICS['']!, byProject: f.METRICS } };
+    const f = (await import('../fixtures/state.json')).default as unknown as FactoryData;
+    return normData({ ...f, generated: new Date().toISOString() });
   }
   throw new Error(why);
 }

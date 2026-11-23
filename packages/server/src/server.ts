@@ -36,6 +36,7 @@ export function uiHandle({ method, url, headers = {}, body = '' }, { token, port
     if (!same(headers['x-factory-token'], token)) return reply(403, { error: 'missing or wrong token' });
     if (headers.origin !== undefined && !hosts.some((h) => headers.origin === `http://${h}`)) return reply(403, { error: 'cross-origin request' });
     if (route === '/runs') return reply(200, { runs: runsData() });
+    if (route === '/state') return reply(200, pageData()); // what page() embeds, for apps/web; never the token
     if (route === '/sessions') return reply(200, { sessions: listSessions() });
     const ev = route.match(/^\/sessions\/([0-9a-f-]{36})\/events$/);
     if (ev) { // server-sent events; ui() writes the stream. EventSource can't send x-factory-token, so clients read it with fetch.
@@ -188,7 +189,8 @@ export function runsData(events = read()) {
   for (const r of runs) { const w = wtInfo(r.id); if (w?.path) r.worktree = w.path; } // the dashboard's "Open in Claude" cwd
   return runs;
 }
-export function page(extra = {}) {
+// Everything the dashboard shows: runs, metrics, rules, skills, harnesses, hooks, ideas. page() embeds it; GET /api/state returns it.
+export function pageData(extra = {}) {
   const events = read();
   const runs = runsData(events);
   const repoOf = (id) => id.split(/[#:]/)[0];
@@ -199,8 +201,11 @@ export function page(extra = {}) {
   catch (e) { ruleData.rulesError = e.message; } // render runs after every record(): a bad config must not half-fail the event
   let idea = {};
   try { idea = { ideas: ideas(events, Object.fromEntries(runs.map((r) => [r.id, r]))) }; } catch (e) { idea = { ideasError: e.message }; } // never fail the event that triggered the render
-  const data = JSON.stringify({ generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)),
-    harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), ...idea, ...extra }).replace(/</g, '\\u003c');
+  return { generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)),
+    harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), ...idea, ...extra };
+}
+export function page(extra = {}) {
+  const data = JSON.stringify(pageData(extra)).replace(/</g, '\\u003c');
   return fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'factory', 'dashboard.html'), 'utf8').replace('__FACTORY_DATA__', () => data);
 }
 

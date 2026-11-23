@@ -27,8 +27,10 @@ describe('ThemeToggle', () => {
 describe('Sessions', () => {
   it('builds resume commands and quotes hostile paths', () => {
     expect(resumeCommand({ agent: 'codex', id: 'abc-123' })).toBe('codex resume abc-123');
-    expect(resumeCommand({ agent: 'claude-code', id: 'a1b2', cwd: '/home/dev/acme shop' })).toBe('cd "/home/dev/acme shop" && claude --resume a1b2');
-    expect(resumeCommand({ agent: 'claude-code', id: 'x;rm', cwd: '/tmp/$(boom)"`' })).toBe('cd "/tmp/\\$(boom)\\"\\`" && claude --resume "x;rm"');
+    expect(resumeCommand({ agent: 'claude-code', id: 'a1b2', cwd: '/home/dev/acme shop' })).toBe("cd '/home/dev/acme shop' && claude --resume a1b2");
+    expect(resumeCommand({ agent: 'claude-code', id: 'a1b2', cwd: "/tmp/$(boom)'!" })).toBe("cd '/tmp/$(boom)'\\''!' && claude --resume a1b2");
+    expect(resumeCommand({ agent: 'claude-code', id: 'x;rm' })).toBeNull(); // an odd id is never pasted into a shell
+    expect(resumeCommand({ agent: 'aider', id: 'abc' })).toBeNull();
   });
 
   it('SessionLink copies the resume command and announces it', async () => {
@@ -38,7 +40,7 @@ describe('Sessions', () => {
     expect(screen.getByText('0f3c9a7e')).toBeInTheDocument();
     expect(screen.getByText(/just now · app/)).toBeInTheDocument();
     await act(() => userEvent.click(screen.getByRole('button', { name: 'Copy resume command' })));
-    expect(writeText).toHaveBeenCalledWith('cd "/home/dev/acme/app" && claude --resume 0f3c9a7e-1111');
+    expect(writeText).toHaveBeenCalledWith("cd '/home/dev/acme/app' && claude --resume 0f3c9a7e-1111");
     expect(screen.getByRole('button', { name: 'Copied resume command' })).toBeInTheDocument();
   });
 
