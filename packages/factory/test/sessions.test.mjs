@@ -116,6 +116,9 @@ test('Windows: stop() ends the whole tree with taskkill, since kill() would end 
   killTree(child, 'linux', run, () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
   killTree({ pid: 0, kill: () => { killed += 10; } }, 'darwin', run, kill); killTree({ pid: 0 }, 'win32', run, kill);
   assert.deepEqual([calls.length, groups.length, killed], [1, 1, 1], 'never pid 0; the child alone when its group is gone');
+  const waited = []; // quit: spawnSync's shape (no .on), bounded so quit can't hang
+  killTree(child, 'win32', (...a) => { waited.push(a); return { status: 0 }; }, kill, true);
+  assert.deepEqual(waited, [['taskkill', ['/pid', '4242', '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5000 }]]);
 });
 
 test('the command is found on the PATH and PATHEXT the session gets, not this process\'s', () => {
@@ -259,7 +262,10 @@ test('serve().close(), the desktop app\'s quit: stops the sessions it started (d
   try { ({ session: id } = await (await fetch(`${u.origin}/api/sessions`, { method: 'POST', headers: H, body: JSON.stringify({ repo: 'acme/app', issue: 91 }) })).json()); }
   finally { delete process.env.STUB_HANG; }
   assert.equal(getSession(id).state, 'running');
+  const s = getSession(id), stop = s.stop, how = [];
+  s.stop = (wait) => { how.push(wait); stop(wait); };
   close();
+  assert.deepEqual(how, [true], 'quit waits for the kill (taskkill on Windows)');
   assert.ok((await finished(getSession(id))).length, 'the session ends');
   assert.notEqual(getSession(id).state, 'running');
   assert.equal(await fetch(`${u.origin}/`).then(() => 'up', () => 'down'), 'down');
