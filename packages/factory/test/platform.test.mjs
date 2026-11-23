@@ -135,14 +135,14 @@ test('cliShims: Windows gets a CRLF .cmd that passes %* and an sh shim with a fo
   assert.throws(() => cliShims('C:\\100%\\factory.mjs', 'win32'), /cannot hold/);
 });
 
-test('installCli: picks ~/.local/bin or ~/bin when on PATH, else prints the line to add', () => {
+test('installCli: picks ~/.local/bin or ~/bin when on PATH, else prints the line to add', { skip: process.platform === 'win32' && 'POSIX paths' }, () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-cli-home-'));
   const r = installCli('/x/factory.mjs', { home, platform: 'linux', env: { PATH: '/usr/bin' } });
   assert.equal(r.dir, path.join(home, '.local', 'bin'));
   assert.equal(r.onPath, false);
   assert.match(r.addToPath, /^export PATH=".*\.local\/bin:\$PATH"/);
   assert.equal(installCli('/x/factory.mjs', { home, platform: 'linux', env: { PATH: `/usr/bin:${home}/bin/` } }).dir, path.join(home, 'bin'));
-}, { skip: process.platform === 'win32' && 'POSIX paths' });
+});
 
 test('F install-cli in a temp HOME: the shim runs factory help, a re-run is idempotent, and a foreign factory file is never overwritten', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-cli-home-')), bin = path.join(home, '.local', 'bin');
