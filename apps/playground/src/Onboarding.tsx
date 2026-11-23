@@ -32,7 +32,7 @@ export function Onboarding() {
           <div><Button variant="ghost" onClick={() => setItems(null)}>← Back to projects</Button></div>
         </div>
       ) : (
-        <ProjectPicker repos={repos} selected={selected} onChange={setSelected} onSubmit={start} scannedRoots={['/Users/dev/Development', '/Users/dev/code']} />
+        <ProjectPicker repos={repos} selected={selected} onChange={setSelected} onSubmit={start} scannedRoots={['/home/dev/Development', '/home/dev/code']} />
       )}
       <div className="pg-stack">
         <div className="sf-label">Step 2, mid-import (static)</div>

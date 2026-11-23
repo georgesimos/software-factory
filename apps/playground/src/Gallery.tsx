@@ -1,6 +1,6 @@
 import {
   Badge, Button, Card, Checkbox, CloseIcon, Dialog, EmptyState, IconButton, Input, Kbd, MetricStat, MetricStrip, OutcomePill, OUTCOMES,
-  ReviewMatrix, RunCard, SearchIcon, Select, Sheet, Skeleton, SourceChip, StageTrack, Table, Tabs, Timeline, Tooltip, useToast,
+  ReviewMatrix, RunCard, SearchIcon, Select, SessionList, SessionsChip, Sheet, Skeleton, SourceChip, StageTrack, Table, Tabs, ThemeToggle, Timeline, Tooltip, useToast,
 } from '@software-factory/design-system';
 import { useState, type ReactNode } from 'react';
 import { CAP, RUNS } from './fixtures/index.ts';
@@ -44,6 +44,10 @@ export function Basics() {
       <Demo title="Badge">
         {(['neutral', 'run', 'ok', 'bad', 'warn', 'idle'] as const).map((t) => <Badge key={t} tone={t} dot>{t}</Badge>)}
         <Badge quiet>Archived</Badge>
+      </Demo>
+      <Demo title="ThemeToggle">
+        <ThemeToggle />
+        <span className="sf-muted">Stored in localStorage; applied before paint by themeInitScript.</span>
       </Demo>
       <Demo title="Tooltip">
         <Tooltip content="Dismissed: no outbound request uses user input."><Button size="sm">Hover or focus me</Button></Tooltip>
@@ -109,9 +113,13 @@ export function FactoryParts() {
           <MetricStat size="sm" label="Cost" value="$6.10" sub="over cap" meter={1.22} />
         </div>
       </Demo>
+      <Demo title="SessionList · SessionsChip" wide>
+        <SessionList sessions={byId('acme/app:dev/wip-9').sessions ?? []} />
+        <div style={{ marginTop: 12 }}><SessionsChip sessions={byId('acme/app:dev/wip-9').sessions ?? []} /></div>
+      </Demo>
       <Demo title="RunCard">
         <div className="pg-cards">
-          {['acme/shop#45', 'acme/app#20', 'acme/shop#43', 'acme/app#12'].map((id) => <RunCard key={id} run={byId(id)} cap={CAP} showRepo onSelect={() => {}} />)}
+          {['acme/shop#45', 'acme/app#20', 'acme/shop#43', 'acme/app:dev/wip-9'].map((id) => <RunCard key={id} run={byId(id)} cap={CAP} showRepo onSelect={() => {}} />)}
         </div>
       </Demo>
       <Demo title="StageTrack (loop-backs)" wide><StageTrack run={byId('acme/shop#43')} /></Demo>

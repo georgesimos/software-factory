@@ -7,8 +7,8 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import * as hosts from '../hosts/index.mjs';
-import * as trackers from '../trackers/index.mjs';
+import * as hosts from '../../adapters/hosts/index.mjs';
+import * as trackers from '../../adapters/trackers/index.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const F = path.join(HERE, '..', 'factory.mjs'), STUB = path.join(HERE, 'gh-project-stub.mjs'), EX = path.join(HERE, '..', 'examples', 'budget-app');
@@ -51,7 +51,7 @@ export async function projectTest({ uiHandle, read, project: { validateIssues, v
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-project-'));
   const dir = path.join(root, 'state'), stub = path.join(root, 'gh'), home = path.join(root, 'home');
   for (const d of [dir, stub, home]) fs.mkdirSync(d);
-  const env = { ...process.env, ...GIT_ENV, HOME: home, FACTORY_DIR: dir, FACTORY_GH: STUB, STUB_STATE: stub };
+  const env = { ...process.env, ...GIT_ENV, HOME: home, USERPROFILE: home, FACTORY_DIR: dir, FACTORY_GH: STUB, STUB_STATE: stub };
   for (const k of ['CLAUDE_CODE_SESSION_ID', 'FACTORY_GIT', 'FACTORY_HOSTS', 'FACTORY_TRACKERS', 'FACTORY_TEMPLATES']) delete env[k];
   const put = (p, text) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
   const run = (args, extra = {}) => execFileSync(process.execPath, [F, ...args], { encoding: 'utf8', env: { ...env, ...extra }, stdio: ['ignore', 'pipe', 'pipe'] });

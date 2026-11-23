@@ -7,3 +7,4 @@ export const SearchIcon = (p: SVGProps<SVGSVGElement>) => <svg {...base} {...p}>
 export const CheckIcon = (p: SVGProps<SVGSVGElement>) => <svg {...base} {...p}><path d="M3.5 8.5l3 3 6-7" /></svg>;
 export const ArrowUpRightIcon = (p: SVGProps<SVGSVGElement>) => <svg {...base} {...p}><path d="M5 11l6-6M6 5h5v5" /></svg>;
 export const BranchIcon = (p: SVGProps<SVGSVGElement>) => <svg {...base} {...p}><circle cx="5" cy="4" r="1.5" /><circle cx="5" cy="12" r="1.5" /><circle cx="11" cy="6" r="1.5" /><path d="M5 5.5v5M11 7.5c0 2-2 2.5-6 3" /></svg>;
+export const CopyIcon = (p: SVGProps<SVGSVGElement>) => <svg {...base} {...p}><rect x="5.5" y="5.5" width="7" height="7" rx="1.5" /><path d="M10.5 3.5h-6a1 1 0 0 0-1 1v6" /></svg>;
