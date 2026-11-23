@@ -1,6 +1,7 @@
 import { Table } from '../components/Table.tsx';
 import { Tooltip } from '../components/Tooltip.tsx';
-import { isBlocking, isDismissed, reviewFailed, type Run } from './model.ts';
+import { Badge } from '../components/Badge.tsx';
+import { burnText, costText, formatTokens, isBlocking, isDismissed, reviewFailed, runnerLabel, type Run } from './model.ts';
 
 /** Axes × iterations verdict grid, then every finding newest-first. Dismissed findings are struck through; the reason is in a tooltip. */
 export function ReviewMatrix({ run: r }: { run: Run }) {
@@ -8,14 +9,16 @@ export function ReviewMatrix({ run: r }: { run: Run }) {
   const iters = [...new Set([...Object.keys(axesBy), ...Object.keys(reviews)])].sort((a, b) => Number(a) - Number(b));
   if (!iters.length) return <p className="sf-muted">{r.imported ? 'Tracked run: the factory does not review it.' : 'No reviews yet.'}</p>;
   const axes = [...new Set(iters.flatMap((i) => [...(axesBy[i] ?? []), ...Object.keys(reviews[i] ?? {})]))];
+  const ab = r.burn?.byAxis ?? {}, hasTok = axes.some((a) => ab[a]);
+  const extra = Object.entries(ab).filter(([k]) => !axes.includes(k)); // the verifier and other non-axis reviewers
   const finds = iters.slice().reverse().flatMap((i) =>
     Object.entries(reviews[i] ?? {}).flatMap(([axis, v]) => (v.findings ?? []).map((f, j) => ({ f, axis, i, key: `${i}-${axis}-${j}` }))));
   return (
     <div className="sf-review">
       <Table aria-label="Review verdicts by axis and iteration">
-        <thead><tr><th scope="col">Axis</th>{iters.map((i) => <th key={i} scope="col">Iter {i}</th>)}</tr></thead>
+        <thead><tr><th scope="col">Axis</th>{iters.map((i) => <th key={i} scope="col">Iter {i}</th>)}{hasTok ? <th scope="col">Tokens</th> : null}</tr></thead>
         <tbody>
-          {axes.map((a) => (
+          {axes.map((a) => { const lastI = iters.filter((i) => reviews[i]?.[a]).pop(); return ( // burn's used model covers the axis: shown on its latest verdict
             <tr key={a}>
               <th scope="row" className="sf-review-axis">{a}</th>
               {iters.map((i) => {
@@ -23,14 +26,17 @@ export function ReviewMatrix({ run: r }: { run: Run }) {
                 if (!v) return (axesBy[i] ?? []).includes(a)
                   ? <td key={i} className="sf-verdict" data-v="pending">… pending</td>
                   : <td key={i} className="sf-verdict" data-v="not-reviewed"><span aria-hidden="true">·</span><span className="sf-sr-only">not reviewed</span></td>;
-                const n = (v.findings ?? []).length;
-                if (!reviewFailed(v)) return <td key={i} className="sf-verdict" data-v="passed">✓ pass{n ? <span className="sf-verdict-n"> · {n}</span> : null}</td>;
-                return <td key={i} className="sf-verdict" data-v="failed">✕ {(v.findings ?? []).filter(isBlocking).length || 'fail'}</td>;
+                const n = (v.findings ?? []).length, rn = runnerLabel(v.runner, false, undefined, i === lastI ? ab[a]?.used ?? '' : '');
+                const chip = rn ? <Badge quiet className="sf-rn" title={rn.title}>{rn.text}</Badge> : null;
+                if (!reviewFailed(v)) return <td key={i} className="sf-verdict" data-v="passed">✓ pass{n ? <span className="sf-verdict-n"> · {n}</span> : null}{chip}</td>;
+                return <td key={i} className="sf-verdict" data-v="failed">✕ {(v.findings ?? []).filter(isBlocking).length || 'fail'}{chip}</td>;
               })}
+              {hasTok ? <td className="sf-review-tok" title={ab[a] ? costText(ab[a]) : undefined}>{ab[a] ? formatTokens(ab[a].tokens) : '·'}</td> : null}
             </tr>
-          ))}
+          ); })}
         </tbody>
       </Table>
+      {extra.length ? <p className="sf-review-burn">{extra.map(([k, c]) => `${k} ${burnText(c)}`).join('  ·  ')}</p> : null}
       {finds.length ? (
         <ul className="sf-finds" aria-label="Findings">
           {finds.map(({ f, axis, i, key }) => {

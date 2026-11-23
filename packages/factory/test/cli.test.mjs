@@ -617,7 +617,11 @@ export function skillsTest(cli) {
   const one = get(`/api/runs/${o}/${rp}/${n}`);
   assert.equal(one.status, 200);
   assert.equal(JSON.parse(one.body).run.id, issueRun.id);
-  for (const r of [all, one]) assert.ok(!r.body.includes(tok), 'API reads never carry the ui token');
+  const state = get('/api/state'), sd = JSON.parse(state.body);
+  assert.equal(state.status, 200);
+  assert.deepEqual([sd.runs.map((r) => r.id), Object.keys(sd.skills.plans).includes('acme/kit'), sd.ui], [runsData().map((r) => r.id), true, undefined], 'what page() embeds, without ui');
+  assert.equal(get('/api/state', { 'x-factory-token': 'u'.repeat(32) }).status, 403);
+  for (const r of [all, one, state]) assert.ok(!r.body.includes(tok), 'API reads never carry the ui token');
   assert.equal(get(`/api/runs/${o}/${rp}/999999`).status, 404);
   assert.equal(get(`/api/runs/${o}/${rp}/x1`).status, 400);
   assert.equal(get('/api/runs/-bad/repo/1').status, 400);

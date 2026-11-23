@@ -1,16 +1,18 @@
 import {
-  ArrowUpRightIcon, Badge, Dot, MetricStat, OutcomePill, ReviewMatrix, SessionList, SourceChip, StageTrack, Timeline,
-  formatAgo, formatClock, formatDuration, formatMoney, formatTokens, outcomeOf, type Run,
+  ArrowUpRightIcon, Badge, Dot, MetricStat, OutcomePill, ReviewMatrix, STAGES, SessionList, SourceChip, StageTrack, Timeline,
+  burnText, costText, formatAgo, formatClock, formatDuration, formatMoney, formatTokens, outcomeOf, previewOf, repoOf, shortId, type Run,
 } from '@software-factory/design-system';
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 
 const Section = ({ title, children }: { title: string; children: ReactNode }) => (
   <section className="web-sec"><h3 className="sf-label">{title}</h3>{children}</section>
 );
+/** Only https links are rendered: run data comes from GitHub and local logs. */
+const Ext = ({ url, children }: { url?: string; children: ReactNode }) =>
+  /^https:\/\//.test(url ?? '') ? <a href={url} target="_blank" rel="noreferrer">{children} <ArrowUpRightIcon /></a> : null;
 
-/** Measured burn wins over reported numbers, as gate.ts spent() does. `burn` is set by core's derive() but not typed in the model. */
-export const spent = (r: Run & { burn?: { total?: { costUsd?: number | null; tokens?: number } } }) =>
-  r.burn?.total ?? { costUsd: r.costUsd, tokens: r.tokens };
+/** Measured burn wins over reported numbers, as gate.ts spent() does. */
+export const spent = (r: Run) => r.burn?.total ?? { tokens: r.tokens, costUsd: r.costUsd };
 
 function Decision({ run: r }: { run: Run }) {
   const o = outcomeOf(r);
@@ -34,26 +36,111 @@ function Decision({ run: r }: { run: Run }) {
     <>
       <div className="web-verdict"><Dot tone={tone as 'ok'} />{head}</div>
       {list.length ? <ul className="web-reasons">{list.map((x, i) => <li key={i}>{x}</li>)}</ul> : null}
+      {/* Approval is never taken from the page (#21): an escalated run is reviewed and merged on GitHub. */}
+      {o === 'escalated' && /^https:\/\//.test(r.pr ?? '') ? <p className="web-links"><Ext url={r.pr}>Review and merge on GitHub</Ext></p> : null}
       {r.reverted ? (
         <div className="web-callout">
           <b>Reverted</b>{r.reverted.reason ? ` · ${r.reverted.reason}` : null}
-          {r.reverted.pr ? <> · <a href={r.reverted.pr} target="_blank" rel="noreferrer">revert PR</a></> : null}
+          {/^https:\/\//.test(r.reverted.pr ?? '') ? <> · <a href={r.reverted.pr} target="_blank" rel="noreferrer">revert PR</a></> : null}
         </div>
       ) : null}
     </>
   );
 }
 
-export function RunDetail({ run: r, cap, costCap, now }: { run: Run; cap: number; costCap: number; now?: number }) {
+function Burn({ run: r }: { run: Run }) {
+  const b = r.burn;
+  if (!b?.total.tokens) return null;
+  const by = b.byStage ?? {}, parts = STAGES.filter((s) => (by[s]?.tokens ?? 0) > 0);
+  const iters = Object.keys(b.byIteration ?? {}).sort((x, y) => Number(x) - Number(y));
+  const note = [b.measured ? 'Measured from session transcripts' : 'Reported by subagents (other work not counted)',
+    b.measured && b.reported ? `subagents reported ${formatTokens(b.reported.tokens)}` : null,
+    b.total.unpriced ? `${formatTokens(b.total.unpriced)} on unpriced models` : null].filter(Boolean).join(' · ');
+  return (
+    <Section title="Burn">
+      <div className="web-burn-h"><span className="web-v">{formatTokens(b.total.tokens)} tokens</span><span>{costText(b.total)}</span>
+        <Badge tone={b.measured ? 'run' : 'neutral'} quiet={!b.measured}>{b.measured ? 'Measured' : 'Reported'}</Badge></div>
+      <p className="sf-muted web-burn-src">{note}</p>
+      <div className="web-burn-bar" role="img" aria-label={'Tokens by stage: ' + parts.map((s) => `${s} ${formatTokens(by[s]!.tokens)}`).join(', ')}>
+        {parts.map((s) => <i key={s} data-stage={s} style={{ flex: by[s]!.tokens } as CSSProperties} />)}
+      </div>
+      <ul className="web-burn-legend">{parts.map((s) => <li key={s}><span className="web-sw" data-stage={s} aria-hidden="true" /><b>{s}</b> {burnText(by[s]!)}</li>)}</ul>
+      {iters.length > 1 ? (
+        <ul className="web-burn-iters" aria-label="Tokens by iteration">
+          {iters.map((i) => <li key={i}><span>{i === '0' ? 'Before build' : `Iteration ${i}`}</span><span>{burnText(b.byIteration![i]!)}</span></li>)}
+        </ul>
+      ) : null}
+    </Section>
+  );
+}
+
+/** Environments per connector: the latest state of each, newest first. */
+function Deploys({ run: r }: { run: Run }) {
+  if (!r.deploys?.length) return null;
+  const by = new Map<string, NonNullable<Run['deploys']>>();
+  for (const d of r.deploys.slice().sort((a, b) => (Date.parse(b.at ?? '') || 0) - (Date.parse(a.at ?? '') || 0))) by.set(d.connector!, [...(by.get(d.connector!) ?? []), d]);
+  return (
+    <Section title="Deploy">
+      {[...by].map(([name, list]) => (
+        <div key={name} className="web-group">
+          <div className="sf-label">{name}</div>
+          <ul className="web-kids">
+            {list.map((d, i) => (
+              <li key={i} className="web-kid">
+                <span className="web-mono">{d.env}</span><span className="web-t" title={d.detail}>{d.detail || (d.at ? formatAgo(d.at) : '')}</span>
+                {d.sha ? <span className="web-mono" title={d.sha}>{d.sha.slice(0, 7)}</span> : null}
+                <span className="web-links"><Ext url={d.url}>Open</Ext></span>
+                <Badge tone={d.status === 'passed' ? 'ok' : d.status === 'failed' ? 'bad' : 'neutral'}>{d.state}</Badge>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </Section>
+  );
+}
+
+function Epic({ run: r, find, href }: { run: Run; find: (id: string) => Run | undefined; href: (id: string) => string }) {
+  if (!r.parent && !r.children?.length) return null;
+  const row = (id: string) => {
+    const c = find(id);
+    const kids = <><span className="web-mono">{shortId(id)}</span><span className="web-t">{c ? c.title : 'not tracked'}</span>{c ? <OutcomePill outcome={outcomeOf(c)} reverted={!!c.reverted} /> : null}</>;
+    return <li key={id} className="web-kid">{c ? <a href={href(id)}>{kids}</a> : kids}</li>;
+  };
+  return (
+    <Section title="Epic">
+      {r.parent ? <div className="web-group"><div className="sf-label">Part of</div><ul className="web-kids">{row(String(r.parent))}</ul></div> : null}
+      {r.children?.length ? <div className="web-group"><div className="sf-label">Split into</div><ul className="web-kids">{r.children.map((c) => row(String(c)))}</ul></div> : null}
+    </Section>
+  );
+}
+
+// claude-cli://open: a new Claude Code terminal in the run's worktree (else the latest session's cwd), prompt pre-filled, not sent.
+// The handler refuses relative paths, "..", network paths and control/bidi characters; refuse them here too.
+const deepCwd = (p: unknown): p is string => typeof p === 'string' && /^(\/(?!\/)|[A-Za-z]:\\)/.test(p) && !p.includes('..') && !/[\p{Cc}\p{Cf}]/u.test(p);
+export function openInClaude(r: Run) {
+  const cwd = [r.worktree, ...(r.sessions ?? []).map((s) => s.cwd)].find(deepCwd);
+  if (!cwd || !/^[\w.-]+\/[\w.-]+(#\d+|:[\w./-]+)$/.test(r.id)) return null; // owner/repo#N or an import's owner/repo:branch; it goes into a prompt that runs F
+  const q = `Continue factory run ${r.id}. Run F state '${r.id}' first.`;
+  if (encodeURIComponent(q).length >= 5000) return null;
+  return 'claude-cli://open?' + Object.entries({ cwd, q }).map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
+}
+
+export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, href = (id) => '#' + encodeURIComponent(id) }:
+  { run: Run; cap: number; costCap: number; now?: number; find?: (id: string) => Run | undefined; href?: (id: string) => string }) {
   const d = formatDuration(r.durationMs ?? Date.parse(r.updated ?? '') - Date.parse(r.started ?? ''));
   const { costUsd, tokens } = spent(r);
+  const src = r.burn ? (r.burn.measured ? 'measured' : 'reported') : '';
+  const repo = repoOf(r.id), open = openInClaude(r);
+  const closes = /^[\w.-]+\/[\w.-]+$/.test(repo) ? (r.issues ?? []).filter((n) => Number.isInteger(n) && n > 0) : [];
   return (
     <article className="web-detail">
       <div className="web-d-bar">
         <OutcomePill outcome={outcomeOf(r)} reverted={!!r.reverted} />
         {r.imported ? <SourceChip source={r.source ?? 'none'} prefix="Tracked" /> : <SourceChip source="factory" />}
+        {r.archived ? <Badge quiet>Archived</Badge> : null}
       </div>
-      <h2 className="web-d-title">{r.title || r.id}</h2>
+      <h2 className="web-d-title" id="d-title" tabIndex={-1}>{r.title || r.branch || r.id}</h2>
       {r.spec ? <p className="web-d-spec">{r.spec}</p> : null}
       <div className="web-d-meta">
         {r.author ? <span>{r.author}{r.association ? ` · ${r.association.toLowerCase()}` : ''}</span> : null}
@@ -61,22 +148,32 @@ export function RunDetail({ run: r, cap, costCap, now }: { run: Run; cap: number
         {r.updated ? <span>updated {formatAgo(r.updated, now)}</span> : null}
       </div>
       <div className="web-links">
-        {r.url ? <a href={r.url} target="_blank" rel="noreferrer">Issue <ArrowUpRightIcon /></a> : null}
-        {r.pr ? <a href={r.pr} target="_blank" rel="noreferrer">Pull request <ArrowUpRightIcon /></a> : null}
+        {r.imported ? null : <Ext url={r.url}>Issue</Ext>}
+        <Ext url={r.pr}>Pull request</Ext>
+        <Ext url={previewOf(r)?.url}>Preview</Ext>
+        {closes.map((n) => <Ext key={n} url={`https://github.com/${repo}/issues/${n}`}>Closes #{n}</Ext>)}
         {r.children?.length ? <Badge quiet>{r.children.length} runs</Badge> : null}
       </div>
       <Section title="Pipeline"><StageTrack run={r} /></Section>
-      {r.sessions?.length ? <Section title="Sessions"><SessionList sessions={r.sessions} now={now} /></Section> : null}
       <Section title="Review"><ReviewMatrix run={r} /></Section>
       <Section title="Decision"><Decision run={r} /></Section>
       <Section title="Run">
         <div className="web-facts">
           <MetricStat size="sm" label="Iterations" value={`${r.iteration ?? 0} / ${cap}`} sub={r.loopbacks?.length ? `${r.loopbacks.length} loop-back${r.loopbacks.length > 1 ? 's' : ''}` : 'no loop-backs'} />
-          {costUsd != null ? <MetricStat size="sm" label="Cost" value={formatMoney(costUsd)} {...(costCap > 0 ? { sub: `of ${formatMoney(costCap)} cap`, meter: costUsd / costCap } : {})} /> : null}
-          {tokens != null ? <MetricStat size="sm" label="Tokens" value={formatTokens(tokens)} /> : null}
+          {costUsd != null ? <MetricStat size="sm" label="Cost" value={r.burn ? costText(r.burn.total) : formatMoney(costUsd)} {...(costCap > 0 ? { sub: `of ${formatMoney(costCap)} cap${src ? ` · ${src}` : ''}`, meter: costUsd / costCap } : {})} /> : null}
+          {tokens != null ? <MetricStat size="sm" label="Tokens" value={formatTokens(tokens)} sub={src || undefined} /> : null}
           {d ? <MetricStat size="sm" label="Duration" value={d.join('')} sub={r.started ? `since ${formatClock(r.started, now)}` : undefined} /> : null}
         </div>
       </Section>
+      <Burn run={r} />
+      <Deploys run={r} />
+      <Epic run={r} find={find} href={href} />
+      {r.sessions?.length || open ? (
+        <Section title="Sessions">
+          {open ? <p className="web-links"><a href={open} title="Opens a new Claude Code terminal here (prompt pre-filled, not sent). Requires the claude-cli handler: send one message in any interactive claude session first.">Open in Claude</a></p> : null}
+          {r.sessions?.length ? <SessionList sessions={r.sessions} now={now} /> : null}
+        </Section>
+      ) : null}
       <Section title="Timeline"><Timeline events={r.events ?? []} archived={r.archived} now={now} /></Section>
     </article>
   );

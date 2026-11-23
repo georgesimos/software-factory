@@ -1,5 +1,5 @@
-// Screenshots apps/web (board + run sheet) in light and dark, at 1280px and 375px, into apps/web/screenshots/.
-// Injects the playground's demo data the way a host does (window.__FACTORY_DATA__), so no /api request is made.
+// Screenshots apps/web (board, then a run in the docked panel or, on a phone, the sheet) in light and dark, at 1280px and
+// 375px, into apps/web/screenshots/. Injects apps/web's fixture the way a host does (window.__FACTORY_DATA__), so no /api request is made.
 // Fails on horizontal overflow, a console error, or a request off localhost. Same approach as scripts/screenshots.mjs.
 // Usage: pnpm --filter @software-factory/web build && pnpm --filter @software-factory/web preview (in another terminal),
 // then `pnpm screenshots:web`. Set CHROME=/path/to/chrome to pick a browser.
@@ -10,7 +10,7 @@ import { chromium } from 'playwright-core';
 
 const URL_ = process.env.WEB_URL || 'http://localhost:5200/';
 const OUT = path.resolve(import.meta.dirname, '../apps/web/screenshots');
-const DATA = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, '../apps/playground/src/fixtures/demo.json'), 'utf8'));
+const DATA = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, '../apps/web/fixtures/state.json'), 'utf8'));
 // shortcut: adapted from scripts/screenshots.mjs (it runs on import); finds a Playwright Chromium in the macOS, Linux or
 // Windows cache, else local Chrome on macOS. Set CHROME anywhere else.
 const findChrome = () => {
@@ -57,9 +57,9 @@ for (const theme of ['light', 'dark']) {
     const save = async (name) => { const f = path.join(OUT, `${tag}-${name}.png`); await page.screenshot({ path: f, fullPage: name === 'board' }); shots.push(f); };
     await save('board');
     await page.locator('.sf-run-card', { hasText: 'newsletter' }).first().click();
-    await page.waitForSelector('dialog.sf-dialog[open]');
-    await overflow('run sheet');
-    await save('sheet');
+    await page.waitForSelector(view === 'mobile' ? 'dialog.sf-dialog[open]' : 'aside#detail h2.web-d-title');
+    await overflow(view === 'mobile' ? 'run sheet' : 'run panel');
+    await save(view === 'mobile' ? 'sheet' : 'panel');
     await ctx.close();
   }
 }
