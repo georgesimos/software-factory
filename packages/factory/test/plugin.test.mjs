@@ -42,7 +42,8 @@ test('F runs from a copy of the tracked files, the way Claude Code copies a plug
   const copy = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-plugin-'));
   for (const f of files) if (/^(packages\/(cli|core|server|adapters|ship|factory)|\.claude-plugin)\//.test(f) && fs.existsSync(path.join(ROOT, f))) fs.cpSync(path.join(ROOT, f), path.join(copy, f), { recursive: true });
   const env = { ...process.env, FACTORY_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'factory-plugin-state-')) };
-  const r = spawnSync(process.execPath, [path.join(copy, 'packages', 'factory', 'factory.mjs'), 'help'], { encoding: 'utf8', env }); // usage exits 1
+  const r = spawnSync(process.execPath, [path.join(copy, 'packages', 'factory', 'factory.mjs'), 'help'], { encoding: 'utf8', env });
+  assert.equal(r.status, 0);
   assert.equal(r.stderr, '');
   assert.match(r.stdout, /install-skill/);
   // A broken app.html (a bad merge): the event is still recorded, once, with a warning; F render itself fails loudly.

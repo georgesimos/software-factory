@@ -48,6 +48,14 @@ node packages/factory/factory.mjs install-skill
 
 On Windows the skill's shell steps need Git for Windows (Git Bash), which Claude Code also uses.
 
+**The `factory` command** (optional, for your own terminal): put a `factory` shim for this copy on your PATH, then run `factory help` from any folder.
+
+```bash
+node packages/factory/factory.mjs install-cli
+```
+
+It writes to `~/.local/bin` (or `~/bin` when that is the one on your PATH): an sh shim, plus `factory.cmd` on Windows. It needs no admin rights and never edits your shell profile. If the folder is not on PATH yet, it prints the one line to add. For a plugin install, ask Claude Code to run `F install-cli` (the skill knows where its copy is). A plugin update moves that copy, so run `install-cli` again after one; the shim says so if you forget. From a clone, `pnpm link --global` in `packages/factory` also works (it uses the package's `bin`). `factory <cmd>` is the same as `F <cmd>` in SKILL.md.
+
 Then say "factory owner/repo#123" in Claude Code. See [docs/architecture.md](docs/architecture.md) for details.
 
 ## Monorepo

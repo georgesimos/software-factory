@@ -4,8 +4,8 @@ import { test } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { command, linkSkill, open, opener, posixShell, run } from '../../core/src/platform.ts';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { cliShims, command, installCli, linkSkill, open, opener, posixShell, run } from '../../core/src/platform.ts';
 import { checkRunner } from '../../core/src/skills.ts';
 import { evalCommand } from '../../core/src/eval.ts';
 
@@ -106,4 +106,70 @@ test('factory.mjs on a Node without type stripping prints an upgrade message, no
 
 test('a script override (FACTORY_GH=stub.mjs) runs under this node on every OS', () => {
   for (const platform of ['win32', 'darwin']) assert.deepEqual(command('C:\\t\\gh-stub.mjs', ['pr', 'a b'], { ...win, platform }), { file: process.execPath, args: ['C:\\t\\gh-stub.mjs', 'pr', 'a b'] });
+});
+
+const ENTRY = path.join(import.meta.dirname, '..', 'factory.mjs');
+
+test('factory help, --help and -h list every command and exit 0; an unknown command prints the list and exits 1', () => {
+  const cmds = [...fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'cli', 'src', 'main.ts'), 'utf8').matchAll(/case '([\w-]+)':/g)].map((m) => m[1]);
+  assert.ok(cmds.length > 30);
+  for (const arg of ['help', '--help', '-h']) {
+    const r = spawnSync(process.execPath, [ENTRY, arg], { encoding: 'utf8' });
+    assert.equal(r.status, 0, arg);
+    for (const c of cmds) assert.match(r.stdout, new RegExp(`(^|\\s|\\|)${c}(\\s|$)`, 'm'), `${arg} lists ${c}`);
+  }
+  const bad = spawnSync(process.execPath, [ENTRY, 'no-such-command'], { encoding: 'utf8' });
+  assert.equal(bad.status, 1);
+  assert.match(bad.stdout, /^usage: factory <command>/);
+});
+
+test('cliShims: Windows gets a CRLF .cmd that passes %* and an sh shim with a forward-slash path; a % in the path is refused', () => {
+  const s = cliShims('C:\\Users\\Jane Doe\\sf\\packages\\factory\\factory.mjs', 'win32');
+  assert.deepEqual(Object.keys(s), ['factory', 'factory.cmd']);
+  assert.match(s['factory.cmd'], /\r\nnode "C:\\Users\\Jane Doe\\sf\\packages\\factory\\factory\.mjs" %\*\r\n$/);
+  assert.doesNotMatch(s['factory.cmd'].replace(/\r\n/g, ''), /\n/);
+  assert.match(s.factory, /^#!\/bin\/sh\n/);
+  assert.match(s.factory, /exec node 'C:\/Users\/Jane Doe\/sf\/packages\/factory\/factory\.mjs' "\$@"\n$/);
+  assert.deepEqual(Object.keys(cliShims('/a/factory.mjs', 'linux')), ['factory']);
+  assert.match(cliShims("/it's/factory.mjs", 'darwin').factory, /exec node '\/it'\\''s\/factory\.mjs'/);
+  assert.throws(() => cliShims('C:\\100%\\factory.mjs', 'win32'), /cannot hold/);
+});
+
+test('installCli: picks ~/.local/bin or ~/bin when on PATH, else prints the line to add', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-cli-home-'));
+  const r = installCli('/x/factory.mjs', { home, platform: 'linux', env: { PATH: '/usr/bin' } });
+  assert.equal(r.dir, path.join(home, '.local', 'bin'));
+  assert.equal(r.onPath, false);
+  assert.match(r.addToPath, /^export PATH=".*\.local\/bin:\$PATH"/);
+  assert.equal(installCli('/x/factory.mjs', { home, platform: 'linux', env: { PATH: `/usr/bin:${home}/bin/` } }).dir, path.join(home, 'bin'));
+}, { skip: process.platform === 'win32' && 'POSIX paths' });
+
+test('F install-cli in a temp HOME: the shim runs factory help, a re-run is idempotent, and a foreign factory file is never overwritten', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-cli-home-')), bin = path.join(home, '.local', 'bin');
+  const env = { ...process.env, HOME: home, USERPROFILE: home, PATH: [path.dirname(process.execPath), bin, process.env.PATH].join(path.delimiter) };
+  const install = () => spawnSync(process.execPath, [ENTRY, 'install-cli'], { encoding: 'utf8', env });
+  const first = install();
+  assert.equal(first.status, 0, first.stderr);
+  const out = JSON.parse(first.stdout);
+  assert.equal(out.onPath, true);
+  assert.equal(fs.realpathSync(out.dir), fs.realpathSync(bin));
+  assert.equal(install().status, 0);
+  const shim = path.join(bin, process.platform === 'win32' ? 'factory.cmd' : 'factory');
+  for (const arg of ['help', 'nope']) {
+    const r = run(shim, [arg], { encoding: 'utf8', env });
+    assert.equal(r.status, arg === 'help' ? 0 : 1, r.stderr);
+    assert.match(r.stdout, /usage: factory <command>[\s\S]*install-cli/);
+  }
+  fs.writeFileSync(path.join(bin, 'factory'), '#!/bin/sh\necho someone else\n');
+  const refused = install();
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /not written by install-cli/);
+});
+
+test('the sh shim fails loudly once its factory.mjs is gone (a plugin update moved it)', { skip: process.platform === 'win32' && 'sh shim' }, () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-cli-gone-')), f = path.join(d, 'factory');
+  fs.writeFileSync(f, cliShims(path.join(d, 'gone', 'factory.mjs')).factory, { mode: 0o755 });
+  const r = spawnSync(f, ['help'], { encoding: 'utf8' });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /is gone .*run F install-cli again/);
 });
