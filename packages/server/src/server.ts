@@ -5,7 +5,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { CAP, COST_CAP, TERMINAL, TOKEN_CAP } from '../../core/src/constants.ts';
-import { hooks } from '../../core/src/ship.ts';
+import { hooks, loadShipList } from '../../core/src/ship.ts';
 import { LOGIN, rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
 import { budget, budgetWhy, derive } from '../../core/src/derive.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
@@ -18,7 +18,7 @@ import { applyPreset, readSkills, setSkill, skillsData } from '../../core/src/sk
 import { sync } from '../../core/src/sync.ts';
 import { withMeasured } from '../../core/src/burn.ts';
 import { open } from '../../core/src/platform.ts';
-import { getSession, listSessions, startSession, subscribe } from '../../adapters/sessions.mjs';
+import { getSession, listSessions, startSession, stopAll, subscribe } from '../../adapters/sessions.mjs';
 
 // `F ui`: the dashboard on a loopback port, where the Skills sheet can save. Pure, so the self-test can drive it.
 export const same = (a, b) => typeof a === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -144,7 +144,10 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
   const id = `${repo}#${issue}`, r = derive(read())[id];
   if (r?.imported) throw new Error(`${id} is imported: never run claude -p in its checkout`);
   if (['escalated', 'rejected'].includes(r?.outcome)) throw new Error(`${id} is ${r.outcome}: it needs a human, not a new run`); // the factory handed it over
-  const gone = !r && readArchive().find((a) => a.id === id); // F archive drops it from the log, not from history
+  // F archive drops a run from the log, not from history: a stray later event (a sync, a step) doesn't reopen it. Only a new
+  // intake does, which a person starts (/software-factory <id>), so that is the explicit reopen.
+  const reopened = r?.events?.some((e) => e.stage === 'intake' && e.status === 'started');
+  const gone = !reopened && readArchive().find((a) => a.id === id);
   if (gone) throw new Error(`${id} is ${gone.outcome} (archived): it needs a human, not a new run`);
   const mine = listSessions().filter((x) => x.label === id);
   if (mine.some((x) => x.state === 'running')) throw new Error(`${id} already has a running session`); // before its first event lands
@@ -163,7 +166,9 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
   return startSession(h, { mode, prompt: `/software-factory ${id}`, resume, budget: budgetLeft(b), write: true }, { cwd, env, label: id, modules });
 }
 
-export function ui(port = 0) {
+// The F ui server, unprinted: the desktop main loads `url` in its window; F ui prints it. Resolves once listening.
+export async function serve(port = 0) {
+  await loadShipList(); // the wizard's ship step lists packages/ship's connectors
   const token = crypto.randomBytes(24).toString('base64url');
   const server = http.createServer((req, res) => {
     let body = '';
@@ -180,9 +185,18 @@ export function ui(port = 0) {
       if (r.stream.state !== 'running') res.end();
     });
   });
-  server.listen(port, '127.0.0.1', () => console.log(`factory ui: http://127.0.0.1:${server.address().port}/?t=${token}\nOnly this URL can change settings (skills.json, rules, projects). Ctrl-C to stop.`));
-  return server;
+  // close(): the desktop app's quit. Sessions run detached in their own process group, so they'd outlive it; stop them first.
+  const close = () => { stopAll(); server.closeAllConnections(); server.close(); };
+  return new Promise<{ server: http.Server; token: string; url: string; close: () => void }>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => {
+      server.off('error', reject); // later errors are logged, not swallowed by a settled promise
+      server.on('error', (e) => console.error(`factory ui: ${e.message}`));
+      resolve({ server, token, url: `http://127.0.0.1:${server.address().port}/?t=${token}`, close });
+    });
+  });
 }
+export const ui = (port = 0) => serve(port).then(({ url }) => console.log(`factory ui: ${url}\nOnly this URL can change settings (skills.json, rules, projects). Ctrl-C to stop.`));
 export const runRepos = () => [...new Set([...Object.keys(derive(read())), ...readArchive().map((a) => a.id)].map((id) => id.split(/[#:]/)[0]))];
 export function render() {
   const out = path.join(stateDir(), 'dashboard.html');
@@ -218,7 +232,7 @@ export function pageData(extra = {}) {
   let idea = {};
   try { idea = { ideas: ideas(events, Object.fromEntries(runs.map((r) => [r.id, r]))) }; } catch (e) { idea = { ideasError: e.message }; } // never fail the event that triggered the render
   return { generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)),
-    harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), fCmd: F_CMD,
+    harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), fCmd: F_CMD, ...(!F_CMD && { fMissing: true }),
     autoMerge: Object.fromEntries(Object.entries(projects()).map(([r, p]) => [r, p?.autoMerge !== false])), ...idea, ...extra };
 }
 export function page(extra = {}) {

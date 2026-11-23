@@ -13,7 +13,7 @@ import { projects, saveProject } from '../../core/src/workspace.ts';
 import { command, opener } from '../../core/src/platform.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { MAX_BYTES, killTree, listSessions, resolveSpec, startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
-import { budgetLeft, harnessReady, launchSession, resumeFor, ui, uiHandle } from '../../server/src/server.ts';
+import { budgetLeft, harnessReady, launchSession, resumeFor, serve, uiHandle } from '../../server/src/server.ts';
 
 setup();
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-shome-'));
@@ -116,6 +116,9 @@ test('Windows: stop() ends the whole tree with taskkill, since kill() would end 
   killTree(child, 'linux', run, () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
   killTree({ pid: 0, kill: () => { killed += 10; } }, 'darwin', run, kill); killTree({ pid: 0 }, 'win32', run, kill);
   assert.deepEqual([calls.length, groups.length, killed], [1, 1, 1], 'never pid 0; the child alone when its group is gone');
+  const waited = []; // quit: spawnSync's shape (no .on), bounded so quit can't hang
+  killTree(child, 'win32', (...a) => { waited.push(a); return { status: 0 }; }, kill, true);
+  assert.deepEqual(waited, [['taskkill', ['/pid', '4242', '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5000 }]]);
 });
 
 test('the command is found on the PATH and PATHEXT the session gets, not this process\'s', () => {
@@ -151,6 +154,10 @@ test('launchSession(): an attached repo and an issue number only; #25\'s refusal
   assert.ok(archive(-1).archived >= 2, 'F archive moves the finished runs out of the log');
   for (const [n, o] of [[80, 'escalated'], [81, 'rejected']])
     assert.throws(() => launchSession({ repo: 'acme/app', issue: n }), new RegExp(`is ${o} \\(archived\\): it needs a human`), 'an archived run is still a human\'s call');
+  record('acme/app#80', 'spec', 'started', {}); // a stray event after the archive: a live run again, with no outcome of its own
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 80 }), /is escalated \(archived\)/, 'a later event doesn\'t reopen it');
+  record('acme/app#80', 'intake', 'started', {}); // a person ran /software-factory on it again
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 80 }), /already has an active run/, 'reopened: the ordinary rules apply');
   record('acme/app#5', 'intake', 'started', { imported: true });
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 5 }), /imported/);
   process.env.STUB_LOGGED_OUT = '1'; harnessReady.clear();
@@ -234,11 +241,8 @@ test('/api/sessions: POST starts one behind the token and Origin checks; GET lis
 });
 
 test('F ui streams a live session over HTTP as server-sent events, to the end', async () => {
-  const log = console.log; let url;
-  console.log = (x) => { url = /http:\S+/.exec(String(x))?.[0] ?? url; };
-  const server = ui(0);
+  const { server, url } = await serve(0);
   try {
-    await new Promise((r) => server.once('listening', r));
     const u = new URL(url), t = u.searchParams.get('t'), H = { 'x-factory-token': t, origin: u.origin, 'content-type': 'application/json' };
     const { session } = await (await fetch(`${u.origin}/api/sessions`, { method: 'POST', headers: H, body: JSON.stringify({ repo: 'acme/app', issue: 7 }) })).json();
     const signal = AbortSignal.timeout(10_000); // a stream that never ends fails here instead of hanging the run
@@ -247,7 +251,24 @@ test('F ui streams a live session over HTTP as server-sent events, to the end', 
     const blocks = (await es.text()).split('\n\n').filter(Boolean);
     assert.deepEqual(blocks.map((b) => JSON.parse(b.split('data: ')[1]).type).at(-1), 'exit');
     assert.match(blocks[0], /^id: 0\ndata: /);
-  } finally { console.log = log; server.closeAllConnections(); server.close(); }
+  } finally { server.closeAllConnections(); server.close(); }
+});
+
+test('serve().close(), the desktop app\'s quit: stops the sessions it started (detached, so they would outlive it), then the server', async () => {
+  const { url, close } = await serve(0);
+  const u = new URL(url), H = { 'x-factory-token': u.searchParams.get('t'), origin: u.origin, 'content-type': 'application/json' };
+  process.env.STUB_HANG = '1'; // the stub claude runs until killed
+  let id;
+  try { ({ session: id } = await (await fetch(`${u.origin}/api/sessions`, { method: 'POST', headers: H, body: JSON.stringify({ repo: 'acme/app', issue: 91 }) })).json()); }
+  finally { delete process.env.STUB_HANG; }
+  assert.equal(getSession(id).state, 'running');
+  const s = getSession(id), stop = s.stop, how = [];
+  s.stop = (wait) => { how.push(wait); stop(wait); };
+  close();
+  assert.deepEqual(how, [true], 'quit waits for the kill (taskkill on Windows)');
+  assert.ok((await finished(getSession(id))).length, 'the session ends');
+  assert.notEqual(getSession(id).state, 'running');
+  assert.equal(await fetch(`${u.origin}/`).then(() => 'up', () => 'down'), 'down');
 });
 
 // Stand-ins for node-pty and the Agent SDK: the host passes these in, so no real module or binary is touched.
