@@ -85,6 +85,6 @@ export function onboardText(s, platform = process.platform) {
     L.push(`   ${sc}: ${pol.map(([k, x]) => `${k}=${JSON.stringify(x.value)}`).join(', ') || 'built-in'}${am}`);
   }
   L.push(`   ${F_CMD} rules set <scope> ci required|advisory|skip --reason "…"   ·   ${F_CMD} automerge <owner/repo> on|off`);
-  L.push('', '6. Start', '   In Claude Code: /software-factory <owner/repo>#<issue>', `   What's ready: ${F_CMD} queue <owner/repo>   ·   Live setup: ${F_CMD} ui`);
+  L.push('', '6. Start', `   In Claude Code: ${F_CMD.includes('~/.claude/skills/') ? '/software-factory' : '/software-factory:software-factory (plugin) or /software-factory'} <owner/repo>#<issue>`, `   What's ready: ${F_CMD} queue <owner/repo>   ·   Live setup: ${F_CMD} ui`);
   return L.join('\n');
 }

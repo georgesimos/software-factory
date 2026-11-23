@@ -175,6 +175,8 @@ export async function main(argv) {
         out({ opened: open(target) }); break;
       }
       case 'install-skill': // link this checkout's packages/factory as a personal skill; --codex: Codex's ~/.agents/skills instead
+        if (run && run !== '--codex') throw new Error('usage: install-skill [--codex]');
+        if (/[\\/]plugins[\\/]cache[\\/]/.test(import.meta.dirname)) throw new Error('this F runs from the Claude Code plugin cache, which an update replaces; the plugin already provides the skill. Link a clone instead.');
         out(linkSkill(path.join(import.meta.dirname, '..', '..', 'factory'), path.join(os.homedir(), ...(run === '--codex' ? ['.agents'] : ['.claude']), 'skills', 'software-factory'))); break;
       case 'ui': ui(Number(run) || 0); break;
       case 'demo': // never pollute the real log with fixtures

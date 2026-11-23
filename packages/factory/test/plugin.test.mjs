@@ -16,7 +16,7 @@ test('marketplace and plugin manifests agree, and the skills path holds the soft
   assert.ok(m.owner?.name);
   assert.deepEqual(m.plugins.map((x) => [x.name, x.source]), [['software-factory', './']]); // the repo root: factory.mjs imports ../cli and ../core
   assert.equal(p.name, 'software-factory');
-  assert.match(p.version, /^\d+\.\d+\.\d+$/);
+  assert.equal(p.version, undefined, 'no pinned version: the commit SHA versions the plugin cache, so every merge reaches installs');
   assert.equal(p.license, json('package.json').license);
   assert.match(p.skills, /^\.\//);
   const skill = fs.readFileSync(path.join(ROOT, p.skills, 'SKILL.md'), 'utf8');

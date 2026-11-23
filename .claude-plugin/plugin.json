@@ -1,8 +1,9 @@
 {
   "name": "software-factory",
-  "version": "0.1.0",
   "description": "Issue to merged (or escalated) PR through intake, spec, build, multi-axis review, a mechanical gate and approval. Keeps a local dashboard with token burn.",
-  "author": { "name": "georgesimos" },
+  "author": {
+    "name": "georgesimos"
+  },
   "repository": "https://github.com/georgesimos/software-factory",
   "license": "Apache-2.0",
   "skills": "./packages/factory"
