@@ -642,6 +642,8 @@ export function skillsTest(cli) {
   fs.writeFileSync(path.join(web, 'assets', 'new.js'), 'export {}'); // after a rebuild, without a restart
   assert.deepEqual([app('/app/assets/new.js').status, app('/app/assets/new.js').cache], [200, 'public, max-age=31536000, immutable']);
   assert.equal(app('/app/').cache, undefined, 'index.html is never cached');
+  fs.rmSync(path.join(web, 'assets', 'new.js')); // still in the cached listing
+  assert.deepEqual([app('/app/assets/new.js').status, app('/app/assets/new.js').body.includes(web)], [404, false]);
   assert.equal(app('/app/', { host: 'evil.test:4242' }).status, 403);
   assert.match(app('/app/', {}, path.join(web, 'missing')).body, /not built: run pnpm --filter @software-factory\/web build/);
   assert.equal(uiHandle({ method: 'POST', url: '/app/', headers: H, body: '{}' }, ctx).status, 404);
