@@ -1,3 +1,5 @@
 packages:
   - packages/*
   - apps/*
+onlyBuiltDependencies:
+  - node-pty # its install script: the Linux build (node-gyp) and spawn-helper permissions; pnpm 10 skips scripts unless named

@@ -53,7 +53,7 @@ export function killTree(child, platform = process.platform, run, kill = process
 }
 // Detached children don't get the terminal's Ctrl-C, so a running session is stopped when this process ends: waited for,
 // since nothing after 'exit' or quit gets another turn of the event loop.
-export const stopAll = () => { for (const s of sessions.values()) if (s.state === 'running') s.stop(true); };
+export const stopAll = () => { for (const s of sessions.values()) if (s.state === 'running') { s.stop(true); s.stop = () => {}; } }; // once: quit, then 'exit', would taskkill twice
 process.once('exit', stopAll);
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(sig, () => { stopAll(); process.kill(process.pid, sig); }); // then the default action
 

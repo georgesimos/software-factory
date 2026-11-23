@@ -47,7 +47,7 @@ describe('board parity with dashboard.html', () => {
     await screen.findByRole('region', { name: /^Done/ });
     expect(screen.queryByRole('complementary')).toBeNull(); // closed until a run is chosen
     act(() => { location.hash = encodeURIComponent('acme/shop#43'); dispatchEvent(new HashChangeEvent('hashchange')); });
-    const panel = screen.getByRole('complementary');
+    const panel = await screen.findByRole('complementary'); // the hashchange listener attaches in an effect, which can land after the first paint
     expect(within(panel).getByRole('heading', { name: 'Add newsletter signup to footer' })).toBeTruthy();
     expect(document.title).toMatch(/Add newsletter signup to footer · Software Factory$/);
     await userEvent.click(within(panel).getByRole('button', { name: 'Focus' }));
