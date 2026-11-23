@@ -13,7 +13,7 @@ export interface Runner {
 }
 export interface Usage { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }
 export interface LocalChecks { sha?: string; state?: string; commands?: { cmd: string; exit: number }[] }
-export interface Deploy { connector?: string; kind?: string; env?: string; state?: string; status?: string; url?: string; sha?: string; at?: string; detail?: string; creator?: string; ts?: string }
+export interface Deploy { connector?: string; kind?: string; env?: string; state?: string; status?: string; url?: string; sha?: string | null; at?: string; detail?: string; creator?: string; ts?: string }
 export interface Note { id?: string; step?: string; text?: string; by?: string; ts?: string; state: 'pending' | 'applied'; appliedTo?: string[]; appliedAt?: string; claim?: unknown }
 export interface Session { agent?: string; id: string; cwd?: string; last?: string }
 
@@ -24,7 +24,7 @@ export interface FactoryEvent {
   author?: string; association?: string; source?: string; imported?: boolean; origin?: string; originAssociation?: string;
   harness?: string; sessionId?: string; cwd?: string;
   costUsd?: number; tokens?: number; usage?: Usage; model?: string;
-  axis?: string; axes?: string[]; role?: string; sha?: string; findings?: Finding[]; runner?: Runner; localChecks?: LocalChecks;
+  axis?: string; axes?: string[]; role?: string; sha?: string | null; findings?: Finding[]; runner?: Runner; localChecks?: LocalChecks;
   next?: string; reasons?: string[]; action?: string; by?: string; mergedBy?: string | null; reason?: string;
   connector?: string; env?: string; kind?: string; state?: string; at?: string; detail?: string; creator?: string; // ship
   id?: string; step?: string; text?: string; notes?: string[]; steps?: string[]; claim?: unknown; // note
@@ -63,7 +63,7 @@ export interface Run {
   sessions?: Session[]; costUsd?: number; tokens?: number; burn?: Burn;
   localChecks?: LocalChecks; reviewedSha?: string; runners?: Record<string, Runner | undefined>;
   decision?: { action?: string; reasons?: string[] };
-  humanMerge?: { by?: string | null; sha?: string; ts: string };
+  humanMerge?: { by?: string | null; sha?: string | null; ts: string };
   reverted?: { pr?: string; reason?: string };
   deploys?: Deploy[]; notes?: Note[];
   archived?: boolean; sessionEvents?: { ts: string; stage: string; status: string; sessionId: string }[];
