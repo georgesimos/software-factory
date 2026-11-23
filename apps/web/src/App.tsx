@@ -18,16 +18,22 @@ function useMedia(q: string) {
   return on;
 }
 
+/** A poll's data, keeping the keys written since it started (they hold a newer reply). */
+export const merged = (prev: FactoryData | undefined, data: FactoryData, keep: string[]): FactoryData =>
+  prev && keep.length ? { ...data, ...Object.fromEntries(keep.map((k) => [k, prev[k as keyof FactoryData]])) } : data;
+
 export function App({ load = loadData }: { load?: () => Promise<FactoryData> }) {
   const [state, setState] = useState<{ data?: FactoryData; error?: string }>({});
-  const writes = useRef(0); // a poll that started before a write must not undo its reply
+  const writes = useRef<string[][]>([]); // the keys each write's reply patched
+  // A poll that started before a write keeps that write's keys and takes the rest, so steady editing never freezes the board.
+  const settle = useCallback((w: number, data: FactoryData) => setState((s) => ({ data: merged(s.data, data, writes.current.slice(w).flat()) })), []);
   useEffect(() => {
     let ignore = false, waiting = false, timer: ReturnType<typeof setTimeout> | undefined;
     const later = () => { timer = setTimeout(() => { if (document.hidden) waiting = true; else go(false); }, 10_000); }; // no polling in a hidden tab
     const onVis = () => { if (waiting && !document.hidden) { waiting = false; go(false); } };
-    const go = (first: boolean) => { const w = writes.current; return load().then((data) => {
+    const go = (first: boolean) => { const w = writes.current.length; return load().then((data) => {
       if (ignore) return;
-      if (w === writes.current) setState({ data });
+      settle(w, data);
       if (data.token) later(); // F ui: live; injected data is a snapshot
     }, (e: unknown) => {
       if (ignore) return;
@@ -37,10 +43,10 @@ export function App({ load = loadData }: { load?: () => Promise<FactoryData> }) 
     go(true);
     document.addEventListener('visibilitychange', onVis);
     return () => { ignore = true; clearTimeout(timer); document.removeEventListener('visibilitychange', onVis); };
-  }, [load]);
+  }, [load, settle]);
   const { data, error } = state;
-  const patch = useCallback((p: Partial<FactoryData>) => (writes.current++, setState((s) => (s.data ? { data: { ...s.data, ...p } } : s))), []); // a write's reply, until the next poll
-  const refresh = useCallback(() => { const w = ++writes.current; load().then((d) => { if (w === writes.current) setState({ data: d }); }, () => {}); }, [load]); // after a setup write
+  const patch = useCallback((p: Partial<FactoryData>) => (writes.current.push(Object.keys(p)), setState((s) => (s.data ? { data: { ...s.data, ...p } } : s))), []); // a write's reply, until the next poll
+  const refresh = useCallback(() => { const w = writes.current.length; load().then((d) => settle(w, d), () => {}); }, [load, settle]); // after a setup write
   return data ? <Shell data={data} patch={patch} refresh={refresh} /> : (
     <>
       <header className="web-top"><span className="web-brand"><span className="sf-mark" aria-hidden="true" />Software Factory</span><ThemeToggle /></header>
@@ -65,8 +71,8 @@ function Shell({ data, patch, refresh }: { data: FactoryData; patch: (p: Partial
   const setCollapsed = (c: boolean) => { store('sf.panelCollapsed', c ? '1' : '0'); setCollapsedState(c); };
   const wide = useMedia(WIDE);
   const [skillsOpen, setSkillsOpen] = useState<string | false>(false); // the scope it opens on
-  // No project attached yet: set up first, unless it was closed in this tab. Data without a projects list never opens it.
-  const [setupOpen, setSetupOpen] = useState(() => Array.isArray(data.projects) && !data.projects.length && session('sf.onboardClosed') !== '1');
+  // Nothing yet (no project, run or idea): set up first, unless it was closed in this tab. Data without a projects list never opens it.
+  const [setupOpen, setSetupOpen] = useState(() => Array.isArray(data.projects) && !projects.length && session('sf.onboardClosed') !== '1');
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 60_000); return () => clearInterval(t); }, []); // "Updated 3m ago" stays true
   const byId = new Map(data.runs.map((r) => [r.id, r]));
@@ -135,7 +141,7 @@ function Shell({ data, patch, refresh }: { data: FactoryData; patch: (p: Partial
       </div>
       <SetupWizard open={setupOpen} onClose={() => { session('sf.onboardClosed', '1'); setSetupOpen(false); }} data={data} token={data.token}
         onSkills={(skills) => patch({ skills })} refresh={refresh} openSkills={(s) => setSkillsOpen(s)} />
-      {data.skills ? <SkillsSheet key={String(skillsOpen)} open={!!skillsOpen} onClose={() => setSkillsOpen(false)} skills={data.skills} harnesses={data.harnesses} token={data.token} scope={skillsOpen || project} fCmd={data.fCmd} onSaved={(skills) => patch({ skills })} /> : null}
+      {data.skills ? <SkillsSheet open={!!skillsOpen} onClose={() => setSkillsOpen(false)} skills={data.skills} harnesses={data.harnesses} token={data.token} scope={skillsOpen || project} fCmd={data.fCmd} onSaved={(skills) => patch({ skills })} /> : null}
       {wide ? null : <Sheet open={!!sel} onClose={close} title={sel?.id ?? 'Run'}>{sel ? detail(sel) : null}</Sheet>}
     </>
   );
