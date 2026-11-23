@@ -6,7 +6,7 @@ import path from 'node:path';
 import { COST_CAP } from '../../core/src/constants.ts';
 import { HERE } from '../factory.mjs';
 import { SUB_AXIS } from '../../core/src/burn.ts';
-import { axesFor, decide, risk } from '../../core/src/gate.ts';
+import { axesFor, decide, metrics, risk } from '../../core/src/gate.ts';
 import { PRESETS, availablePlan, checkRunner, older } from '../../core/src/skills.ts';
 import { derive } from '../../core/src/derive.ts';
 import { relabelMerged } from '../../core/src/github.ts';
@@ -711,10 +711,25 @@ export function syncTest(cli) {
   for (const [id, pr] of [['acme/app#17', 'https://github.com/acme/app/pull/18'], ['acme/app#19', 'https://github.com/evil/app/pull/19']]) { // a PR on another branch, or in another repo
     record(id, 'intake', 'started', { title: 'g', association: 'OWNER' });
     record(id, 'build', 'passed', { pr });
+    record(id, 'approve', 'decided', { action: 'escalate', reasons: ['x'] });
     record(id, 'approve', 'escalated');
   }
+  // A merge between "decided escalate" and "escalated" counts; after a "merge" decision (F merge merged, then threw) it never does.
+  const tick = () => { const t = Date.now(); while (Date.now() < t + 3); return new Date().toISOString(); };
+  for (const [id, action] of [['acme/app#26', 'escalate'], ['acme/app#27', 'merge']]) {
+    const n = id.split('#')[1];
+    record(id, 'intake', 'started', { title: 'd', association: 'OWNER' });
+    record(id, 'build', 'passed', { pr: `https://github.com/acme/app/pull/${n}`, branch: `factory/issue-${n}` });
+    record(id, 'approve', 'decided', { action, reasons: [] });
+  }
+  const between = tick(); tick();
+  for (const id of ['acme/app#26', 'acme/app#27']) record(id, 'approve', 'escalated');
   record('acme/app#11', 'approve', 'escalated'); // imported: decide always escalates it, and a merge elsewhere is not the factory's
-  const hsync = (env2) => JSON.parse(cli(['sync', 'acme/app'], '', { ...env, STUB_CLOSED: '10,11,15', ...env2 }))[0].humanMerged;
+  const hsyncAll = (env2) => JSON.parse(cli(['sync', 'acme/app'], '', { ...env, STUB_CLOSED: '10,11,15', ...env2 }))[0], hsync = (env2) => hsyncAll(env2).humanMerged;
+  const down = hsyncAll({ STUB_PR_STATE: 'MERGED', STUB_PR_VIEW_FAIL: '1' }); // a failed lookup skips the run, is reported, and never breaks sync
+  assert.deepEqual([down.humanMerged, down.humanMergeErrors.map((x) => x.run)], [[], [H, 'acme/app#17', 'acme/app#26']]);
+  assert.match(down.humanMergeErrors[0].error, /HTTP 502/);
+  assert.equal(hsyncAll({}).humanMergeErrors, undefined);
   assert.deepEqual(hsync({}), []); // still open
   assert.deepEqual(hsync({ STUB_PR_STATE: 'CLOSED' }), []);
   assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED', STUB_MERGED_AT: '2000-01-01T00:00:00Z' }), []); // merged before the escalation
@@ -722,7 +737,10 @@ export function syncTest(cli) {
   assert.match(cliErr(['event', H, 'approve', 'merged', '-'], '{"by":"human"}', env), /recorded by "merge"/);
   assert.match(cliErr(['event', H, 'spec', 'passed', '-'], '{"mergedBy":"x"}', env), /mergedBy/);
   assert.equal(derive(read())[H].outcome, 'escalated');
-  assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED' }), [H]);
+  const labelLog = path.join(io.dir, 'human-labels.log');
+  assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED', STUB_MERGED_AT: between, STUB_LABEL_LOG: labelLog }), [H, 'acme/app#26']);
+  assert.match(fs.readFileSync(labelLog, 'utf8'), /^api -X POST repos\/acme\/app\/issues\/16\/labels --input - \{"labels":\["factory:merged"\]\}/m); // relabelled, never merged
+  assert.equal(derive(read())['acme/app#27'].outcome, 'escalated');
   const hm = derive(read())[H];
   assert.equal(hm.outcome, 'merged');
   assert.deepEqual({ ...hm.humanMerge, ts: undefined }, { by: 'octo', sha: 'f'.repeat(40), ts: undefined });
@@ -731,6 +749,9 @@ export function syncTest(cli) {
   assert.equal(derive(read())['acme/app#11'].humanMerge, undefined);
   assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED' }), []); // recorded once
   assert.match(cliErr(['intake', H], '', env), /merged by octo: it needs a human, not a new run/);
+  record(H, 'approve', 'reverted', { pr: 'https://github.com/acme/app/pull/98', reason: 'main went red' }); // reverted (and the issue reopened): it may be built again
+  assert.equal(JSON.parse(cli(['intake', H], '', env)).title, 'app issue');
+  assert.deepEqual(['merged', 'humanMerged', 'escalated', 'mergeRate', 'costPerMergeUsd'].map((k) => metrics([{ outcome: 'merged', costUsd: 4 }, { outcome: 'merged', humanMerge: {}, costUsd: 2 }, { outcome: 'escalated' }])[k]), [1, 1, 2, 0.333, 6]); // merge rate is the factory's own
   // Intake: issue 5 is claimed by open PR 10 (exact closing ref) -> stop, record nothing; issue 8's only PR is the factory's own.
   const busy = JSON.parse(cli(['intake', 'acme/app#5'], '', env));
   assert.deepEqual(busy.inProgress, ['https://github.com/acme/app/pull/10']);

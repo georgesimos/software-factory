@@ -6,7 +6,7 @@ import { dashboard } from './log.ts';
 import { shipTrack } from './ship.ts';
 import { read, record, sessionsFile, stateDir } from './log.ts';
 import { derive } from './derive.ts';
-import { gh, openPRs } from './github.ts';
+import { gh, openPRs, relabelMerged } from './github.ts';
 import { git, ls, projects, projectsFile } from './workspace.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 
@@ -117,16 +117,21 @@ export function sync(repo, repoPath) {
     if (reason) { record(r.id, 'approve', 'closed', { reasons: [reason] }); closed.push(r.id); }
   }
   // Escalated runs whose PR a human then merged on GitHub (#21): recorded as merged by a human. Every fact comes from
-  // GitHub (state, merge time, merger, merge commit, head branch), never from issue, PR or comment text. Record only:
-  // nothing here merges, relabels or re-runs. shortcut: archived escalated runs are not checked; they stay escalated.
-  const humanMerged = [];
+  // GitHub (state, merge time, merger, merge commit, head branch), never from issue, PR or comment text. It never merges
+  // or re-runs; it only records, then relabels the issue factory:merged. The merge must follow the run's latest decision,
+  // and that decision must be "escalate": after a "merge" decision, a merged PR may be F merge's own that then threw.
+  // A failed lookup skips the run and is reported, never breaks sync. shortcut: archived escalated runs are not checked.
+  const humanMerged = [], humanMergeErrors = [];
   for (const r of runs) {
     const m = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)$/.exec(r.pr || ''); // r.pr was typed by the orchestrator
-    if (r.outcome !== 'escalated' || r.imported || !m || m[1] !== repo || open.has(r.pr)) continue; // imported runs: not the factory's work
-    const p = JSON.parse(gh('pr', 'view', m[2], '-R', repo, '--json', 'state,mergedAt,mergedBy,mergeCommit,headRefName'));
-    const escalatedAt = r.events.findLast((e) => e.status === 'escalated')?.ts;
-    if (p.state !== 'MERGED' || p.headRefName !== `factory/issue-${r.id.split('#')[1]}` || !(Date.parse(p.mergedAt) > Date.parse(escalatedAt))) continue;
+    const decided = r.events.findLast((e) => e.stage === 'approve' && e.status === 'decided');
+    if (r.outcome !== 'escalated' || r.imported || !m || m[1] !== repo || open.has(r.pr) || decided?.action !== 'escalate') continue; // imported runs: not the factory's work
+    let p;
+    try { p = JSON.parse(gh('pr', 'view', m[2], '-R', repo, '--json', 'state,mergedAt,mergedBy,mergeCommit,headRefName')); }
+    catch (e) { humanMergeErrors.push({ run: r.id, error: String(e?.stderr || e?.message || e).trim().split('\n')[0] }); continue; }
+    if (p.state !== 'MERGED' || p.headRefName !== `factory/issue-${r.id.split('#')[1]}` || !(Date.parse(p.mergedAt) > Date.parse(decided.ts))) continue;
     record(r.id, 'approve', 'merged', { by: 'human', mergedBy: p.mergedBy?.login || null, sha: p.mergeCommit?.oid || null });
+    relabelMerged(r.id);
     humanMerged.push(r.id);
   }
   const links = sessionsFile();
@@ -138,5 +143,5 @@ export function sync(repo, repoPath) {
   const head = new Map(prs.map((p) => [p.url, p.headRefOid])); // deploy state of each in-progress run's PR head (finished runs aren't polled)
   const ship = shipTrack(Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') && r.outcome === 'in-progress' && head.get(r.pr)).map((r) => ({ run: r.id, repo, sha: head.get(r.pr), path: repoPath })));
   dashboard.render();
-  return { repo, path: repoPath, added, attached, closed, humanMerged, ...(ship && { ship }) };
+  return { repo, path: repoPath, added, attached, closed, humanMerged, ...(humanMergeErrors.length && { humanMergeErrors }), ...(ship && { ship }) };
 }
