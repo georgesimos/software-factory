@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { CAP, COST_CAP, TOKEN_CAP } from '../../core/src/constants.ts';
-import { hooks } from '../../factory/factory.mjs';
+import { hooks } from '../../core/src/ship.ts';
 import { LOGIN, rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
 import { derive } from '../../core/src/derive.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
@@ -12,7 +12,7 @@ import { ideas, startIdea } from '../../core/src/project.ts';
 import { metrics } from '../../core/src/gate.ts';
 import { onboardConfig, onboardState, readOnboard, setShip } from '../../core/src/onboard.ts';
 import { projects, wtInfo } from '../../core/src/workspace.ts';
-import { read, readArchive, sessionsFile, stateDir } from '../../core/src/log.ts';
+import { dashboard, read, readArchive, sessionsFile, stateDir } from '../../core/src/log.ts';
 import { readSkills, setSkill, skillsData } from '../../core/src/skills.ts';
 import { sync } from '../../core/src/sync.ts';
 import { withMeasured } from '../../core/src/burn.ts';
@@ -95,6 +95,7 @@ export function render() {
   fs.writeFileSync(out, page()); // never carries a ui token: that exists only in what `F ui` serves
   return out;
 }
+dashboard.render = render; // core calls dashboard.render() after every state change
 // The run list the dashboard embeds and GET /api/runs returns: live + archived, linked sessions, worktree path.
 export function runsData(events = read()) {
   const live = Object.values(withMeasured(derive(events), events));

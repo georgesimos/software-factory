@@ -3,12 +3,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { STAGES, STATUSES, TERMINAL, VERIFIER_KEYS } from './constants.ts';
-import { dashboard } from '../../factory/factory.mjs';
 import { cleanup, wtInfo } from './workspace.ts';
 import { runnerStamp } from './review.ts';
 import { withMeasured } from './burn.ts';
 import { derive, validateReview, validateUsage } from './derive.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
+
+// The dashboard renderer, registered by packages/server when it loads. Core alone (no server) skips the render.
+export const dashboard = { render: () => undefined };
 
 // One mutable object, not `let`s: once code moves into packages, an importer cannot reassign a binding (docs/plans/split.md S1): where F reads and writes, and which binaries it runs.
 // gh/git are overridable only so the self-test can stub GitHub; projects: demo and test point it at fixture transcripts.

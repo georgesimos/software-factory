@@ -14,3 +14,4 @@ export * from './eval.ts';
 export * from './project.ts';
 export * from './onboard.ts';
 export * from './demo.ts';
+export * from './ship.ts';
