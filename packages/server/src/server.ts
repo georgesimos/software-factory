@@ -2,6 +2,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { CAP, COST_CAP, TOKEN_CAP } from '../../core/src/constants.ts';
 import { hooks } from '../../core/src/ship.ts';
@@ -108,27 +109,27 @@ export function runsData(events = read()) {
   for (const r of runs) { const w = wtInfo(r.id); if (w?.path) r.worktree = w.path; } // the dashboard's "Open in Claude" cwd
   return runs;
 }
-export function page(extra = {}, keep = () => true) { // keep(owner/repo): which projects to show (the Artifact leaves out fixtures)
+export function page(extra = {}) {
   const events = read();
+  const runs = runsData(events);
   const repoOf = (id) => id.split(/[#:]/)[0];
-  const runs = runsData(events).filter((r) => keep(repoOf(r.id)));
-  const attached = Object.keys(projects()).filter(keep);
   const byProject = {};
   for (const p of new Set(runs.map((r) => repoOf(r.id)))) byProject[p] = metrics(runs.filter((r) => repoOf(r.id) === p));
-  const ruleData = { rules: {}, ruleHistory: events.filter((e) => e.stage === 'rules' && keep(e.run)).slice(-100) };
-  try { const cfg = readSkills(); for (const p of new Set([...Object.keys(byProject), ...attached])) ruleData.rules[p] = rules(p, cfg); }
+  const ruleData = { rules: {}, ruleHistory: read().filter((e) => e.stage === 'rules').slice(-100) };
+  try { const cfg = readSkills(); for (const p of new Set([...Object.keys(byProject), ...Object.keys(projects())])) ruleData.rules[p] = rules(p, cfg); }
   catch (e) { ruleData.rulesError = e.message; } // render runs after every record(): a bad config must not half-fail the event
   let idea = {};
-  try { idea = { ideas: Object.fromEntries(Object.entries(ideas(events, Object.fromEntries(runs.map((r) => [r.id, r])))).filter(([k]) => keep(k))) }; } catch (e) { idea = { ideasError: e.message }; } // never fail the event that triggered the render
-  const data = JSON.stringify({ generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: attached, metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject), keep),
+  try { idea = { ideas: ideas(events, Object.fromEntries(runs.map((r) => [r.id, r]))) }; } catch (e) { idea = { ideasError: e.message }; } // never fail the event that triggered the render
+  const data = JSON.stringify({ generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)),
     harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), ...idea, ...extra }).replace(/</g, '\\u003c');
   return fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'factory', 'dashboard.html'), 'utf8').replace('__FACTORY_DATA__', () => data);
 }
 
 // The claude.ai Artifact page (#18): the host adds the document skeleton, updates arrive by republish (no reload timer),
-// and it refuses to ship a token. Throws when the dashboard markup drifts, so a broken page is never published.
-const notFixture = (repo) => !/^acme\//.test(repo); // shortcut: hides any acme/* project, the self-test's fixture owner, until #20 stops the leak
-export function artifact(html = page({}, notFixture)) {
+// no local path leaves this machine, and it refuses to ship a token. Throws when the dashboard markup drifts, so a
+// broken page is never published.
+const DATA_TAG = /(<script type="application\/json" id="data">)([^<]*)(<\/script>)/;
+export function artifact(html = page()) {
   for (const re of [/^<!doctype html>\s*/i, /<html[^>]*>\s*/i, /<head>\s*/i, /<\/head>\s*/i, /<body[^>]*>\s*/i, /<\/body>\s*/i, /<\/html>\s*/i,
     /<meta charset="utf-8">\s*/i, /<meta name="viewport"[^>]*>\s*/i]) {
     if (!re.test(html)) throw new Error(`artifact: the dashboard no longer has ${re}`);
@@ -137,6 +138,15 @@ export function artifact(html = page({}, notFixture)) {
   const reload = 'setTimeout(tick, 10000);';
   if (html.split(reload).length !== 2) throw new Error('artifact: the reload timer is not in the dashboard exactly once');
   html = html.replace(reload, '/* Artifact: updates arrive by republish, so no reload timer. */');
+  const m = html.match(DATA_TAG);
+  if (!m) throw new Error('artifact: the dashboard no longer has its data tag');
+  const d = JSON.parse(m[2]);
+  for (const r of d.runs || []) { delete r.worktree; for (const s of r.sessions || []) delete s.cwd; } // "Open in Claude" is local-only
+  if (d.skills?.catalog) d.skills.catalog = { global: [], projects: {} }; // install paths; the Skills sheet can't save there anyway
+  const home = JSON.stringify(os.homedir()).slice(1, -1).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  let json = JSON.stringify(d);
+  if (home.length > 1) json = json.replace(new RegExp(home + '(?=[/\\\\"]|$)', 'g'), '~'); // any path left in free text
+  html = html.replace(DATA_TAG, (_, open, _old, close) => open + json.replace(/</g, '\\u003c') + close);
   if (html.includes('"token":"')) throw new Error('artifact: refusing to publish a page that carries a token');
   return html;
 }

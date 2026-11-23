@@ -206,7 +206,7 @@ Finally, report the outcome with its links, and give the dashboard path, `~/.cla
 The owner watches from phone and web through a private claude.ai Artifact, because `F ui` is loopback-only. Watching a run live happens in its Claude app session, so the page only needs to be current when the owner has to act: republish it **only** when a run reaches `merged`, `escalated`, `rejected`, `needs-info` or `awaiting-approval`, about twice per run. Never at other stage events, and never on a timer.
 
 1. Skip this under `--dry-run`, when `policy.artifact` from `F rules OWNER/REPO` is unset (publishing is opt-in per repo), or when this session has no Artifact tool.
-2. After the run's final event is recorded, run `F render --artifact DIR/artifact.html`. It builds the page from the same data as `dashboard.html`, so nothing more is published. It strips the document skeleton (the host adds one), drops the 10 s reload timer, leaves out the test-fixture `acme/*` projects until #20 is fixed, and refuses a page that carries a token. If it fails, tell the user and don't publish.
+2. After the run's final event is recorded, run `F render --artifact DIR/artifact.html`. It builds the page from the same data as `dashboard.html`, so nothing more is published. It strips the document skeleton (the host adds one), drops the 10 s reload timer, strips local paths (run worktrees, session folders and the skills catalog; any other home-folder path becomes `~`), and refuses a page that carries a token. If it fails, tell the user and don't publish.
 3. Publish that file with the Artifact tool to `policy.artifact.value`, the same URL every time. In a session that hasn't read or published that Artifact yet, read it first (`action: "read"`).
 
 The page shows every attached project, as the owner approved; the rule only decides which repos' runs trigger a publish. An escalated run links to its PR so the owner can review and merge on GitHub. The page never takes an approval.
@@ -258,7 +258,7 @@ Rules live in `~/.claude/factory/skills.json` next to the runners: a `"default"`
 | `ci` | `required` (built-in) \| `advisory` \| `skip` | `advisory` reads CI but red doesn't block or revert; `skip` never reads it, in build or after the merge. Either way, CI is **not** treated as green: the merge needs `F checks` passing on the reviewed commit, or the run escalates. |
 | `checks.commands` | JSON array of commands | What `F checks` runs in the worktree. Setting it also adds a requirement when CI is required. |
 | `diffCap` | `1`–`300` | Lowers the auto-merge diff cap. |
-| `artifact` | a private `https://claude.ai/artifact/<id>` URL | Opts this repo's runs in to [republishing](#publish-to-the-artifact) that Artifact when they end or need the owner. Unset: never published. |
+| `artifact` | a private `https://claude.ai/artifact/<id>` URL, per repo only (not `default`) | Opts this repo's runs in to [republishing](#publish-to-the-artifact) that Artifact when they end or need the owner. Unset: never published. |
 | `deploy.preview` | `off` (built-in) \| `advisory` \| `required` | `required`: the merge needs a `ready` preview of the reviewed commit, with an https URL, from any `web-deploy` connector in `packages/ship`; `advisory` only notes it in the decision. |
 
 Nothing else is configurable: trusted authors, sensitive paths, the `code` and `security` axes, the merge pinned to the reviewed commit, imported runs escalating, and the owned events and typed fields.

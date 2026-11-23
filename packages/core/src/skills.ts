@@ -147,10 +147,10 @@ export function catalog(repos = []) {
   return { global: globalCatalog, projects: Object.fromEntries(repos.map((r) => [r, scanProject(r)])) };
 }
 // Everything the Skills sheet needs: raw config (to tell "set here" from "inherited"), resolved plans and the catalog.
-export function skillsData(repos = [], keep = () => true) {
+export function skillsData(repos = []) {
   try {
-    const all = readSkills(), cfg = Object.fromEntries(Object.entries(all).filter(([s]) => s === 'default' || keep(s)));
-    const scopes = [...new Set([...Object.keys(projects()), ...repos, ...Object.keys(cfg)])].filter((s) => s !== 'default' && keep(s)).sort();
+    const cfg = readSkills();
+    const scopes = [...new Set([...Object.keys(projects()), ...repos, ...Object.keys(cfg)])].filter((s) => s !== 'default').sort();
     return { steps: STEP_KEYS, required: REQUIRED_AXES, config: cfg, scopes,
       plans: Object.fromEntries(['default', ...scopes].map((s) => [s, skills(s === 'default' ? '' : s, cfg)])), catalog: catalog(scopes) };
   } catch (e) { return { error: e.message }; } // a bad skills.json must not break rendering an event that was already appended

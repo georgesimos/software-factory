@@ -17,6 +17,7 @@ export function setAutoMerge(repo, on) {
 const ARTIFACT_URL = /^https:\/\/claude\.ai\/(code\/)?artifact\/[\w-]+$/;
 // Policy rules: a closed set of typed switches that F enforces. They can only make the factory stricter, or swap a
 // signal that can't be had (GitHub CI, e.g. when Actions billing fails) for one F measures itself (local checks).
+// One exception: `artifact` is a per-repo opt-in to publishing the dashboard off this machine, so `default` can't set it.
 // Not configurable, ever: TRUSTED, SENSITIVE, the code/security axes, --match-head-commit, imported runs escalating.
 export const RULES = {
   ci: [(v) => ['required', 'advisory', 'skip'].includes(v), 'required|advisory|skip'],
@@ -93,6 +94,7 @@ export function setRule(scope, key, raw, { reason, until } = {}) {
   if (step !== null) s.guide = { ...s.guide, [step]: String(raw ?? '') };
   else {
     if (!RULES[key]) checkRules({ [key]: {} }, `rules ${scope}`); // throws the unknown-rule message
+    if (key === 'artifact' && scope === 'default') throw new Error('artifact is a per-repo opt-in: set it on owner/repo, not default');
     if (['diffCap', 'project.budgetUsd', 'project.maxIssuesPerSession'].includes(key)) value = Number(raw);
     if (key === 'checks.commands') { try { value = JSON.parse(raw); } catch { value = [raw]; } }
     if (until !== undefined && !(isDay(until) && until >= dayOf())) throw new Error('--until must be YYYY-MM-DD, today or later');

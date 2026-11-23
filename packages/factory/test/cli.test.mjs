@@ -362,6 +362,7 @@ export function rulesTest(cli) {
   record('acme/rr#2', 'intake', 'started', { title: 't' });
   assert.match(fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), /"rulesError":"skills.json acme\/rr.rules.ci: needs a reason/);
   fs.rmSync(path.join(io.dir, 'skills.json'));
+  assert.throws(() => set('default', 'artifact', 'https://claude.ai/artifact/FEMb-sU_9', '--reason', 'x'), /per-repo opt-in/); // publishing off the machine is never global
   assert.equal(set('acme/rr', 'artifact', 'https://claude.ai/artifact/FEMb-sU_9', '--reason', 'phone view').policy.artifact.value, 'https://claude.ai/artifact/FEMb-sU_9'); // opt-in per repo
   cli(['rules', 'unset', 'acme/rr', 'artifact']);
 }
