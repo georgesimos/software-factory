@@ -118,7 +118,7 @@ export function cliShims(entry: string, platform: NodeJS.Platform = process.plat
 // reg.exe by full path: a bare 'reg' may resolve from the current folder first, and F can run inside an untrusted clone.
 export function windowsPath(env: Env = process.env, run: (file: string, args: string[], o: object) => string = execFileSync as never) {
   const reg = path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', 'System32', 'reg.exe');
-  const read = (key: string) => { try { return /^\s*Path\s+REG_(?:EXPAND_)?SZ\s+(.*)$/im.exec(run(reg, ['query', key, '/v', 'Path'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))?.[1].trim() ?? ''; } catch { return ''; } };
+  const read = (key: string) => { try { return /^\s*Path\s+REG_(?:EXPAND_)?SZ\s+(.*)$/im.exec(run(reg, ['query', key, '/v', 'Path'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))?.[1]?.trim() ?? ''; } catch { return ''; } };
   return [read('HKCU\\Environment'), read('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment')].join(';')
     .replace(/%([^%;]+)%/g, (m, v) => envGet(env, v) ?? m);
 }
@@ -128,13 +128,13 @@ export function windowsPath(env: Env = process.env, run: (file: string, args: st
 export function cliDir(home: string, pathList: string, platform: NodeJS.Platform = process.platform) {
   const p = platform === 'win32' ? path.win32 : path.posix;
   const norm = (d: string) => { const n = p.normalize(d).replace(/[\\/]+$/, ''); return platform === 'win32' ? n.toLowerCase() : n; };
-  const dirs = [p.join(home, '.local', 'bin'), p.join(home, 'bin')];
+  const local = p.join(home, '.local', 'bin'), dirs = [local, p.join(home, 'bin')];
   for (const e of pathList.split(platform === 'win32' ? ';' : ':')) {
     const abs = /^~(?=[\\/]|$)/.test(e) ? p.join(home, e.slice(1)) : e;
     const hit = p.isAbsolute(abs) && dirs.find((d) => norm(d) === norm(abs));
     if (hit) return { dir: hit, onPath: true };
   }
-  return { dir: dirs[0], onPath: false };
+  return { dir: local, onPath: false };
 }
 
 export function installCli(entry: string, { home, platform = process.platform, env = process.env, pathList }: { home: string; platform?: NodeJS.Platform; env?: Env; pathList?: string }) {
