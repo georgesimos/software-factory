@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ID = /^[a-z][a-z0-9-]{0,30}$/;
-// models(): reserved for per-step model selection; nothing reads it yet.
+// models(): the aliases a runner on this harness may pick (per-step model, effort and fallback); efforts: its effort levels.
 const OPTIONAL = ['headless', 'providerTools', 'sessions', 'notes', 'current', 'headlessArgs', 'models'];
 
 // Shape check at load time; behaviour is checked by the shared contract test in factory.mjs.
@@ -18,6 +18,7 @@ export function check(h, file) {
   for (const k of ['label', 'install']) if (typeof h[k] !== 'string' || !h[k].trim()) throw new Error(`${at}: ${k} must be a non-empty string`);
   for (const k of ['detect', 'login']) if (typeof h[k] !== 'function') throw new Error(`${at}: ${k}() is required`);
   for (const k of OPTIONAL) if (h[k] !== undefined && typeof h[k] !== 'function') throw new Error(`${at}: ${k} must be a function`);
+  if (h.efforts !== undefined && !(Array.isArray(h.efforts) && h.efforts.every((e) => /^[a-z]+$/.test(e)))) throw new Error(`${at}: efforts must be lowercase level names`);
   if (h.configDirs !== undefined && !(Array.isArray(h.configDirs) && h.configDirs.every((d) => /^\.[\w.-]+$/.test(d)))) throw new Error(`${at}: configDirs must be dot-folder names like ".claude"`);
   return h;
 }

@@ -419,6 +419,9 @@ dialog.sk-pick[open] { display: flex; flex-direction: column; }
 .sk-from { font-size: 12px; color: var(--ink-3); }
 .sk-from.here { color: var(--accent); }
 .sk-act { text-align: right; white-space: nowrap; }
+.sk-model { width: 1%; white-space: nowrap; }
+.sk-model .sk-input { width: auto; padding: 4px 8px; font-size: 12.5px; }
+.sk-model .sk-from { display: block; margin-top: 4px; }
 .sk-act button + button { margin-left: 6px; }
 .sk-axes { margin-top: 28px; }
 .sk-axes h3 { margin: 0 0 4px; font: 600 14px var(--sans); }
@@ -460,6 +463,7 @@ dialog.sk-pick[open] { display: flex; flex-direction: column; }
   .sk-table tr.sk-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 8px; padding: 10px 0; border-bottom: 1px solid var(--line); }
   .sk-table tr.sk-row > * { padding: 0; border: 0; }
   .sk-table tr.sk-row > .sk-runcell { grid-column: 1 / -1; grid-row: 2; }
+  .sk-table tr.sk-row > .sk-model { grid-column: 1 / -1; grid-row: 3; white-space: normal; }
   .skills-btn { padding: 5px 8px; }
 }
 /* idea-to-app project view: one panel per project from `F new`, above the metrics */
@@ -600,14 +604,22 @@ const link = (url, text, cls) => (/^https:\/\//.test(url || '') ? el('a', { href
 const runHref = (id) => '#' + encodeURIComponent(id);
 const chip = (text, tone) => el('span', { class: 'chip' + (tone ? ' ' + tone : '') }, text);
 // Who did a step, when it wasn't the built-in brief. Text and title only; `short` drops the kind for the narrow pipeline track.
-const runnerChip = (x, short, what = 'Run by') => {
+// A model id as its alias (claude-fable-5-2 -> fable); unknown ids stay as they are.
+const alias = (id) => (/(fable|opus|sonnet|haiku)/.exec(String(id)) || [])[1] || String(id);
+const usedModel = (c) => (obj(c).used ? alias(c.used) : ''); // the burn cell's serving model, chosen in finishBurn
+const capital = (m) => m.charAt(0).toUpperCase() + m.slice(1);
+// `fallback` is either the runner downgrade ({from, reason}) or the model's fallback chain (an array); `model` is the configured one, `used` what ran.
+const runnerChip = (x, short, what = 'Run by', used = '') => {
   x = obj(x);
-  const fb = obj(x.fallback), from = obj(fb.from), last = (n) => String(n).split(':').pop();
+  const down = !!x.fallback && !Array.isArray(x.fallback), fb = down ? obj(x.fallback) : {}, from = obj(fb.from), last = (n) => String(n).split(':').pop();
   const name = (y) => y.use === 'skill' ? 'skill: ' + y.name : y.use === 'brief' ? 'brief: ' + String(y.path || '').split('/').pop() : y.use === 'provider' ? [y.harness, y.name].filter(Boolean).join(': ') : null;
-  const full = x.fallback ? 'default · fallback' : name(x);
-  if (!full) return null;
-  const text = !short || x.fallback ? full : x.use === 'brief' ? full.slice(7) : last(x.name || x.harness);
-  return el('span', { class: 'chip rn', title: x.fallback ? `Configured ${name(from) || 'runner'} was unavailable: ${fb.reason || 'no reason given'}` : what + ' ' + full }, text);
+  const base = down ? 'default · fallback' : name(x), model = typeof x.model === 'string' ? x.model : '', fell = !!(used && model && used !== model);
+  const m = fell ? `${capital(model)} → ${capital(used)} (fallback)` : capital(used || model);
+  if (!base && !m) return null;
+  const who = !base ? '' : !short || down ? base : x.use === 'brief' ? base.slice(7) : last(x.name || x.harness);
+  const text = [who, m + (m && !short && x.effort ? ' · ' + x.effort : '')].filter(Boolean).join(' · ');
+  const on = m ? ` on ${used || model}${x.effort ? ` (${x.effort} effort)` : ''}${fell ? `; configured ${model}` : used ? '' : ' (configured; no usage yet)'}${Array.isArray(x.fallback) ? '; fallback chain ' + x.fallback.join(' → ') : ''}` : '';
+  return el('span', { class: 'chip rn', title: down ? `Configured ${name(from) || 'runner'} was unavailable: ${fb.reason || 'no reason given'}` : `${what} ${base || 'the built-in brief'}${on}` }, text);
 };
 const dot = (tone, live) => el('span', { class: 'dot ' + tone + (live ? ' live' : ''), 'aria-hidden': 'true' });
 
@@ -628,7 +640,8 @@ const pct = (x) => (num(x) ? [String(Math.round(x * 100)), '%'] : null);
 const money = (x) => (num(x) ? '$' + (x >= 1000 ? Math.round(x).toLocaleString() : x.toFixed(2)) : null);
 const tokens = (x) => (!num(x) ? null : x >= 1e6 ? (x / 1e6).toFixed(1) + 'M' : x >= 1e3 ? Math.round(x / 1e3) + 'k' : String(x));
 const costTxt = (c) => (c.costUsd == null ? '—' : money(c.costUsd) + (c.unpriced ? '+' : '')); // "+": some tokens ran on a model with no price
-const cellN = (c) => (num(obj(c).tokens) ? { tokens: c.tokens, costUsd: num(c.costUsd) ? c.costUsd : null, unpriced: num(c.unpriced) ? c.unpriced : 0 } : null);
+const cellN = (c) => (num(obj(c).tokens) ? { tokens: c.tokens, costUsd: num(c.costUsd) ? c.costUsd : null, unpriced: num(c.unpriced) ? c.unpriced : 0,
+  used: typeof c.used === 'string' && /^[\w.:[\]-]{1,64}$/.test(c.used) ? c.used : null } : null);
 const cellsN = (m) => Object.fromEntries(Object.entries(obj(m)).map(([k, v]) => [k, cellN(v)]).filter(([, v]) => v));
 const burnN = (b) => (cellN(obj(b).total) ? { measured: b.measured === true, total: cellN(b.total), byStage: cellsN(b.byStage), byIteration: cellsN(b.byIteration), byAxis: cellsN(b.byAxis), reported: cellN(b.reported) } : null);
 
@@ -849,7 +862,7 @@ function track(r) {
   const t = el('ol', { class: 'track', style: 'list-style:none;margin:0;padding:0' }, STAGES.map((s, i) => {
     const [cls, sub] = stageState(r, s);
     return el('li', { class: ['st', cls, i === cur ? 'cur' : '', live && i > cur && cls ? 'stale' : ''].join(' '), 'aria-current': i === cur ? 'step' : null },
-      el('span', { class: 'n', 'aria-hidden': 'true' }), el('div', { class: 'nm' }, s), el('div', { class: 'sb' }, sub || ' '), runnerChip(obj(r.runners)[s], true, s === 'gate' ? 'Verifier run by' : undefined),
+      el('span', { class: 'n', 'aria-hidden': 'true' }), el('div', { class: 'nm' }, s), el('div', { class: 'sb' }, sub || ' '), runnerChip(obj(r.runners)[s], true, s === 'gate' ? 'Verifier run by' : undefined, s === 'review' ? '' : usedModel(s === 'gate' ? obj(obj(r.burn).byAxis).verifier : obj(obj(r.burn).byStage)[s])), // review: per axis, in the matrix
       el('span', { class: 'sr' }, cls ? `: ${cls === 'active' ? 'in progress' : cls === 'skip' ? 'skipped' : cls}` : ': not reached'));
   }));
   const routes = {};
@@ -878,8 +891,9 @@ function matrix(r) {
     el('tbody', {}, axes.map((a) => el('tr', {}, el('td', {}, a), iters.map((i) => {
       const v = (r.reviews[i] || {})[a];
       if (!v) return (r.axes[i] || []).includes(a) ? el('td', { class: 'v wait' }, '… pending') : el('td', { class: 'v na', 'aria-label': 'not reviewed' }, '·');
-      if (!failed(v)) return el('td', { class: 'v passed' }, '✓ pass', v.findings.length ? el('span', { style: 'color:var(--ink-3)' }, ` · ${v.findings.length}`) : null, runnerChip(v.runner));
-      return el('td', { class: 'v failed' }, `✕ ${v.findings.filter(blocking).length || 'fail'}`, runnerChip(v.runner));
+      const chip = runnerChip(v.runner, false, undefined, usedModel(ab[a]));
+      if (!failed(v)) return el('td', { class: 'v passed' }, '✓ pass', v.findings.length ? el('span', { style: 'color:var(--ink-3)' }, ` · ${v.findings.length}`) : null, chip);
+      return el('td', { class: 'v failed' }, `✕ ${v.findings.filter(blocking).length || 'fail'}`, chip);
     }), hasTok ? el('td', { class: 'tok', title: ab[a] ? costTxt(ab[a]) : null }, ab[a] ? tokens(ab[a].tokens) : '·') : null))));
   const extra = Object.entries(ab).filter(([k]) => !axes.includes(k));
   const finds = iters.slice().reverse().flatMap((i) => Object.entries(r.reviews[i] || {}).flatMap(([axis, v]) => v.findings.map((f, j) => {
@@ -1334,12 +1348,33 @@ function fillSkills(d, msg) {
         el('span', { class: 'sk-name' + (isDef ? ' def' : '') }, runnerName(r, scope)),
         isDef ? null : chip(kindOf(r, scope)),
         el('span', { class: 'sk-from' + (here ? ' here' : '') }, here ? (scope === 'default' ? 'set globally' : 'set for this project') : inherited ? 'from global' : 'built-in'))),
+      modelCell(step, r, label),
       el('td', { class: 'sk-act' }, change, reset));
+  };
+  // Model per Claude-run step (the resolved plan has one). The empty choice inherits: in a project, the global step's model
+  // when it sets one, else the preset's. Choosing a model resets fallback to that model's chain; inheriting drops effort too.
+  const modelCell = (step, r, label) => {
+    if (!r.model) return el('td', { class: 'sk-model' });
+    const here = step in mine, own = obj(mine[step]), set = here && typeof own.model === 'string' ? own.model : '';
+    const g = obj(glob[step]);
+    const fromGlobal = scope !== 'default' && typeof g.model === 'string'; // a project's runner takes a model it doesn't set from global
+    const presetModel = arr(obj(obj(S.presets)[S.preset])[step])[0] || '';
+    const inherit = fromGlobal ? 'Global (' + g.model + ')' : 'Preset' + (presetModel ? ' (' + presetModel + ')' : '');
+    const sel = el('select', { class: 'sk-input', 'data-k': 'sk-model:' + step, 'aria-label': 'Model for ' + label },
+      el('option', { value: '' }, inherit), arr(S.models).map((m) => el('option', { value: m, selected: m === set ? '' : null }, m)));
+    sel.onchange = () => {
+      const v = sel.value, src = { use: 'default', ...(here ? own : scope === 'default' ? {} : g) };
+      const { model: _m, effort, fallback: _f, ...base } = src;
+      const next = v ? { ...base, ...(effort && { effort }), model: v } : base;
+      act(step, Object.keys(next).length === 1 && next.use === 'default' ? null : next, 'sk-model:' + step);
+    };
+    const why = set ? 'set here' : fromGlobal ? 'from global' : 'preset ' + (S.preset || '');
+    return el('td', { class: 'sk-model' }, sel, el('span', { class: 'sk-from' }, [r.effort && r.effort + ' effort', Array.isArray(r.fallback) && 'fallback ' + r.fallback.join(' → '), why].filter(Boolean).join(' · ')));
   };
   const steps = arr(S.steps);
   const groups = [['Pipeline', steps.filter((k) => ['intake', 'spec', 'build'].includes(k))], ['Review axes', steps.filter((k) => k.startsWith('review.'))], ['After review', steps.filter((k) => ['verifier', 'postmerge'].includes(k))]];
   const table = el('table', { class: 'sk-table' }, el('caption', { class: 'sr' }, 'Runner per step for ' + (scope === 'default' ? 'all projects' : scope)),
-    groups.map(([g, ks]) => el('tbody', {}, el('tr', { class: 'sk-group' }, el('th', { colspan: '3', scope: 'colgroup' }, g)), ks.map(row))));
+    groups.map(([g, ks]) => el('tbody', {}, el('tr', { class: 'sk-group' }, el('th', { colspan: '4', scope: 'colgroup' }, g)), ks.map(row))));
 
   // Extra axes: a scope's list is saved whole. Under a project, global axes show read-only.
   const own = arr(mine['axes.extra']).map(obj), fromGlobal = scope === 'default' ? [] : arr(glob['axes.extra']).map(obj).filter((x) => !own.some((y) => y.axis === x.axis));
