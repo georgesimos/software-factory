@@ -1,10 +1,11 @@
-import { Dot, EmptyState, IconButton, Kbd, Sheet, Skeleton, Tabs, ThemeToggle, formatAgo, formatClock, repoOf } from '@software-factory/design-system';
-import { useCallback, useEffect, useState } from 'react';
+import { Button, Dot, EmptyState, IconButton, Kbd, Sheet, Skeleton, Tabs, ThemeToggle, formatAgo, formatClock, repoOf } from '@software-factory/design-system';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Board, runHref } from './Board.tsx';
 import { loadData, projectsOf, CAP, COST_CAP, type FactoryData } from './data.ts';
 import { Panel } from './Panel.tsx';
 import { RuleChips } from './Rules.tsx';
 import { RunDetail } from './RunDetail.tsx';
+import { SkillsSheet } from './Skills.tsx';
 import { store } from './store.ts';
 
 const WIDE = '(min-width: 1100px)'; // the docked panel; narrower screens open a run in a sheet
@@ -18,25 +19,27 @@ function useMedia(q: string) {
 
 export function App({ load = loadData }: { load?: () => Promise<FactoryData> }) {
   const [state, setState] = useState<{ data?: FactoryData; error?: string }>({});
+  const writes = useRef(0); // a poll that started before a write must not undo its reply
   useEffect(() => {
     let ignore = false, waiting = false, timer: ReturnType<typeof setTimeout> | undefined;
     const later = () => { timer = setTimeout(() => { if (document.hidden) waiting = true; else go(false); }, 10_000); }; // no polling in a hidden tab
     const onVis = () => { if (waiting && !document.hidden) { waiting = false; go(false); } };
-    const go = (first: boolean) => load().then((data) => {
+    const go = (first: boolean) => { const w = writes.current; return load().then((data) => {
       if (ignore) return;
-      setState({ data });
+      if (w === writes.current) setState({ data });
       if (data.token) later(); // F ui: live; injected data is a snapshot
     }, (e: unknown) => {
       if (ignore) return;
       if (first) setState({ error: String((e as Error)?.message ?? e ?? 'Unknown error') });
       else later(); // keep the last good data through a blip
-    });
+    }); };
     go(true);
     document.addEventListener('visibilitychange', onVis);
     return () => { ignore = true; clearTimeout(timer); document.removeEventListener('visibilitychange', onVis); };
   }, [load]);
   const { data, error } = state;
-  return data ? <Shell data={data} /> : (
+  const patch = useCallback((p: Partial<FactoryData>) => (writes.current++, setState((s) => (s.data ? { data: { ...s.data, ...p } } : s))), []); // a write's reply, until the next poll
+  return data ? <Shell data={data} patch={patch} /> : (
     <>
       <header className="web-top"><span className="web-brand"><span className="sf-mark" aria-hidden="true" />Software Factory</span><ThemeToggle /></header>
       <main className="web-main" aria-busy={!error}>
@@ -46,7 +49,7 @@ export function App({ load = loadData }: { load?: () => Promise<FactoryData> }) 
   );
 }
 
-function Shell({ data }: { data: FactoryData }) {
+function Shell({ data, patch }: { data: FactoryData; patch: (p: Partial<FactoryData>) => void }) {
   const projects = projectsOf(data);
   const [project, setProjectState] = useState(() => { const p = store('sf.project') ?? ''; return projects.includes(p) ? p : ''; });
   const setProject = (p: string) => { setProjectState(p); store('sf.project', p); if (readHash()) history.replaceState(null, '', location.pathname + location.search); setHash(''); };
@@ -57,6 +60,7 @@ function Shell({ data }: { data: FactoryData }) {
   });
   const setCollapsed = (c: boolean) => { store('sf.panelCollapsed', c ? '1' : '0'); setCollapsedState(c); };
   const wide = useMedia(WIDE);
+  const [skillsOpen, setSkillsOpen] = useState(false);
   const [, tick] = useState(0);
   useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 60_000); return () => clearInterval(t); }, []); // "Updated 3m ago" stays true
   const byId = new Map(data.runs.map((r) => [r.id, r]));
@@ -87,9 +91,10 @@ function Shell({ data }: { data: FactoryData }) {
   return (
     <>
       <header className="web-top">
-        <span className="web-brand"><span className="sf-mark" aria-hidden="true" />Software Factory</span>
+        <span className="web-brand"><span className="sf-mark" aria-hidden="true" /><span className="web-brand-t">Software Factory</span></span>
         <RuleChips data={data} project={project} />
         {data.generated ? <span className="web-updated"><Dot tone={fresh ? 'ok' : 'idle'} /><time dateTime={data.generated} title={formatClock(data.generated)}><span className="web-upd-word">Updated </span>{formatAgo(data.generated)}</time></span> : null}
+        {data.skills ? <Button size="sm" variant="ghost" aria-haspopup="dialog" title="Who runs each step" onClick={() => setSkillsOpen(true)}>Skills</Button> : null}
         <ThemeToggle />
         {wide && (sel || runs.length) ? (
           <IconButton label={`${shown ? 'Hide' : 'Show'} run panel (])`} aria-expanded={shown} aria-controls="detail" onClick={() => setCollapsed(shown)}>
@@ -116,6 +121,7 @@ function Shell({ data }: { data: FactoryData }) {
           </Panel>
         ) : null}
       </div>
+      {data.skills ? <SkillsSheet open={skillsOpen} onClose={() => setSkillsOpen(false)} skills={data.skills} harnesses={data.harnesses} token={data.token} scope={project} onSaved={(skills) => patch({ skills })} /> : null}
       {wide ? null : <Sheet open={!!sel} onClose={close} title={sel?.id ?? 'Run'}>{sel ? detail(sel) : null}</Sheet>}
     </>
   );

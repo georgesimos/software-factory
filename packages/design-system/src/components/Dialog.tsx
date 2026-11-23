@@ -33,7 +33,7 @@ export function Dialog({ open, onClose, title, bare, description, footer, childr
   return (
     <dialog ref={ref} className={cx('sf-dialog', className)} data-variant={variant} data-bare={bare || undefined}
       aria-labelledby={`${id}-t`} aria-describedby={description ? `${id}-d` : undefined}
-      onCancel={(e) => { e.preventDefault(); onClose(); }}
+      onCancel={(e) => { e.preventDefault(); e.stopPropagation(); onClose(); }} // React bubbles cancel: Escape in a nested dialog closes only it
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       {open ? (
         <div className="sf-dialog-in">

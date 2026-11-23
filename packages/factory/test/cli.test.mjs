@@ -621,6 +621,22 @@ export function skillsTest(cli) {
   assert.equal(state.status, 200);
   assert.deepEqual([sd.runs.map((r) => r.id), Object.keys(sd.skills.plans).includes('acme/kit'), sd.ui], [runsData().map((r) => r.id), true, undefined], 'what page() embeds, without ui');
   assert.equal(get('/api/state', { 'x-factory-token': 'u'.repeat(32) }).status, 403);
+  // POST /api/skills/preset: the same checks; a bad name writes nothing; the reply says which steps changed.
+  const pre = (body, h = {}) => uiHandle({ method: 'POST', url: '/api/skills/preset', headers: { ...H, origin: 'http://127.0.0.1:4242', 'content-type': 'application/json', 'x-factory-token': tok, ...h }, body: JSON.stringify(body) }, ctx);
+  const beforePreset = fs.readFileSync(path.join(io.dir, 'skills.json'), 'utf8');
+  assert.equal(pre({ name: 'all-claude-lean' }, { 'x-factory-token': 'u'.repeat(32) }).status, 403);
+  assert.equal(pre({ name: 'all-claude-lean' }, { origin: 'https://evil.test' }).status, 403);
+  assert.equal(pre({ name: 'all-claude-lean' }, { 'content-type': 'text/plain' }).status, 415);
+  for (const name of ['constructor', '__proto__', ['all-claude'], 'max-quality']) assert.equal(pre({ name }).status, 400, `preset ${JSON.stringify(name)}`);
+  assert.equal(pre({ name: 'all-claude', scope: 'acme' }).status, 400);
+  assert.equal(fs.readFileSync(path.join(io.dir, 'skills.json'), 'utf8'), beforePreset);
+  const lean = JSON.parse(pre({ name: 'all-claude-lean' }).body);
+  assert.deepEqual([lean.applied.includes('review.code'), lean.plans.default.plan['review.code'].model, lean.efforts.includes('high')], [true, 'sonnet', true]);
+  const proj = JSON.parse(pre({ name: 'all-claude', scope: 'acme/kit' }).body);
+  assert.ok(proj.inherited.length > 0 && Array.isArray(proj.skipped), 'a project preset only touches the steps it sets');
+  const bare = fs.readFileSync(path.join(io.dir, 'skills.json'), 'utf8');
+  assert.deepEqual(JSON.parse(pre({ name: 'all-claude', scope: 'acme/none' }).body).applied, []);
+  assert.equal(fs.readFileSync(path.join(io.dir, 'skills.json'), 'utf8'), bare, 'a preset that changes nothing writes nothing');
   for (const r of [all, one, state]) assert.ok(!r.body.includes(tok), 'API reads never carry the ui token');
   assert.equal(get(`/api/runs/${o}/${rp}/999999`).status, 404);
   assert.equal(get(`/api/runs/${o}/${rp}/x1`).status, 400);

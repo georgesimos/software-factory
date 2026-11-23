@@ -149,7 +149,7 @@ export function setSkill(scope, key, value) {
 // The preset's model, effort and fallback on each step of a scope, keeping who runs the step. Non-Claude runners are skipped.
 // A project gets them only on steps it already sets; the rest keep inheriting global (and its preset) as it changes.
 export function applyPreset(name, scope = 'default') {
-  if (!PRESETS[name]) throw new Error(`unknown preset "${name}" (${Object.keys(PRESETS).join('|')})`);
+  if (typeof name !== 'string' || !Object.hasOwn(PRESETS, name)) throw new Error(`unknown preset ${JSON.stringify(name)} (${Object.keys(PRESETS).join('|')})`);
   checkScope(scope);
   const cfg = readSkills(), s = { ...cfg[scope] }, applied = [], skipped = [], inherited = [];
   for (const key of Object.keys(PRESETS[name])) {
@@ -159,6 +159,7 @@ export function applyPreset(name, scope = 'default') {
     s[key] = presetRunner(name, key, base);
     applied.push(key);
   }
+  if (!applied.length) return { scope, preset: name, applied, skipped, inherited }; // nothing to write or audit
   const setBy = whoami();
   cfg[scope] = s;
   writeSkills(cfg);
@@ -264,6 +265,6 @@ export function skillsData(repos = []) {
     const scopes = [...new Set([...Object.keys(projects()), ...repos, ...Object.keys(cfg)])].filter((s) => s !== 'default').sort();
     return { steps: STEP_KEYS, required: REQUIRED_AXES, config: cfg, scopes,
       plans: Object.fromEntries(['default', ...scopes].map((s) => [s, skills(s === 'default' ? '' : s, cfg)])), catalog: catalog(scopes),
-      models: (harnesses.find((h) => h.host)?.models?.() || []).map((m) => m.alias), preset: DEFAULT_PRESET, presets: PRESETS };
+      models: (harnesses.find((h) => h.host)?.models?.() || []).map((m) => m.alias), efforts: harnesses.find((h) => h.host)?.efforts || [], preset: DEFAULT_PRESET, presets: PRESETS };
   } catch (e) { return { error: e.message }; } // a bad skills.json must not break rendering an event that was already appended
 }
