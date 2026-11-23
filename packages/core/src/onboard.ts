@@ -17,33 +17,35 @@ import { stateDir } from './log.ts';
 // path (a plugin install lives in Claude Code's plugin cache). cmd.exe and PowerShell don't expand ~, so Windows always gets the real path.
 // No bundled copy and no linked skill: a plugin-only install (#91), found through Claude Code's plugin registry.
 export function fCmd(platform = process.platform, home = os.homedir(), entry = path.join(import.meta.dirname, '..', '..', 'factory', 'factory.mjs'), env = process.env) {
-  const linked = path.join(home, '.claude', 'skills', 'software-factory', 'factory.mjs');
+  const linked = path.join(env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), 'skills', 'software-factory', 'factory.mjs'); // Claude Code's config dir, like the plugins
   let here = entry, viaLink = false;
   try { here = fs.realpathSync(entry); viaLink = fs.realpathSync(linked) === here; } catch { viaLink = !fs.existsSync(entry) && fs.existsSync(linked); } // the desktop build ships no factory.mjs: the installed skill's
   if (!viaLink && !fs.existsSync(entry)) here = pluginEntry(home, env);
   if (!viaLink && !here) return null; // no F on this machine at all: the page says to install it (fMissing)
   if (platform === 'win32') return `node "${viaLink ? linked : here}"`;
-  return viaLink ? 'node ~/.claude/skills/software-factory/factory.mjs' : `node ${shq(here)}`;
+  return viaLink ? (env.CLAUDE_CONFIG_DIR ? `node ${shq(linked)}` : 'node ~/.claude/skills/software-factory/factory.mjs') : `node ${shq(here)}`;
 }
 // The software-factory plugin's factory.mjs from <config>/plugins/installed_plugins.json, which Claude Code writes as
 // {"version":2,"plugins":{"<name>@<marketplace>":[{"scope","installPath","lastUpdated",…}]}}. Read as untrusted: only a string,
-// absolute installPath whose factory.mjs really resolves inside <config>/plugins counts. User scope first, then the newest.
+// absolute installPath whose factory.mjs really resolves inside <config>/plugins counts. User scope only (a project or local
+// entry belongs to some other folder's project), the most recently updated first.
+// shortcut: a disabled plugin (settings enabledPlugins) still counts; read the settings if that ever matters.
+// shortcut: a local-marketplace install whose installPath is outside <config>/plugins is refused; use the linked skill there.
 export function pluginEntry(home = os.homedir(), env = process.env) {
   const dir = path.join(env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), 'plugins');
   let reg, root;
   try { reg = JSON.parse(fs.readFileSync(path.join(dir, 'installed_plugins.json'), 'utf8')); root = fs.realpathSync(dir); } catch { return null; }
   const plugins = reg && typeof reg.plugins === 'object' && !Array.isArray(reg.plugins) ? reg.plugins : {};
   const found = Object.entries(plugins).filter(([k, v]) => k.startsWith('software-factory@') && Array.isArray(v)).flatMap(([, v]) => v).map((e) => {
-    if (!e || typeof e.installPath !== 'string' || !path.isAbsolute(e.installPath)) return null;
+    if (!e || e.scope !== 'user' || typeof e.installPath !== 'string' || !path.isAbsolute(e.installPath)) return null;
     let f;
     try { f = fs.realpathSync(path.join(e.installPath, 'packages', 'factory', 'factory.mjs')); } catch { return null; }
     const rel = path.relative(root, f);
-    return rel && rel.split(path.sep)[0] !== '..' && !path.isAbsolute(rel) ? { f, user: e.scope === 'user' ? 1 : 0, at: typeof e.lastUpdated === 'string' ? e.lastUpdated : '' } : null;
-  }).filter(Boolean).sort((a, b) => b.user - a.user || b.at.localeCompare(a.at));
+    return rel && rel.split(path.sep)[0] !== '..' && !path.isAbsolute(rel) ? { f, at: Date.parse(e.lastUpdated) || 0 } : null; // not a date: oldest
+  }).filter(Boolean).sort((a, b) => b.at - a.at);
   return found[0]?.f ?? null;
 }
 export const shq = (x) => (/^[\w@%+=:,./~-]+$/.test(String(x)) ? String(x) : "'" + String(x).replace(/'/g, "'\\''") + "'");
-export const F_CMD = fCmd();
 export const onboardFile = () => path.join(stateDir(), 'onboard.json');
 export const SHIP_KINDS = ['web', 'mobile', 'database'];
 export const readOnboard = () => { try { return JSON.parse(fs.readFileSync(onboardFile(), 'utf8')); } catch { return {}; } };
@@ -75,6 +77,7 @@ export function onboardState() {
   return { harnesses: hs, repos: discover(), hooks: { ...hooks(), connectors: shipConnectors() }, ...onboardConfig() };
 }
 export function onboardText(s, platform = process.platform) {
+  const F_CMD = fCmd(); // now, not at import: a plugin installed while the app runs counts
   const mark = (b) => (b ? '✓' : b === null || b === undefined ? '?' : '✗'), L = [], scopes = ['default', ...Object.keys(s.projects)];
   if (platform === 'win32') L.push('The commands below quote for a POSIX shell: run them in Git Bash (cmd.exe and PowerShell read \'…\' differently).', '');
   L.push('1. Local AI');

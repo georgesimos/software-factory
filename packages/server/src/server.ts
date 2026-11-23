@@ -11,7 +11,7 @@ import { budget, budgetWhy, derive } from '../../core/src/derive.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { ideas, startIdea } from '../../core/src/project.ts';
 import { metrics } from '../../core/src/gate.ts';
-import { F_CMD, onboardConfig, onboardState, readOnboard, setShip } from '../../core/src/onboard.ts';
+import { fCmd, onboardConfig, onboardState, readOnboard, setShip } from '../../core/src/onboard.ts';
 import { projects, wtInfo } from '../../core/src/workspace.ts';
 import { dashboard, read, readArchive, sessionsFile, stateDir } from '../../core/src/log.ts';
 import { applyPreset, readSkills, setSkill, skillsData } from '../../core/src/skills.ts';
@@ -238,6 +238,7 @@ export function pageData(extra = {}) {
   catch (e) { ruleData.rulesError = e.message; } // render runs after every record(): a bad config must not half-fail the event
   let idea = {};
   try { idea = { ideas: ideas(events, Object.fromEntries(runs.map((r) => [r.id, r]))) }; } catch (e) { idea = { ideasError: e.message }; } // never fail the event that triggered the render
+  const F_CMD = fCmd(); // per page build, so installing the plugin while the app runs clears fMissing without a restart
   return { generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)),
     harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), fCmd: F_CMD, ...(!F_CMD && { fMissing: true }),
     autoMerge: Object.fromEntries(Object.entries(projects()).map(([r, p]) => [r, p?.autoMerge !== false])), ...idea, ...extra };
