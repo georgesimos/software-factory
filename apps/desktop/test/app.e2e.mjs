@@ -5,7 +5,7 @@
 // Never clicks Resume: that would spawn a harness. Run: pnpm --filter @software-factory/desktop e2e [screenshot dir];
 // DESKTOP_EXE=<packaged binary> runs it against a packaged build instead (CI does, on Linux under Xvfb).
 import assert from 'node:assert/strict';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -32,7 +32,7 @@ const EXE = process.env.DESKTOP_EXE; // a packaged build's binary (scripts/smoke
 const ARGS = EXE ? [] : [APP];
 const app = await _electron.launch({ ...(EXE && { executablePath: EXE }), args: ARGS, cwd: APP, env });
 const errors = [];
-let origin;
+let origin, leftPid = 0;
 try {
   const win = await app.firstWindow();
   win.on('pageerror', (e) => errors.push(e.message));
@@ -72,8 +72,10 @@ try {
   await live.getByRole('listitem').filter({ hasText: 'acme/shop' }).first().getByRole('button', { name: 'Stop' }).click();
   await live.getByText(/exited stopped/).first().waitFor();
   await live.getByRole('button', { name: 'New terminal' }).click(); // left running: quitting must stop it
-  await screenText.getByText('stub terminal').waitFor();
-  await win.keyboard.press('Escape'); // close the sheet
+  await screenText.getByText(/stub terminal pid \d+/).waitFor();
+  leftPid = Number((await screenText.textContent()).match(/stub terminal pid (\d+)/)[1]);
+  await live.getByRole('button', { name: 'Close' }).first().click(); // the sheet's own close: Escape would go to xterm
+  await live.waitFor({ state: 'hidden' });
 
   // No Node in the page, nothing from another origin, no new windows, no navigation away.
   assert.deepEqual(await win.evaluate(() => [typeof window.process, typeof window.require, typeof window.module]), ['undefined', 'undefined', 'undefined']);
@@ -107,8 +109,8 @@ try {
 }
 // Closing the window quit the app, and the server with it.
 assert.equal(await fetch(`${origin}/`).then(() => 'up', () => 'down'), 'down');
-if (process.platform !== 'win32') { // and the terminal left running went with it (the stub is the only claude on this PATH)
-  const left = spawnSync('pgrep', ['-f', path.join(FACTORY, 'test', 'bin', 'claude')], { encoding: 'utf8' }).stdout.trim();
-  assert.equal(left, '', 'no stub claude outlives the app');
-}
+// And the terminal left running went with it: that stub's own pid, given a moment to go.
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+for (let i = 0; i < 50 && alive(leftPid); i++) await new Promise((r) => setTimeout(r, 100));
+assert.ok(leftPid > 0 && !alive(leftPid), `the stub claude (pid ${leftPid}) outlives the app`);
 console.log(`desktop e2e: ok (${SHOTS})`);

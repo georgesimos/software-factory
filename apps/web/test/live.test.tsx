@@ -24,14 +24,14 @@ const running: LiveSession = { id: '00000000-0000-4000-8000-000000000001', harne
 const exited: LiveSession = { id: '00000000-0000-4000-8000-000000000002', harness: 'claude-code', mode: 'headless', label: 'acme/app#8', state: 'exited', exit: 1, started: new Date().toISOString(), harnessSession: 'abc-1' };
 const sse = (...events: object[]) => new Response(new ReadableStream({ start(c) { for (const e of events) c.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`)); c.close(); } }));
 let calls: [string, unknown][];
-const serve = (reply: (url: string, body: Record<string, unknown>) => Response | undefined = () => undefined) => {
+const serve = (reply: (url: string, body: Record<string, unknown>) => Response | undefined = () => undefined, sessions = [running, exited], events: object[] = [{ type: 'output', data: 'hello\r\n' }, { type: 'exit', code: 0 }]) => {
   calls = [];
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
     const body = init.body ? JSON.parse(String(init.body)) : undefined;
     calls.push([url, body]);
     expect((init.headers as Record<string, string>)['x-factory-token']).toBe('tok');
-    if (url === '/api/sessions') return new Response(JSON.stringify({ sessions: [running, exited] }));
-    if (url.endsWith('/events')) return sse({ type: 'output', data: 'hello\r\n' }, { type: 'exit', code: 0 });
+    if (url === '/api/sessions') return new Response(JSON.stringify({ sessions }));
+    if (url.endsWith('/events')) return sse(...events);
     return reply(url, body) ?? new Response('{}');
   }));
 };
@@ -66,6 +66,16 @@ describe('Sessions sheet (#58)', () => {
     expect(calls).toContainEqual(['/api/sessions/input', { id: running.id, cols: 120, rows: 32 }]);
     term.type('ls\r');
     expect(calls).toContainEqual(['/api/sessions/input', { id: running.id, data: 'ls\r' }]);
+  });
+
+  it('a headless run shows its stderr, plain lines and drops, takes no keystrokes, and a stream cut short says so', async () => {
+    const headless = { ...running, mode: 'headless' };
+    serve(undefined, [headless], [{ type: 'dropped', from: 0, first: 9 }, { type: 'stderr', data: 'boom' }, { type: 'text', data: 'not json' }]);
+    sheet();
+    await userEvent.click(await screen.findByRole('button', { name: 'Show' }));
+    await waitFor(() => expect(term.written).toEqual(['[earlier output was dropped]\r\n', 'boom\r\n', 'not json\r\n', '\r\n[the event stream ended]\r\n']));
+    term.type('ls\r');
+    expect(calls.filter(([u]) => u === '/api/sessions/input')).toEqual([]);
   });
 
   it('a refusal is shown; without node-pty (F ui in a browser) there is no New terminal', async () => {

@@ -18,24 +18,26 @@ export function stream(id: string, token: string, on: (e: Event) => void): () =>
     const res = await fetch(`/api/sessions/${id}/events`, { headers: { 'x-factory-token': token }, signal: ctl.signal });
     if (!res.ok || !res.body) return on({ type: 'error', message: `no event stream (${res.status})` });
     const read = res.body.pipeThrough(new TextDecoderStream()).getReader();
-    let buf = '';
+    let buf = '', ended = false;
     for (;;) {
       const { value, done } = await read.read();
-      if (done) return;
+      if (done) { if (!ended) on({ type: 'error', message: 'the event stream ended' }); return; } // the server ends it after exit
       buf += value;
       for (let i = buf.indexOf('\n\n'); i >= 0; i = buf.indexOf('\n\n')) {
         const data = buf.slice(0, i).split('\n').find((l) => l.startsWith('data: '));
         buf = buf.slice(i + 2);
-        if (data) on(JSON.parse(data.slice(6)) as Event);
+        let e: Event | undefined;
+        try { e = data ? JSON.parse(data.slice(6)) as Event : undefined; } catch { /* one bad frame: skip it */ }
+        if (e) { ended ||= e.type === 'exit'; on(e); }
       }
     }
-  })().catch(() => { /* aborted, or the server went away */ });
+  })().catch(() => { if (!ctl.signal.aborted) on({ type: 'error', message: 'the event stream broke off' }); });
   return () => ctl.abort();
 }
 
 export function TerminalPane({ session, token }: { session: LiveSession; token: string }) {
   const el = useRef<HTMLDivElement>(null);
-  const live = session.state === 'running';
+  const live = session.state === 'running' && session.mode === 'terminal'; // headless and sdk read no keystrokes
   useEffect(() => {
     const css = getComputedStyle(document.documentElement), v = (k: string) => css.getPropertyValue(k).trim() || undefined;
     const term = new Terminal({ cursorBlink: true, fontSize: 13, fontFamily: v('--sf-font-mono') ?? 'monospace', disableStdin: !live,
@@ -52,6 +54,8 @@ export function TerminalPane({ session, token }: { session: LiveSession; token: 
     const stop = stream(session.id, token, (e) => {
       if (e.type === 'output' && typeof e.data === 'string') term.write(e.data);
       else if (e.type === 'event') term.write(`${JSON.stringify(e.data).slice(0, 400)}\r\n`); // headless and sdk: one line per event
+      else if ((e.type === 'stderr' || e.type === 'text') && typeof e.data === 'string') term.write(`${e.data}\r\n`); // why a failed run failed
+      else if (e.type === 'dropped') term.write('[earlier output was dropped]\r\n');
       else if (e.type === 'error') term.write(`\r\n[${e.message}]\r\n`);
       else if (e.type === 'exit') term.write(`\r\n[exited: ${String(e.code)}]\r\n`);
     });
@@ -75,14 +79,14 @@ export function LiveSessions({ open, onClose, token, repos, terminal }: { open: 
     try { const x = await post<{ session?: string }>(route, body, token); setMsg({ text: done }); if (x.session) show(x.session); await load(); }
     catch (e) { setMsg({ text: (e as Error).message, bad: true }); }
   };
-  const cur = list.find((s) => s.id === shown);
+  const cur = list.find((s) => s.id === shown), sel = repos.includes(repo) ? repo : repos[0] ?? ''; // repos may arrive after mount
   return (
     <Dialog open={open} onClose={onClose} variant="sheet" title="Sessions" className="web-live"
       description="Sessions this app started: factory runs and your own terminals. They stop when the app quits.">
       {terminal && repos.length ? (
         <div className="web-live-new">
-          <Select aria-label="Repo" value={repo} onChange={(e) => setRepo(e.target.value)}>{repos.map((r) => <option key={r}>{r}</option>)}</Select>
-          <Button size="sm" onClick={() => act('/sessions/terminal', { repo }, `Terminal started in ${repo}.`)}>New terminal</Button>
+          <Select aria-label="Repo" value={sel} onChange={(e) => setRepo(e.target.value)}>{repos.map((r) => <option key={r}>{r}</option>)}</Select>
+          <Button size="sm" onClick={() => act('/sessions/terminal', { repo: sel }, `Terminal started in ${sel}.`)}>New terminal</Button>
         </div>
       ) : null}
       <p className="web-sk-status" role="status" data-bad={msg?.bad || undefined}>{msg?.text}</p>

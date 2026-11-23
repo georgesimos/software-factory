@@ -120,16 +120,19 @@ export const harnessReady = new Map(); // harness id -> when detect() and login(
 // The harness session to resume for a run, or undefined. Only a run that is still active and that the stopped or crashed
 // session last wrote: its last event falls inside that session's life. Anything else, such as a terminal /software-factory
 // run that has owned the issue since, is refused as an active run.
+const SESSION_ID = /^\w[\w-]{0,99}$/; // a harness session id as an argument: plain, and never a flag (no leading '-')
 export function resumeFor(r, last) {
   if (!r || TERMINAL.includes(r.outcome) || !last || last.state === 'running' || last.exit === 0) return undefined;
   const at = Date.parse(r.events.at(-1)?.ts || 0), from = Date.parse(last.started), to = Date.parse(last.ended) + 5_000; // its last lines land just after
   const v = last.harnessSession;
-  return at >= from && at <= to && /^[\w-]{1,100}$/.test(v || '') ? v : undefined; // plain: it becomes an argument
+  return at >= from && at <= to && SESSION_ID.test(v || '') ? v : undefined;
 }
+// The factory's own sessions: a person's terminal on the same run label never stands in for the run's last session.
+const factorySessions = (label) => listSessions().filter((x) => x.mode !== 'terminal' && x.label === label);
 // Runs a POST /api/sessions would resume now: active, and last written by a session here that stopped or crashed.
 export function resumable() {
-  const runs = derive(read()), labels = [...new Set(listSessions().map((x) => x.label))];
-  return labels.filter((id) => resumeFor(runs[id], listSessions().filter((x) => x.label === id).at(-1)));
+  const runs = derive(read()), labels = [...new Set(listSessions().filter((x) => x.mode !== 'terminal').map((x) => x.label))];
+  return labels.filter((id) => resumeFor(runs[id], factorySessions(id).at(-1)));
 }
 // What the run may still spend: COST_CAP less the dollars, and less the share of TOKEN_CAP used, for usage with no price.
 export const budgetLeft = (b) => b ? Math.min(COST_CAP - b.usd, COST_CAP * (1 - b.tokens / TOKEN_CAP)) : COST_CAP;
@@ -144,16 +147,22 @@ const clone = (repo) => { // an attached repo's folder
   return cwd;
 };
 // A person's own interactive harness in the desktop app's terminal pane (#58): no prompt and no budget, so never a factory
-// run's session. In the run's worktree when it has one, else the clone; `resume` continues a harness session by its id.
+// run's session. In the run's worktree when it has one, else the clone. `resume` continues a session this app started, in
+// that session's own folder: claude keeps its sessions per project folder, so elsewhere --resume wouldn't find it.
 export function terminalSession({ harness = 'claude-code', repo, issue, resume }, env = process.env, modules = hostModules) {
   const h = harnesses.find((y) => y.id === harness);
   if (!h?.launch || !(h.modes || []).includes('terminal')) throw new Error(`harness ${String(harness).slice(0, 40)} has no terminal mode`);
   if (!modules['node-pty']) throw new Error('a terminal needs the desktop app, which supplies node-pty: run it in your own terminal');
   let cwd = clone(repo);
   if (issue !== undefined && (!Number.isInteger(issue) || issue < 1 || issue > 1e9)) throw new Error('issue must be a positive issue number');
-  if (resume !== undefined && !/^[\w-]{1,100}$/.test(String(resume))) throw new Error('resume must be a harness session id');
+  if (resume !== undefined && !SESSION_ID.test(String(resume))) throw new Error('resume must be a harness session id');
   const id = issue ? `${repo}#${issue}` : repo, wt = issue && wtInfo(id)?.path;
   if (wt && fs.existsSync(wt)) cwd = wt;
+  if (resume !== undefined) {
+    const from = listSessions().filter((x) => x.harnessSession === resume && x.harness === h.id).at(-1);
+    if (!from) throw new Error('resume a session this app started');
+    cwd = getSession(from.id).cwd ?? cwd;
+  }
   return startSession(h, { mode: 'terminal', resume }, { cwd, env, label: id, modules });
 }
 export function launchSession({ harness = 'claude-code', mode = 'headless', repo, issue }, env = process.env, modules = hostModules) {
@@ -174,10 +183,10 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
   const reopened = r?.events?.some((e) => e.stage === 'intake' && e.status === 'started');
   const gone = !reopened && readArchive().find((a) => a.id === id);
   if (gone) throw new Error(`${id} is ${gone.outcome} (archived): it needs a human, not a new run`);
-  const mine = listSessions().filter((x) => x.label === id);
-  if (mine.some((x) => x.state === 'running')) throw new Error(`${id} already has a running session`); // before its first event lands
+  // Any running session on the run, a person's terminal included: two harnesses would share one session or worktree.
+  if (listSessions().some((x) => x.label === id && x.state === 'running')) throw new Error(`${id} already has a running session`); // before its first event lands
   // A run left active by a session that was stopped or crashed here resumes that harness session instead of staying stuck.
-  const resume = resumeFor(r, mine.at(-1));
+  const resume = resumeFor(r, factorySessions(id).at(-1));
   if (r && !TERMINAL.includes(r.outcome) && !resume) throw new Error(`${id} already has an active run (${r.outcome || r.stage})`);
   const b = r ? budget(r) : null;
   if (b?.over) throw new Error(`run budget exceeded ${budgetWhy(b)}`);
