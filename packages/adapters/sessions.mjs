@@ -80,7 +80,7 @@ export function startSession(h, opts, { cwd, env = process.env, label = '', modu
   let c;
   try { c = resolveSpec(spec, env, resolve); } catch (e) { fail(e); return s; }
   // spec.stdin carries the prompt: as an argument its space and # would need cmd.exe quoting, which a .cmd shim can't get
-  const child = spawn(c.file, c.args, { cwd, env, stdio: [spec.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsVerbatimArguments: !!c.windowsVerbatimArguments });
+  const child = spawn(c.file, c.args, { cwd, env: { ...env, ...c.env }, stdio: [spec.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsVerbatimArguments: !!c.windowsVerbatimArguments });
   if (spec.stdin !== undefined) child.stdin.on('error', () => { /* exited before reading it: reported by close */ }).end(spec.stdin);
   s.stop = (wait) => killTree(child, process.platform, undefined, process.kill, wait);
   readline.createInterface({ input: child.stdout }).on('line', (line) => {
@@ -119,7 +119,7 @@ async function terminal(s, spec, { cwd, env, modules, resolve, done }) {
   const c = resolveSpec(spec, env, resolve);
   let p;
   // A .cmd shim's cmd.exe line goes to node-pty as one string: given an array, node-pty quotes each argument again.
-  try { p = pty.spawn(c.file, c.windowsVerbatimArguments ? c.args.join(' ') : c.args, { name: 'xterm-256color', cols: 120, rows: 32, cwd, env }); } catch (e) {
+  try { p = pty.spawn(c.file, c.windowsVerbatimArguments ? c.args.join(' ') : c.args, { name: 'xterm-256color', cols: 120, rows: 32, cwd, env: { ...env, ...c.env } }); } catch (e) {
     throw onPath(c.file, env) ? e : new Error(`${spec.cmd} is not installed`); // else a bad cwd or a broken pty passes through
   }
   s.write = (data) => { if (!stopped) p.write(data); }; // a stopped pty may already be gone

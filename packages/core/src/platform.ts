@@ -9,7 +9,8 @@ import type { ExecFileSyncOptions, SpawnSyncOptions } from 'node:child_process';
 
 type Env = Record<string, string | undefined>;
 export interface Resolve { platform?: NodeJS.Platform; env?: Env; isFile?: (p: string) => boolean }
-export interface Command { file: string; args: string[]; windowsVerbatimArguments?: boolean }
+// env: added to the spawn's env (callers merge it over their own).
+export interface Command { file: string; args: string[]; windowsVerbatimArguments?: boolean; env?: Env }
 
 // What cmd.exe treats as plain text: no & | < > ^ " % ! ( ) or whitespace. Empty arguments need quotes, so they fail too.
 const PLAIN = /^[\w\-.,:/\\=@+~]+$/;
@@ -19,7 +20,7 @@ const isFileSync = (p: string) => { try { return fs.statSync(p).isFile(); } catc
 function findOnPath(cmd: string, env: Env, isFile: (p: string) => boolean, skip?: RegExp): string | undefined {
   const exts = (envGet(env, 'PATHEXT') || '.COM;.EXE;.BAT;.CMD').split(';').filter(Boolean).map((e) => e.toLowerCase()); // NTFS ignores case
   const names = exts.some((e) => cmd.toLowerCase().endsWith(e)) ? [cmd, ...exts.map((e) => cmd + e)] : exts.map((e) => cmd + e);
-  const dirs = /[\\/]/.test(cmd) ? [''] : (envGet(env, 'PATH') || '').split(';').map((d) => d.trim().replace(/^"(.*)"$/, '$1')).filter((d) => d && !skip?.test(d)); // "C:\\Tools\\gh bin" is valid
+  const dirs = /[\\/]/.test(cmd) ? [''] : (envGet(env, 'PATH') || '').split(';').map((d) => d.trim().replace(/^"(.*)"$/, '$1')).filter((d) => path.win32.isAbsolute(d) && !skip?.test(d)); // "C:\\Tools\\gh bin" is valid; a relative entry never counts
   for (const d of dirs) for (const n of names) { const p = d ? path.win32.join(d, n) : n; if (isFile(p)) return p; }
   return undefined;
 }
@@ -36,19 +37,23 @@ export function command(cmd: string, args: string[] = [], { platform = process.p
   if (bad !== undefined || /["%]/.test(file)) {
     throw new Error(`${path.win32.basename(file)} is a .cmd shim, and ${JSON.stringify(bad ?? file)} would need cmd.exe quoting; install a native ${cmd}.exe or run this step yourself`);
   }
-  // /s strips the outer quotes, leaving "file" args; verbatim so Node adds no quoting of its own.
-  return { file: envGet(env, 'COMSPEC') || path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', 'System32', 'cmd.exe'), args: ['/d', '/s', '/c', `""${file}" ${args.join(' ')}"`], windowsVerbatimArguments: true };
+  // /s strips the outer quotes, leaving "file" args; verbatim so Node adds no quoting of its own. The shim runs a bare `node`,
+  // which cmd.exe would look for in the current folder (a run's worktree, maybe an untrusted clone) first: env turns that off.
+  return { file: envGet(env, 'COMSPEC') || path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', 'System32', 'cmd.exe'), args: ['/d', '/s', '/c', `""${file}" ${args.join(' ')}"`], windowsVerbatimArguments: true,
+    env: { NoDefaultCurrentDirectoryInExePath: '1' } };
 }
 
+const spawnOptions = <O extends { env?: NodeJS.ProcessEnv }>(c: Command, options: O): O =>
+  ({ ...options, ...(c.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}), ...(c.env ? { env: { ...(options.env ?? process.env), ...c.env } } : {}) });
 export function exec(cmd: string, args: string[] = [], options: ExecFileSyncOptions = {}) {
   const c = command(cmd, args);
-  return execFileSync(c.file, c.args, { ...options, ...(c.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}) });
+  return execFileSync(c.file, c.args, spawnOptions(c, options));
 }
 
 export function run(cmd: string, args: string[] = [], options: SpawnSyncOptions = {}) {
   let c: Command;
   try { c = command(cmd, args); } catch (error) { return { status: null, stdout: '', stderr: '', error: error as Error }; }
-  return spawnSync(c.file, c.args, { ...options, ...(c.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}) });
+  return spawnSync(c.file, c.args, spawnOptions(c, options));
 }
 
 // The POSIX shell for `checks.commands` (written for sh). On Windows that is Git Bash, the shell Claude Code uses:
@@ -78,12 +83,13 @@ export function opener(target: string, platform: NodeJS.Platform = process.platf
   if (platform === 'win32') return { file: 'explorer.exe', args: [href] };
   return { file: 'xdg-open', args: [href] };
 }
-export function open(target: string, { platform = process.platform, env = process.env, isFile = isFileSync }: Resolve = {}) {
-  const c = opener(target, platform);
-  const found = platform === 'win32' ? findOnPath(c.file, env, isFile) || isFile(path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', c.file))
-    : (envGet(env, 'PATH') || '').split(':').some((d) => d && isFile(path.join(d, c.file)));
-  if (!found) throw new Error(`no ${c.file} here to open ${target}; open it yourself`);
-  spawn(c.file, c.args, { detached: true, stdio: 'ignore' }).on('error', () => { /* reported below by the caller's hint */ }).unref();
+// The opener is spawned by the full path found, never by bare name (on Windows that is looked up in the current folder first).
+export function open(target: string, { platform = process.platform, env = process.env, isFile = isFileSync }: Resolve = {}, launch = spawn) {
+  const c = opener(target, platform), sys = path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', c.file);
+  const file = platform === 'win32' ? (isFile(sys) ? sys : findOnPath(c.file, env, isFile))
+    : (envGet(env, 'PATH') || '').split(':').filter((d) => path.posix.isAbsolute(d)).map((d) => path.posix.join(d, c.file)).find(isFile);
+  if (!file) throw new Error(`no ${c.file} here to open ${target}; open it yourself`);
+  launch(file, c.args, { detached: true, stdio: 'ignore' }).on('error', () => { /* reported below by the caller's hint */ }).unref();
   return target;
 }
 

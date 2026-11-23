@@ -277,7 +277,7 @@ function fakePty(spawnError) {
   const rec = {};
   return { rec, spawn(file, args, opts) {
     if (spawnError) throw new Error(spawnError);
-    Object.assign(rec, { file, args, cwd: opts.cwd });
+    Object.assign(rec, { file, args, cwd: opts.cwd, env: opts.env });
     let data, exit;
     setTimeout(() => data('ready\r\n'), 5);
     return { onData: (f) => { data = f; }, onExit: (f) => { exit = f; }, write: (x) => { (rec.writes ||= []).push(x); data(`echo:${x}`); if (x === 'exit\r') exit({ exitCode: 0 }); }, resize: (c, r) => { rec.size = [c, r]; }, kill: () => exit({ exitCode: null }) };
@@ -323,6 +323,8 @@ test('terminal on Windows: npm\'s claude.cmd goes to node-pty as one cmd.exe lin
   const s = startSession(claude, { mode: 'terminal', resume: 'abc' }, { cwd: home, env: stubEnv, modules: { [PTY]: pty }, resolve: win });
   await new Promise((r) => setTimeout(r, 20));
   assert.deepEqual([pty.rec.file, pty.rec.args], ['C:\\Windows\\system32\\cmd.exe', '/d /s /c ""C:\\npm\\claude.cmd" --resume abc"']);
+  assert.equal(pty.rec.env.NoDefaultCurrentDirectoryInExePath, '1'); // the shim's bare `node` is never taken from the worktree
+  assert.equal(pty.rec.env.PATH, stubEnv.PATH); // merged over the host's env, not instead of it
   s.stop(); await finished(s);
 });
 

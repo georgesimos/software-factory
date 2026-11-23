@@ -6,18 +6,21 @@ import { spawnSync } from 'node:child_process';
 
 // What to spawn for `name args`. On Windows only a file found on PATH (quoted entries unquoted), never the bare name, which
 // Windows looks up in the current folder (maybe an untrusted clone) first: an .exe directly, an npm .cmd shim through
-// cmd.exe /d /s /c like sessions do (args here are fixed words, never quoted). null: not installed. Kept in this file:
-// a harness is one file with node: builtins only.
+// cmd.exe /d /s /c like sessions do, only with plain args (no cmd.exe quoting is attempted). The shim runs a bare `node`, which
+// cmd.exe would look for in the current folder first: run it from the shim's own folder with that lookup off. Relative PATH
+// entries never count. null: not installed, or not runnable safely. Kept in this file: a harness is one file with node: builtins only.
 const isFile = (f) => { try { return fs.statSync(f).isFile(); } catch { return false; } };
+const PLAIN = /^[\w\-.,:/\\=@+~]+$/; // what cmd.exe passes as is: core/src/platform.ts command()'s rule
 export function spawnFor(name, args, platform = process.platform, env = process.env, exists = isFile) {
   if (platform !== 'win32') return [name, args, {}];
-  for (const d of String(env.PATH ?? env.Path ?? '').split(';').map((x) => x.trim().replace(/^"(.*)"$/, '$1')).filter(Boolean)) {
+  for (const d of String(env.PATH ?? env.Path ?? '').split(';').map((x) => x.trim().replace(/^"(.*)"$/, '$1')).filter((x) => path.win32.isAbsolute(x))) {
     for (const ext of ['.exe', '.cmd']) {
       const f = path.win32.join(d, name + ext);
       if (!exists(f)) continue;
       if (ext === '.exe') return [f, args, {}];
-      if (/["%]/.test(f)) return null; // a path cmd.exe can't take quoted as is
-      return [env.ComSpec || env.COMSPEC || path.win32.join(env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows', 'System32', 'cmd.exe'), ['/d', '/s', '/c', `""${f}" ${args.join(' ')}"`], { windowsVerbatimArguments: true }];
+      if (/["%]/.test(f) || !args.every((a) => PLAIN.test(a))) return null; // would need cmd.exe quoting
+      return [env.ComSpec || env.COMSPEC || path.win32.join(env.SystemRoot || env.SYSTEMROOT || 'C:\\Windows', 'System32', 'cmd.exe'), ['/d', '/s', '/c', `""${f}" ${args.join(' ')}"`],
+        { windowsVerbatimArguments: true, cwd: d, env: { ...env, NoDefaultCurrentDirectoryInExePath: '1' } }];
     }
   }
   return null;
