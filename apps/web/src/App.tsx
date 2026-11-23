@@ -120,7 +120,7 @@ function Shell({ data, patch, refresh }: { data: FactoryData; patch: (p: Partial
       refresh();
     } catch (e) { put({ text: (e as Error).message, bad: true }); }
   };
-  const detail = (r: NonNullable<typeof sel>) => <RunDetail run={r} cap={data.cap ?? CAP} costCap={data.costCap ?? COST_CAP} find={(id) => byId.get(id)} href={runHref}
+  const detail = (r: NonNullable<typeof sel>) => <RunDetail run={r} token={token} cap={data.cap ?? CAP} costCap={data.costCap ?? COST_CAP} find={(id) => byId.get(id)} href={runHref}
     resume={token && (data.resumable?.includes(r.id) || starts[r.id]) ? { go: () => resume(r.id), state: starts[r.id] } : undefined} />;
   return (
     <>
