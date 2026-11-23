@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Software Factory</title>
+  <link rel="icon" href="data:,">
+  <script>
+    // Apply ?theme= or the saved theme before first paint.
+    try { const t = new URLSearchParams(location.search).get('theme') || localStorage.getItem('sf.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+  <!-- For a host to fill with the run data, as page() in packages/server/src/server.ts fills dashboard.html's.
+       Not wired yet: F ui still serves dashboard.html. -->
+  <script type="application/json" id="data">__FACTORY_DATA__</script>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>
