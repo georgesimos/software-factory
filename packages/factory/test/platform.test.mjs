@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cliShims, command, installCli, linkSkill, open, opener, posixShell, run } from '../../core/src/platform.ts';
+import { cliDir, cliShims, command, installCli, windowsPath, linkSkill, open, opener, posixShell, run } from '../../core/src/platform.ts';
 import { checkRunner } from '../../core/src/skills.ts';
 import { evalCommand } from '../../core/src/eval.ts';
 
@@ -142,6 +142,9 @@ test('installCli: picks ~/.local/bin or ~/bin when on PATH, else prints the line
   assert.equal(r.onPath, false);
   assert.match(r.addToPath, /^export PATH=".*\.local\/bin:\$PATH"/);
   assert.equal(installCli('/x/factory.mjs', { home, platform: 'linux', env: { PATH: `/usr/bin:${home}/bin/` } }).dir, path.join(home, 'bin'));
+  assert.match(installCli('/x/factory.mjs', { home, platform: 'linux', env: { PATH: '/usr/bin', SHELL: '/opt/homebrew/bin/fish' } }).addToPath, /^fish_add_path '/);
+  fs.rmSync(path.join(home, '.local', 'bin', 'factory')); fs.symlinkSync(path.join(home, 'elsewhere'), path.join(home, '.local', 'bin', 'factory'));
+  assert.throws(() => installCli('/x/factory.mjs', { home, platform: 'linux', env: { PATH: '/usr/bin' } }), /not written by install-cli/); // never writes through a link
 });
 
 test('F install-cli in a temp HOME: the shim runs factory help, a re-run is idempotent, and a foreign factory file is never overwritten', () => {
@@ -172,4 +175,22 @@ test('the sh shim fails loudly once its factory.mjs is gone (a plugin update mov
   const r = spawnSync(f, ['help'], { encoding: 'utf8' });
   assert.equal(r.status, 1);
   assert.match(r.stderr, /is gone .*run F install-cli again/);
+});
+
+test('cliDir: the candidate first in PATH order wins; ~ means home; relative entries never count', () => {
+  assert.deepEqual(cliDir('/h', '/usr/bin:/h/bin:/h/.local/bin', 'linux'), { dir: '/h/bin', onPath: true });
+  assert.deepEqual(cliDir('/h', '~/.local/bin/:/h/bin', 'linux'), { dir: '/h/.local/bin', onPath: true });
+  assert.deepEqual(cliDir('/h', 'bin:.local/bin', 'linux'), { dir: '/h/.local/bin', onPath: false }); // relative to wherever F runs: not on PATH
+  assert.deepEqual(cliDir('C:\\Users\\J', 'C:\\Windows;c:\\users\\j\\BIN\\', 'win32'), { dir: 'C:\\Users\\J\\bin', onPath: true }); // NTFS ignores case
+});
+
+test('Windows: on-PATH is judged from the registry Path a new cmd.exe or PowerShell gets, not Git Bash\'s PATH with ~/bin', () => {
+  const reg = { 'HKCU\\Environment': 'HKEY_CURRENT_USER\\Environment\r\n    Path    REG_EXPAND_SZ    %USERPROFILE%\\AppData\\Local\\Microsoft\\WindowsApps;%NOPE%\\x\r\n\r\n',
+    'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment': '\r\n    Path    REG_SZ    C:\\Windows\\system32;C:\\Program Files\\Git\\cmd\r\n' };
+  const env = { USERPROFILE: 'C:\\Users\\J', PATH: '/c/Users/J/bin:/mingw64/bin:/usr/bin' }; // what Git Bash shows
+  const winPath = windowsPath(env, (k) => reg[k]);
+  assert.equal(winPath, 'C:\\Users\\J\\AppData\\Local\\Microsoft\\WindowsApps;%NOPE%\\x;C:\\Windows\\system32;C:\\Program Files\\Git\\cmd');
+  assert.deepEqual(cliDir('C:\\Users\\J', winPath, 'win32'), { dir: 'C:\\Users\\J\\.local\\bin', onPath: false }); // so the PowerShell line is printed
+  assert.equal(windowsPath(env, () => { throw new Error('no reg'); }), ';'); // no registry: nothing counts as on Path
+  assert.deepEqual(cliDir('C:\\Users\\J', windowsPath(env, (k) => k.startsWith('HKCU') ? '    Path    REG_SZ    C:\\Users\\J\\.local\\bin\r\n' : ''), 'win32'), { dir: 'C:\\Users\\J\\.local\\bin', onPath: true });
 });

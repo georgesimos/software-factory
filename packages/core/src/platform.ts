@@ -113,21 +113,43 @@ export function cliShims(entry: string, platform: NodeJS.Platform = process.plat
   return { factory: sh, 'factory.cmd': `${cmd.join('\r\n')}\r\n` };
 }
 
-export function installCli(entry: string, { home, platform = process.platform, env = process.env }: { home: string; platform?: NodeJS.Platform; env?: Env }) {
-  const p = platform === 'win32' ? path.win32 : path.posix, sep = platform === 'win32' ? ';' : ':';
-  const norm = (d: string) => { const n = p.resolve(d).replace(/[\\/]+$/, ''); return platform === 'win32' ? n.toLowerCase() : n; };
-  const onPath = new Set((envGet(env, 'PATH') || '').split(sep).filter(Boolean).map(norm));
-  const dirs = [p.join(home, '.local', 'bin'), p.join(home, 'bin')], dir = dirs.find((d) => onPath.has(norm(d))) ?? dirs[0];
+// The Path a new cmd.exe or PowerShell starts with: the registry user and machine values, with %VARS% expanded. Not this
+// process's PATH: Git Bash, where Claude Code runs F on Windows, adds ~/bin and other folders Windows itself never sees.
+export function windowsPath(env: Env = process.env, query = (key: string) => execFileSync('reg', ['query', key, '/v', 'Path'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })) {
+  const read = (key: string) => { try { return /^\s*Path\s+REG_(?:EXPAND_)?SZ\s+(.*)$/im.exec(query(key))?.[1].trim() ?? ''; } catch { return ''; } };
+  return [read('HKCU\\Environment'), read('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment')].join(';')
+    .replace(/%([^%;]+)%/g, (m, v) => envGet(env, v) ?? m);
+}
+
+// Where install-cli writes: whichever of ~/.local/bin and ~/bin comes first on PATH, else ~/.local/bin (not yet on PATH).
+// PATH entries are judged as absolute paths only, with a leading ~ meaning home; relative ones never count.
+export function cliDir(home: string, pathList: string, platform: NodeJS.Platform = process.platform) {
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const norm = (d: string) => { const n = p.normalize(d).replace(/[\\/]+$/, ''); return platform === 'win32' ? n.toLowerCase() : n; };
+  const dirs = [p.join(home, '.local', 'bin'), p.join(home, 'bin')];
+  for (const e of pathList.split(platform === 'win32' ? ';' : ':')) {
+    const abs = /^~(?=[\\/]|$)/.test(e) ? p.join(home, e.slice(1)) : e;
+    const hit = p.isAbsolute(abs) && dirs.find((d) => norm(d) === norm(abs));
+    if (hit) return { dir: hit, onPath: true };
+  }
+  return { dir: dirs[0], onPath: false };
+}
+
+export function installCli(entry: string, { home, platform = process.platform, env = process.env, pathList }: { home: string; platform?: NodeJS.Platform; env?: Env; pathList?: string }) {
+  const p = platform === 'win32' ? path.win32 : path.posix;
+  const { dir, onPath } = cliDir(home, pathList ?? (platform === 'win32' ? windowsPath(env) : envGet(env, 'PATH') || ''), platform);
   const shims = cliShims(entry, platform);
   fs.mkdirSync(dir, { recursive: true });
-  for (const name of Object.keys(shims)) { // check every file before writing any
-    const f = p.join(dir, name);
-    if (fs.existsSync(f) && !fs.readFileSync(f, 'utf8').includes(MARK)) throw new Error(`${f} already exists and was not written by install-cli; move it aside first`);
+  for (const name of Object.keys(shims)) { // check every file before writing any; never write through a link
+    const f = p.join(dir, name), st = fs.lstatSync(f, { throwIfNoEntry: false });
+    if (st && (!st.isFile() || !fs.readFileSync(f, 'utf8').includes(MARK))) throw new Error(`${f} already exists and was not written by install-cli; move it aside first`);
   }
   for (const [name, text] of Object.entries(shims)) fs.writeFileSync(p.join(dir, name), text, { mode: 0o755 });
   if (platform !== 'win32') fs.chmodSync(p.join(dir, 'factory'), 0o755); // mode is ignored when the file already exists
-  const addToPath = onPath.has(norm(dir)) ? undefined : platform === 'win32'
+  const fish = /(^|\/)fish$/.test(envGet(env, 'SHELL') || '');
+  const addToPath = onPath ? undefined : platform === 'win32'
     ? `[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';${dir.replace(/'/g, "''")}', 'User')   # PowerShell, then open a new terminal`
+    : fish ? `fish_add_path '${dir.replace(/['\\]/g, '\\$&')}'   # run once in fish`
     : `export PATH="${dir.replace(/["$`\\]/g, '\\$&')}:$PATH"   # add this line to your shell profile (~/.zshrc, ~/.bashrc), then open a new terminal`;
   return { dir, files: Object.keys(shims).map((n) => p.join(dir, n)), entry, ...(addToPath ? { onPath: false, addToPath } : { onPath: true }) };
 }
