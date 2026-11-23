@@ -6,13 +6,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { setup } from './setup.mjs';
+import { COST_CAP, TOKEN_CAP } from '../../core/src/constants.ts';
 import { HERE } from '../factory.mjs';
 import { record } from '../../core/src/log.ts';
 import { saveProject } from '../../core/src/workspace.ts';
 import { command, opener } from '../../core/src/platform.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
-import { MAX_BYTES, killTree, resolveSpec, startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
-import { harnessReady, launchSession, ui, uiHandle } from '../../server/src/server.ts';
+import { MAX_BYTES, killTree, listSessions, resolveSpec, startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
+import { budgetLeft, harnessReady, launchSession, resumeFor, ui, uiHandle } from '../../server/src/server.ts';
 
 setup();
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-shome-'));
@@ -86,13 +87,15 @@ test('a session killed by a signal ends: exit carries the signal, and stop() is 
 });
 
 test('Windows: stop() ends the whole tree with taskkill, since kill() would end only cmd.exe; never pid 0', () => {
-  const calls = [], run = (...a) => { calls.push(a.slice(0, 2)); return { on: () => {} }; };
+  const calls = [], run = (...a) => { calls.push(a.slice(0, 2)); return { on: () => {} }; }, groups = [], kill = (pid, sig) => { groups.push([pid, sig]); };
   let killed = 0; const child = { pid: 4242, kill: () => { killed++; } };
-  killTree(child, 'win32', run);
+  killTree(child, 'win32', run, kill);
   assert.deepEqual([calls, killed], [[['taskkill', ['/pid', '4242', '/T', '/F']]], 0]);
-  killTree(child, 'darwin', run);
-  killTree({ pid: 0, kill: () => { killed += 10; } }, 'darwin', run); killTree({ pid: 0 }, 'win32', run);
-  assert.deepEqual([calls.length, killed], [1, 1]);
+  killTree(child, 'darwin', run, kill);
+  assert.deepEqual(groups, [[-4242, 'SIGTERM']], 'POSIX: the whole process group');
+  killTree(child, 'linux', run, () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
+  killTree({ pid: 0, kill: () => { killed += 10; } }, 'darwin', run, kill); killTree({ pid: 0 }, 'win32', run, kill);
+  assert.deepEqual([calls.length, groups.length, killed], [1, 1, 1], 'never pid 0; the child alone when its group is gone');
 });
 
 test('the command is found on the PATH and PATHEXT the session gets, not this process\'s', () => {
@@ -108,6 +111,7 @@ test('a session keeps at most MAX_BYTES of events and says what it dropped', asy
   assert.ok(s.events[0].n > 0 && s.events.at(-1).type === 'exit');
   const sub = []; subscribe(s, (e) => sub.push(e), 0);
   assert.deepEqual(sub[0], { type: 'dropped', from: 0, first: s.events[0].n });
+  assert.equal(s.harnessSession, 'stub-session', 'the harness session id outlives its dropped init event');
 });
 
 test('launchSession(): an attached repo and an issue number only; #25\'s refusals', async () => {
@@ -129,6 +133,43 @@ test('launchSession(): an attached repo and an issue number only; #25\'s refusal
   const ev = await finished(s);
   assert.equal(ev.find((e) => e.data?.type === 'assistant').data.message.content[0].text, 'prompt: /software-factory acme/app#3', 'the prompt is built by the server');
   assert.equal(fs.realpathSync(ev.find((e) => e.data?.subtype === 'init').data.cwd), fs.realpathSync(clone), 'runs in the attached clone');
+});
+
+test('POSIX: stop() ends claude\'s own children too (a dev server a Bash tool started)', { skip: process.platform === 'win32' }, async () => {
+  const s = startSession(claude, { mode: 'headless', prompt: 'x' }, { cwd: home, env: { ...stubEnv, STUB_CHILD: '1' }, label: 'tree' });
+  const pid = await new Promise((r) => { const off = subscribe(s, (e) => { if (e.data?.type === 'grandchild') { off(); r(e.data.pid); } }); });
+  const end = finished(s); s.stop(); await end;
+  const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  for (let i = 0; i < 50 && alive(); i++) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(alive(), false, `grandchild ${pid} survived`);
+});
+
+test('a missing folder is named, not reported as "claude is not installed"', async () => {
+  const ev = await finished(startSession(claude, { mode: 'headless', prompt: 'x' }, { cwd: path.join(home, 'gone'), env: stubEnv }));
+  assert.match(ev.find((e) => e.type === 'error').message, /the folder .*gone does not exist/);
+});
+
+test('resumeFor(): only a still-active run whose last event the stopped session wrote; budgetLeft() counts token headroom', () => {
+  const last = { state: 'exited', exit: 'SIGTERM', harnessSession: 'abc-1', started: '2026-11-23T10:00:00.000Z', ended: '2026-11-23T10:05:00.000Z' };
+  const run = (ts, outcome) => ({ outcome, events: [{ ts }] });
+  assert.equal(resumeFor(run('2026-11-23T10:04:00.000Z'), last), 'abc-1');
+  assert.equal(resumeFor(run('2026-11-23T10:05:03.000Z'), last), 'abc-1', 'its last lines land just after it ends');
+  for (const [r, l, why] of [[run('2026-11-23T10:30:00.000Z'), last, 'someone else wrote it since (a terminal run)'], [run('2026-11-23T09:00:00.000Z'), last, 'it never wrote this run'],
+    [run('2026-11-23T10:04:00.000Z', 'merged'), last, 'a finished run starts fresh'], [undefined, last, 'no run: start fresh'], [run('2026-11-23T10:04:00.000Z'), { ...last, exit: 0 }, 'it exited cleanly'],
+    [run('2026-11-23T10:04:00.000Z'), { ...last, harnessSession: 'a b' }, 'not a plain id'], [run('2026-11-23T10:04:00.000Z'), { ...last, state: 'running' }, 'still running']]) assert.equal(resumeFor(r, l), undefined, why);
+  assert.equal(budgetLeft(null), COST_CAP);
+  assert.equal(budgetLeft({ usd: 0, tokens: 0 }), COST_CAP);
+  assert.equal(budgetLeft({ usd: 0, tokens: TOKEN_CAP / 2 }), COST_CAP / 2, 'unpriced usage still spends the cap');
+  assert.equal(budgetLeft({ usd: COST_CAP * 0.9, tokens: TOKEN_CAP / 2 }), COST_CAP - COST_CAP * 0.9);
+});
+
+test('the newest session of a run it may resume is kept (emptied) when finished sessions are pruned', async () => {
+  const keep = startSession(claude, { mode: 'headless', prompt: 'x' }, { cwd: home, env: { ...stubEnv, STUB_HANG: '1' }, label: 'acme/app#77' });
+  await new Promise((r) => { const off = subscribe(keep, (e) => { if (e.data?.subtype === 'init') { off(); r(); } }); });
+  const end = finished(keep); keep.stop(); await end;
+  for (let i = 0; i < 25; i++) await finished(startSession(claude, { mode: 'headless', prompt: 'x' }, { cwd: home, env: stubEnv, label: `filler-${i}` }));
+  assert.ok(listSessions().filter((x) => x.label.startsWith('filler-')).length <= 20, 'the rest are pruned');
+  assert.deepEqual([getSession(keep.id)?.harnessSession, getSession(keep.id)?.events.length], ['stub-session', 0]);
 });
 
 test('launchSession(): a run left active by a stopped session resumes that harness session; a running one is still refused', async () => {
