@@ -2,19 +2,25 @@
   "name": "@software-factory/desktop",
   "private": true,
   "license": "Apache-2.0",
-  "description": "The Electron app: F ui in-process, in a window.",
+  "description": "The Electron app: F ui in-process, in a window. Runtime dependencies are only what the build leaves external (native or spawned files).",
   "type": "module",
   "main": "dist/apps/desktop/src/main.mjs",
   "scripts": {
     "build": "tsc -p tsconfig.json && vite build",
     "start": "vite build && electron .",
-    "test": "vite build && node --test test/build.test.mjs",
-    "e2e": "vite build && node test/app.e2e.mjs"
+    "test": "vite build && node --test test/build.test.mjs test/login-path.test.mjs",
+    "e2e": "vite build && node test/app.e2e.mjs",
+    "package": "node scripts/package.mjs",
+    "smoke": "node scripts/smoke.mjs",
+    "postinstall": "node scripts/pty-helper.mjs"
   },
   "dependencies": {
-    "@software-factory/server": "workspace:*"
+    "@anthropic-ai/claude-agent-sdk": "0.3.330",
+    "node-pty": "1.1.0"
   },
   "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "@software-factory/server": "workspace:*",
     "@types/node": "^24.19.2",
     "electron": "45.4.1",
     "typescript": "~5.9.3",

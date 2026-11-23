@@ -1,0 +1,43 @@
+# Unsigned desktop builds for macOS, Windows and Linux (#56). Never signed, notarized, published or auto-updated:
+# each build is a workflow artifact, kept a week. A display-less smoke test runs every build's own binary as Node;
+# on Linux the GUI e2e also drives the packaged app under Xvfb.
+name: desktop
+on:
+  pull_request:
+    paths: [apps/desktop/**, apps/web/**, packages/**, pnpm-lock.yaml, pnpm-workspace.yaml, .github/workflows/desktop.yml]
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @software-factory/desktop test
+      - run: pnpm --filter @software-factory/desktop package
+      - run: pnpm --filter @software-factory/desktop smoke
+      - name: GUI e2e on the packaged build
+        if: runner.os == 'Linux'
+        working-directory: apps/desktop
+        env:
+          DESKTOP_EXE: ${{ github.workspace }}/apps/desktop/out/Software Factory-linux-x64/software-factory
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 # Chromium's sandbox needs user namespaces
+          xvfb-run -a node test/app.e2e.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: software-factory-${{ runner.os }}-${{ runner.arch }}
+          path: apps/desktop/out/Software Factory-*/
+          retention-days: 7
