@@ -63,9 +63,9 @@ export function archive(days = 14) {
   const old = Object.values(runs).filter((r) => TERMINAL.includes(r.outcome) && r.updated < cutoff && !wtInfo(r.id));
   if (!old.length) return { archived: 0 };
   const ids = new Set(old.map((r) => r.id));
-  // events: the last five, notes left out so they never crowd out how the run ended
+  // events: the last five, notes left out (their events and texts) so they never crowd out how the run ended
   const sessionEvents = (r) => r.events.filter((e) => e.sessionId).map((e) => ({ ts: e.ts, stage: e.stage, status: e.status, sessionId: e.sessionId }));
-  fs.appendFileSync(archiveFile(), old.map((r) => JSON.stringify({ ...r, events: r.events.filter((e) => e.stage !== 'note').slice(-5), sessionEvents: sessionEvents(r), archived: true })).join('\n') + '\n');
+  fs.appendFileSync(archiveFile(), old.map((r) => JSON.stringify({ ...r, notes: undefined, events: r.events.filter((e) => e.stage !== 'note').slice(-5), sessionEvents: sessionEvents(r), archived: true })).join('\n') + '\n');
   const tmp = log() + '.tmp'; // write-then-rename so a crash never leaves a half log
   fs.writeFileSync(tmp, events.filter((e) => !ids.has(e.run)).map((e) => JSON.stringify(e)).join('\n') + (events.length > ids.size ? '\n' : ''));
   fs.copyFileSync(log(), log() + '.bak');

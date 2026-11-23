@@ -1,6 +1,7 @@
 // @ts-nocheck
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import vm from 'node:vm';
 import os from 'node:os';
 import path from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
@@ -38,7 +39,8 @@ test('notes: record, hand out once, next, loop-back, refusals, races, invisible 
   assert.equal(note('build', 'y'.repeat(1000)).text.length, 1000); // the cap itself is allowed
   assert.throws(() => note('review.perf', 'x'), /not an axis of acme\/note/); // an extra axis must be configured
   cli(['skills', 'set', 'acme/note', 'axes.extra', JSON.stringify([{ axis: 'perf', when: ['src/**'], use: 'skill', name: 'perf-review' }])]);
-  assert.match(note('intake', 'reread the thread').warning, /intake already ran: this note waits/); // recorded, with a warning
+  assert.throws(() => note('intake', 'reread the thread'), /intake already ran for acme\/note#1 and won't run again/); // nothing would read it
+  assert.throws(() => take('review.nope'), /notes: review\.nope is not an axis/); // F notes checks axes like F note
   assert.throws(() => cli(['note', R, 'build'], 'x'), /usage: note/);
   assert.throws(() => take(), /usage: notes/);
   assert.throws(() => take('next'), /not one step/);
@@ -46,14 +48,14 @@ test('notes: record, hand out once, next, loop-back, refusals, races, invisible 
   assert.throws(() => cli(['event', R, 'note', 'applied']), /recorded by "note"/);
   cli(['event', R, 'spec', 'passed', '-'], '{"approvedBy":"o"}');
   cli(['event', R, 'build', 'started']);
-  note('spec', 'tighter criteria');
+  assert.match(note('spec', 'only if we loop back').warning, /spec already ran: the note is handed out only if a gate loops back to it, so it may never be used/);
   note('next', 'keep it small');
   assert.deepEqual(take('build'), { build: ['use the existing helper', 'y'.repeat(1000), 'keep it small'] }); // its own notes plus "next"; spec's waits
   note('review.perf', 'profile the hot path');
   assert.deepEqual(take('build'), {}); // handed out once
   note('next', 'check the docs');
   assert.deepEqual(take('review.code', 'review.security', 'review.perf'), { 'review.code': ['check the docs'], 'review.security': ['check the docs'], 'review.perf': ['profile the hot path', 'check the docs'] }); // "next": every step starting together
-  assert.deepEqual(take('spec'), { spec: ['tighter criteria'] }); // a finished step's note: only when a gate loops back to it
+  assert.deepEqual(take('spec'), { spec: ['only if we loop back'] }); // a finished step's note: only when a gate loops back to it
   assert.deepEqual(take('spec'), {});
   // Two steps starting at once (separate processes, no lock): each one-shot note goes to exactly one of them.
   for (let i = 0; i < 5; i++) note('next', `race ${i}`);
@@ -63,8 +65,8 @@ test('notes: record, hand out once, next, loop-back, refusals, races, invisible 
     { run: R, stage: 'note', status: 'applied', claim: 'c1', notes: ['a'], steps: ['build'] }, { run: R, stage: 'note', status: 'applied', claim: 'c2', notes: ['a'], steps: ['build'] }];
   assert.equal(derive(two)[R].notes[0].claim, 'c1'); // the first claim in the log wins; the later one gets nothing
   const r = derive(read())[R];
-  assert.deepEqual(r.notes.slice(0, 7).map((x) => [x.step, x.text.slice(0, 20), x.state, x.appliedTo]), [['build', 'use the existing hel', 'applied', ['build']],
-    ['build', 'y'.repeat(20), 'applied', ['build']], ['intake', 'reread the thread', 'pending', undefined], ['spec', 'tighter criteria', 'applied', ['spec']],
+  assert.deepEqual(r.notes.slice(0, 6).map((x) => [x.step, x.text.slice(0, 20), x.state, x.appliedTo]), [['build', 'use the existing hel', 'applied', ['build']],
+    ['build', 'y'.repeat(20), 'applied', ['build']], ['spec', 'only if we loop back', 'applied', ['spec']],
     ['next', 'keep it small', 'applied', ['build']], ['review.perf', 'profile the hot path', 'applied', ['review.perf']], ['next', 'check the docs', 'applied', ['review.code', 'review.security', 'review.perf']]]);
   assert.equal(new Set(r.notes.map((x) => x.id)).size, r.notes.length);
   assert.ok(read().filter((e) => e.stage === 'note').every((e) => !('sessionId' in e))); // no session: measured burn never sees a note
@@ -80,5 +82,33 @@ test('notes: record, hand out once, next, loop-back, refusals, races, invisible 
   assert.equal(archive(-1).archived >= 1, true);
   const a = readArchive().find((x) => x.id === R);
   assert.ok(a.events.every((e) => e.stage !== 'note'));
+  assert.equal(a.notes, undefined); // nor the note texts
   assert.deepEqual(a.events.at(-1).stage + ' ' + a.events.at(-1).status, 'approve escalated');
+});
+
+// "Already ran" is read from the events each step records: the verifier's usage record, postmerge after "approve merged".
+test('notes: verifier and postmerge map to their own events', () => {
+  io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-note-'));
+  const cli = (args, input) => execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), ...args],
+    { encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, FACTORY_DIR: io.dir, FACTORY_GH: path.join(HERE, 'test', 'gh-stub.mjs') } });
+  const R = 'acme/note#3', note = (step) => JSON.parse(cli(['note', R, step, '-'], 'x'));
+  cli(['event', R, 'intake', 'needs-info', '-'], '{"questions":["which page?"]}');
+  assert.equal(note('intake').warning, undefined); // parked on needs-info: intake will run again, so the note is kept
+  assert.equal(note('verifier').warning, undefined);
+  cli(['event', R, 'review', 'passed', '-'], '{"role":"verifier","tokens":10}');
+  assert.match(note('verifier').warning, /verifier already ran/);
+  assert.equal(note('postmerge').warning, undefined); // not merged yet
+});
+
+// The dashboard timeline row for a note shows its step and text, and where it went.
+test('notes: dashboard timeline rows', () => {
+  const html = fs.readFileSync(path.join(HERE, 'dashboard.html'), 'utf8');
+  const src = /^function timeline\(r\) \{[^]*?^\}$/m.exec(html)[0];
+  const text = (x) => (x == null || x === false ? '' : Array.isArray(x) ? x.map(text).join('') : String(x));
+  const ctx = { el: (tag, attrs, ...kids) => text(kids) + ' ', section: (t, body) => text(body), clock: () => '', dot: () => '', money: String, tokens: String,
+    num: (x) => typeof x === 'number', arr: (x) => (Array.isArray(x) ? x : []), obj: (x) => x || {} };
+  vm.runInNewContext(src, ctx);
+  const out = ctx.timeline({ events: [{ stage: 'note', status: 'pending', step: 'build', text: 'use the helper' }, { stage: 'note', status: 'applied', steps: ['build', 'review.code'] }] });
+  assert.match(out, /note\s+· pending\s+for build: use the helper/);
+  assert.match(out, /note\s+· applied\s+handed to build, review\.code/);
 });

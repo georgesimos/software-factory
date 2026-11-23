@@ -79,7 +79,7 @@ export async function main(argv) {
         break;
       }
       case 'checks': out(localChecks(run)); break;
-      case 'note': { // note <run> <step|next> - : the user's note on stdin (quoted heredoc); only from the user's own chat or the F ui box
+      case 'note': { // note <run> <step|next> - : the user's note on stdin (quoted heredoc); only from the user's own chat message
         if (!rest[0] || rest[1] !== '-') throw new Error('usage: note <run> <step|next> -   (the note text on stdin)');
         out(note(run, rest[0], fs.readFileSync(0, 'utf8'))); break;
       }
@@ -201,7 +201,7 @@ export async function main(argv) {
   rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, deploy.preview required|advisory|off, project.budgetUsd x, project.maxIssuesPerSession n, guide.<step> "text"
   rules unset <owner/repo|default> <key> [--reason "…"]  remove one (back to the global rule, or the built-in)
   checks <run>                            run the checks.commands rule in the worktree on its HEAD commit (the CI stand-in)
-  note   <run> <step|next> -              record the user's one-shot note for a step (text on stdin; only from the user's own chat or the F ui box)
+  note   <run> <step|next> -              record the user's one-shot note for a step (text on stdin; only from the user's own chat message)
   notes  <run> <step...>                  hand out pending notes for the steps starting now, once (put under "User instructions" after guide)
   gc                                      remove worktrees of finished runs
   gate   <run>                            compute + record gate verdict
