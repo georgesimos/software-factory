@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { harnesses } from '../../factory/harnesses/index.mjs';
+import { harnesses } from '../../adapters/harnesses/index.mjs';
 
 export const CAP = 3;          // max build iterations before escalating
 export const MAX_DIFF = 300;   // added + deleted lines allowed for auto-merge

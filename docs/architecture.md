@@ -35,15 +35,10 @@ software-factory/
 │   │   ├── SKILL.md          orchestration: modes, ground rules, stages 0–7, attach, evals, scheduling
 │   │   ├── factory.mjs       the F CLI: event log, derive, gate/decide/merge, sync, worktrees, dashboard render, self-test
 │   │   ├── project.mjs       idea-to-app: F new, issues create, queue, loop, project (imported by factory.mjs)
-│   │   ├── registry.mjs      loads one-file-per-provider folders (hosts/, trackers/)
-│   │   ├── hosts/            repo hosts: github.mjs, _template.mjs, index.mjs (contract), README.md (recipe)
-│   │   ├── trackers/         issue trackers: github-issues.mjs, _template.mjs, index.mjs (contract), README.md
 │   │   ├── templates/        stack templates, data only: next-web.json, expo-mobile.json, _template.json, README.md
 │   │   ├── examples/
 │   │   │   └── budget-app/   PLAN.md + issues.json for "a personal budget app", and the F new --dry-run output
 │   │   ├── dashboard.html    static dashboard template; F render injects the run data at __FACTORY_DATA__ (also the setup wizard)
-│   │   ├── harnesses/        AI harness registry (index.mjs) auto-loads every *.mjs except _*: claude-code.mjs, codex.mjs, _template.mjs
-│   │   ├── HARNESSES.md      add a harness in 4 steps
 │   │   ├── references/
 │   │   │   └── reviewers.md  per-axis reviewer briefs (code, security, ux, ui, seo, docs) and the verifier brief
 │   │   ├── evals/golden/     1.json … 8.json: intake fixtures with the expected outcome (pass / needs-info / reject / split)
@@ -55,6 +50,14 @@ software-factory/
 │   │   │   ├── project.mjs   idea-to-app self-test: commands, idempotency, queue, loop stops, adapter contracts
 │   │   │   └── onboard.e2e.cjs  Playwright run of the setup wizard against F ui (375/1280 px, light/dark, static file)
 │   │   └── package.json      private; `test` = env -u CLAUDE_CODE_SESSION_ID node factory.mjs test
+│   ├── core/                 @software-factory/core: the logic moving out of factory.mjs (docs/plans/split.md). Run by Node directly
+│   │   └── src/              constants, log (event log, record), derive, burn, gate (gate/decide/risk/metrics), skills, rules, review
+│   ├── adapters/             @software-factory/adapters: one file per provider, loaded by name
+│   │   ├── registry.mjs      loads one-file-per-provider folders (hosts/, trackers/)
+│   │   ├── harnesses/        AI harness registry (index.mjs) auto-loads every *.mjs except _*: claude-code.mjs, codex.mjs, _template.mjs
+│   │   ├── HARNESSES.md      add a harness in 4 steps
+│   │   ├── hosts/            repo hosts: github.mjs, _template.mjs, index.mjs (contract), README.md (recipe)
+│   │   └── trackers/         issue trackers: github-issues.mjs, _template.mjs, index.mjs (contract), README.md
 │   ├── ship/                 @software-factory/ship: the ship harness (phase 0, read only). See docs/plans/ship-harness.md
 │   │   ├── ship.mjs          CLI (`F ship` is an alias): connectors | detect <repo> | status <repo> [sha]; track() records through F's record()
 │   │   ├── contract.mjs      connector contract: id, kind, detect, auth, status, tagged actions; normalized states per kind; validation

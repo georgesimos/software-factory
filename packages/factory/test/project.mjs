@@ -7,8 +7,8 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import * as hosts from '../hosts/index.mjs';
-import * as trackers from '../trackers/index.mjs';
+import * as hosts from '../../adapters/hosts/index.mjs';
+import * as trackers from '../../adapters/trackers/index.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const F = path.join(HERE, '..', 'factory.mjs'), STUB = path.join(HERE, 'gh-project-stub.mjs'), EX = path.join(HERE, '..', 'examples', 'budget-app');

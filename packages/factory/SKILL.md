@@ -377,4 +377,4 @@ To run the factory unattended, create a routine with `/schedule`. It should run 
 
 ## Other trackers (Jira, Linear…)
 
-Creating a project's issues, reading open issues and their dependencies (`F issues create`, `F queue`, `F loop`) go through a tracker adapter: add one file under `trackers/` (see `trackers/README.md`), and a repo host under `hosts/`. Per-issue intake, comments and labels are still GitHub-specific; to support another tracker there, swap those for its CLI or MCP and keep run ids as `<tracker>/<key>`.
+Creating a project's issues, reading open issues and their dependencies (`F issues create`, `F queue`, `F loop`) go through a tracker adapter: add one file under `packages/adapters/trackers/` (see its `README.md`), and a repo host under `packages/adapters/hosts/`. Per-issue intake, comments and labels are still GitHub-specific; to support another tracker there, swap those for its CLI or MCP and keep run ids as `<tracker>/<key>`.

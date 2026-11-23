@@ -41,3 +41,12 @@ $M packages/core/src/skills.ts BUILTIN_AXES,REQUIRED_AXES,STEP_KEYS,harnessIds,N
 $M packages/core/src/rules.ts setAutoMerge,RULES,RULE_FIELDS,LOGIN,isDay,dayOf,isGuideKey,checkRules,checkGuide,rules,whoami,audit,checkScope,setRule,unsetRule
 $M packages/core/src/review.ts MIN_SHARE_USD,headlessArgs,runnerStamp,reviewFromText
 ```
+
+**S5** (#41) is a folder move, not a `move.ts` run:
+
+```bash
+mkdir -p packages/adapters
+for d in harnesses hosts trackers registry.mjs HARNESSES.md; do git mv packages/factory/$d packages/adapters/$d; done
+```
+
+After the move, re-point the imports in `factory.mjs`, `project.mjs`, `test/project.mjs` and `core/src/*.ts`. The self-test's three `path.join(HERE, 'harnesses'…)` lines become `path.join(HERE, '..', 'adapters', 'harnesses'…)`. They are file paths, the same kind of change as an import path, and they are the only edits to the oracle.

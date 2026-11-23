@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ls, projects } from '../../factory/factory.mjs';
 import { checkGuide, checkRules, rules } from './rules.ts';
-import { harnesses } from '../../factory/harnesses/index.mjs';
+import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { stateDir } from './log.ts';
 
 // Who does each step: the built-in brief, the user's own skill or brief, or a harness's tool.

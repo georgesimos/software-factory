@@ -7,7 +7,7 @@ import { archiveFile, cleanup, dashboard, wtInfo } from '../../factory/factory.m
 import { runnerStamp } from './review.ts';
 import { withMeasured } from './burn.ts';
 import { derive, validateReview, validateUsage } from './derive.ts';
-import { harnesses } from '../../factory/harnesses/index.mjs';
+import { harnesses } from '../../adapters/harnesses/index.mjs';
 
 // One mutable object, not `let`s: once code moves into packages, an importer cannot reassign a binding (docs/plans/split.md S1): where F reads and writes, and which binaries it runs.
 // gh/git are overridable only so the self-test can stub GitHub; projects: demo and test point it at fixture transcripts.

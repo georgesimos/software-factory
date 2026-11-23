@@ -9,7 +9,7 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { harnesses } from './harnesses/index.mjs';
+import { harnesses } from '../adapters/harnesses/index.mjs';
 import * as project from './project.mjs'; // also handed whole to the idea-to-app test
 import { PROJECT_EVENTS, newProject, issuesCreate, projectStatus, loop, queue, startIdea, retireIdea, ideas } from './project.mjs';
 import { CAP, COST_CAP, DOCS, FINDING_KEYS, MAX_DIFF, MAX_ISSUES_PER_SESSION, OUTCOMES, PROJECT_BUDGET_USD, REVIEW_KEYS, SEO, SEVERITIES, SOURCE, STAGES, STATUSES, TERMINAL, TEST, TOKEN_CAP, TRUSTED, UI, USAGE_KEYS, VERIFIER_KEYS, blocking, costOf, isSensitive, sensitive } from '../core/src/constants.ts';
@@ -1126,7 +1126,7 @@ function harnessTest(cli) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-hhome-'));
   const saved = { PATH: process.env.PATH, HOME: process.env.HOME, STUB_LOGGED_OUT: process.env.STUB_LOGGED_OUT };
   const withEnv = (env, fn) => { Object.assign(process.env, env); try { return fn(); } finally { for (const [k, v] of Object.entries(saved)) v === undefined ? delete process.env[k] : (process.env[k] = v); } };
-  const files = ls(path.join(HERE, 'harnesses')).filter((f) => f.endsWith('.mjs') && !f.startsWith('_') && f !== 'index.mjs').sort();
+  const files = ls(path.join(HERE, '..', 'adapters', 'harnesses')).filter((f) => f.endsWith('.mjs') && !f.startsWith('_') && f !== 'index.mjs').sort();
   assert.deepEqual(harnesses.map((h) => h.id + '.mjs'), files); // auto-loaded, template skipped, id = file name
   for (const h of harnesses) {
     const at = (m) => `${h.id}: ${m}`;
@@ -1157,8 +1157,8 @@ function harnessTest(cli) {
   }
   // A third harness: one file plus its stub binary, in a temp registry dir next to copies of the real adapters.
   const reg = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-reg-')), fbin = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-fbin-'));
-  for (const f of ls(path.join(HERE, 'harnesses')).filter((f) => f !== 'index.mjs')) fs.copyFileSync(path.join(HERE, 'harnesses', f), path.join(reg, f));
-  const tpl = fs.readFileSync(path.join(HERE, 'harnesses', '_template.mjs'), 'utf8');
+  for (const f of ls(path.join(HERE, '..', 'adapters', 'harnesses')).filter((f) => f !== 'index.mjs')) fs.copyFileSync(path.join(HERE, '..', 'adapters', 'harnesses', f), path.join(reg, f));
+  const tpl = fs.readFileSync(path.join(HERE, '..', 'adapters', 'harnesses', '_template.mjs'), 'utf8');
   fs.writeFileSync(path.join(reg, 'fake-agent.mjs'), tpl.replaceAll('my-agent', 'fake-agent').replaceAll('My Agent', 'Fake Agent')
     .replace('current: () => null', 'current: () => process.env.FAKE_SESSION || null')
     .replace('sessions: (repoPath, remoteUrl) => []', "sessions: (repoPath, remoteUrl) => remoteUrl.endsWith('/acme/app.git') ? [{ branch: 'dev/feat-a', id: 'fk-1', cwd: repoPath, last: new Date().toISOString() }] : []"));
