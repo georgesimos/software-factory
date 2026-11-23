@@ -1,5 +1,6 @@
 // @ts-nocheck
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { checkScope, rules } from './rules.ts';
 import { dashboard } from './log.ts';
@@ -12,7 +13,8 @@ import { stateDir } from './log.ts';
 
 // ---- Onboarding: the wizard (dashboard, via `F ui`) and `F onboard`. What spawns CLIs or walks the disk runs only
 // when asked for, never in page(), which runs on every record().
-export const F_CMD = 'node ~/.claude/skills/software-factory/factory.mjs';
+// cmd.exe and PowerShell don't expand ~ in an argument, so Windows gets the real path.
+export const F_CMD = process.platform === 'win32' ? `node "${path.join(os.homedir(), '.claude', 'skills', 'software-factory', 'factory.mjs')}"` : 'node ~/.claude/skills/software-factory/factory.mjs';
 export const shq = (x) => (/^[\w@%+=:,./~-]+$/.test(String(x)) ? String(x) : "'" + String(x).replace(/'/g, "'\\''") + "'");
 export const onboardFile = () => path.join(stateDir(), 'onboard.json');
 export const SHIP_KINDS = ['web', 'mobile', 'database'];
@@ -44,8 +46,9 @@ export function onboardState() {
   });
   return { harnesses: hs, repos: discover(), hooks: { ...hooks(), connectors: shipConnectors() }, ...onboardConfig() };
 }
-export function onboardText(s) {
+export function onboardText(s, platform = process.platform) {
   const mark = (b) => (b ? '✓' : b === null || b === undefined ? '?' : '✗'), L = [], scopes = ['default', ...Object.keys(s.projects)];
+  if (platform === 'win32') L.push('The commands below quote for a POSIX shell: run them in Git Bash (cmd.exe and PowerShell read \'…\' differently).', '');
   L.push('1. Local AI');
   for (const h of s.harnesses) {
     L.push(`   ${mark(h.installed)} ${h.label}${h.version ? ' ' + h.version : ''}${h.installed ? '' : `   install: ${h.install}`}`);

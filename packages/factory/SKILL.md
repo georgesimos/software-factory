@@ -198,7 +198,7 @@ Run `F gate RUN`. Its `next` decides where the run goes:
 1. Under `ci=skip`, `F postmerge RUN` returns `"state":"skipped"` at once: don't poll, and tell the user main's CI wasn't watched. Otherwise poll `F postmerge RUN` about every 2 minutes, for at most 20 minutes. If `plan.postmerge` isn't default, also run it once CI passes, on the base branch at the merge commit. It can only add a failure, never clear one.
 2. If `state` is `fail` and `advisory` isn't `true`, or the postmerge runner reports a failure, run `F revert RUN "<one line: which check failed>"`. It opens a revert PR labelled `factory:needs-human` and **never merges it**. Tell the user.
 
-Finally, report the outcome with its links, and give the dashboard path, `~/.claude/factory/dashboard.html`. On the first run, open the dashboard with `open`.
+Finally, report the outcome with its links, and give the dashboard path, `~/.claude/factory/dashboard.html`. On the first run, open the dashboard with `F open dashboard`.
 
 ## Runners: who does each step
 

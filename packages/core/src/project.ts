@@ -72,7 +72,7 @@ export function validatePlan(text) {
 }
 
 const ISSUE_FIELDS = ['key', 'title', 'body', 'acceptance', 'dependsOn', 'milestone', 'files'];
-const relPath = (f) => typeof f === 'string' && f.length <= 200 && !f.startsWith('/') && !f.split('/').includes('..') && !/[\0-\x1f]/.test(f);
+const relPath = (f) => typeof f === 'string' && f.length <= 200 && !f.startsWith('/') && !f.includes('\\') && !/^[A-Za-z]:/.test(f) && !f.split('/').includes('..') && !/[\0-\x1f]/.test(f);
 
 // -> { epic, issues } with issues in dependency order (stable: the file's order wherever the dependencies allow).
 export function validateIssues(doc, milestonesText) {

@@ -122,6 +122,26 @@ Document it as the one install step. **Never copy** the skill folder: the [split
 - Change `SKILL.md` to say `F open dashboard`.
 - Make install hints per-OS.
 
+**Done in X2 (#50), §2–§5:**
+- **`localChecks`:** runs through `platform.posixShell()`: `/bin/sh` on POSIX; on Windows, Git Bash from `CLAUDE_CODE_GIT_BASH_PATH` or from beside `git.exe`. It refuses otherwise and never uses `cmd.exe`.
+- **`deps`:** clones with `fs.cpSync` and `COPYFILE_FICLONE_FORCE` (APFS, btrfs, XFS). Where cloning isn't possible, and always on Windows, it installs instead of making a full copy.
+- **Paths:**
+  - brief runners accept `C:\…` and `~\…`;
+  - brief paths may contain spaces;
+  - `relPath` rejects `\` and drive prefixes;
+  - `SKIP_DIRS` adds `AppData` and `OneDrive`;
+  - the dashboard's `deepCwd` accepts `C:\…`;
+  - on Windows, `F_CMD` prints the real quoted path.
+- **New commands:** `F open [dashboard|url]` (`platform.opener()`: https:, file: and claude-cli: only; `open`, `explorer.exe` or `xdg-open`, never through a shell) and `F install-skill` (a junction on Windows, a symlink elsewhere, never a copy).
+- **Docs and hints:** `SKILL.md` says `F open dashboard`. The README uses `install-skill`, drops the `FACTORY_DIR=$(mktemp -d)` prefix and states the Git for Windows requirement. The Claude Code install hint is per-OS.
+
+**Still open:**
+- the `claude-cli://` handler check on Windows and Linux;
+- Codex's Windows install hint;
+- `shq` and `resumeCmd` copy-paste lines for PowerShell (W2 and #27 replace them with buttons);
+- an `F onboard` check for Git for Windows;
+- the Claude Code session folder name for `C:\…` paths.
+
 ## 6. Tests
 
 | Where | What | Rating |

@@ -22,7 +22,7 @@ export function sessionsByBranch(repo, repoPath) {
   }
   return out;
 }
-export const SKIP_DIRS = new Set(['node_modules', 'Library', 'Applications', 'Pictures', 'Music', 'Movies', 'dist', 'build', 'vendor']);
+export const SKIP_DIRS = new Set(['node_modules', 'Library', 'Applications', 'Pictures', 'Music', 'Movies', 'AppData', 'OneDrive', 'dist', 'build', 'vendor']);
 export const DISCOVER_ROOTS = ['Development', 'code', 'Code', 'projects', 'Projects', 'src', 'dev', 'repos', 'workspace', 'git', 'GitHub'];
 // Finds local clones with a GitHub origin, for onboarding. Reads .git/config directly (no subprocess per folder);
 // skips hidden folders and node_modules.
