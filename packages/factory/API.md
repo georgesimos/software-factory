@@ -35,8 +35,10 @@ curl -s -X POST -H "x-factory-token: $T" -H "Origin: http://127.0.0.1:$P" -H 'Co
 | Route | Returns | Errors | CLI |
 |---|---|---|---|
 | `GET /api/runs` | `{"runs": [run…]}`: the run list `dashboard.html` embeds (live and archived runs, newest first, with linked sessions and worktree path) | – | nearest: `F state <run>` per run |
-| `GET /api/state` | everything the dashboard embeds: `runs`, `metrics`, `projects`, `rules`, `ruleHistory`, `skills`, `harnesses`, `hooks`, `onboard`, `autoMerge`, `ideas`, `generated`, `cap`, `costCap`, `tokenCap`, and `resumable` (runs whose session here stopped or crashed, which `POST /api/sessions` would resume) | – | nearest: `F state`, `F rules`, `F skills` |
+| `GET /api/state` | everything the dashboard embeds: `runs`, `metrics`, `projects`, `rules`, `ruleHistory`, `skills`, `harnesses`, `hooks`, `onboard`, `autoMerge`, `ideas`, `generated`, `cap`, `costCap`, `tokenCap`, and `resumable` (runs whose session here stopped or crashed, which `POST /api/sessions` would resume), and `terminal` (true in the desktop app, which supplies node-pty for terminal sessions) | – | nearest: `F state`, `F rules`, `F skills` |
 | `GET /api/runs/:owner/:repo/:n` | `{"run": run}` for `owner/repo#n` | `400` malformed owner, repo or number; `404` no such run | nearest: `F state owner/repo#n` (without archived runs, sessions or worktree) |
+| `GET /api/sessions` | `{"sessions": [{id, harness, mode, label, state, exit, started, ended, harnessSession}…]}`: the sessions this server started, oldest first | – | none |
+| `GET /api/sessions/:id/events` | server-sent events (`output` for a terminal, `event` for headless and sdk, `error`, `exit`); `Last-Event-ID` resumes. Read it with `fetch`: `EventSource` can't send the token | `404` no such session | none |
 
 None of them returns the `F ui` token.
 
@@ -56,5 +58,10 @@ Every write is also served at its original path without `/api` (for example `POS
 | `POST /api/onboard/ship` | `{"scope": "owner/repo"\|"default", "ship": ["web","mobile","database"]}` | onboarding config | `F onboard ship <scope> <kinds>` |
 | `POST /api/onboard/rule` | `{"scope", "key", "value", "reason", "until"?}` or `{"scope", "key", "unset": true, "reason"?}` | onboarding config | `F rules set\|unset` |
 | `POST /api/onboard/automerge` | `{"repo": "owner/repo", "on": true\|false}` | onboarding config | `F automerge owner/repo on\|off` |
+| `POST /api/sessions` | `{"repo": "owner/repo", "issue": N, "harness"?, "mode"?: "headless"\|"sdk"}` | `{"session"}`; starts or resumes the factory run for that issue, with its budget. Refuses active, escalated, rejected and archived runs | `/software-factory owner/repo#N` |
+| `POST /api/sessions/terminal` | `{"repo": "owner/repo", "issue"?: N, "resume"?: "<harness session id>", "harness"?}` | `{"session"}`; a person's own interactive harness in a pseudo-terminal, in the run's worktree or the clone. Desktop app only (node-pty) | `claude [--resume <id>]` |
+| `POST /api/sessions/input` | `{"id", "data"?: "<keys>", "cols"?, "rows"?}` | `{"ok"}`; keystrokes and size for a running terminal session | none |
+| `POST /api/sessions/stop` | `{"id"}` | `{"ok"}`; stops it and its child processes (`taskkill /T` on Windows) | none |
+| `POST /api/sessions/open` | `{"id": "<harness session id>", "harness"?}` | `{"opened"}`; opens it in the Claude desktop app when the harness has a link for it | `claude --resume <id>` |
 
 `/api/onboard` is a `POST` although it only reads, because it checks logins by running local CLIs.

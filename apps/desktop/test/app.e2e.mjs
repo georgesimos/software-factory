@@ -5,7 +5,7 @@
 // Never clicks Resume: that would spawn a harness. Run: pnpm --filter @software-factory/desktop e2e [screenshot dir];
 // DESKTOP_EXE=<packaged binary> runs it against a packaged build instead (CI does, on Linux under Xvfb).
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -23,6 +23,10 @@ const env = { ...process.env, FACTORY_DIR: path.join(root, 'factory'), FACTORY_T
 delete env.CLAUDE_CODE_SESSION_ID;
 delete env.ELECTRON_RUN_AS_NODE;
 execFileSync(process.execPath, [path.join(FACTORY, 'factory.mjs'), 'demo'], { env, stdio: 'ignore' });
+const clone = path.join(HOME, 'shop'); // attached, for a terminal session (#58): the stub claude runs in it
+fs.mkdirSync(clone);
+const pj = path.join(env.FACTORY_DIR, 'projects.json');
+fs.writeFileSync(pj, JSON.stringify({ ...(fs.existsSync(pj) ? JSON.parse(fs.readFileSync(pj, 'utf8')) : {}), 'acme/shop': { path: clone } }));
 
 const EXE = process.env.DESKTOP_EXE; // a packaged build's binary (scripts/smoke.mjs prints where), else the dev build
 const ARGS = EXE ? [] : [APP];
@@ -54,6 +58,22 @@ try {
   await panel.getByRole('heading', { name: 'Sessions' }).waitFor();
   await win.screenshot({ path: path.join(SHOTS, 'desktop-run.png') });
   assert.deepEqual(blocked, [], 'the app itself breaks no CSP rule');
+  // A terminal session in a real pty (#58): the stub claude's prompt in xterm.js, a typed line echoed back, Stop.
+  await win.getByRole('button', { name: 'Sessions' }).click();
+  const live = win.getByRole('dialog', { name: 'Sessions' });
+  await live.getByRole('combobox', { name: 'Repo' }).selectOption('acme/shop');
+  await live.getByRole('button', { name: 'New terminal' }).click();
+  const screenText = live.locator('.xterm-rows');
+  await screenText.getByText('stub terminal').waitFor();
+  await win.keyboard.type('hello');
+  await win.keyboard.press('Enter');
+  await screenText.getByText('you said: hello').waitFor();
+  await win.screenshot({ path: path.join(SHOTS, 'desktop-terminal.png') });
+  await live.getByRole('listitem').filter({ hasText: 'acme/shop' }).first().getByRole('button', { name: 'Stop' }).click();
+  await live.getByText(/exited stopped/).first().waitFor();
+  await live.getByRole('button', { name: 'New terminal' }).click(); // left running: quitting must stop it
+  await screenText.getByText('stub terminal').waitFor();
+  await win.keyboard.press('Escape'); // close the sheet
 
   // No Node in the page, nothing from another origin, no new windows, no navigation away.
   assert.deepEqual(await win.evaluate(() => [typeof window.process, typeof window.require, typeof window.module]), ['undefined', 'undefined', 'undefined']);
@@ -87,4 +107,8 @@ try {
 }
 // Closing the window quit the app, and the server with it.
 assert.equal(await fetch(`${origin}/`).then(() => 'up', () => 'down'), 'down');
+if (process.platform !== 'win32') { // and the terminal left running went with it (the stub is the only claude on this PATH)
+  const left = spawnSync('pgrep', ['-f', path.join(FACTORY, 'test', 'bin', 'claude')], { encoding: 'utf8' }).stdout.trim();
+  assert.equal(left, '', 'no stub claude outlives the app');
+}
 console.log(`desktop e2e: ok (${SHOTS})`);

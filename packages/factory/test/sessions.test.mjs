@@ -13,7 +13,7 @@ import { projects, saveProject } from '../../core/src/workspace.ts';
 import { command, opener } from '../../core/src/platform.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { MAX_BYTES, killTree, listSessions, resolveSpec, startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
-import { budgetLeft, harnessReady, launchSession, resumeFor, serve, uiHandle } from '../../server/src/server.ts';
+import { budgetLeft, harnessReady, launchSession, resumeFor, serve, terminalSession, uiHandle } from '../../server/src/server.ts';
 
 setup();
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-shome-'));
@@ -277,6 +277,23 @@ function fakePty(spawnError) {
     return { onData: (f) => { data = f; }, onExit: (f) => { exit = f; }, write: (x) => { (rec.writes ||= []).push(x); data(`echo:${x}`); if (x === 'exit\r') exit({ exitCode: 0 }); }, resize: (c, r) => { rec.size = [c, r]; }, kill: () => exit({ exitCode: null }) };
   } };
 }
+test('terminalSession(): a person\'s own harness in the desktop app\'s pane, in the attached clone or the run\'s worktree', async () => {
+  const clone = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-tclone-'));
+  saveProject('acme/term', clone);
+  const tok = 't'.repeat(32), H = { host: '127.0.0.1:4646', origin: 'http://127.0.0.1:4646', 'content-type': 'application/json', 'x-factory-token': tok };
+  const post = (body) => uiHandle({ method: 'POST', url: '/api/sessions/terminal', headers: H, body: JSON.stringify(body) }, { token: tok, port: 4646 });
+  assert.match(JSON.parse(post({ repo: 'acme/term' }).body).error, /needs the desktop app, which supplies node-pty/, 'F ui alone has no pty');
+  const pty = fakePty(), modules = { [PTY]: pty };
+  for (const [x, re] of [[{ repo: 'acme/nope' }, /not attached/], [{ repo: '../x' }, /owner\/repo/], [{ repo: 'acme/term', issue: 0 }, /positive issue/],
+    [{ repo: 'acme/term', resume: '--dangerously-skip-permissions x' }, /harness session id/], [{ repo: 'acme/term', harness: 'nope' }, /no terminal mode/]])
+    assert.throws(() => terminalSession(x, stubEnv, modules), re, JSON.stringify(x));
+  const s = terminalSession({ repo: 'acme/term', issue: 92, resume: 'abc-1' }, stubEnv, modules);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual([s.mode, s.label, pty.rec.file, pty.rec.args, fs.realpathSync(pty.rec.cwd)], ['terminal', 'acme/term#92', 'claude', ['--resume', 'abc-1'], fs.realpathSync(clone)]);
+  const done = finished(s); s.stop();
+  assert.equal((await done).at(-1).code, 'stopped');
+});
+
 const fakeSdk = (fail, result = { type: 'result', subtype: 'success' }) => ({ rec: {}, async *query(q) { this.rec.q = q; yield { type: 'system', subtype: 'init', session_id: 'sdk-1' }; if (fail) throw new Error('boom'); if (result) yield result; } });
 
 test('terminal mode: a pseudo-terminal from the host, with input and resize through /api/sessions/input', async () => {

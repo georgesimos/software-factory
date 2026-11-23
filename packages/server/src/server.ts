@@ -40,7 +40,7 @@ export function uiHandle({ method, url, headers = {}, body = '' }, { token, port
     if (!same(headers['x-factory-token'], token)) return reply(403, { error: 'missing or wrong token' });
     if (headers.origin !== undefined && !hosts.some((h) => headers.origin === `http://${h}`)) return reply(403, { error: 'cross-origin request' });
     if (route === '/runs') return reply(200, { runs: runsData() });
-    if (route === '/state') return reply(200, pageData({ resumable: resumable() })); // what page() embeds, for apps/web; never the token
+    if (route === '/state') return reply(200, pageData({ resumable: resumable(), terminal: !!hostModules['node-pty'] })); // what page() embeds, for apps/web; never the token
     if (route === '/sessions') return reply(200, { sessions: listSessions() });
     const ev = route.match(/^\/sessions\/([0-9a-f-]{36})\/events$/);
     if (ev) { // server-sent events; ui() writes the stream. EventSource can't send x-factory-token, so clients read it with fetch.
@@ -89,6 +89,7 @@ export const UI_ROUTES = {
   },
   '/onboard/automerge': ({ repo, on }) => { setAutoMerge(repo, on); return onboardConfig(); },
   '/sessions': (x) => ({ session: launchSession(x).id }),
+  '/sessions/terminal': (x) => ({ session: terminalSession(x).id }),
   '/sessions/input': ({ id, data, cols, rows }) => { // keystrokes and size for a terminal session
     const s = getSession(id);
     if (!s?.write || s.state !== 'running') throw new Error('no running terminal session with that id');
@@ -128,6 +129,26 @@ export const budgetLeft = (b) => b ? Math.min(COST_CAP - b.usd, COST_CAP * (1 - 
 // node-pty and the SDK for terminal and sdk sessions, keyed by package name. Empty until a host that ships them (apps/desktop,
 // main.ts) sets them: packages/adapters' lazy import() can't see apps/desktop's dependencies under pnpm (ADR 0001).
 export const hostModules: Record<string, unknown> = {};
+const clone = (repo) => { // an attached repo's folder
+  const [owner, name, extra] = typeof repo === 'string' ? repo.split('/') : [];
+  if (extra !== undefined || !LOGIN.test(owner || '') || !/^(?!\.\.?$)[\w.-]{1,100}$/.test(name || '')) throw new Error('repo must be owner/repo');
+  const cwd = projects()[repo]?.path;
+  if (!cwd || !fs.existsSync(cwd)) throw new Error(`${repo} is not attached: F sync ${repo} <path> first`);
+  return cwd;
+};
+// A person's own interactive harness in the desktop app's terminal pane (#58): no prompt and no budget, so never a factory
+// run's session. In the run's worktree when it has one, else the clone; `resume` continues a harness session by its id.
+export function terminalSession({ harness = 'claude-code', repo, issue, resume }, env = process.env, modules = hostModules) {
+  const h = harnesses.find((y) => y.id === harness);
+  if (!h?.launch || !(h.modes || []).includes('terminal')) throw new Error(`harness ${String(harness).slice(0, 40)} has no terminal mode`);
+  if (!modules['node-pty']) throw new Error('a terminal needs the desktop app, which supplies node-pty: run it in your own terminal');
+  let cwd = clone(repo);
+  if (issue !== undefined && (!Number.isInteger(issue) || issue < 1 || issue > 1e9)) throw new Error('issue must be a positive issue number');
+  if (resume !== undefined && !/^[\w-]{1,100}$/.test(String(resume))) throw new Error('resume must be a harness session id');
+  const id = issue ? `${repo}#${issue}` : repo, wt = issue && wtInfo(id)?.path;
+  if (wt && fs.existsSync(wt)) cwd = wt;
+  return startSession(h, { mode: 'terminal', resume }, { cwd, env, label: id, modules });
+}
 export function launchSession({ harness = 'claude-code', mode = 'headless', repo, issue }, env = process.env, modules = hostModules) {
 
   const h = harnesses.find((y) => y.id === harness);
@@ -136,10 +157,7 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
   if (mode === 'terminal') throw new Error('factory runs are headless or sdk: a terminal session has no budget cap or pinned policy'); // a person drives terminal mode
   const need = mode === 'sdk' && h.launch({ mode, prompt: 'x' }).module;
   if (need && !modules[need]) throw new Error(`${mode} mode needs the desktop app, which supplies ${need}: run headless`);
-  const [owner, name, extra] = typeof repo === 'string' ? repo.split('/') : [];
-  if (extra !== undefined || !LOGIN.test(owner || '') || !/^(?!\.\.?$)[\w.-]{1,100}$/.test(name || '')) throw new Error('repo must be owner/repo');
-  const cwd = projects()[repo]?.path;
-  if (!cwd || !fs.existsSync(cwd)) throw new Error(`${repo} is not attached: F sync ${repo} <path> first`);
+  const cwd = clone(repo);
   if (!Number.isInteger(issue) || issue < 1 || issue > 1e9) throw new Error('issue must be a positive issue number');
   const id = `${repo}#${issue}`, r = derive(read())[id];
   if (r?.imported) throw new Error(`${id} is imported: never run claude -p in its checkout`);

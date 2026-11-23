@@ -21,4 +21,8 @@ else if (process.argv.includes('-p') && a.includes('--output-format stream-json 
     });
   }
 }
+else if (!a || /^--resume [\w-]+$/.test(a)) { // terminal mode, in a pty (the desktop e2e): echoes each line until "exit"
+  process.stdout.write(`stub terminal${a ? ` (${a})` : ''}\r\n> `);
+  process.stdin.on('data', (d) => { const s = String(d).trim(); if (s === 'exit') process.exit(0); process.stdout.write(`you said: ${s}\r\n> `); });
+}
 else { process.stderr.write('claude-stub unexpected: ' + a); process.exit(2); }
