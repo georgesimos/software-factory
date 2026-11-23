@@ -1,0 +1,12 @@
+{
+  "name": "software-factory",
+  "owner": { "name": "georgesimos" },
+  "description": "Turn GitHub issues into reviewed, gated pull requests, with a local dashboard.",
+  "plugins": [
+    {
+      "name": "software-factory",
+      "source": "./",
+      "description": "Issue to merged (or escalated) PR through intake, spec, build, multi-axis review, a mechanical gate and approval. Keeps a local dashboard with token burn."
+    }
+  ]
+}
