@@ -30,17 +30,22 @@ const MODELS = [
 // --setting-sources user and --strict-mcp-config instead. Read-only unless `write` (build): manual mode with prompts
 // none denies anything outside the allowlist, where auto mode's classifier could approve other Bash. A schema adds the
 // structured-output contract (reviews); model, effort and fallback come from the step's runner. Budget: unknown -> no flag, spent -> refuse.
-function headlessArgs({ schema, budget, write = false, model, effort, fallback } = {}) {
+const READ_ONLY_TOOLS = ['Bash(git diff:*)', 'Bash(git log:*)', 'Read', 'Grep', 'Glob'];
+function usdOf(budget) {
   const usd = budget == null ? null : Math.floor(Number(budget) * 100 + 1e-9) / 100; // whole cents, rounded down (1e-9: 0.29 * 100 is 28.999…)
   if (usd != null && !(usd > 0)) throw new Error(`no run budget left (${budget}); escalate instead of running`); // 0, negative and NaN alike
+  return usd;
+}
+function headlessArgs({ schema, budget, write = false, stream = false, model, effort, fallback } = {}) {
+  const usd = usdOf(budget);
   return [
-    '--output-format', 'json', '--setting-sources', 'user', '--strict-mcp-config',
+    ...(stream ? ['--output-format', 'stream-json', '--verbose'] : ['--output-format', 'json']), '--setting-sources', 'user', '--strict-mcp-config',
     '--permission-mode', write ? 'auto' : 'manual', '--permission-prompts', 'none',
     ...(usd != null ? ['--max-budget-usd', String(usd)] : []),
     ...(model ? ['--model', model] : []), ...(effort ? ['--effort', effort] : []),
     ...(fallback?.length ? ['--fallback-model', fallback.join(',')] : []), // `claude --help`: a comma-separated list, tried in order
     ...(schema ? ['--json-schema', typeof schema === 'string' ? schema : JSON.stringify(schema)] : []),
-    ...(write ? [] : ['--allowedTools', 'Bash(git diff:*)', 'Bash(git log:*)', 'Read', 'Grep', 'Glob']), // variadic: keep last
+    ...(write ? [] : ['--allowedTools', ...READ_ONLY_TOOLS]), // variadic: keep last
   ];
 }
 
@@ -65,6 +70,32 @@ export default {
   efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   headlessArgs, // F headless-args prints these; F names no harness
   headless: () => ({ cmd: 'claude', args: ['-p', '<prompt>', ...headlessArgs()], note: 'Read-only default; F headless-args <run> --write switches to auto mode for build, --review adds the review schema.' }),
+  // launch() only says what to run; packages/adapters/sessions.mjs runs it. headless: NDJSON events on stdout (stream-json
+  // needs --verbose). terminal: an interactive claude for a pseudo-terminal host (node-pty, H1 part 2).
+  modes: ['headless', 'terminal', 'sdk'],
+  launch({ mode, prompt, resume, budget, write = false }) {
+    const res = resume ? ['--resume', resume] : [];
+    if (mode === 'headless') {
+      if (!prompt) throw new Error('a headless launch needs a prompt');
+      return { cmd: 'claude', args: [...res, '-p', ...headlessArgs({ budget, write, stream: true })], stdin: prompt }; // the prompt on stdin: npm's claude.cmd can't take it as an argument
+    }
+    // terminal: a person at the keyboard, so no budget or permission flags; launchSession() never starts one for a factory run
+    if (mode === 'terminal') { // a person types the prompt: as an argument, a .cmd shim (Windows) could not pass a space
+      if (prompt) throw new Error('terminal mode takes no prompt: type it in the session');
+      return { cmd: 'claude', args: res };
+    }
+    if (mode === 'sdk') { // the Agent SDK's query(): the same pinned policy as headlessArgs, as SDK options (checked against 0.3.330)
+      if (!prompt) throw new Error('an sdk launch needs a prompt');
+      const usd = usdOf(budget);
+      return { module: '@anthropic-ai/claude-agent-sdk', prompt, options: { ...(resume && { resume }), settingSources: ['user'], strictMcpConfig: true,
+        permissionMode: write ? 'auto' : 'default', ...(usd != null && { maxBudgetUsd: usd }), ...(write ? {} : { allowedTools: READ_ONLY_TOOLS }),
+        permissionPrompts: 'none' } }; // as --permission-mode manual|auto --permission-prompts none: what would prompt is denied, never waits
+    }
+    throw new Error(`claude-code has no ${mode} mode`);
+  },
+  // The desktop app's own link for one of its sessions. Observed, not documented (ADR §5): best effort; callers fall back
+  // to `claude --resume <id>` in a terminal when this returns null.
+  openDesktop: (id) => (/^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(String(id)) ? `claude://claude.ai/epitaxy/${id}` : null),
   providerTools: () => TOOLS,
   notes() {
     const label = 'claude-cli:// links ("Open in Claude")', hint = 'Run claude and send one message in an interactive session; that registers the link handler.';
