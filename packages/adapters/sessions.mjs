@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { spawn, spawnSync } from 'node:child_process';
-import { command } from '../core/src/platform.ts';
+import { command, systemRoot } from '../core/src/platform.ts';
 
 // Per session, older events are dropped past either cap, and a replay that reaches back past them starts with a 'dropped' event.
 const MAX_EVENTS = 5000;
@@ -47,9 +47,10 @@ export const resolveSpec = (spec, env, resolve) => command(spec.cmd, spec.args, 
 export function killTree(child, platform = process.platform, run, kill = process.kill, wait = false) {
   if (!child.pid) return;
   const args = ['/pid', String(child.pid), '/T', '/F'];
+  const taskkill = systemRoot(process.env, 'System32', 'taskkill.exe');
   if (platform !== 'win32') try { kill(-child.pid, 'SIGTERM'); } catch { child.kill(); } // the group is gone: the child alone, if it is not
-  else if (wait) (run ?? spawnSync)('taskkill', args, { stdio: 'ignore', windowsHide: true, timeout: 5_000 });
-  else (run ?? spawn)('taskkill', args, { stdio: 'ignore', windowsHide: true }).on('error', () => { /* taskkill missing: nothing else to try */ });
+  else if (wait) (run ?? spawnSync)(taskkill, args, { stdio: 'ignore', windowsHide: true, timeout: 5_000 });
+  else (run ?? spawn)(taskkill, args, { stdio: 'ignore', windowsHide: true }).on('error', () => { /* taskkill missing: nothing else to try */ });
 }
 // Detached children don't get the terminal's Ctrl-C, so a running session is stopped when this process ends: waited for,
 // since nothing after 'exit' or quit gets another turn of the event loop.
