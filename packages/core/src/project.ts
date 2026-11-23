@@ -18,7 +18,7 @@ import * as trackers from '../../adapters/trackers/index.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // Every project event, by stage. All are owned: `F event` refuses them, only new / issues create / loop record them.
-export const PROJECT_EVENTS = { idea: ['started', 'retired'], plan: ['passed'], repo: ['created'], issues: ['created'], loop: ['running', 'stopped'] };
+export const PROJECT_EVENTS: Record<string, string[]> = { idea: ['started', 'retired'], plan: ['passed'], repo: ['created'], issues: ['created'], loop: ['running', 'stopped'] };
 export const projectId = (repo) => `${repo}:project`;
 const REPO = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
 const KEY = /^[a-z0-9][a-z0-9-]{0,40}$/;

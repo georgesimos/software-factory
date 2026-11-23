@@ -6,6 +6,7 @@ import { addBurn, burnOf, finishBurn } from './derive.ts';
 import { costOf } from './constants.ts';
 import { io, readArchive, stateDir } from './log.ts';
 import { ls } from './workspace.ts';
+import type { FactoryEvent, Measured, Run, Slot, Transcript, TranscriptRow } from './types.ts';
 
 // ---------- measured burn: Claude Code transcripts of the sessions that recorded events ----------
 export const projectsRoot = () => io.projects || path.join(os.homedir(), '.claude', 'projects');
@@ -49,7 +50,7 @@ export function scanFile(file, prev) {
   return { size: st.size, offset: from + end, rows, ...(axis ? { axis } : {}) };
 }
 // sessionId -> [{rows, axis, sub}] for every main and subagent transcript of the sessions that wrote events.
-export function measure(events) {
+export function measure(events: FactoryEvent[]): Measured {
   const ids = [...new Set(events.map((e) => e.sessionId).filter((s) => /^[\w-]+$/.test(s || '')))];
   if (!ids.length) return {};
   let cache = {};
@@ -79,7 +80,7 @@ export function measure(events) {
 // shortcut: anything else the session does between two factory events counts too; drive one run per session if that skews it.
 // Calls onRow(slot, row, file) for each transcript message that falls to a run the factory drove; slot: {run, stage, iteration, harness}.
 // archived: the archive summaries, whose session-event stubs still close windows.
-export function attribute(runs, events, by, onRow, archived = readArchive()) {
+export function attribute(runs: Record<string, Run>, events: FactoryEvent[], by: Measured, onRow: (at: Slot, row: TranscriptRow, f: Transcript) => void, archived: Run[] = readArchive()): void {
   const iter = {}, slots = {};
   // Archived runs keep stubs of their session events so their windows still close; their messages are then dropped (not in runs).
   const stubs = archived.flatMap((a) => (a.sessionEvents || []).map((e) => ({ ...e, run: a.id })));
@@ -107,7 +108,7 @@ export function attribute(runs, events, by, onRow, archived = readArchive()) {
     }
   }
 }
-export function withMeasured(runs, events, by = measure(events), archived) { // archived: undefined reads the archive, only once there is something to attribute
+export function withMeasured(runs: Record<string, Run>, events: FactoryEvent[], by: Measured = measure(events), archived?: Run[]): Record<string, Run> { // archived: undefined reads the archive, only once there is something to attribute
   if (!Object.keys(by).length) return runs;
   const got = {};
   attribute(runs, events, by, (at, [, , model, ...rest], f) => {

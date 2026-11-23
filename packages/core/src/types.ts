@@ -44,6 +44,8 @@ export interface Burn {
   byStage: Record<string, BurnCell>; byIteration: Record<string, BurnCell>; byAxis: Record<string, BurnCell>;
   reported?: BurnCell | null;
 }
+/** A rule in effect (rules.ts rules().policy); value is whatever `F rules set` stored. */
+export interface Rule { value?: unknown; reason?: string; setBy?: string; setAt?: string; until?: string; scope?: string }
 export interface Loopback { iteration: number; route?: string; reasons?: string[]; ts: string }
 
 export type Outcome = 'in-progress' | 'rejected' | 'needs-info' | 'merged' | 'escalated' | 'closed' | 'awaiting-approval' | 'split';
@@ -55,7 +57,7 @@ export interface Run {
   reviews: Record<number, Record<string, AxisReview>>;
   /** iteration → axes requested */
   axes?: Record<number, string[]>;
-  stage?: string; status?: string; started?: string; updated?: string; durationMs?: number;
+  stage: string; status: string; started: string; updated: string; durationMs: number;
   title?: string; url?: string; pr?: string; branch?: string; spec?: string; issues?: number[]; children?: string[]; parent?: string;
   author?: string; association?: string; source?: string; imported?: boolean; origin?: string; originAssociation?: string;
   sessions?: Session[]; costUsd?: number; tokens?: number; burn?: Burn;
@@ -66,3 +68,17 @@ export interface Run {
   deploys?: Deploy[]; notes?: Note[];
   archived?: boolean; sessionEvents?: { ts: string; stage: string; status: string; sessionId: string }[];
 }
+
+/** A transcript message's usage: [ts, message id, model, input, output, cacheRead, cacheWrite5m, cacheWrite1h, fast (0|1)]. */
+export type TranscriptRow = [string, string, string, number, number, number, number, number, number];
+/** One main or subagent transcript of a session; axis: the subagent's review axis, from its description. */
+export interface Transcript { rows: TranscriptRow[]; axis?: string; sub: boolean }
+/** sessionId → its transcripts (burn.ts measure()). */
+export type Measured = Record<string, Transcript[]>;
+/** Where a transcript message falls: the run, stage and iteration of the factory events around it. */
+export interface Slot { t: number; run: string; stage: string; status: string; iteration: number; harness?: string }
+
+/** projects.json, per owner/repo. */
+export interface Project { path?: string; synced?: string; autoMerge?: boolean }
+/** A run's worktree.json. */
+export interface WorktreeInfo { path: string; repoPath: string; branch: string; [k: string]: unknown }
