@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { archive, io, log, read, record } from '../../core/src/log.ts';
-import { budget, derive, getRun } from '../../core/src/derive.ts';
+import { addBurn, budget, burnOf, derive, finishBurn, getRun } from '../../core/src/derive.ts';
 import { decide } from '../../core/src/gate.ts';
 import { facts } from '../../core/src/github.ts';
 import { main } from '../../cli/src/main.ts';
@@ -58,6 +58,16 @@ export function usageTest() {
   // the configured model, from the subagent's rows alone when the step ran in one.
   assert.deepEqual(b.byStage.build.models, { 'claude-opus-5-5': 1_000_000, 'claude-mystery-9': 1000, 'claude-fable-5-2': 100_000 });
   assert.deepEqual([b.byStage.build.subModels, b.byStage.review.subModels], [{}, { 'claude-sonnet-5-5': 220_000 }]);
+  assert.deepEqual([b.byStage.build.used, b.byStage.review.used, b.byAxis.code.used], ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-sonnet-5-5']);
+  // A session-run step that spawns a small helper keeps the session's model; a step run in a subagent gets the subagent's,
+  // even when the orchestrator's cache reads around it are larger (they don't count as served).
+  const hb = burnOf(), at1 = (stage, axis) => ({ stage, iteration: 1, axis });
+  addBurn(hb, at1('build'), 1_000_000, 0, 0, 'claude-opus-5-5');
+  addBurn(hb, at1('build', 'other'), 50_000, 0, 0, 'claude-haiku-4-5', true);
+  addBurn(hb, at1('spec'), 900_000, 0, 880_000, 'claude-opus-5-5');
+  addBurn(hb, at1('spec', 'other'), 300_000, 0, 0, 'claude-fable-5-2', true);
+  finishBurn(hb);
+  assert.deepEqual([hb.byStage.build.used, hb.byStage.spec.used, hb.byAxis.other.used], ['claude-opus-5-5', 'claude-fable-5-2', 'claude-fable-5-2']);
   assert.deepEqual([b.byAxis.code.models, b.byAxis.verifier.models], [{ 'claude-sonnet-5-5': 200_000 }, { 'claude-sonnet-5-5': 10_000 }]);
   assert.equal(getRun(P).burn.total.tokens, 1000);
   assert.equal(getRun(I).burn, undefined);

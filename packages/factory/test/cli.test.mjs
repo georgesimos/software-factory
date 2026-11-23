@@ -442,11 +442,14 @@ function modelsTest(cli, R, stub) {
   // A model alias a harness drops later is ignored on read with a warning, not fatal; writes still refuse it.
   const cfg = cfgNow();
   cfg['acme/gp']['review.code'] = { use: 'default', model: 'claude-9', effort: 'huge', fallback: ['opus', 'claude-8'] };
+  cfg['acme/gp']['review.docs'] = { use: 'default', model: 'opus', fallback: ['opus', 'sonnet'] };
   fs.writeFileSync(file, JSON.stringify(cfg));
   const res = spawnSync(process.execPath, [path.join(HERE, 'factory.mjs'), 'skills', 'acme/gp'], { encoding: 'utf8', env: { ...process.env, FACTORY_DIR: io.dir, ...stub } });
   assert.equal(res.status, 0, res.stderr);
   assert.deepEqual(JSON.parse(res.stdout).plan['review.code'], { use: 'default', model: 'sonnet', effort: 'high', fallback: ['opus'] }); // global's lean fields
-  assert.match(res.stderr, /skills\.json acme\/gp\.review\.code: ignoring model claude-9, effort huge, fallback claude-8/);
+  assert.match(res.stderr, /skills\.json acme\/gp\.review\.code: ignoring model claude-9, effort huge, fallback claude-8 \(Claude Code offers [a-z|]+\); the next settings change removes it from the file/);
+  assert.match(res.stderr, /skills\.json acme\/gp\.review\.docs: ignoring fallback opus \(same as the model\); the next/);
+  assert.deepEqual(JSON.parse(res.stdout).plan['review.docs'].fallback, ['sonnet']);
   assert.throws(() => set('acme/gp', 'review.docs', { use: 'default', model: 'claude-9' }), /model must be one of/);
   fs.writeFileSync(file, before); // later checks expect the global config as it was
 }

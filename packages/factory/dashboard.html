@@ -604,10 +604,9 @@ const link = (url, text, cls) => (/^https:\/\//.test(url || '') ? el('a', { href
 const runHref = (id) => '#' + encodeURIComponent(id);
 const chip = (text, tone) => el('span', { class: 'chip' + (tone ? ' ' + tone : '') }, text);
 // Who did a step, when it wasn't the built-in brief. Text and title only; `short` drops the kind for the narrow pipeline track.
-// The model that served most of a burn cell's tokens (transcripts first, reported usage as fallback), as an alias.
+// A model id as its alias (claude-fable-5-2 -> fable); unknown ids stay as they are.
 const alias = (id) => (/(fable|opus|sonnet|haiku)/.exec(String(id)) || [])[1] || String(id);
-// A step run in a subagent is that subagent's model, not the orchestrator's around it; otherwise the session's own.
-const usedModel = (c) => { const sub = obj(obj(c).subModels), m = Object.entries(Object.keys(sub).length ? sub : obj(obj(c).models)).filter(([, n]) => num(n)).sort((a, b) => b[1] - a[1])[0]; return m ? alias(m[0]) : ''; };
+const usedModel = (c) => (obj(c).used ? alias(c.used) : ''); // the burn cell's serving model, chosen in finishBurn
 const capital = (m) => m.charAt(0).toUpperCase() + m.slice(1);
 // `fallback` is either the runner downgrade ({from, reason}) or the model's fallback chain (an array); `model` is the configured one, `used` what ran.
 const runnerChip = (x, short, what = 'Run by', used = '') => {
@@ -641,9 +640,8 @@ const pct = (x) => (num(x) ? [String(Math.round(x * 100)), '%'] : null);
 const money = (x) => (num(x) ? '$' + (x >= 1000 ? Math.round(x).toLocaleString() : x.toFixed(2)) : null);
 const tokens = (x) => (!num(x) ? null : x >= 1e6 ? (x / 1e6).toFixed(1) + 'M' : x >= 1e3 ? Math.round(x / 1e3) + 'k' : String(x));
 const costTxt = (c) => (c.costUsd == null ? '—' : money(c.costUsd) + (c.unpriced ? '+' : '')); // "+": some tokens ran on a model with no price
-const modelsN = (m) => Object.fromEntries(Object.entries(obj(m)).filter(([k, n]) => /^[\w.:[\]-]{1,64}$/.test(k) && num(n)));
 const cellN = (c) => (num(obj(c).tokens) ? { tokens: c.tokens, costUsd: num(c.costUsd) ? c.costUsd : null, unpriced: num(c.unpriced) ? c.unpriced : 0,
-  models: modelsN(c.models), subModels: modelsN(c.subModels) } : null);
+  used: typeof c.used === 'string' && /^[\w.:[\]-]{1,64}$/.test(c.used) ? c.used : null } : null);
 const cellsN = (m) => Object.fromEntries(Object.entries(obj(m)).map(([k, v]) => [k, cellN(v)]).filter(([, v]) => v));
 const burnN = (b) => (cellN(obj(b).total) ? { measured: b.measured === true, total: cellN(b.total), byStage: cellsN(b.byStage), byIteration: cellsN(b.byIteration), byAxis: cellsN(b.byAxis), reported: cellN(b.reported) } : null);
 

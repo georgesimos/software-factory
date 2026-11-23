@@ -78,7 +78,7 @@ export function checkSkills(cfg) {
   return cfg;
 }
 // On read, a model, effort or fallback the harness no longer offers is dropped with a warning instead of failing every
-// command; setSkill and applyPreset still refuse them, since writeSkills checks strictly.
+// command; setSkill and applyPreset still refuse them, since writeSkills checks strictly. The next write saves the drop.
 const warned = new Set();
 export function dropUnknownModels(cfg) {
   if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return cfg;
@@ -89,13 +89,16 @@ export function dropUnknownModels(cfg) {
     const out = { ...r }, gone = [];
     if (r.model !== undefined && !ids.includes(r.model)) { gone.push(`model ${r.model}`); delete out.model; }
     if (r.effort !== undefined && !(h.efforts || []).includes(r.effort)) { gone.push(`effort ${r.effort}`); delete out.effort; }
+    let same = '';
     if (Array.isArray(r.fallback)) {
-      const keep = r.fallback.filter((m) => ids.includes(m) && m !== out.model);
-      if (keep.length < r.fallback.length) gone.push(`fallback ${r.fallback.filter((m) => !keep.includes(m)).join(',')}`);
+      const keep = r.fallback.filter((m) => ids.includes(m) && m !== out.model), unknown = r.fallback.filter((m) => !ids.includes(m));
+      if (unknown.length) gone.push(`fallback ${unknown.join(',')}`);
+      if (keep.length + unknown.length < r.fallback.length) same = `fallback ${out.model} (same as the model)`;
       if (keep.length) out.fallback = keep; else delete out.fallback;
     }
-    const msg = `skills.json ${at}: ignoring ${gone.join(', ')} (${h.label} offers ${ids.join('|')})`;
-    if (gone.length && !warned.has(msg)) { warned.add(msg); console.error(msg); }
+    const what = [gone.length && `${gone.join(', ')} (${h.label} offers ${ids.join('|')})`, same].filter(Boolean).join('; ');
+    const msg = `skills.json ${at}: ignoring ${what}; the next settings change removes it from the file`;
+    if (what && !warned.has(msg)) { warned.add(msg); console.error(msg); }
     return out;
   };
   return Object.fromEntries(Object.entries(cfg).map(([scope, steps]) => [scope, !steps || typeof steps !== 'object' || Array.isArray(steps) ? steps

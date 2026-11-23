@@ -30,8 +30,15 @@ export function addBurn(b, { stage, iteration, axis }, tokens, usd, cacheRead = 
     if (usd == null) c.unpriced += tokens; else c.costUsd += usd;
   }
 }
+const top = (m) => Object.entries(m).sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+const served = (m) => Object.values(m).reduce((s, n) => s + n, 0);
 export const finishBurn = (b) => {
-  for (const c of [b.total, ...[b.byStage, b.byIteration, b.byAxis].flatMap(Object.values)]) c.costUsd = c.unpriced && !c.costUsd ? null : +c.costUsd.toFixed(4);
+  for (const c of [b.total, ...[b.byStage, b.byIteration, b.byAxis].flatMap(Object.values)]) {
+    c.costUsd = c.unpriced && !c.costUsd ? null : +c.costUsd.toFixed(4);
+    // The model that served the step: its subagent's when subagents did most of the work (a step run in one), else the
+    // top model overall, so a small helper subagent in a session-run step doesn't count as the step's model.
+    c.used = top(served(c.subModels) * 2 > served(c.models) ? c.subModels : c.models);
+  }
   return b;
 };
 // A recorded verdict is final: only F's own "invalid" placeholder can be replaced, and nothing once the iteration is gated.
