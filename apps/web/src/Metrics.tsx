@@ -41,13 +41,14 @@ export function normMetrics(x: unknown): LogMetrics {
 export const RANGES: [string, string][] = [['7', 'Last 7 days'], ['30', 'Last 30 days'], ['90', 'Last 90 days'], ['', 'All time']];
 /** The `since` date (UTC, as the API buckets days) for a range in days; '' is all time. */
 export const sinceFor = (days: string, now = Date.now()) => (days ? new Date(now - (Number(days) - 1) * 864e5).toISOString().slice(0, 10) : '');
+export const dayOf = (now: number) => new Date(now).toISOString().slice(0, 10);
 
-/** One bar per day from the first to the last day with burn: a quiet day is a zero bar, never a gap that hides it. */
-export function dayBars(byDay: Record<string, MCell>, from = '') {
+/** One bar per day from `from` (or the first day with burn) to `to` (or the last): a quiet day is a zero bar, never a gap. */
+export function dayBars(byDay: Record<string, MCell>, from = '', to = '') {
   const days = Object.keys(byDay).sort();
   if (!days.length) return [];
   const out: { day: string; cell: MCell | null }[] = [];
-  for (let t = Date.parse(from && from < days[0]! ? from : days[0]!), end = Date.parse(days.at(-1)!); t <= end; t += 864e5) {
+  for (let t = Date.parse(from && from < days[0]! ? from : days[0]!), end = Date.parse(to > days.at(-1)! ? to : days.at(-1)!); t <= end; t += 864e5) {
     const day = new Date(t).toISOString().slice(0, 10);
     out.push({ day, cell: byDay[day] ?? null });
   }
@@ -66,18 +67,19 @@ export async function fetchMetrics(token: string, project: string, since: string
   const q = new URLSearchParams();
   if (project) q.set('project', project);
   if (since) q.set('since', since);
-  const res = await fetch('/api/metrics' + (q.size ? '?' + q : ''), { headers: { 'x-factory-token': token } });
+  const qs = String(q); // not q.size: Safari 16 and older Chromium and Firefox lack it
+  const res = await fetch('/api/metrics' + (qs ? '?' + qs : ''), { headers: { 'x-factory-token': token } });
   const x = await res.json().catch(() => null) as { error?: string } | null;
-  if (!res.ok) throw new Error(x?.error || `GET /api/metrics answered ${res.status}`);
+  if (!res.ok || !x || typeof x !== 'object') throw new Error(x?.error || `GET /api/metrics answered ${res.status}${res.ok ? ' without JSON' : ''}`);
   return normMetrics(x);
 }
 
 const tok = (n: number) => formatTokens(n) ?? '0';
 const pct = (x: number | null) => formatPercent(x);
 
-function Chart({ m, from }: { m: LogMetrics; from: string }) {
+function Chart({ m, from, to }: { m: LogMetrics; from: string; to: string }) {
   const [by, setBy] = useState<'tokens' | 'cost'>('tokens');
-  const bars = dayBars(m.byDay, from), val = (c: MCell | null) => (!c ? 0 : by === 'tokens' ? c.tokens : c.costUsd ?? 0);
+  const bars = dayBars(m.byDay, from, to), val = (c: MCell | null) => (!c ? 0 : by === 'tokens' ? c.tokens : c.costUsd ?? 0);
   const max = Math.max(0, ...bars.map((b) => val(b.cell)));
   const peak = bars.find((b) => max > 0 && val(b.cell) === max);
   const text = (c: MCell | null) => (by === 'tokens' ? tok(c?.tokens ?? 0) + ' tokens' : c ? costText(c) : '$0.00');
@@ -116,7 +118,7 @@ function Breakdown({ title, by, order, base }: { title: string; by: Record<strin
               <td className="web-mx-k">{key}{c.source && c.source !== base ? <small className="sf-muted"> {c.source}</small> : null}</td>
               <td className="sf-num">{tok(c.tokens)}</td>
               <td className="sf-num">{costText(c)}</td>
-              <td className="web-mx-share"><span className="web-mx-bar" aria-label={`${Math.round(share * 100)}% of tokens`}><i style={{ width: `${share * 100}%` }} /></span></td>
+              <td className="web-mx-share"><span className="sf-sr-only">{Math.round(share * 100)}% of tokens</span><span className="web-mx-bar" aria-hidden="true"><i style={{ width: `${share * 100}%` }} /></span></td>
             </tr>
           ))}
         </tbody>
@@ -127,17 +129,17 @@ function Breakdown({ title, by, order, base }: { title: string; by: Record<strin
 
 function Body({ token, projects, initial, load }: { token: string; projects: string[]; initial: string; load: typeof fetchMetrics }) {
   const [project, setProject] = useState(initial), [range, setRange] = useState('30');
-  const [st, setSt] = useState<{ m?: LogMetrics; error?: string }>({});
-  const since = sinceFor(range);
+  const [st, setSt] = useState<{ m?: LogMetrics; error?: string; busy?: boolean }>({});
+  const now = Date.now(), since = sinceFor(range, now), to = range ? dayOf(now) : ''; // a range runs to today, quiet days included
   useEffect(() => {
     let ignore = false;
-    setSt((s) => ({ m: s.m })); // keep the last numbers on screen while the next filter loads
+    setSt((s) => ({ m: s.m, busy: true })); // the last numbers stay, dimmed and marked busy, until the new filter's arrive
     load(token, project, since).then((m) => { if (!ignore) setSt({ m }); }, (e: unknown) => { if (!ignore) setSt({ error: String((e as Error)?.message ?? e) }); });
     return () => { ignore = true; };
   }, [token, project, since, load]);
   const { m, error } = st, o = m?.outcomes, t = m?.total;
   const cache = pct(m?.cacheHitRatio ?? null), cap = pct(m?.capHitShare ?? null), med = formatDuration(m?.medianIntakeToMergeMs);
-  const empty = m && !t!.tokens && !Object.values(o!).some(Boolean);
+  const empty = m && !t!.tokens && !(['merged', 'humanMerged', 'escalated', 'rejected', 'reverted'] as const).some((k) => o![k]); // the outcomes shown
   return (
     <div className="web-mx">
       <div className="web-mx-filters">
@@ -149,7 +151,7 @@ function Body({ token, projects, initial, load }: { token: string; projects: str
       {error ? <EmptyState title="Could not load metrics">{error}</EmptyState> : !m ? <><span className="sf-sr-only">Loading metrics…</span><Skeleton height={240} width="100%" /></> : empty ? (
         <EmptyState title="Nothing in this range">No run spent tokens or finished {range ? `in the last ${range} days` : 'yet'}{project ? ` in ${project}` : ''}.</EmptyState>
       ) : (
-        <>
+        <div className="web-mx-data" aria-busy={st.busy || undefined}>
           <MetricStrip label="Burn and cost">
             <MetricStat label="Spend" value={costText(t!)} sub={`${tok(t!.tokens)} tokens${t!.source && t!.source !== 'measured' ? ` · ${t!.source}` : ''}`} />
             <MetricStat label="Cache hits" value={cache?.[0] ?? null} unit={cache?.[1]} sub={`${tok(t!.cacheRead)} read from cache`} />
@@ -158,14 +160,14 @@ function Body({ token, projects, initial, load }: { token: string; projects: str
             <MetricStat label="Loops / run" value={m.loopsPerRun == null ? null : m.loopsPerRun.toFixed(1)} sub="gate loop-backs" />
             <MetricStat label="Cap hits" value={cap?.[0] ?? null} unit={cap?.[1]} sub="loop cap or budget" />
           </MetricStrip>
-          <MetricStrip label="Outcomes">
+          <div className="web-mx-out"><MetricStrip label="Outcomes">
             <MetricStat size="sm" label="Merged" value={String(o!.merged)} sub="by the factory" />
             <MetricStat size="sm" label="Human-merged" value={String(o!.humanMerged)} sub="after escalation" />
             <MetricStat size="sm" label="Escalated" value={String(o!.escalated)} />
             <MetricStat size="sm" label="Rejected" value={String(o!.rejected)} />
             <MetricStat size="sm" label="Reverted" value={String(o!.reverted)} sub="of factory merges" />
-          </MetricStrip>
-          <Chart m={m} from={since} />
+          </MetricStrip></div>
+          <Chart m={m} from={since} to={to} />
           <div className="web-mx-grid">
             <Breakdown title="Stage" by={m.byStage} order={STAGES} base={t!.source} />
             <Breakdown title="Axis" by={m.byAxis} base={t!.source} />
@@ -174,7 +176,7 @@ function Body({ token, projects, initial, load }: { token: string; projects: str
             {project ? null : <Breakdown title="Project" by={m.byProject} base={t!.source} />}
           </div>
           <p className="sf-muted web-mx-note">{m.measuredRuns} run{m.measuredRuns === 1 ? '' : 's'} measured from transcripts; the rest is what subagents reported. A “+” on a cost means some tokens ran on an unpriced model.</p>
-        </>
+        </div>
       )}
     </div>
   );

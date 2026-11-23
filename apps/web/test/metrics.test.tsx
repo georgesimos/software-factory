@@ -1,10 +1,10 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import demo from '../../playground/src/fixtures/demo.json';
 import { App } from '../src/App.tsx';
 import type { FactoryData } from '../src/data.ts';
-import { MetricsSheet, dayBars, normMetrics, rows, sinceFor, type LogMetrics } from '../src/Metrics.tsx';
+import { MetricsSheet, dayBars, dayOf, normMetrics, rows, sinceFor, type LogMetrics } from '../src/Metrics.tsx';
 
 const c = (tokens: number, costUsd: number | null, more: Record<string, unknown> = {}) => ({ tokens, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd, unpriced: 0, reported: 0, source: 'measured', ...more });
 // The shape GET /api/metrics returns (packages/core/src/metrics.ts logMetrics).
@@ -37,6 +37,9 @@ describe('metrics data shaping', () => {
     expect(dayBars(m.byDay).map((b) => [b.day, b.cell?.tokens ?? 0])).toEqual([['2026-11-20', 5_100_000], ['2026-11-21', 0], ['2026-11-22', 6500]]);
     expect(dayBars(m.byDay, '2026-11-19')[0]).toEqual({ day: '2026-11-19', cell: null });
     expect(dayBars({})).toEqual([]);
+    // A range runs to today: quiet days at the end are zero bars too.
+    expect(dayBars(m.byDay, '2026-11-19', '2026-11-24').map((b) => b.day)).toEqual(['2026-11-19', '2026-11-20', '2026-11-21', '2026-11-22', '2026-11-23', '2026-11-24']);
+    expect(dayBars(m.byDay, '', '2026-11-21').at(-1)!.day).toBe('2026-11-22'); // never cuts burn off
   });
   it('rows: pipeline order for stages, most tokens first otherwise, with shares', () => {
     const m = normMetrics(reply);
@@ -59,15 +62,22 @@ describe('Metrics sheet', () => {
     expect(within(burn).getByText('$4.56+')).toBeTruthy();
     const out = within(sheet).getByRole('region', { name: 'Outcomes' });
     expect(within(out).getByText('Human-merged').parentElement!.textContent).toContain('1');
-    expect(within(sheet).getByRole('img', { name: /^Tokens per day, .* to 2026-11-22; peak 5\.1M tokens on 2026-11-20$/ })).toBeTruthy();
+    expect(within(sheet).getByRole('img', { name: new RegExp(`^Tokens per day, ${sinceFor('30')} to ${dayOf(Date.now())}; peak 5\\.1M tokens on 2026-11-20$`) })).toBeTruthy(); // the range, to today
     const models = within(sheet).getByRole('region', { name: 'Burn by model' });
     expect(within(models).getByText('—')).toBeTruthy(); // the unpriced model has no cost
+    expect(within(models).getByText('100% of tokens', { exact: false })).toBeTruthy(); // the share, as text for screen readers
     expect(within(sheet).getByRole('region', { name: 'Burn by project' })).toBeTruthy();
 
     await userEvent.click(within(sheet).getByRole('button', { name: 'Cost' }));
     expect(within(sheet).getByRole('img', { name: /^Cost per day, .*; peak \$8\.60 on 2026-11-20$/ })).toBeTruthy();
 
+    // While the next filter loads, the old numbers stay but are marked busy and dimmed.
+    let release = () => {};
+    load.mockImplementationOnce((_t, project) => new Promise((ok) => { release = () => ok(normMetrics(project ? { ...reply, total: c(500, 0.01), byProject: {} } : reply)); }));
     await userEvent.selectOptions(within(sheet).getByLabelText('Project'), 'acme/b');
+    expect(sheet.querySelector('.web-mx-data')!.getAttribute('aria-busy')).toBe('true');
+    release();
+    await waitFor(() => expect(sheet.querySelector('.web-mx-data')!.hasAttribute('aria-busy')).toBe(false));
     await userEvent.selectOptions(within(sheet).getByLabelText('Range'), '');
     expect(load).toHaveBeenLastCalledWith('t', 'acme/b', '');
     expect(await within(sheet).findByText('$0.01')).toBeTruthy();
@@ -78,8 +88,15 @@ describe('Metrics sheet', () => {
     const { unmount } = render(<MetricsSheet open onClose={() => {}} token="t" projects={[]} project="" load={async () => { throw new Error('missing or wrong token'); }} />);
     expect(await screen.findByText('missing or wrong token')).toBeTruthy();
     unmount();
-    render(<MetricsSheet open onClose={() => {}} token="t" projects={[]} project="" load={async () => normMetrics({})} />);
-    expect(await screen.findByText('Nothing in this range')).toBeTruthy();
+    const { unmount: u2 } = render(<MetricsSheet open onClose={() => {}} token="t" projects={[]} project="" load={async () => normMetrics({ outcomes: { closed: 2, split: 1 } })} />);
+    expect(await screen.findByText('Nothing in this range')).toBeTruthy(); // closed and split have no tile, so they don't fill the page
+    u2();
+    // A 200 that isn't JSON (a dev server's index.html) is an error, not an empty range.
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<!doctype html>', { status: 200 })));
+    try {
+      render(<MetricsSheet open onClose={() => {}} token="t" projects={[]} project="" />);
+      expect(await screen.findByText('GET /api/metrics answered 200 without JSON')).toBeTruthy();
+    } finally { vi.unstubAllGlobals(); }
   });
 
   it('is offered under F ui only: F render’s file and the Artifact have no API', async () => {
