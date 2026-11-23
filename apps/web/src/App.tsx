@@ -19,18 +19,21 @@ function useMedia(q: string) {
 export function App({ load = loadData }: { load?: () => Promise<FactoryData> }) {
   const [state, setState] = useState<{ data?: FactoryData; error?: string }>({});
   useEffect(() => {
-    let ignore = false, timer: ReturnType<typeof setTimeout> | undefined;
+    let ignore = false, waiting = false, timer: ReturnType<typeof setTimeout> | undefined;
+    const later = () => { timer = setTimeout(() => { if (document.hidden) waiting = true; else go(false); }, 10_000); }; // no polling in a hidden tab
+    const onVis = () => { if (waiting && !document.hidden) { waiting = false; go(false); } };
     const go = (first: boolean) => load().then((data) => {
       if (ignore) return;
       setState({ data });
-      if (data.token) timer = setTimeout(() => go(false), 10_000); // F ui: live; injected data is a snapshot
+      if (data.token) later(); // F ui: live; injected data is a snapshot
     }, (e: unknown) => {
       if (ignore) return;
       if (first) setState({ error: String((e as Error)?.message ?? e ?? 'Unknown error') });
-      else timer = setTimeout(() => go(false), 10_000); // keep the last good data through a blip
+      else later(); // keep the last good data through a blip
     });
     go(true);
-    return () => { ignore = true; clearTimeout(timer); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { ignore = true; clearTimeout(timer); document.removeEventListener('visibilitychange', onVis); };
   }, [load]);
   const { data, error } = state;
   return data ? <Shell data={data} /> : (
@@ -48,9 +51,14 @@ function Shell({ data }: { data: FactoryData }) {
   const [project, setProjectState] = useState(() => { const p = store('sf.project') ?? ''; return projects.includes(p) ? p : ''; });
   const setProject = (p: string) => { setProjectState(p); store('sf.project', p); if (readHash()) history.replaceState(null, '', location.pathname + location.search); setHash(''); };
   const [hash, setHash] = useState(readHash);
-  const [collapsed, setCollapsedState] = useState(() => (store('sf.panelCollapsed') ?? '1') === '1'); // closed until a run is chosen
+  const [collapsed, setCollapsedState] = useState(() => { // closed until a run is chosen; a link to a run opens it
+    if (data.runs.some((r) => r.id === readHash())) { store('sf.panelCollapsed', '0'); return false; }
+    return (store('sf.panelCollapsed') ?? '1') === '1';
+  });
   const setCollapsed = (c: boolean) => { store('sf.panelCollapsed', c ? '1' : '0'); setCollapsedState(c); };
   const wide = useMedia(WIDE);
+  const [, tick] = useState(0);
+  useEffect(() => { const t = setInterval(() => tick((n) => n + 1), 60_000); return () => clearInterval(t); }, []); // "Updated 3m ago" stays true
   const byId = new Map(data.runs.map((r) => [r.id, r]));
   const sel = byId.get(hash) ?? null;
   const runs = data.runs.filter((r) => !project || repoOf(r.id) === project);
@@ -61,7 +69,7 @@ function Shell({ data }: { data: FactoryData }) {
     addEventListener('hashchange', f); addEventListener('popstate', f);
     return () => { removeEventListener('hashchange', f); removeEventListener('popstate', f); };
   });
-  const close = useCallback(() => { const id = readHash(); history.pushState(null, '', location.pathname + location.search); setHash(''); setTimeout(() => document.querySelector<HTMLElement>(`a[href="${CSS.escape(runHref(id))}"]`)?.focus(), 0); }, []);
+  const close = useCallback(() => { const id = readHash(); history.pushState(null, '', location.pathname + location.search); setHash(''); setTimeout(() => document.querySelector<HTMLElement>(`.web-board a[href="${CSS.escape(runHref(id))}"]`)?.focus(), 0); }, []);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (document.querySelector('dialog[open]')) return; // a sheet or dialog handles its own keys
@@ -90,7 +98,10 @@ function Shell({ data }: { data: FactoryData }) {
         ) : null}
       </header>
       <div className="web-shell" data-panel={shown || undefined}>
-        <main className="web-main">
+        <main className="web-main" onClick={(e) => { // re-clicking the selected card fires no hashchange
+          const a = (e.target as HTMLElement).closest<HTMLAnchorElement>('.web-board a');
+          if (a && wide && collapsed && a.hash === location.hash && byId.has(readHash())) setCollapsed(false);
+        }}>
           <Tabs label="Project" value={project} onChange={setProject} className="web-tabs"
             items={[{ id: '', label: 'All', count: data.runs.length }, ...projects.map((p) => ({ id: p, prefix: p.includes('/') ? p.split('/')[0] + '/' : undefined, label: p.split('/')[1] ?? p }))]}>
             <Board data={data} project={project} selected={sel?.id} />

@@ -99,6 +99,7 @@ export async function loadData(): Promise<FactoryData> {
     } catch (e) {
       why = `GET /api/state failed: ${(e as Error).message}`;
     }
+    throw new Error(why); // never swap live data for the dev fixture: App keeps the last good data and retries
   }
   if (import.meta.env.DEV) {
     const f = (await import('../fixtures/state.json')).default as unknown as FactoryData;

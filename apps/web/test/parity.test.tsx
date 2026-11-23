@@ -28,6 +28,19 @@ describe('board parity with dashboard.html', () => {
     expect(localStorage.getItem('sf.doneOpen')).toBe('0');
   });
 
+  it('a link to a run opens it on a wide screen, and re-clicking the selected card reopens a hidden panel', async () => {
+    wide(true);
+    history.replaceState(null, '', '/#' + encodeURIComponent('acme/shop#43'));
+    render(<App load={async () => data} />);
+    const panel = await screen.findByRole('complementary');
+    expect(within(panel).getByRole('heading', { name: 'Add newsletter signup to footer' })).toBeTruthy();
+    fireEvent.keyDown(document.body, { key: ']' });
+    expect(screen.queryByRole('complementary')).toBeNull();
+    const card = document.querySelector<HTMLAnchorElement>(`.web-board a[href="#${CSS.escape(encodeURIComponent('acme/shop#43'))}"]`)!;
+    fireEvent.click(card);
+    expect(within(screen.getByRole('complementary')).getByRole('heading', { name: 'Add newsletter signup to footer' })).toBeTruthy();
+  });
+
   it('docks the run panel on wide screens: hash selection, Focus, keyboard resize, ] and Esc', async () => {
     wide(true);
     render(<App load={async () => data} />);
