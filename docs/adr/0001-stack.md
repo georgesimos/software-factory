@@ -95,7 +95,7 @@ The harness adapter contract (`packages/adapters/harnesses`) gains an optional `
 - never `--dangerously-bypass-approvals-and-sandbox`;
 - budget flags come from `F`.
 
-`node-pty` and the SDKs are dependencies of `adapters` only, loaded lazily, so `F` itself stays zero-dependency.
+`node-pty` and the SDKs will be dependencies of `apps/desktop`, which will hand them to the session runner (`packages/adapters/sessions.mjs`, through the server's `hostModules`). `apps/desktop` isn't built yet, so nothing sets `hostModules` today: `launchSession()` refuses sdk mode up front ("needs the desktop app"), and only headless runs start. `adapters` stays dependency-free, so `F` itself stays zero-dependency. The host must pass them in, keyed by package name: under pnpm, `adapters`' fallback `import()` resolves from `packages/adapters` and can't see `apps/desktop`'s dependencies. Decided in H1 (#79): the Agent SDK pulls a 361 MB platform binary into every install, and pnpm 10 blocks `node-pty`'s build script unless the root config allows it.
 
 `node-pty` notes:
 - It is an N-API native module, so one build works in Node and in Electron.
@@ -141,7 +141,7 @@ The Codex CLI moved to Rust for these reasons.
 - The skill folder must be a link, never a copy: a symlink on macOS and Linux, a junction on Windows (`F install-skill`).
 - The split is about ten move-only PRs, gated by the existing self-test ([split.md §2](../plans/split.md#2-rules-for-every-move-pr)). They escalate to a human merge by design.
 - Node 24.12 becomes a hard requirement. Today any Node with ESM works.
-- `adapters` gains native and SDK dependencies (`node-pty`, the Agent SDK, the Codex SDK). `core`, `cli` and `server` stay dependency-free.
+- `apps/desktop` carries the native and SDK dependencies (`node-pty`, the Agent SDK, the Codex SDK). `core`, `cli`, `server` and `adapters` stay dependency-free.
 
 ## Verification
 

@@ -74,17 +74,18 @@ export function rules(repo, cfg = readSkills(), now = Date.now()) {
   }
   return { repo, policy, guide, expired, warnings };
 }
-// The person changing a rule is whoever gh is logged in as; it is never typed in.
-export const whoami = () => {
+// The person changing a rule (or writing a note) is whoever gh is logged in as; it is never typed in.
+export const whoami = (doing = 'changing the rule') => {
   let login = '';
   try { login = gh('api', 'user', '--jq', '.login').trim(); } catch { /* below */ }
-  if (!LOGIN.test(login)) throw new Error('cannot tell who is changing the rule: "gh api user" failed (run gh auth login)');
+  if (!LOGIN.test(login)) throw new Error(`cannot tell who is ${doing}: "gh api user" failed (run gh auth login)`);
   return login;
 };
-// Rule changes are owned events in the log (stage "rules"), not run events: derive() skips them and F event refuses them.
-export function audit(scope, status, e) {
+// Rule changes (stage "rules") and notes (stage "note") are owned events in the log, written here outside record():
+// they never move a run, and F event refuses them.
+export function audit(scope, status, e, stage = 'rules') {
   fs.mkdirSync(stateDir(), { recursive: true });
-  fs.appendFileSync(log(), JSON.stringify({ ts: new Date().toISOString(), ...e, run: scope, stage: 'rules', status }) + '\n');
+  fs.appendFileSync(log(), JSON.stringify({ ts: new Date().toISOString(), ...e, run: scope, stage, status }) + '\n');
   dashboard.render();
 }
 export const checkScope = (scope) => { if (scope !== 'default' && !/^[\w.-]+\/[\w.-]+$/.test(scope || '')) throw new Error(`scope "${scope}" must be "default" or owner/repo`); };

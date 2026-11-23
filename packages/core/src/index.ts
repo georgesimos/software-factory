@@ -6,6 +6,7 @@ export * from './burn.ts';
 export * from './gate.ts';
 export * from './skills.ts';
 export * from './rules.ts';
+export * from './notes.ts';
 export * from './review.ts';
 export * from './workspace.ts';
 export * from './github.ts';

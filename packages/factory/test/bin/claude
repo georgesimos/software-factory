@@ -3,4 +3,22 @@
 const a = process.argv.slice(2).join(' '), out = !!process.env.STUB_LOGGED_OUT;
 if (a === '--version') process.stdout.write('2.1.304 (Claude Code)\n');
 else if (a === 'auth status') { process.stdout.write(JSON.stringify({ loggedIn: !out, authMethod: out ? 'none' : 'claude.ai' }, null, 2) + '\n'); process.exit(out ? 1 : 0); }
+else if (process.argv.includes('-p') && a.includes('--output-format stream-json --verbose')) { // headless launch: NDJSON events
+  const ev = (x) => process.stdout.write(JSON.stringify(x) + '\n');
+  ev({ type: 'system', subtype: 'init', session_id: 'stub-session', cwd: process.cwd(), argv: process.argv.slice(2) });
+  if (process.env.STUB_BIG) for (let i = 0; i < Number(process.env.STUB_BIG); i++) ev({ type: 'assistant', i, pad: 'x'.repeat(64 * 1024) }); // output past the byte cap
+  if (process.env.STUB_CHILD) import('node:child_process').then(({ spawn }) => { // a Bash tool's dev server: a grandchild that outlives a plain kill
+    ev({ type: 'grandchild', pid: spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }).pid });
+    setInterval(() => {}, 1000);
+  });
+  else if (process.env.STUB_HANG) setInterval(() => {}, 1000); // runs until killed
+  else { // the prompt comes on stdin
+    let prompt = '';
+    process.stdin.on('data', (d) => { prompt += d; }).on('end', () => {
+      ev({ type: 'assistant', message: { content: [{ type: 'text', text: 'prompt: ' + prompt } ] } });
+      process.stdout.write('not json\n'); process.stderr.write('a warning\n');
+      ev({ type: 'result', subtype: 'success', total_cost_usd: 0 });
+    });
+  }
+}
 else { process.stderr.write('claude-stub unexpected: ' + a); process.exit(2); }

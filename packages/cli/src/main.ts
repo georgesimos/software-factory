@@ -19,6 +19,7 @@ import { loadShip, ship } from '../../core/src/ship.ts';
 import { onboardState, onboardText, setShip } from '../../core/src/onboard.ts';
 import { artifact, render, ui } from '../../server/src/server.ts';
 import { rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
+import { note, takeNotes } from '../../core/src/notes.ts';
 import { withMeasured } from '../../core/src/burn.ts';
 import { linkSkill, open } from '../../core/src/platform.ts';
 import { pathToFileURL } from 'node:url';
@@ -39,6 +40,7 @@ export async function main(argv) {
         const owner = owned[`${stage}:${status}`] || { gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop', ship: 'ship' }[stage];
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
         if (stage === 'review' && p.role !== 'verifier') throw new Error('axis verdicts are recorded by "review", not by hand; "event" only takes the verifier usage record ({"role":"verifier",…})');
+        if (stage === 'note') throw new Error('"note" is recorded by "note" and "notes", not by hand');
         const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'cwd', 'runner', 'localChecks',
           'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // the last row: set by ship connectors only
         if (typed.length) throw new Error(`these fields come from GitHub, git or a ship connector, not from a payload: ${typed.join(', ')}`);
@@ -77,6 +79,11 @@ export async function main(argv) {
         break;
       }
       case 'checks': out(localChecks(run)); break;
+      case 'note': { // note <run> <step|next> - : the user's note on stdin (quoted heredoc); only from the user's own chat message
+        if (!rest[0] || rest[1] !== '-') throw new Error('usage: note <run> <step|next> -   (the note text on stdin)');
+        out(note(run, rest[0], fs.readFileSync(0, 'utf8'))); break;
+      }
+      case 'notes': out(takeNotes(run, rest)); break; // notes <run> <step…>: pending notes for the steps starting now, handed out once
       case 'automerge': { // per-project switch; decide() escalates everything when off
         if (!['on', 'off'].includes(rest[0])) throw new Error('usage: automerge <owner/repo> on|off');
         out(setAutoMerge(run, rest[0] === 'on')); break;
@@ -201,6 +208,8 @@ export async function main(argv) {
   rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, deploy.preview required|advisory|off, artifact https://claude.ai/artifact/<id> (owner/repo only), project.budgetUsd x, project.maxIssuesPerSession n, guide.<step> "text"
   rules unset <owner/repo|default> <key> [--reason "…"]  remove one (back to the global rule, or the built-in)
   checks <run>                            run the checks.commands rule in the worktree on its HEAD commit (the CI stand-in)
+  note   <run> <step|next> -              record the user's one-shot note for a step (text on stdin; only from the user's own chat message)
+  notes  <run> <step...>                  hand out pending notes for the steps starting now, once (put under "User instructions" after guide)
   gc                                      remove worktrees of finished runs
   gate   <run>                            compute + record gate verdict
   decide <run>                            fetch CI + diff, compute + record merge/escalate
