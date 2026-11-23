@@ -14,7 +14,7 @@ import type { Deploy, Run } from './types.ts';
 // GitHub's JSON, as far as F reads it: gh output is parsed, never validated beyond what the code checks.
 interface GhUser { login: string }
 interface GhIssue { pull_request?: unknown; state: string; title: string; html_url: string; user: GhUser; author_association: string; body?: string | null }
-interface GhComment { user: GhUser; author_association: string; created_at: string; body?: string | null }
+export interface GhComment { user: GhUser; author_association: string; created_at: string; body?: string | null }
 /** An open PR from openPRs()'s GraphQL query. */
 export interface GhPullRequest {
   number: number; url: string; title: string; headRefName: string; headRefOid: string; authorAssociation: string; author?: GhUser | null;
@@ -132,7 +132,14 @@ export function approval(run: string) {
   const since = [...r.events].reverse().find((e) => e.status === 'awaiting-approval')?.ts;
   if (!since) throw new Error(`${run} is not awaiting approval`);
   const comments: GhComment[] = gh('api', '--paginate', `repos/${repo}/issues/${n}/comments`, '--jq', '.[]').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-  const vote = comments.filter((c) => c.created_at > since && TRUSTED.includes(c.author_association))
+  return approvalVote(comments, since);
+}
+// The latest trusted "/factory approve|reject" posted after `since`. GitHub stamps comments to the whole second and F to the
+// millisecond, so only a comment from a later second counts: one in the same second may predate the spec it would approve.
+// Compared as times, never strings ("…:00Z" sorts after "…:00.900Z"). An unparsable created_at never counts.
+export function approvalVote(comments: GhComment[], since: string) {
+  const from = Math.floor(Date.parse(since) / 1000) * 1000 + 1000;
+  const vote = comments.filter((c) => Date.parse(c.created_at) >= from && TRUSTED.includes(c.author_association))
     .map((c) => ({ by: c.user.login, m: /^\s*\/factory\s+(approve|reject)\b/i.exec(c.body || '') })).filter((x) => x.m).pop();
   return vote ? { decision: ((vote.m as RegExpExecArray)[1] as string).toLowerCase(), by: vote.by } : { decision: 'waiting' }; // filtered on m; group 1 always matches
 }
