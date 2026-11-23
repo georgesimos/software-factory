@@ -203,9 +203,11 @@ export function residueTest() {
     note: 'X1x/X1x#3: build passed; see packages/build/x and src/app; npm run build' }], projects: ['X1x/X1x'] };
   assert.deepEqual(check(ok, me('build', { 'X1x/X1x': { path: '/srv/clones/xx' } })), []);
   assert.deepEqual(residue(JSON.stringify(ok), raw, me('app')), []);
+  assert.deepEqual(check({ note: 'uses ＠app/ui and @app/ui; step app:1' }, me('app')), []); // a scoped package and a step label, not the host
   for (const [note, what, m] of [
     ['C:\\work\\X1x\\proj', /login/], ['under /mnt/X1x/app', /login/], ['http://localhost:3000/home/X1x/proj', /home, clone or worktree/],
     ['at /srv/clones/xx/src', /home, clone or worktree/, me('build', { 'X1x/X1x': { path: '/srv/clones/xx' } })], ['cd /srv/wt/x3', /worktree/], ['cwd /srv/s/1', /worktree/],
+    ['PR https://github.com/acme/app/pull/2\nhttp://localhost:3000/mnt/X1x/x', /login/], ['PR https://github.com/acme/app/pull/2,/mnt/X1x/x', /login/], // the GitHub exemption ends with its URL
     ['open http://build.local:5173/x', /host/], ['http://build:5173/', /host/], ['me@build', /host/], ['\\\\build\\share', /host/], ['smb://build/share', /host/],
     ['http://Georges-MacBook-Pro.local:5173/x', /host/, me('Georges-MacBook-Pro.local')], ['ran on Georges-MacBook-Pro.local', /host/, me('Georges-MacBook-Pro.local')],
   ]) assert.match(check({ note }, m).join(), what, note);

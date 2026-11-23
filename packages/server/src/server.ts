@@ -230,7 +230,7 @@ const scrub = (v) => typeof v === 'string' ? v.replace(LOCAL_PATH, '[local path]
 // The backstop: what identifies this machine must not be in the page at all, URLs included (http://host.local:5173,
 // http://localhost:3000/Users/bob). Two exceptions keep it from refusing every page: the login counts only as a path
 // segment outside GitHub URLs and owner/repo ids (the owner, and a profile repo login/login, is often the login), and a
-// short host name counts only as a host (host.local, @host, host:port, \\host, //host), since "build" or "app" is prose.
+// short host name counts only as a host (host.local, user@host, \\host, //host[:port]), since "build" or "app" is prose.
 const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const machine = () => ({ user: os.userInfo().username, host: os.hostname(), home: os.homedir(), projects: projects() });
 export function residue(json, raw, me = machine()) {
@@ -238,12 +238,12 @@ export function residue(json, raw, me = machine()) {
   const paths = [me.home, ...Object.values(me.projects).map((p) => p?.path), ...runs.flatMap((r) => [r.worktree, ...(r.sessions || []).map((s) => s.cwd)])];
   if (paths.some((p) => typeof p === 'string' && p.length > 3 && json.includes(jsonOf(p)))) left.push('a home, clone or worktree path');
   const ids = new Set([...Object.keys(me.projects), ...runs.map((r) => String(r.id).split(/[#:]/)[0])]);
-  let text = json.replace(/(?:https?:\/\/)?(?:www\.)?github\.com[/:][^\s"]*/gi, '');
+  let text = json.replace(/(?:https?:\/\/)?(?:www\.)?github\.com[/:][^\s"\\,]*/gi, ''); // JSON text: \n is two characters, so stop at '\' too
   for (const id of ids) text = text.replace(new RegExp(String.raw`(?<![\w.\/\\-])${esc(id)}(?![\w.-])`, 'g'), '');
   if (me.user.length >= 3 && new RegExp(String.raw`(?:\\\\|\/)${esc(me.user)}(?![\w.-])`, 'i').test(text)) left.push('the login name in a path');
   const short = me.host.split('.')[0], hosts = [];
   if (me.host.includes('.') && me.host.length >= 3) hosts.push(String.raw`(?<![\w-])${esc(me.host)}(?![\w-])`);
-  if (short.length >= 3) hosts.push(String.raw`(?<![\w-])${esc(short)}(?=\.local\b|:\d)`, String.raw`(?:[@＠]|\\\\\\\\|\/\/)${esc(short)}(?![\w.-])`);
+  if (short.length >= 3) hosts.push(String.raw`(?<![\w-])${esc(short)}(?=\.local\b)`, String.raw`(?:(?<=[\w.-])[@＠]|\\\\\\\\|\/\/)${esc(short)}(?![\w.-])`); // user@host, not @scope/pkg
   if (hosts.length && new RegExp(hosts.join('|'), 'i').test(json)) left.push('the host name');
   return left;
 }
