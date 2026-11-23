@@ -187,10 +187,14 @@ test('cliDir: the candidate first in PATH order wins; ~ means home; relative ent
 test('Windows: on-PATH is judged from the registry Path a new cmd.exe or PowerShell gets, not Git Bash\'s PATH with ~/bin', () => {
   const reg = { 'HKCU\\Environment': 'HKEY_CURRENT_USER\\Environment\r\n    Path    REG_EXPAND_SZ    %USERPROFILE%\\AppData\\Local\\Microsoft\\WindowsApps;%NOPE%\\x\r\n\r\n',
     'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment': '\r\n    Path    REG_SZ    C:\\Windows\\system32;C:\\Program Files\\Git\\cmd\r\n' };
-  const env = { USERPROFILE: 'C:\\Users\\J', PATH: '/c/Users/J/bin:/mingw64/bin:/usr/bin' }; // what Git Bash shows
-  const winPath = windowsPath(env, (k) => reg[k]);
+  const env = { USERPROFILE: 'C:\\Users\\J', SystemRoot: 'D:\\WIN', PATH: '/c/Users/J/bin:/mingw64/bin:/usr/bin' }; // what Git Bash shows
+  const spawned = [];
+  const winPath = windowsPath(env, (file, args) => { spawned.push(file); assert.deepEqual([args[0], args[2], args[3]], ['query', '/v', 'Path']); return reg[args[1]]; });
+  assert.deepEqual(spawned, ['D:\\WIN\\System32\\reg.exe', 'D:\\WIN\\System32\\reg.exe']); // never a bare "reg", which could resolve from the current folder
+  windowsPath({}, (file) => { spawned.push(file); return ''; });
+  assert.equal(spawned.at(-1), 'C:\\Windows\\System32\\reg.exe');
   assert.equal(winPath, 'C:\\Users\\J\\AppData\\Local\\Microsoft\\WindowsApps;%NOPE%\\x;C:\\Windows\\system32;C:\\Program Files\\Git\\cmd');
   assert.deepEqual(cliDir('C:\\Users\\J', winPath, 'win32'), { dir: 'C:\\Users\\J\\.local\\bin', onPath: false }); // so the PowerShell line is printed
   assert.equal(windowsPath(env, () => { throw new Error('no reg'); }), ';'); // no registry: nothing counts as on Path
-  assert.deepEqual(cliDir('C:\\Users\\J', windowsPath(env, (k) => k.startsWith('HKCU') ? '    Path    REG_SZ    C:\\Users\\J\\.local\\bin\r\n' : ''), 'win32'), { dir: 'C:\\Users\\J\\.local\\bin', onPath: true });
+  assert.deepEqual(cliDir('C:\\Users\\J', windowsPath(env, (f, [, k]) => k.startsWith('HKCU') ? '    Path    REG_SZ    C:\\Users\\J\\.local\\bin\r\n' : ''), 'win32'), { dir: 'C:\\Users\\J\\.local\\bin', onPath: true });
 });

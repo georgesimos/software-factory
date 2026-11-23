@@ -115,8 +115,10 @@ export function cliShims(entry: string, platform: NodeJS.Platform = process.plat
 
 // The Path a new cmd.exe or PowerShell starts with: the registry user and machine values, with %VARS% expanded. Not this
 // process's PATH: Git Bash, where Claude Code runs F on Windows, adds ~/bin and other folders Windows itself never sees.
-export function windowsPath(env: Env = process.env, query = (key: string) => execFileSync('reg', ['query', key, '/v', 'Path'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })) {
-  const read = (key: string) => { try { return /^\s*Path\s+REG_(?:EXPAND_)?SZ\s+(.*)$/im.exec(query(key))?.[1].trim() ?? ''; } catch { return ''; } };
+// reg.exe by full path: a bare 'reg' may resolve from the current folder first, and F can run inside an untrusted clone.
+export function windowsPath(env: Env = process.env, run: (file: string, args: string[], o: object) => string = execFileSync as never) {
+  const reg = path.win32.join(envGet(env, 'SYSTEMROOT') || 'C:\\Windows', 'System32', 'reg.exe');
+  const read = (key: string) => { try { return /^\s*Path\s+REG_(?:EXPAND_)?SZ\s+(.*)$/im.exec(run(reg, ['query', key, '/v', 'Path'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))?.[1].trim() ?? ''; } catch { return ''; } };
   return [read('HKCU\\Environment'), read('HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment')].join(';')
     .replace(/%([^%;]+)%/g, (m, v) => envGet(env, v) ?? m);
 }
