@@ -15,13 +15,32 @@ import { stateDir } from './log.ts';
 // when asked for, never in page(), which runs on every record().
 // The command for this copy of F: the short ~ form when ~/.claude/skills/software-factory links here, else this file's real
 // path (a plugin install lives in Claude Code's plugin cache). cmd.exe and PowerShell don't expand ~, so Windows always gets the real path.
-export function fCmd(platform = process.platform, home = os.homedir(), entry = path.join(import.meta.dirname, '..', '..', 'factory', 'factory.mjs')) {
+// No bundled copy and no linked skill: a plugin-only install (#91), found through Claude Code's plugin registry.
+export function fCmd(platform = process.platform, home = os.homedir(), entry = path.join(import.meta.dirname, '..', '..', 'factory', 'factory.mjs'), env = process.env) {
   const linked = path.join(home, '.claude', 'skills', 'software-factory', 'factory.mjs');
   let here = entry, viaLink = false;
   try { here = fs.realpathSync(entry); viaLink = fs.realpathSync(linked) === here; } catch { viaLink = !fs.existsSync(entry) && fs.existsSync(linked); } // the desktop build ships no factory.mjs: the installed skill's
-  if (!viaLink && !fs.existsSync(entry)) return null; // no F on this machine at all: the page says to install it (fMissing)
+  if (!viaLink && !fs.existsSync(entry)) here = pluginEntry(home, env);
+  if (!viaLink && !here) return null; // no F on this machine at all: the page says to install it (fMissing)
   if (platform === 'win32') return `node "${viaLink ? linked : here}"`;
   return viaLink ? 'node ~/.claude/skills/software-factory/factory.mjs' : `node ${shq(here)}`;
+}
+// The software-factory plugin's factory.mjs from <config>/plugins/installed_plugins.json, which Claude Code writes as
+// {"version":2,"plugins":{"<name>@<marketplace>":[{"scope","installPath","lastUpdated",…}]}}. Read as untrusted: only a string,
+// absolute installPath whose factory.mjs really resolves inside <config>/plugins counts. User scope first, then the newest.
+export function pluginEntry(home = os.homedir(), env = process.env) {
+  const dir = path.join(env.CLAUDE_CONFIG_DIR || path.join(home, '.claude'), 'plugins');
+  let reg, root;
+  try { reg = JSON.parse(fs.readFileSync(path.join(dir, 'installed_plugins.json'), 'utf8')); root = fs.realpathSync(dir); } catch { return null; }
+  const plugins = reg && typeof reg.plugins === 'object' && !Array.isArray(reg.plugins) ? reg.plugins : {};
+  const found = Object.entries(plugins).filter(([k, v]) => k.startsWith('software-factory@') && Array.isArray(v)).flatMap(([, v]) => v).map((e) => {
+    if (!e || typeof e.installPath !== 'string' || !path.isAbsolute(e.installPath)) return null;
+    let f;
+    try { f = fs.realpathSync(path.join(e.installPath, 'packages', 'factory', 'factory.mjs')); } catch { return null; }
+    const rel = path.relative(root, f);
+    return rel && rel.split(path.sep)[0] !== '..' && !path.isAbsolute(rel) ? { f, user: e.scope === 'user' ? 1 : 0, at: typeof e.lastUpdated === 'string' ? e.lastUpdated : '' } : null;
+  }).filter(Boolean).sort((a, b) => b.user - a.user || b.at.localeCompare(a.at));
+  return found[0]?.f ?? null;
 }
 export const shq = (x) => (/^[\w@%+=:,./~-]+$/.test(String(x)) ? String(x) : "'" + String(x).replace(/'/g, "'\\''") + "'");
 export const F_CMD = fCmd();
