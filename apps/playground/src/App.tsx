@@ -1,4 +1,4 @@
-import { Button, CommandMenu, Kbd, Select, type Command, type Run } from '@software-factory/design-system';
+import { Button, CommandMenu, Kbd, ThemeToggle, applyTheme, type Command, type Run, type ThemeChoice } from '@software-factory/design-system';
 import { useMemo, useState, type ReactNode } from 'react';
 import { Board } from './Board.tsx';
 import { RUNS } from './fixtures/index.ts';
@@ -8,12 +8,6 @@ import { RunDetail } from './RunDetail.tsx';
 import { Tokens } from './Tokens.tsx';
 
 const SECTIONS = [['tokens', 'Tokens'], ['basics', 'Basics'], ['factory', 'Factory'], ['onboarding', 'Onboarding'], ['board', 'Board'], ['detail', 'Run detail']] as const;
-type ThemeChoice = 'system' | 'light' | 'dark';
-
-function setTheme(t: ThemeChoice) {
-  if (t === 'system') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
-  try { localStorage.setItem('sf.theme', t); } catch { /* private mode */ }
-}
 
 const Sec = ({ id, title, lede, children }: { id: string; title: string; lede: string; children: ReactNode }) => (
   <section id={id} className="pg-section" aria-labelledby={`${id}-h`}>
@@ -22,10 +16,10 @@ const Sec = ({ id, title, lede, children }: { id: string; title: string; lede: s
 );
 
 export function App() {
-  const [theme, setThemeState] = useState<ThemeChoice>((document.documentElement.dataset.theme as ThemeChoice) || 'system');
+  const [themeKey, setThemeKey] = useState(0); // remount the toggle when ⌘K changes the theme
   const [menu, setMenu] = useState(false);
   const [selected, setSelected] = useState<Run | null>(null);
-  const pick = (t: ThemeChoice) => { setTheme(t); setThemeState(t); };
+  const pick = (t: ThemeChoice) => { applyTheme(t); setThemeKey((k) => k + 1); };
   const commands = useMemo<Command[]>(() => [
     ...SECTIONS.map(([id, label]) => ({ id: `go-${id}`, label: `Go to ${label}`, group: 'Navigate', onRun: () => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' }) })),
     { id: 'theme-light', label: 'Use light theme', group: 'Theme', onRun: () => pick('light') },
@@ -38,13 +32,11 @@ export function App() {
   return (
     <>
       <header className="pg-top">
-        <span className="pg-brand"><span className="sf-mark" aria-hidden="true" />Design system</span>
+        <span className="pg-brand"><span className="sf-mark" aria-hidden="true" /><span className="pg-brand-text">Design system</span></span>
         <nav className="pg-nav" aria-label="Sections">{SECTIONS.map(([id, label]) => <a key={id} href={`#${id}`}>{label}</a>)}</nav>
         <div className="pg-top-end">
-          <Button size="sm" variant="secondary" onClick={() => setMenu(true)} aria-keyshortcuts="Meta+K">Search <Kbd>⌘K</Kbd></Button>
-          <Select aria-label="Theme" value={theme} onChange={(e) => pick(e.target.value as ThemeChoice)} className="pg-theme">
-            <option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option>
-          </Select>
+          <Button size="sm" variant="secondary" onClick={() => setMenu(true)} aria-keyshortcuts="Meta+K" className="pg-search">Search <Kbd>⌘K</Kbd></Button>
+          <ThemeToggle key={themeKey} />
         </div>
       </header>
       <main className="pg-main">

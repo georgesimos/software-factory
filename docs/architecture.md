@@ -33,28 +33,36 @@ software-factory/
 ├── packages/
 │   ├── factory/              @software-factory/factory: the skill. ~/.claude/skills/software-factory symlinks here
 │   │   ├── SKILL.md          orchestration: modes, ground rules, stages 0–7, attach, evals, scheduling
-│   │   ├── factory.mjs       the F CLI: event log, derive, gate/decide/merge, sync, worktrees, dashboard render, self-test
-│   │   ├── project.mjs       idea-to-app: F new, issues create, queue, loop, project (imported by factory.mjs)
-│   │   ├── registry.mjs      loads one-file-per-provider folders (hosts/, trackers/)
-│   │   ├── hosts/            repo hosts: github.mjs, _template.mjs, index.mjs (contract), README.md (recipe)
-│   │   ├── trackers/         issue trackers: github-issues.mjs, _template.mjs, index.mjs (contract), README.md
+│   │   ├── factory.mjs       the F entry (SKILL.md calls this path): checks Node, then runs packages/cli's main()
+│   │   ├── (project.mjs moved to packages/core/src/project.ts in S8)
 │   │   ├── templates/        stack templates, data only: next-web.json, expo-mobile.json, _template.json, README.md
 │   │   ├── examples/
 │   │   │   └── budget-app/   PLAN.md + issues.json for "a personal budget app", and the F new --dry-run output
 │   │   ├── dashboard.html    static dashboard template; F render injects the run data at __FACTORY_DATA__ (also the setup wizard)
-│   │   ├── harnesses/        AI harness registry (index.mjs) auto-loads every *.mjs except _*: claude-code.mjs, codex.mjs, _template.mjs
-│   │   ├── HARNESSES.md      add a harness in 4 steps
 │   │   ├── references/
 │   │   │   └── reviewers.md  per-axis reviewer briefs (code, security, ux, ui, seo, docs) and the verifier brief
 │   │   ├── evals/golden/     1.json … 8.json: intake fixtures with the expected outcome (pass / needs-info / reject / split)
-│   │   ├── test/
+│   │   ├── test/             the self-test: `F test` runs every *.test.mjs with node --test, one process per file
+│   │   │   ├── setup.mjs     every test file calls setup() first: FACTORY_TEST, a temp state dir, no outer session id
+│   │   │   ├── core.test.mjs, discover.test.mjs, usage.test.mjs, cli.test.mjs, project.test.mjs
 │   │   │   ├── gh-stub.mjs   fake `gh` used by the self-test (FACTORY_GH)
 │   │   │   ├── git-stub.mjs  fake `git branch --no-merged` used by the sync test (FACTORY_GIT)
 │   │   │   ├── bin/          fake `claude` and `codex` for the harness contract test (one stub per harness)
 │   │   │   ├── gh-project-stub.mjs  stateful fake `gh` (repos, labels, issues) for the idea-to-app test
-│   │   │   ├── project.mjs   idea-to-app self-test: commands, idempotency, queue, loop stops, adapter contracts
+│   │   │   ├── project.mjs   idea-to-app checks (run by project.test.mjs): commands, idempotency, queue, loop stops, adapter contracts
 │   │   │   └── onboard.e2e.cjs  Playwright run of the setup wizard against F ui (375/1280 px, light/dark, static file)
 │   │   └── package.json      private; `test` = env -u CLAUDE_CODE_SESSION_ID node factory.mjs test
+│   ├── core/                 @software-factory/core: the logic moving out of factory.mjs (docs/plans/split.md). Run by Node directly
+│   │   └── src/              constants, log (event log, record), derive, burn, gate (gate/decide/risk/metrics), skills, rules, review,
+│   │                         workspace, github, sync, eval, project, onboard, demo, ship (packages/ship loading, dashboard hooks)
+│   ├── cli/                  @software-factory/cli: main(argv), the F command switch and usage text
+│   ├── server/               @software-factory/server: `F ui` (uiHandle, UI_ROUTES, ui) and the dashboard renderer (page, render, runsData)
+│   ├── adapters/             @software-factory/adapters: one file per provider, loaded by name
+│   │   ├── registry.mjs      loads one-file-per-provider folders (hosts/, trackers/)
+│   │   ├── harnesses/        AI harness registry (index.mjs) auto-loads every *.mjs except _*: claude-code.mjs, codex.mjs, _template.mjs
+│   │   ├── HARNESSES.md      add a harness in 4 steps
+│   │   ├── hosts/            repo hosts: github.mjs, _template.mjs, index.mjs (contract), README.md (recipe)
+│   │   └── trackers/         issue trackers: github-issues.mjs, _template.mjs, index.mjs (contract), README.md
 │   ├── ship/                 @software-factory/ship: the ship harness (phase 0, read only). See docs/plans/ship-harness.md
 │   │   ├── ship.mjs          CLI (`F ship` is an alias): connectors | detect <repo> | status <repo> [sha]; track() records through F's record()
 │   │   ├── contract.mjs      connector contract: id, kind, detect, auth, status, tagged actions; normalized states per kind; validation
@@ -102,7 +110,7 @@ The skill never writes state itself. It runs `F` subcommands and acts on their J
 
 ### 2.2 The `F` CLI: `factory.mjs`
 
-`factory.mjs` is a single ESM file with no dependencies beyond Node built-ins. It shells out to `gh` and `git` through `execFileSync`, never through a shell. Its responsibilities:
+`factory.mjs` is a thin entry over `packages/core`, `packages/server` and `packages/cli`: TypeScript run by Node directly, with no dependencies beyond Node built-ins. It shells out to `gh` and `git` through `execFileSync`, never through a shell. Its responsibilities:
 
 | Area | Commands | Notes |
 |---|---|---|
@@ -111,12 +119,12 @@ The skill never writes state itself. It runs `F` subcommands and acts on their J
 | Spec gate | `risk`, `approval` | Untrusted authors and sensitive planned files require `/factory approve`. |
 | Build | `worktree`, `deps`, `gc` | One git worktree per run; the cheapest available way to get `node_modules`. |
 | Review | `axes`, `review` | `axes` picks the review axes from the diff (plus configured extra axes) and records the reviewed commit SHA. `review` records one reviewer's raw output; anything outside the contract becomes a failed review. |
-| Runners | `skills`, `skills set`, `skills unset`, `skills catalog`, `ui`, `headless-args` | Who does each step: the built-in brief, the user's skill or brief, or a Claude Code / Codex tool. `ui` serves the dashboard on loopback so its Skills sheet can save. `headless-args` prints the pinned `claude -p` flags for a provider runner. See [§5.1](#51-runners). |
+| Runners | `skills`, `skills set`, `skills unset`, `skills preset`, `skills catalog`, `ui`, `headless-args` | Who does each step: the built-in brief, the user's skill or brief, or a Claude Code / Codex tool. `ui` serves the dashboard on loopback so its Skills sheet can save. `skills preset <name> [scope]` applies a model preset. `headless-args` prints the pinned `claude -p` flags for a provider runner, and `--step <step>` adds that step's `--model`, `--effort` and `--fallback-model`. See [§5.1](#51-runners). |
 | Decisions | `gate`, `decide`, `merge` | Pure functions over derived state plus live GitHub facts. |
 | After merge | `postmerge`, `revert` | Watches CI on the merge commit; opens a revert PR, never merges it. |
 | Onboarding | `discover`, `sync`, `projects`, `automerge` | Finds local clones, imports open PRs and agent sessions. |
 | Rules | `rules`, `rules set`, `rules unset`, `checks` | Per-project or global policy switches and step guidance; local checks that stand in for CI. See [§5.2](#52-rules). |
-| Idea to app | `new`, `issues create`, `queue`, `loop`, `project` | In `project.mjs`. Validates the plan and issue batch Claude wrote, creates the repo and issues through the host and tracker adapters only with `--yes`, and picks the next issue in dependency order. See [§7.7](#77-start-from-an-idea). |
+| Idea to app | `new`, `issues create`, `queue`, `loop`, `project` | In `packages/core/src/project.ts`. Validates the plan and issue batch Claude wrote, creates the repo and issues through the host and tracker adapters only with `--yes`, and picks the next issue in dependency order. See [§7.7](#77-start-from-an-idea). |
 | Housekeeping | `archive`, `render`, `demo`, `test`, `eval` | `eval` runs headless `claude -p` over the golden fixtures and costs tokens. |
 
 Environment overrides:
@@ -324,7 +332,7 @@ On a loop-back, `reviewAxes()` re-reviews only the axes the new commits touch, p
 | **Split inheritance** | A child of a split records its parent's `origin` and `originAssociation`, so an untrusted parent makes the child risky and never auto-merged. | Laundering an untrusted request through child issues |
 | **Test gate** | Source changed with no test file changed: escalate. Docs-only changes pass. | Untested behaviour changes |
 | **Caps** | Loop cap 3, budget $5 or 3M tokens, diff cap 300 lines, CI-fix cap 2 (in `SKILL.md`), post-merge watch of 20 min. | Runaway loops and cost, and oversized auto-merges |
-| **Headless runs** | `F headless-args` pins `claude -p` flags: `--output-format json`, `--permission-prompts none`, `auto` mode only with `--write` (build), otherwise `manual` with a read-only allowlist, `--json-schema` for reviews, `--setting-sources user` and `--strict-mcp-config` (no repo hooks or MCP), no `--bare` (it would skip the skill being run), and `--max-budget-usd` from the run's remaining budget. It refuses imported runs and a spent budget. A missing `structured_output` is a failed review. | Unattended runs drifting with `-p` defaults, repo-supplied hooks or MCP servers running untrusted, and runaway cost |
+| **Headless runs** | `F headless-args` pins `claude -p` flags: `--output-format json`, `--permission-prompts none`, `auto` mode only with `--write` (build), otherwise `manual` with a read-only allowlist, `--json-schema` for reviews, `--setting-sources user` and `--strict-mcp-config` (no repo hooks or MCP), no `--bare` (it would skip the skill being run), `--max-budget-usd` from the run's remaining budget, and with `--step` the step's `--model`, `--effort` and `--fallback-model`. It refuses imported runs and a spent budget. A missing `structured_output` is a failed review. | Unattended runs drifting with `-p` defaults, repo-supplied hooks or MCP servers running untrusted, and runaway cost |
 | **Imported runs** | `sync` imports are tracked only: `decide()` always escalates them, and the skill never builds, pushes or merges them. | The factory taking over a human's or another agent's PR |
 | **Rules are stricter-only** | A closed set (`ci`, `checks.commands`, `diffCap`), each with a reason, the `gh` login that set it, and an optional expiry. CI that isn't required is never green: `decide()` then needs `F checks` passing on the reviewed commit, with the current command list, or it escalates. See [§5.2](#52-rules). | A rule, or the model, quietly turning CI off |
 | **Merge-exact-commit** | `--match-head-commit reviewedSha` | Merging code that was not reviewed |
@@ -348,6 +356,7 @@ Each step can be run by the built-in brief, a user skill or brief, or a harness 
 
 - **Steps:** `intake`, `spec`, `build`, `review.code|security|ux|ui|seo|docs`, `verifier`, `postmerge` and `axes.extra`. A project's step wins over `default`; extra axes from both are combined, and the project's entry wins for the same axis name.
 - **Runners:** `default`, `skill` (a name like `x` or `plugin:x`), `brief` (an absolute or `~/` `.md` path) and `provider` (`harness` is `claude-code` or `codex`). Unknown fields, unknown steps, names outside `[\w.-]` and extra axes that reuse a built-in name are refused.
+- **Models.** A Claude Code runner (`default`, `skill`, `brief`, or `provider` with `harness: claude-code`) may also set `model` (an alias from the harness's `models()`: `fable`, `opus`, `sonnet`, `haiku`), `effort` (`low|medium|high|xhigh|max`) and `fallback` (1–3 other aliases, tried in order). Codex runners can't set them. Unset fields come from the default preset `all-claude`: Fable for intake, spec, `review.code`, `review.security` and the verifier, Opus for build, Sonnet for `review.ux|ui`, Haiku for `review.seo|docs`; postmerge keeps the session's model. `F skills preset all-claude-lean [scope]` writes the cheaper set (Opus for spec, `review.security` and the verifier, Sonnet for `review.code`). A model whose `minVersion` is newer than the installed `claude` is swapped for its first usable fallback and the step is marked `modelFallback`; the run's `usage` events record the configured model next to the measured one, and the dashboard shows "Fable → Opus (fallback)" where they differ.
 - **What can't be configured.** There is no runner that turns an axis off. `code` and `security` are always selected, and extra axes only add. Runners never reach `gate`, `decide`, `merge`, the caps, `TRUSTED` or `SENSITIVE`. Only the policy rules in [§5.2](#52-rules) reach `decide`, and only to make it stricter or to swap CI for local checks.
 - **Contract.** Every reviewer's reply goes through `F review`, which requires a JSON object for the requested axis that passes `validateReview`. Anything else (prose, another axis, unknown fields, a `failed` verdict with no blocking finding) is recorded as a failed review with a high "reviewer output invalid" finding, so it loops back and, at the cap, escalates. A prose provider such as `/code-review` goes through the adapter brief in `references/reviewers.md` first.
 - **User-local only.** There is no in-repo `.factory/skills.json`. Even read from the base branch, one merged PR could change the reviewers and the verifier for every later run. Config is a per-user choice, like `automerge`. The catalog does offer a project's own `.claude/skills`. Picking one lets the repo supply that reviewer's content, and a PR that edits it touches `.claude/` (`SENSITIVE`), so that PR never auto-merges.
@@ -397,7 +406,7 @@ Each step can be run by the built-in brief, a user skill or brief, or a harness 
 
 **The setup wizard.** `F ui` opens a full-screen stepper on the dashboard (by itself when no project is attached, otherwise from **Set up**): Local AI → Repo → What you ship → Workflow → Rules → Review and start. Its state comes from `POST /onboard`, and every write goes through `/onboard/{sync,ship,rule,automerge}` or `/skills`, with the same token, Host, Origin and content-type checks and the same validated functions as the CLI (`sync`, `setShip`, `setRule`/`unsetRule`, `setAutoMerge`, `setSkill`). Its position is kept in localStorage, so it resumes. Opened as a static file, it is read-only and shows the command for each step. `F onboard` prints the same steps in the terminal; `F onboard ship <scope> web,mobile,database` stores the ship choice in `onboard.json`.
 
-**AI harnesses are pluggable.** The core never names a harness for behaviour: runner validation, the catalog's provider tools, session import, the event's `harness`/`sessionId` stamp, extra sensitive config folders and the pinned `F headless-args` flags (from the `host` harness, `claude-code.mjs`) all come from `harnesses/*.mjs` (contract and recipe: `packages/factory/HARNESSES.md`). `models()` is reserved in the contract for per-step model selection. The wizard's ship step lists `packages/ship`'s connectors from its own registry; "Create from an idea" turns on once `F new` exists and records the idea through `POST /idea`.
+**AI harnesses are pluggable.** The core never names a harness for behaviour: runner validation, the catalog's provider tools, session import, the event's `harness`/`sessionId` stamp, extra sensitive config folders and the pinned `F headless-args` flags (from the `host` harness, `claude-code.mjs`) all come from `harnesses/*.mjs` (contract and recipe: `packages/factory/HARNESSES.md`). `models()` lists the aliases a runner may set as `model` and `fallback`, with the oldest CLI version each needs (see [§5.1](#51-runners)). The wizard's ship step lists `packages/ship`'s connectors from its own registry; "Create from an idea" turns on once `F new` exists and records the idea through `POST /idea`.
 
 ```mermaid
 flowchart LR
@@ -577,7 +586,9 @@ $ F queue acme/app
 
 ```console
 $ pnpm --filter @software-factory/factory test
-ok - all checks passed (<tmp dir>)
+ℹ tests 5
+ℹ pass 5
+ℹ fail 0
 ```
 
 The self-test unsets `CLAUDE_CODE_SESSION_ID`, because some of its assertions check exactly which session ids get recorded.

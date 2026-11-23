@@ -47,7 +47,7 @@ function headlessArgs({ schema, budget, write = false, model, effort, fallback }
 export default {
   id: 'claude-code',
   label: 'Claude Code',
-  install: 'curl -fsSL https://claude.ai/install.sh | bash',
+  install: process.platform === 'win32' ? 'irm https://claude.ai/install.ps1 | iex' : 'curl -fsSL https://claude.ai/install.sh | bash',
   configDirs: ['.claude'],
   host: true, // runs the factory skill itself, so plugin agents found next to its skills run on it
   detect() {

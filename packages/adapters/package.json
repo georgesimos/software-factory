@@ -1,0 +1,14 @@
+{
+  "name": "@software-factory/adapters",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "One file per provider: AI harnesses, repo hosts, issue trackers. Loaded by name from their folders.",
+  "type": "module",
+  "engines": { "node": ">=24.12" },
+  "exports": {
+    "./harnesses": "./harnesses/index.mjs",
+    "./hosts": "./hosts/index.mjs",
+    "./trackers": "./trackers/index.mjs"
+  }
+}

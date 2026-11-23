@@ -1,0 +1,11 @@
+.sf-sessions { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--sf-space-1-5); }
+.sf-session {
+  display: flex; align-items: center; gap: var(--sf-space-2-5); min-width: 0; min-height: 40px; padding: var(--sf-space-1) var(--sf-space-1) var(--sf-space-1) var(--sf-space-3);
+  border: 1px solid var(--sf-color-line); border-radius: var(--sf-radius-md); font-size: var(--sf-text-md);
+}
+.sf-session-agent { display: inline-flex; align-items: center; gap: var(--sf-space-1-5); flex: none; font-weight: var(--sf-weight-medium); }
+.sf-session-agent i { font-style: normal; font-size: 8px; color: var(--sf-color-ink-3); }
+.sf-session-id { flex: none; font: var(--sf-text-sm) var(--sf-font-mono); color: var(--sf-color-ink-2); }
+.sf-session-where { flex: 1; min-width: 0; font: var(--sf-text-sm) var(--sf-font-mono); color: var(--sf-color-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-session .sf-tooltip-anchor { margin-left: auto; flex: none; }
+.sf-session-cmd { font: var(--sf-text-sm) / 1.5 var(--sf-font-mono); overflow-wrap: anywhere; user-select: all; }

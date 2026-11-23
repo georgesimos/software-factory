@@ -1011,7 +1011,7 @@ async function copyText(text) {
 }
 // claude-cli://open: a new Claude Code terminal in the run's worktree (else the latest session's cwd), prompt pre-filled, not sent.
 // The handler refuses relative paths, "..", network paths and control/bidi characters; refuse them here too.
-const deepCwd = (p) => typeof p === 'string' && /^\/(?!\/)/.test(p) && !p.includes('..') && !/[\p{Cc}\p{Cf}]/u.test(p);
+const deepCwd = (p) => typeof p === 'string' && /^(\/(?!\/)|[A-Za-z]:\\)/.test(p) && !p.includes('..') && !/[\p{Cc}\p{Cf}]/u.test(p);
 function openInClaude(r) {
   const cwd = [r.worktree, ...r.sessions.map((s) => s.cwd)].find(deepCwd);
   if (!cwd || !/^[\w.-]+\/[\w.-]+(#\d+|:[\w.\/-]+)$/.test(r.id)) return null; // owner/repo#N or an import's owner/repo:branch; it goes into a prompt that runs F
@@ -1350,21 +1350,26 @@ function fillSkills(d, msg) {
       modelCell(step, r, label),
       el('td', { class: 'sk-act' }, change, reset));
   };
-  // Model per Claude-run step (the resolved plan has one): pick an alias, or the default to drop this scope's override.
+  // Model per Claude-run step (the resolved plan has one). The empty choice inherits: the global model in a project that
+  // doesn't set this step, else the preset's. Choosing a model resets fallback to that model's chain; inheriting drops effort too.
   const modelCell = (step, r, label) => {
     if (!r.model) return el('td', { class: 'sk-model' });
-    const own = obj(mine[step] || (scope === 'default' ? null : glob[step]) || { use: 'default' }), set = typeof own.model === 'string' ? own.model : '';
+    const here = step in mine, own = obj(mine[step]), set = here && typeof own.model === 'string' ? own.model : '';
+    const { model: _a, effort: _b, fallback: _c, ...ownBase } = { use: 'default', ...own }, g = obj(glob[step]);
+    const unsets = !here || (Object.keys(ownBase).length === 1 && ownBase.use === 'default'); // inheriting would drop this scope's entry
+    const fromGlobal = scope !== 'default' && unsets && typeof g.model === 'string';
+    const presetModel = arr(obj(obj(S.presets)[S.preset])[step])[0] || '';
+    const inherit = fromGlobal ? 'Global (' + g.model + ')' : 'Preset' + (presetModel ? ' (' + presetModel + ')' : '');
     const sel = el('select', { class: 'sk-input', 'data-k': 'sk-model:' + step, 'aria-label': 'Model for ' + label },
-      el('option', { value: '' }, set ? 'Default' : 'Default (' + r.model + ')'),
-      arr(S.models).map((m) => el('option', { value: m, selected: m === set ? '' : null }, m)));
+      el('option', { value: '' }, inherit), arr(S.models).map((m) => el('option', { value: m, selected: m === set ? '' : null }, m)));
     sel.onchange = () => {
-      const { model: _m, ...base } = own, v = sel.value;
-      if (Array.isArray(base.fallback)) { base.fallback = base.fallback.filter((m) => m !== v); if (!base.fallback.length) delete base.fallback; }
-      const next = v ? { ...base, model: v } : base;
+      const v = sel.value, src = { use: 'default', ...(here ? own : scope === 'default' ? {} : g) };
+      const { model: _m, effort, fallback: _f, ...base } = src;
+      const next = v ? { ...base, ...(effort && { effort }), model: v } : base;
       act(step, Object.keys(next).length === 1 && next.use === 'default' ? null : next, 'sk-model:' + step);
     };
-    const why = set ? (step in mine ? 'set here' : 'from global') : 'preset ' + (S.preset || '');
-    return el('td', { class: 'sk-model' }, sel, el('span', { class: 'sk-from' }, [r.effort, Array.isArray(r.fallback) && '↓ ' + r.fallback.join(', '), why].filter(Boolean).join(' · ')));
+    const why = set ? 'set here' : !here && fromGlobal ? 'from global' : 'preset ' + (S.preset || '');
+    return el('td', { class: 'sk-model' }, sel, el('span', { class: 'sk-from' }, [r.effort && r.effort + ' effort', Array.isArray(r.fallback) && 'fallback ' + r.fallback.join(' → '), why].filter(Boolean).join(' · ')));
   };
   const steps = arr(S.steps);
   const groups = [['Pipeline', steps.filter((k) => ['intake', 'spec', 'build'].includes(k))], ['Review axes', steps.filter((k) => k.startsWith('review.'))], ['After review', steps.filter((k) => ['verifier', 'postmerge'].includes(k))]];

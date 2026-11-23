@@ -7,10 +7,11 @@
 .sf-run-card[aria-current="true"] { border-color: var(--sf-color-ink); box-shadow: inset 0 0 0 0.5px var(--sf-color-ink); }
 .sf-run-card[data-tracked] { background: transparent; }
 .sf-run-card[data-tracked] .sf-rc-title { color: var(--sf-color-ink-2); font-weight: var(--sf-weight-regular); }
+.sf-rc-top, .sf-rc-title, .sf-rc-foot { display: block; }
 .sf-rc-top { display: flex; align-items: center; gap: 7px; font: var(--sf-text-xs) / 1 var(--sf-font-mono); color: var(--sf-color-ink-3); }
 .sf-rc-id { display: flex; min-width: 0; white-space: nowrap; }
-.sf-rc-repo { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.sf-rc-num { flex: none; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.sf-rc-repo { flex: none; max-width: 60%; overflow: hidden; text-overflow: ellipsis; }
+.sf-rc-num { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .sf-rc-top time { margin-left: auto; flex: none; }
 .sf-rc-title {
   margin: 7px 0 0; font: var(--sf-weight-medium) 13.5px / var(--sf-leading-snug) var(--sf-font-sans); letter-spacing: -0.005em; overflow-wrap: anywhere;
