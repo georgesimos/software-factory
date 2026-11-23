@@ -5,7 +5,12 @@ import { loadData, type FactoryData } from './data.ts';
 
 export function App({ load = loadData }: { load?: () => Promise<FactoryData> }) {
   const [state, setState] = useState<{ data?: FactoryData; error?: string }>({});
-  useEffect(() => { load().then((data) => setState({ data }), (e: Error) => setState({ error: e.message })); }, [load]);
+  useEffect(() => {
+    let ignore = false;
+    load().then((data) => { if (!ignore) setState({ data }); },
+      (e: unknown) => { if (!ignore) setState({ error: String((e as Error)?.message ?? e ?? 'Unknown error') }); });
+    return () => { ignore = true; };
+  }, [load]);
   const { data, error } = state;
   return (
     <>

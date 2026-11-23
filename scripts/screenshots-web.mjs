@@ -11,15 +11,19 @@ import { chromium } from 'playwright-core';
 const URL_ = process.env.WEB_URL || 'http://localhost:5200/';
 const OUT = path.resolve(import.meta.dirname, '../apps/web/screenshots');
 const DATA = JSON.parse(fs.readFileSync(path.resolve(import.meta.dirname, '../apps/playground/src/fixtures/demo.json'), 'utf8'));
-// shortcut: copied from scripts/screenshots.mjs (it runs on import); finds a Playwright Chromium or local Chrome, else set CHROME.
+// shortcut: adapted from scripts/screenshots.mjs (it runs on import); finds a Playwright Chromium in the macOS, Linux or
+// Windows cache, else local Chrome on macOS. Set CHROME anywhere else.
 const findChrome = () => {
   if (process.env.CHROME) return process.env.CHROME;
-  const cache = path.join(os.homedir(), 'Library/Caches/ms-playwright');
-  const builds = fs.existsSync(cache) ? fs.readdirSync(cache).filter((d) => /^chromium-\d+$/.test(d)).sort().reverse() : [];
-  for (const b of builds) for (const arch of ['chrome-mac-arm64', 'chrome-mac-x64', 'chrome-mac', 'chrome-linux']) {
-    for (const exe of ['Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing', 'Chromium.app/Contents/MacOS/Chromium', 'chrome']) {
-      const p = path.join(cache, b, arch, exe);
-      if (fs.existsSync(p)) return p;
+  const caches = [path.join(os.homedir(), 'Library/Caches/ms-playwright'), path.join(os.homedir(), '.cache/ms-playwright'),
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'ms-playwright')].filter(Boolean);
+  for (const cache of caches) {
+    const builds = fs.existsSync(cache) ? fs.readdirSync(cache).filter((d) => /^chromium-\d+$/.test(d)).sort().reverse() : [];
+    for (const b of builds) for (const arch of ['chrome-mac-arm64', 'chrome-mac-x64', 'chrome-mac', 'chrome-linux', 'chrome-linux64', 'chrome-win', 'chrome-win64']) {
+      for (const exe of ['Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing', 'Chromium.app/Contents/MacOS/Chromium', 'chrome', 'chrome.exe']) {
+        const p = path.join(cache, b, arch, exe);
+        if (fs.existsSync(p)) return p;
+      }
     }
   }
   return '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
@@ -39,7 +43,7 @@ for (const theme of ['light', 'dark']) {
     const tag = `${theme}-${view}`;
     page.on('console', (m) => { if (m.type() === 'error') problems.push(`${tag}: console error: ${m.text()}`); });
     page.on('pageerror', (e) => problems.push(`${tag}: page error: ${e.message}`));
-    page.on('request', (r) => { const h = new URL(r.url()).hostname; if (!['localhost', '127.0.0.1'].includes(h) && !r.url().startsWith('data:')) problems.push(`${tag}: external request ${r.url()}`); });
+    page.on('request', (r) => { const u = new URL(r.url()); if (/^https?:$/.test(u.protocol) && !['localhost', '127.0.0.1'].includes(u.hostname)) problems.push(`${tag}: external request ${r.url()}`); });
     await page.goto(`${URL_}?theme=${theme}`, { waitUntil: 'networkidle' });
     await page.waitForSelector('.web-col .sf-run-card');
     await page.evaluate(() => document.fonts.ready);

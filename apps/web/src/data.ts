@@ -22,7 +22,8 @@ const isData = (d: unknown): d is FactoryData => !!d && typeof d === 'object' &&
 export const projectsOf = (d: FactoryData) => [...new Set([...(d.projects ?? []), ...d.runs.map((r) => repoOf(r.id))])];
 
 /**
- * Injected data first (a host-set `window.__FACTORY_DATA__`, or the #data tag page() fills), then `GET /api/runs` with the
+ * Injected data first (a host-set `window.__FACTORY_DATA__`, or the #data tag in index.html; nothing fills either yet, since
+ * `F ui` still serves dashboard.html), then `GET /api/runs` with the
  * `F ui` token from `?t=`, then the playground fixture in dev. A production build never shows fixture runs.
  */
 export async function loadData(): Promise<FactoryData> {

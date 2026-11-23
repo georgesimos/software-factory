@@ -11,19 +11,24 @@ const Section = ({ title, children }: { title: string; children: ReactNode }) =>
 function Decision({ run: r }: { run: Run }) {
   const o = outcomeOf(r);
   const last = (s: string) => (r.events ?? []).filter((e) => e.status === s).pop();
+  const decided = r.decision?.reasons;
   const [tone, head, reasons] =
     o === 'rejected' ? ['bad', 'Rejected at intake', [last('rejected')?.reason]]
     : o === 'needs-info' ? ['warn', 'Waiting on the reporter', last('needs-info')?.questions]
     : o === 'awaiting-approval' ? ['warn', 'Spec awaiting human approval', last('awaiting-approval')?.reasons]
-    : o === 'split' ? ['idle', `Split into ${r.children?.length ?? 'several'} runs`, []]
-    : r.decision ? [o === 'merged' ? 'ok' : 'warn', o === 'merged' ? 'Merged' : o === 'escalated' ? 'Escalated to a human' : 'Deciding', r.decision.reasons]
+    : o === 'split' ? ['idle', `Split into ${r.children?.length || 'several'} runs`, []]
+    : o === 'merged' ? ['ok', 'Merged', decided]
+    : o === 'escalated' ? ['warn', 'Escalated to a human', decided]
+    : o === 'closed' ? ['idle', 'Closed', decided]
     : r.imported ? ['idle', 'Tracked, not driven', ['The factory will not build or merge it.']]
+    : r.decision ? ['warn', 'Deciding', decided]
     : [null, 'No decision yet', []];
   if (!tone) return <p className="sf-muted">{head}.</p>;
+  const list = (reasons ?? []).filter(Boolean);
   return (
     <>
       <div className="web-verdict"><Dot tone={tone as 'ok'} />{head}</div>
-      {reasons?.filter(Boolean).length ? <ul className="web-reasons">{reasons.filter(Boolean).map((x) => <li key={x}>{x}</li>)}</ul> : null}
+      {list.length ? <ul className="web-reasons">{list.map((x, i) => <li key={i}>{x}</li>)}</ul> : null}
       {r.reverted ? <div className="web-callout"><b>Reverted</b> · {r.reverted.reason}</div> : null}
     </>
   );

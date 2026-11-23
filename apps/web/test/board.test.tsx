@@ -27,4 +27,9 @@ describe('Board', () => {
     expect(await screen.findByText('GET /api/runs answered 403.')).toBeTruthy();
     expect(screen.queryByRole('region', { name: /^Done/ })).toBeNull();
   });
+
+  it('shows a non-Error rejection instead of loading forever', async () => {
+    render(<App load={() => Promise.reject('offline')} />);
+    expect(await screen.findByText('offline')).toBeTruthy();
+  });
 });

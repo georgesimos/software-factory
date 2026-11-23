@@ -2,7 +2,7 @@ import {
   EmptyState, MetricStat, MetricStrip, RunCard, STAGES, Sheet, Tabs, formatDuration, formatMoney, formatPercent,
   isDone, repoOf, stageOf, type Run,
 } from '@software-factory/design-system';
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { CAP, COST_CAP, projectsOf, type FactoryData } from './data.ts';
 import { RunDetail } from './RunDetail.tsx';
 
@@ -31,11 +31,11 @@ export function Board({ data }: { data: FactoryData }) {
                 <MetricStat label="Avg iterations" value={M.avgIterations != null ? M.avgIterations.toFixed(1) : null} sub={`cap ${maxIter}`} />
                 <MetricStat label="Median cycle" value={cyc?.[0] ?? null} unit={cyc?.[1]} sub="first event → decision" />
                 <MetricStat label="Revert rate" value={rev?.[0] ?? null} unit={rev?.[1]} sub={`${M.reverts ?? 0} reverted`} />
-                <MetricStat label="Spend" prefix="$" value={M.costUsd ? M.costUsd.toFixed(2) : null} sub={M.costPerMergeUsd ? `${formatMoney(M.costPerMergeUsd)} per merge` : `cap ${formatMoney(costCap)} / run`} />
+                <MetricStat label="Spend" prefix="$" value={M.costUsd != null ? M.costUsd.toFixed(2) : null} sub={M.costPerMergeUsd != null ? `${formatMoney(M.costPerMergeUsd)} per merge` : `cap ${formatMoney(costCap)} / run`} />
               </MetricStrip>
             ) : null}
             <div className="web-board-wrap">
-              <div className="web-board">
+              <div className="web-board" style={{ '--cols': cols.length } as CSSProperties}>
                 {cols.map((c) => (
                   <section key={c.key} className="web-col" aria-label={`${c.name}, ${c.list.length} runs`}>
                     <div className="web-col-h">{c.idx ? <span className="web-idx">{c.idx}</span> : null}<h3 className="sf-label">{c.name}</h3><span className="web-count">{c.list.length}</span></div>
