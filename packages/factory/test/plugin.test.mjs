@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { fCmd } from '../../core/src/onboard.ts';
+import { claudeDir, fCmd, fFound, pluginEntry } from '../../core/src/onboard.ts';
 
 const ROOT = path.join(import.meta.dirname, '..', '..', '..');
 const json = (f) => JSON.parse(fs.readFileSync(path.join(ROOT, f), 'utf8'));
@@ -56,4 +56,71 @@ test('F runs from a copy of the tracked files, the way Claude Code copies a plug
   assert.match(ev.stderr, /dashboard not updated: .*no data tag/);
   assert.equal(fs.readFileSync(path.join(env.FACTORY_DIR, 'events.jsonl'), 'utf8').split('\n').filter((l) => l.includes('acme/app#7')).length, 1);
   assert.notEqual(F(['render']).status, 0);
+});
+
+test('fCmd finds a plugin-only install through installed_plugins.json, and the linked skill still wins over it (#91)', (t) => {
+  const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'factory-plugin-only-'))), home = path.join(d, 'home');
+  t.after(() => fs.rmSync(d, { recursive: true, force: true }));
+  const gone = path.join(d, 'desktop', 'factory.mjs'); // the desktop build ships no factory.mjs
+  const plugins = path.join(home, '.claude', 'plugins');
+  const put = (installPath) => { const f = path.join(installPath, 'packages', 'factory', 'factory.mjs'); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, ''); return f; };
+  const reg = (plugins_, dir = plugins) => { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'installed_plugins.json'), typeof plugins_ === 'string' ? plugins_ : JSON.stringify({ version: 2, plugins: plugins_ })); };
+  const env = {};
+  assert.equal(fCmd('darwin', home, gone, env), null); // neither installed
+  const old = path.join(plugins, 'cache', 'software-factory', 'software-factory', 'old sha'), cur = path.join(plugins, 'cache', 'software-factory', 'software-factory', 'new sha');
+  const curF = put(cur); put(old);
+  const proj = path.join(plugins, 'cache', 'software-factory', 'software-factory', 'project sha'); put(proj);
+  reg({ 'software-factory@software-factory': [
+    { scope: 'project', projectPath: '/p', installPath: proj, lastUpdated: '2026-11-30T00:00:00Z' }, // another folder's project: never
+    { scope: 'user', installPath: old, lastUpdated: '2026-11-23T01:00:00+05:00' }, // a later string, an earlier time (20:00Z on the 22nd)
+    { scope: 'user', installPath: cur, lastUpdated: '2026-11-23T00:00:00Z' }] });
+  assert.equal(fCmd('darwin', home, gone, env), `node '${curF}'`); // quoted: the path has a space
+  assert.equal(fCmd('win32', home, gone, env), `node "${curF}"`);
+  fs.mkdirSync(path.join(home, '.claude', 'skills'), { recursive: true }); // both installed: the linked skill wins
+  const clone = path.join(d, 'clone'); put(clone);
+  fs.symlinkSync(path.join(clone, 'packages', 'factory'), path.join(home, '.claude', 'skills', 'software-factory'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.equal(fCmd('linux', home, gone, env), 'node ~/.claude/skills/software-factory/factory.mjs');
+  const cfg = path.join(d, 'cfg'); fs.mkdirSync(path.join(cfg, 'skills'), { recursive: true }); // CLAUDE_CONFIG_DIR: the linked skill is looked for there too
+  fs.symlinkSync(path.join(clone, 'packages', 'factory'), path.join(cfg, 'skills', 'software-factory'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.equal(fCmd('linux', home, gone, { CLAUDE_CONFIG_DIR: cfg }), `node ${path.join(cfg, 'skills', 'software-factory', 'factory.mjs')}`);
+  assert.equal(fCmd('linux', path.join(d, 'nohome'), gone, { CLAUDE_CONFIG_DIR: cfg }), `node ${path.join(cfg, 'skills', 'software-factory', 'factory.mjs')}`);
+});
+
+test('pluginEntry treats installed_plugins.json as untrusted: only a software-factory installPath inside <config>/plugins counts', (t) => {
+  const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'factory-plugin-reg-'))), home = path.join(d, 'home'), plugins = path.join(home, '.claude', 'plugins');
+  t.after(() => fs.rmSync(d, { recursive: true, force: true }));
+  const put = (installPath) => { const f = path.join(installPath, 'packages', 'factory', 'factory.mjs'); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, ''); return f; };
+  const reg = (x, dir = plugins) => { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'installed_plugins.json'), typeof x === 'string' ? x : JSON.stringify({ version: 2, plugins: x })); };
+  const outside = path.join(d, 'evil'); put(outside);
+  const inside = path.join(plugins, 'cache', 'm', 'software-factory', 'v'); const insideF = put(inside);
+  const sneaky = path.join(plugins, 'cache', 'link'); fs.symlinkSync(outside, sneaky, process.platform === 'win32' ? 'junction' : 'dir');
+  for (const bad of ['{not json', '[]', { 'software-factory@m': 'x' }, { 'software-factory@m': [null, 7, { scope: 'user', installPath: 5 }, { scope: 'user', installPath: 'cache/m/software-factory/v' }, { scope: 'local', installPath: inside }] },
+    { 'software-factory@m': [{ scope: 'user', installPath: outside }] }, { 'software-factory@m': [{ scope: 'user', installPath: sneaky }] }, { 'other@m': [{ scope: 'user', installPath: inside }] },
+    { 'software-factory@m': [{ scope: 'user', installPath: path.join(plugins, 'cache', 'missing') }] }]) {
+    reg(bad);
+    assert.equal(pluginEntry(home, {}), null, JSON.stringify(bad));
+  }
+  reg({ 'software-factory@m': [{ scope: 'user', installPath: outside }, { scope: 'user', installPath: inside }] });
+  assert.equal(pluginEntry(home, {}), insideF);
+  for (const lastUpdated of [{ toString: 1 }, 5, null, ['2026']]) { // Date.parse({toString:1}) throws: not a string counts as oldest, never a throw
+    reg({ 'software-factory@m': [{ scope: 'user', installPath: inside, lastUpdated }] });
+    assert.equal(pluginEntry(home, {}), insideF, JSON.stringify(lastUpdated));
+    assert.equal(fFound('darwin', home, path.join(d, 'gone.mjs'), {})?.via, 'plugin');
+  }
+  const cfg = path.join(d, 'cfg'), cfgF = put(path.join(cfg, 'plugins', 'c', 'sf'));
+  reg({ 'software-factory@m': [{ scope: 'user', installPath: path.join(cfg, 'plugins', 'c', 'sf') }] }, path.join(cfg, 'plugins'));
+  assert.equal(pluginEntry(home, { CLAUDE_CONFIG_DIR: cfg }), cfgF); // Claude Code's config dir, when set
+});
+
+test('install-skill links into CLAUDE_CONFIG_DIR when set, where fCmd looks; a relative one resolves from the current folder', (t) => {
+  const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'factory-cfgdir-'))), cfg = path.join(d, 'cfg');
+  t.after(() => fs.rmSync(d, { recursive: true, force: true }));
+  assert.equal(claudeDir('/h', {}), path.join('/h', '.claude'));
+  assert.equal(claudeDir('/h', { CLAUDE_CONFIG_DIR: 'rel' }), path.resolve('rel'));
+  const entry = path.join(ROOT, 'packages', 'factory', 'factory.mjs');
+  const r = spawnSync(process.execPath, [entry, 'install-skill'], { encoding: 'utf8', cwd: d, env: { ...process.env, CLAUDE_CONFIG_DIR: 'cfg', FACTORY_DIR: path.join(d, 'state') } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(fs.realpathSync(path.join(cfg, 'skills', 'software-factory')), fs.realpathSync(path.dirname(entry)));
+  assert.deepEqual(fFound('linux', path.join(d, 'nohome'), entry, { CLAUDE_CONFIG_DIR: cfg }), { cmd: `node ${path.join(cfg, 'skills', 'software-factory', 'factory.mjs')}`, via: 'skill' });
+  assert.equal(fFound('linux', path.join(d, 'nohome'), entry, {})?.via, 'self'); // not linked: this file
 });

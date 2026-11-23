@@ -30,3 +30,10 @@
   .web-mx-filters label { flex: 1 1 140px; }
   .web-mx-filters .sf-select { min-width: 0; width: 100%; }
 }
+
+/* Phones: the header has no room for it, so it moves under the header, as Sessions does. */
+.sf-btn.web-mx-alt { display: none; }
+@media (max-width: 420px) {
+  .sf-btn.web-mx-top { display: none; }
+  .sf-btn.web-mx-alt { display: flex; width: 100%; justify-content: center; margin-bottom: var(--sf-space-4); }
+}

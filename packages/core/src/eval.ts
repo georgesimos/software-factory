@@ -16,11 +16,11 @@ export function evals(only) {
   const dir = path.join(import.meta.dirname, '..', '..', 'factory', 'evals', 'golden');
   const ids = ls(dir).filter((f) => f.endsWith('.json')).map((f) => f.slice(0, -5)).filter((n) => !only || n === only).sort((a, b) => a - b);
   const results = [];
+  if (ids.length) evalCommand(`eval/golden#${ids[0]}`); // no usable claude: throw now, before any temp dir (every run has the same shape)
   for (const n of ids) {
     const fx = JSON.parse(fs.readFileSync(path.join(dir, `${n}.json`), 'utf8'));
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-eval-'));
     const run = `eval/golden#${n}`;
-    evalCommand(run);
     try {
       exec('claude', evalArgs(run),
         { env: { ...process.env, FACTORY_DIR: tmp, FACTORY_FIXTURES: dir }, stdio: 'ignore', timeout: 600_000 });

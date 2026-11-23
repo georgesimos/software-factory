@@ -2,7 +2,8 @@
 // Launches the built Electron app on `F demo` data: the window shows the board and a run's sessions from the in-process
 // server, the page has no Node, nothing off-origin loads, opens or navigates, and closing the window stops the server.
 // A temp FACTORY_DIR, a fake HOME and the factory's stub gh, git, claude and codex keep it off real repos and ~/.claude.
-// Never clicks Resume: that would spawn a harness. Run: pnpm --filter @software-factory/desktop e2e [screenshot dir]
+// Never clicks Resume: that would spawn a harness. Run: pnpm --filter @software-factory/desktop e2e [screenshot dir];
+// DESKTOP_EXE=<packaged binary> runs it against a packaged build instead (CI does, on Linux under Xvfb).
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -22,10 +23,16 @@ const env = { ...process.env, FACTORY_DIR: path.join(root, 'factory'), FACTORY_T
 delete env.CLAUDE_CODE_SESSION_ID;
 delete env.ELECTRON_RUN_AS_NODE;
 execFileSync(process.execPath, [path.join(FACTORY, 'factory.mjs'), 'demo'], { env, stdio: 'ignore' });
+const clone = path.join(HOME, 'shop'); // attached, for a terminal session (#58): the stub claude runs in it
+fs.mkdirSync(clone);
+const pj = path.join(env.FACTORY_DIR, 'projects.json');
+fs.writeFileSync(pj, JSON.stringify({ ...(fs.existsSync(pj) ? JSON.parse(fs.readFileSync(pj, 'utf8')) : {}), 'acme/shop': { path: clone } }));
 
-const app = await _electron.launch({ args: [APP], cwd: APP, env });
+const EXE = process.env.DESKTOP_EXE; // a packaged build's binary (scripts/smoke.mjs prints where), else the dev build
+const ARGS = EXE ? [] : [APP];
+const app = await _electron.launch({ ...(EXE && { executablePath: EXE }), args: ARGS, cwd: APP, env });
 const errors = [];
-let origin;
+let origin, leftPid = 0;
 try {
   const win = await app.firstWindow();
   win.on('pageerror', (e) => errors.push(e.message));
@@ -51,6 +58,32 @@ try {
   await panel.getByRole('heading', { name: 'Sessions' }).waitFor();
   await win.screenshot({ path: path.join(SHOTS, 'desktop-run.png') });
   assert.deepEqual(blocked, [], 'the app itself breaks no CSP rule');
+  // A terminal session in a real pty (#58): the stub claude's prompt in xterm.js, a typed line echoed back, Stop.
+  await win.getByRole('button', { name: 'Sessions' }).click();
+  const live = win.getByRole('dialog', { name: 'Sessions' });
+  await live.getByRole('combobox', { name: 'Repo' }).selectOption('acme/shop');
+  await live.getByRole('button', { name: 'New terminal' }).click();
+  const screenText = live.locator('.xterm-rows');
+  // The banner's pid, once a terminal other than `not` shows it: the pane switches sessions after the start returns.
+  const pidOn = async (not) => {
+    for (let i = 0; i < 150; i++) {
+      const m = ((await screenText.textContent()) ?? '').match(/stub\s+terminal\s+pid\s+(\d+)/); // xterm may draw spaces as U+00A0
+      if (m && Number(m[1]) !== not) return Number(m[1]);
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    throw new Error('no terminal banner');
+  };
+  const firstPid = await pidOn(0);
+  await win.keyboard.type('hello');
+  await win.keyboard.press('Enter');
+  await screenText.getByText('you said: hello').waitFor();
+  await win.screenshot({ path: path.join(SHOTS, 'desktop-terminal.png') });
+  await live.getByRole('listitem').filter({ hasText: 'acme/shop' }).first().getByRole('button', { name: 'Stop' }).click();
+  await live.getByText(/exited stopped/).first().waitFor();
+  await live.getByRole('button', { name: 'New terminal' }).click(); // left running: quitting must stop it
+  leftPid = await pidOn(firstPid);
+  await live.getByRole('button', { name: 'Close' }).first().click(); // the sheet's own close: Escape would go to xterm
+  await live.waitFor({ state: 'hidden' });
 
   // No Node in the page, nothing from another origin, no new windows, no navigation away.
   assert.deepEqual(await win.evaluate(() => [typeof window.process, typeof window.require, typeof window.module]), ['undefined', 'undefined', 'undefined']);
@@ -73,7 +106,7 @@ try {
   assert.equal(await win.evaluate(() => navigator.clipboard.writeText('software-factory e2e').then(() => 'ok', (e) => e.name)), 'ok');
   assert.equal(await win.evaluate(() => navigator.mediaDevices?.getUserMedia({ audio: true }).then(() => 'ok', (e) => e.name) ?? 'none'), 'NotAllowedError');
   // A second launch on the same profile hands over to this one and exits: one server per FACTORY_DIR.
-  const second = spawn(app.process().spawnfile, [APP], { cwd: APP, env, stdio: 'ignore' });
+  const second = spawn(app.process().spawnfile, ARGS, { cwd: APP, env, stdio: 'ignore' });
   const code = await Promise.race([new Promise((r) => second.on('exit', r)), new Promise((r) => setTimeout(() => r('still running'), 20_000))]);
   if (code === 'still running') second.kill();
   assert.equal(code, 0, 'the second instance quits');
@@ -84,4 +117,8 @@ try {
 }
 // Closing the window quit the app, and the server with it.
 assert.equal(await fetch(`${origin}/`).then(() => 'up', () => 'down'), 'down');
+// And the terminal left running went with it: that stub's own pid, given a moment to go.
+const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
+for (let i = 0; i < 50 && alive(leftPid); i++) await new Promise((r) => setTimeout(r, 100));
+assert.ok(leftPid > 0 && !alive(leftPid), `the stub claude (pid ${leftPid}) outlives the app`);
 console.log(`desktop e2e: ok (${SHOTS})`);

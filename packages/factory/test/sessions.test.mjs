@@ -9,11 +9,11 @@ import { setup } from './setup.mjs';
 import { COST_CAP, TOKEN_CAP } from '../../core/src/constants.ts';
 import { HERE } from '../factory.mjs';
 import { archive, record } from '../../core/src/log.ts';
-import { projects, saveProject } from '../../core/src/workspace.ts';
+import { projects, saveProject, wtFile } from '../../core/src/workspace.ts';
 import { command, opener } from '../../core/src/platform.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { MAX_BYTES, killTree, listSessions, resolveSpec, startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
-import { budgetLeft, harnessReady, launchSession, resumeFor, serve, uiHandle } from '../../server/src/server.ts';
+import { budgetLeft, harnessReady, launchSession, resumable, resumeFor, serve, terminalSession, uiHandle } from '../../server/src/server.ts';
 
 setup();
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-shome-'));
@@ -107,24 +107,33 @@ test('a session killed by a signal ends: exit carries the signal, and stop() is 
 });
 
 test('Windows: stop() ends the whole tree with taskkill, since kill() would end only cmd.exe; never pid 0', () => {
-  const calls = [], run = (...a) => { calls.push(a.slice(0, 2)); return { on: () => {} }; }, groups = [], kill = (pid, sig) => { groups.push([pid, sig]); };
-  let killed = 0; const child = { pid: 4242, kill: () => { killed++; } };
-  killTree(child, 'win32', run, kill);
-  assert.deepEqual([calls, killed], [[['taskkill', ['/pid', '4242', '/T', '/F']]], 0]);
-  killTree(child, 'darwin', run, kill);
-  assert.deepEqual(groups, [[-4242, 'SIGTERM']], 'POSIX: the whole process group');
-  killTree(child, 'linux', run, () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
-  killTree({ pid: 0, kill: () => { killed += 10; } }, 'darwin', run, kill); killTree({ pid: 0 }, 'win32', run, kill);
-  assert.deepEqual([calls.length, groups.length, killed], [1, 1, 1], 'never pid 0; the child alone when its group is gone');
-  const waited = []; // quit: spawnSync's shape (no .on), bounded so quit can't hang
-  killTree(child, 'win32', (...a) => { waited.push(a); return { status: 0 }; }, kill, true);
-  assert.deepEqual(waited, [['taskkill', ['/pid', '4242', '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5000 }]]);
+  const root = process.env.SystemRoot; // pinned: real Windows has its own (often C:\\WINDOWS)
+  const pin = (v) => { if (v === undefined) delete process.env.SystemRoot; else process.env.SystemRoot = v; };
+  try {
+    pin('C:\\Windows');
+    const calls = [], run = (...a) => { calls.push(a.slice(0, 2)); return { on: () => {} }; }, groups = [], kill = (pid, sig) => { groups.push([pid, sig]); };
+    let killed = 0; const child = { pid: 4242, kill: () => { killed++; } };
+    killTree(child, 'win32', run, kill);
+    const TK = 'C:\\Windows\\System32\\taskkill.exe'; // by full path, never a taskkill.exe in the worktree (#97)
+    assert.deepEqual([calls, killed], [[[TK, ['/pid', '4242', '/T', '/F']]], 0]);
+    killTree(child, 'darwin', run, kill);
+    assert.deepEqual(groups, [[-4242, 'SIGTERM']], 'POSIX: the whole process group');
+    killTree(child, 'linux', run, () => { throw Object.assign(new Error('gone'), { code: 'ESRCH' }); });
+    killTree({ pid: 0, kill: () => { killed += 10; } }, 'darwin', run, kill); killTree({ pid: 0 }, 'win32', run, kill);
+    assert.deepEqual([calls.length, groups.length, killed], [1, 1, 1], 'never pid 0; the child alone when its group is gone');
+    const waited = []; // quit: spawnSync's shape (no .on), bounded so quit can't hang
+    killTree(child, 'win32', (...a) => { waited.push(a); return { status: 0 }; }, kill, true);
+    assert.deepEqual(waited, [[TK, ['/pid', '4242', '/T', '/F'], { stdio: 'ignore', windowsHide: true, timeout: 5000 }]]);
+    pin('D:\\WINNT');
+    killTree(child, 'win32', run, kill);
+    assert.equal(calls.at(-1)[0], 'D:\\WINNT\\System32\\taskkill.exe', 'under %SystemRoot%');
+  } finally { pin(root); }
 });
 
 test('the command is found on the PATH and PATHEXT the session gets, not this process\'s', () => {
   const env = { PATH: 'D:\\tools', PATHEXT: '.EXE' }, resolve = { platform: 'win32', isFile: (p) => p.toLowerCase() === 'd:\\tools\\claude.exe' };
   assert.equal(resolveSpec({ cmd: 'claude', args: ['-p'] }, env, resolve).file, 'D:\\tools\\claude.exe');
-  assert.equal(resolveSpec({ cmd: 'claude', args: ['-p'] }, { PATH: 'C:\\other' }, resolve).file, 'claude', 'not found there: left for ENOENT');
+  assert.throws(() => resolveSpec({ cmd: 'claude', args: ['-p'] }, { PATH: 'C:\\other' }, resolve), { code: 'ENOENT', message: 'claude is not installed' }); // never the bare name, which Windows looks up in the current folder first
 });
 
 test('a session keeps at most MAX_BYTES of events and says what it dropped', async () => {
@@ -277,12 +286,48 @@ function fakePty(spawnError) {
   const rec = {};
   return { rec, spawn(file, args, opts) {
     if (spawnError) throw new Error(spawnError);
-    Object.assign(rec, { file, args, cwd: opts.cwd });
+    Object.assign(rec, { file, args, cwd: opts.cwd, env: opts.env });
     let data, exit;
     setTimeout(() => data('ready\r\n'), 5);
     return { onData: (f) => { data = f; }, onExit: (f) => { exit = f; }, write: (x) => { (rec.writes ||= []).push(x); data(`echo:${x}`); if (x === 'exit\r') exit({ exitCode: 0 }); }, resize: (c, r) => { rec.size = [c, r]; }, kill: () => exit({ exitCode: null }) };
   } };
 }
+test('terminalSession(): a person\'s own harness in the desktop app\'s pane, in the attached clone or the run\'s worktree', async () => {
+  const clone = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-tclone-')), wt = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-twt-'));
+  saveProject('acme/term', clone);
+  fs.mkdirSync(path.dirname(wtFile('acme/term#92')), { recursive: true }); fs.writeFileSync(wtFile('acme/term#92'), JSON.stringify({ path: wt }));
+  const tok = 't'.repeat(32), H = { host: '127.0.0.1:4646', origin: 'http://127.0.0.1:4646', 'content-type': 'application/json', 'x-factory-token': tok };
+  const post = (body) => uiHandle({ method: 'POST', url: '/api/sessions/terminal', headers: H, body: JSON.stringify(body) }, { token: tok, port: 4646 });
+  assert.match(JSON.parse(post({ repo: 'acme/term' }).body).error, /needs the desktop app, which supplies node-pty/, 'F ui alone has no pty');
+  const pty = fakePty(), modules = { [PTY]: pty };
+  for (const [x, re] of [[{ repo: 'acme/nope' }, /not attached/], [{ repo: '../x' }, /owner\/repo/], [{ repo: 'acme/term', issue: 0 }, /positive issue/],
+    [{ repo: 'acme/term', resume: '--dangerously-skip-permissions' }, /harness session id/], [{ repo: 'acme/term', resume: '--dangerously-skip-permissions x' }, /harness session id/],
+    [{ repo: 'acme/term', resume: 'not-ours-1' }, /a session this app started/], [{ repo: 'acme/term', harness: 'nope' }, /no terminal mode/]])
+    assert.throws(() => terminalSession(x, stubEnv, modules), re, JSON.stringify(x));
+  const own = terminalSession({ repo: 'acme/term', issue: 92 }, stubEnv, modules);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual([own.mode, own.label, pty.rec.file, pty.rec.args, fs.realpathSync(pty.rec.cwd)], ['terminal', 'acme/term#92', 'claude', [], fs.realpathSync(wt)], 'the run\'s worktree');
+  let end = finished(own); own.stop(); assert.equal((await end).at(-1).code, 'stopped');
+
+  // The factory's run, stopped in the clone: a terminal resumes it there (claude finds sessions per folder), and once that
+  // terminal exits the run is still the factory's to resume.
+  const run = launchSession({ repo: 'acme/term', issue: 92 }, { ...stubEnv, STUB_HANG: '1' });
+  await new Promise((r) => { const off = subscribe(run, (e) => { if (e.data?.subtype === 'init') { off(); r(); } }); });
+  record('acme/term#92', 'intake', 'started', {});
+  assert.throws(() => terminalSession({ repo: 'acme/term', issue: 92, resume: 'stub-session' }, stubEnv, modules), /already has a running session/, 'never two claudes on one harness session');
+  end = finished(run); run.stop(); await end;
+  assert.ok(resumable().includes('acme/term#92'));
+  const s = terminalSession({ repo: 'acme/term', resume: 'stub-session' }, stubEnv, modules); // no issue in the body: the label is the session's
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual([s.label, pty.rec.args, fs.realpathSync(pty.rec.cwd)], ['acme/term#92', ['--resume', 'stub-session'], fs.realpathSync(clone)]);
+  assert.throws(() => terminalSession({ repo: 'acme/term', resume: 'stub-session' }, stubEnv, modules), /acme\/term#92 already has a running session/);
+  assert.throws(() => launchSession({ repo: 'acme/term', issue: 92 }, stubEnv), /already has a running session/, 'not while a person has it open');
+  end = finished(s); s.stop(); assert.equal((await end).at(-1).code, 'stopped');
+  assert.ok(resumable().includes('acme/term#92'), 'the terminal session doesn\'t replace the run\'s last session');
+  const again = await finished(launchSession({ repo: 'acme/term', issue: 92 }, stubEnv));
+  assert.deepEqual(again.find((e) => e.data?.subtype === 'init').data.argv.slice(0, 2), ['--resume', 'stub-session']);
+});
+
 const fakeSdk = (fail, result = { type: 'result', subtype: 'success' }) => ({ rec: {}, async *query(q) { this.rec.q = q; yield { type: 'system', subtype: 'init', session_id: 'sdk-1' }; if (fail) throw new Error('boom'); if (result) yield result; } });
 
 test('terminal mode: a pseudo-terminal from the host, with input and resize through /api/sessions/input', async () => {
@@ -323,6 +368,8 @@ test('terminal on Windows: npm\'s claude.cmd goes to node-pty as one cmd.exe lin
   const s = startSession(claude, { mode: 'terminal', resume: 'abc' }, { cwd: home, env: stubEnv, modules: { [PTY]: pty }, resolve: win });
   await new Promise((r) => setTimeout(r, 20));
   assert.deepEqual([pty.rec.file, pty.rec.args], ['C:\\Windows\\system32\\cmd.exe', '/d /s /c ""C:\\npm\\claude.cmd" --resume abc"']);
+  assert.equal(pty.rec.env.NoDefaultCurrentDirectoryInExePath, '1'); // the shim's bare `node` is never taken from the worktree
+  assert.equal(pty.rec.env.PATH, stubEnv.PATH); // merged over the host's env, not instead of it
   s.stop(); await finished(s);
 });
 
@@ -368,8 +415,8 @@ test('launchSession() never starts a terminal session for a factory run: it woul
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 9, mode: 'terminal' }, stubEnv, { [PTY]: fakePty() }), /no budget cap/);
 });
 
-test('launchSession() refuses sdk mode up front while no host supplies the SDK (apps/desktop is not built yet)', () => {
-  assert.throws(() => launchSession({ repo: 'acme/app', issue: 9, mode: 'sdk' }, stubEnv), /needs the desktop app \(not built yet\), which supplies @anthropic-ai\/claude-agent-sdk/);
+test('launchSession() refuses sdk mode up front while no host supplies the SDK (outside the desktop app)', () => {
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 9, mode: 'sdk' }, stubEnv), /needs the desktop app, which supplies @anthropic-ai\/claude-agent-sdk/);
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 9, mode: 'sdk' }, stubEnv, { 'node-pty': fakePty() }), /needs the desktop app/, 'node-pty alone is not the SDK');
 });
 

@@ -85,12 +85,14 @@ describe('Metrics sheet', () => {
   it('is offered under F ui only: F render’s file and the Artifact have no API', async () => {
     const { unmount } = render(<App load={async () => demo as unknown as FactoryData} />);
     await screen.findByText('Merge rate');
-    expect(screen.queryByRole('button', { name: 'Metrics' })).toBeNull();
+    expect(screen.queryAllByRole('button', { name: 'Metrics' })).toEqual([]);
     unmount();
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify(reply), { status: 200 })));
     try {
       render(<App load={async () => ({ ...(demo as unknown as FactoryData), token: 'tok' })} />);
-      await userEvent.click(await screen.findByRole('button', { name: 'Metrics' }));
+      const [top, alt] = await screen.findAllByRole('button', { name: 'Metrics' }); // the header's, and the one phones get under it
+      expect([top!.className, alt!.className]).toEqual([expect.stringContaining('web-mx-top'), expect.stringContaining('web-mx-alt')]);
+      await userEvent.click(top!);
       expect(await screen.findByRole('region', { name: 'Burn and cost' })).toBeTruthy();
       expect(vi.mocked(fetch).mock.calls[0]![0]).toMatch(/^\/api\/metrics\?since=\d{4}-\d{2}-\d{2}$/);
       expect(vi.mocked(fetch).mock.calls[0]![1]).toEqual({ headers: { 'x-factory-token': 'tok' } });

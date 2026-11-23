@@ -16,7 +16,7 @@ import { evals } from '../../core/src/eval.ts';
 import { headlessArgs, reviewFromText, stepModel } from '../../core/src/review.ts';
 import { issuesCreate, loop, newProject, projectStatus, queue, retireIdea } from '../../core/src/project.ts';
 import { loadShip, loadShipList, ship } from '../../core/src/ship.ts';
-import { onboardState, onboardText, setShip } from '../../core/src/onboard.ts';
+import { claudeDir, onboardState, onboardText, setShip } from '../../core/src/onboard.ts';
 import { artifact, render, ui } from '../../server/src/server.ts';
 import { rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
 import { note, takeNotes } from '../../core/src/notes.ts';
@@ -177,7 +177,7 @@ export async function main(argv) {
       case 'install-skill': // link this checkout's packages/factory as a personal skill; --codex: Codex's ~/.agents/skills instead
         if (run && run !== '--codex') throw new Error('usage: install-skill [--codex]');
         if (/[\\/]plugins[\\/]cache[\\/]/.test(import.meta.dirname)) throw new Error('this F runs from the Claude Code plugin cache, which an update replaces; the plugin already provides the skill. Link a clone instead.');
-        out(linkSkill(path.join(import.meta.dirname, '..', '..', 'factory'), path.join(os.homedir(), ...(run === '--codex' ? ['.agents'] : ['.claude']), 'skills', 'software-factory'))); break;
+        out(linkSkill(path.join(import.meta.dirname, '..', '..', 'factory'), path.join(run === '--codex' ? path.join(os.homedir(), '.agents') : claudeDir(), 'skills', 'software-factory'))); break;
       case 'install-cli': // a `factory` shim in ~/.local/bin (or ~/bin) for this copy; prints the PATH line when that dir is not on PATH
         if (run) throw new Error('usage: install-cli');
         out(installCli(path.join(import.meta.dirname, '..', '..', 'factory', 'factory.mjs'), { home: os.homedir() })); break;
@@ -242,7 +242,7 @@ export async function main(argv) {
   dir    <run>                            print the run's artifact folder
   open   [dashboard|url]                  open the dashboard (default) or an https:, file: or claude-cli: URL with the OS opener
   install-cli                             put a \`factory\` command for this copy in ~/.local/bin (or ~/bin); prints the PATH line if needed
-  install-skill [--codex]                link ~/.claude/skills/software-factory (Codex: ~/.agents/skills) to this checkout (a junction on Windows)
+  install-skill [--codex]                link ~/.claude/skills/software-factory ($CLAUDE_CONFIG_DIR/skills when set; Codex: ~/.agents/skills) to this checkout (a junction on Windows)
   render [--artifact <out>]              rewrite dashboard.html, or write the claude.ai Artifact page to <out>
   demo | test`);
         process.exitCode = !cmd || ['help', '--help', '-h'].includes(cmd) ? 0 : 1;

@@ -4,6 +4,7 @@ import { blocking } from './constants.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { read } from './log.ts';
 import { resolvedSteps, skills } from './skills.ts';
+import type { Runner } from './types.ts';
 
 // Pinned unattended flags come from the harness that runs the skill (claude-code.mjs: `claude -p`), so F names no harness.
 // `share`: how many headless runs spend the remaining budget at once (parallel reviewers). Each gets an equal cut,
@@ -22,7 +23,7 @@ export function headlessArgs({ share = 1, ...opts } = {}) {
   return h.headlessArgs(opts);
 }
 // F, not the payload, says who did the work. Default runners leave events unchanged; a fallback can only downgrade to default.
-export function runnerStamp(run, stage, axis, fallback, role) {
+export function runnerStamp(run: string, stage: string, axis?: string, fallback?: unknown, role?: string): { runner?: Runner } {
   const key = stage === 'review' ? (role === 'verifier' ? 'verifier' : axis && `review.${axis}`) : stage === 'gate' ? 'verifier' : ['intake', 'spec', 'build'].includes(stage) ? stage : null;
   if (!key) return {};
   const { plan, extra } = skills(run.split(/[#:]/)[0]);

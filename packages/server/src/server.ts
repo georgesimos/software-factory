@@ -11,7 +11,7 @@ import { budget, budgetWhy, derive } from '../../core/src/derive.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { ideas, startIdea } from '../../core/src/project.ts';
 import { metrics } from '../../core/src/gate.ts';
-import { F_CMD, onboardConfig, onboardState, readOnboard, setShip } from '../../core/src/onboard.ts';
+import { fCmd, onboardConfig, onboardState, readOnboard, setShip } from '../../core/src/onboard.ts';
 import { projects, wtInfo } from '../../core/src/workspace.ts';
 import { dashboard, read, readArchive, sessionsFile, stateDir } from '../../core/src/log.ts';
 import { applyPreset, readSkills, setSkill, skillsData } from '../../core/src/skills.ts';
@@ -41,7 +41,7 @@ export function uiHandle({ method, url, headers = {}, body = '' }, { token, port
     if (!same(headers['x-factory-token'], token)) return reply(403, { error: 'missing or wrong token' });
     if (headers.origin !== undefined && !hosts.some((h) => headers.origin === `http://${h}`)) return reply(403, { error: 'cross-origin request' });
     if (route === '/runs') return reply(200, { runs: runsData() });
-    if (route === '/state') return reply(200, pageData({ resumable: resumable() })); // what page() embeds, for apps/web; never the token
+    if (route === '/state') return reply(200, pageData({ resumable: resumable(), terminal: !!hostModules['node-pty'] })); // what page() embeds, for apps/web; never the token
     if (route === '/sessions') return reply(200, { sessions: listSessions() });
     if (route === '/metrics') { // #82: burn, outcomes and timing derived from the log; ?project=owner/repo&since=<ISO date>
       const q = (k) => u.searchParams.get(k) || undefined;
@@ -96,6 +96,7 @@ export const UI_ROUTES = {
   },
   '/onboard/automerge': ({ repo, on }) => { setAutoMerge(repo, on); return onboardConfig(); },
   '/sessions': (x) => ({ session: launchSession(x).id }),
+  '/sessions/terminal': (x) => ({ session: terminalSession(x).id }),
   '/sessions/input': ({ id, data, cols, rows }) => { // keystrokes and size for a terminal session
     const s = getSession(id);
     if (!s?.write || s.state !== 'running') throw new Error('no running terminal session with that id');
@@ -119,22 +120,53 @@ export const harnessReady = new Map(); // harness id -> when detect() and login(
 // The harness session to resume for a run, or undefined. Only a run that is still active and that the stopped or crashed
 // session last wrote: its last event falls inside that session's life. Anything else, such as a terminal /software-factory
 // run that has owned the issue since, is refused as an active run.
+const SESSION_ID = /^\w[\w-]{0,99}$/; // a harness session id as an argument: plain, and never a flag (no leading '-')
 export function resumeFor(r, last) {
   if (!r || TERMINAL.includes(r.outcome) || !last || last.state === 'running' || last.exit === 0) return undefined;
   const at = Date.parse(r.events.at(-1)?.ts || 0), from = Date.parse(last.started), to = Date.parse(last.ended) + 5_000; // its last lines land just after
   const v = last.harnessSession;
-  return at >= from && at <= to && /^[\w-]{1,100}$/.test(v || '') ? v : undefined; // plain: it becomes an argument
+  return at >= from && at <= to && SESSION_ID.test(v || '') ? v : undefined;
 }
+// The factory's own sessions: a person's terminal on the same run label never stands in for the run's last session.
+const factorySessions = (label) => listSessions().filter((x) => x.mode !== 'terminal' && x.label === label);
 // Runs a POST /api/sessions would resume now: active, and last written by a session here that stopped or crashed.
 export function resumable() {
-  const runs = derive(read()), labels = [...new Set(listSessions().map((x) => x.label))];
-  return labels.filter((id) => resumeFor(runs[id], listSessions().filter((x) => x.label === id).at(-1)));
+  const runs = derive(read()), labels = [...new Set(listSessions().filter((x) => x.mode !== 'terminal').map((x) => x.label))];
+  return labels.filter((id) => resumeFor(runs[id], factorySessions(id).at(-1)));
 }
 // What the run may still spend: COST_CAP less the dollars, and less the share of TOKEN_CAP used, for usage with no price.
 export const budgetLeft = (b) => b ? Math.min(COST_CAP - b.usd, COST_CAP * (1 - b.tokens / TOKEN_CAP)) : COST_CAP;
 // node-pty and the SDK for terminal and sdk sessions, keyed by package name. Empty until a host that ships them (apps/desktop,
-// not built yet) sets them: packages/adapters' lazy import() can't see apps/desktop's dependencies under pnpm (ADR 0001).
-export const hostModules = {};
+// main.ts) sets them: packages/adapters' lazy import() can't see apps/desktop's dependencies under pnpm (ADR 0001).
+export const hostModules: Record<string, unknown> = {};
+const clone = (repo) => { // an attached repo's folder
+  const [owner, name, extra] = typeof repo === 'string' ? repo.split('/') : [];
+  if (extra !== undefined || !LOGIN.test(owner || '') || !/^(?!\.\.?$)[\w.-]{1,100}$/.test(name || '')) throw new Error('repo must be owner/repo');
+  const cwd = projects()[repo]?.path;
+  if (!cwd || !fs.existsSync(cwd)) throw new Error(`${repo} is not attached: F sync ${repo} <path> first`);
+  return cwd;
+};
+// A person's own interactive harness in the desktop app's terminal pane (#58): no prompt and no budget, so never a factory
+// run's session. In the run's worktree when it has one, else the clone. `resume` continues a session this app started, in
+// that session's own folder: claude keeps its sessions per project folder, so elsewhere --resume wouldn't find it.
+export function terminalSession({ harness = 'claude-code', repo, issue, resume }, env = process.env, modules = hostModules) {
+  const h = harnesses.find((y) => y.id === harness);
+  if (!h?.launch || !(h.modes || []).includes('terminal')) throw new Error(`harness ${String(harness).slice(0, 40)} has no terminal mode`);
+  if (!modules['node-pty']) throw new Error('a terminal needs the desktop app, which supplies node-pty: run it in your own terminal');
+  let cwd = clone(repo);
+  if (issue !== undefined && (!Number.isInteger(issue) || issue < 1 || issue > 1e9)) throw new Error('issue must be a positive issue number');
+  if (resume !== undefined && !SESSION_ID.test(String(resume))) throw new Error('resume must be a harness session id');
+  const id = issue ? `${repo}#${issue}` : repo, wt = issue && wtInfo(id)?.path;
+  if (wt && fs.existsSync(wt)) cwd = wt;
+  let label = id;
+  if (resume !== undefined) { // under the resumed session's own label, so launchSession's running check sees it
+    const from = listSessions().filter((x) => x.harnessSession === resume && x.harness === h.id).at(-1);
+    if (!from) throw new Error('resume a session this app started');
+    if (listSessions().some((x) => x.state === 'running' && (x.label === from.label || x.harnessSession === resume))) throw new Error(`${from.label} already has a running session`); // one claude per harness session
+    cwd = getSession(from.id).cwd ?? cwd; label = from.label;
+  }
+  return startSession(h, { mode: 'terminal', resume }, { cwd, env, label, modules });
+}
 export function launchSession({ harness = 'claude-code', mode = 'headless', repo, issue }, env = process.env, modules = hostModules) {
 
   const h = harnesses.find((y) => y.id === harness);
@@ -142,11 +174,8 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
   if (!(h.modes || []).includes(mode)) throw new Error(`${h.id} modes are ${(h.modes || []).join(', ')}`);
   if (mode === 'terminal') throw new Error('factory runs are headless or sdk: a terminal session has no budget cap or pinned policy'); // a person drives terminal mode
   const need = mode === 'sdk' && h.launch({ mode, prompt: 'x' }).module;
-  if (need && !modules[need]) throw new Error(`${mode} mode needs the desktop app (not built yet), which supplies ${need}: run headless`);
-  const [owner, name, extra] = typeof repo === 'string' ? repo.split('/') : [];
-  if (extra !== undefined || !LOGIN.test(owner || '') || !/^(?!\.\.?$)[\w.-]{1,100}$/.test(name || '')) throw new Error('repo must be owner/repo');
-  const cwd = projects()[repo]?.path;
-  if (!cwd || !fs.existsSync(cwd)) throw new Error(`${repo} is not attached: F sync ${repo} <path> first`);
+  if (need && !modules[need]) throw new Error(`${mode} mode needs the desktop app, which supplies ${need}: run headless`);
+  const cwd = clone(repo);
   if (!Number.isInteger(issue) || issue < 1 || issue > 1e9) throw new Error('issue must be a positive issue number');
   const id = `${repo}#${issue}`, r = derive(read())[id];
   if (r?.imported) throw new Error(`${id} is imported: never run claude -p in its checkout`);
@@ -156,10 +185,10 @@ export function launchSession({ harness = 'claude-code', mode = 'headless', repo
   const reopened = r?.events?.some((e) => e.stage === 'intake' && e.status === 'started');
   const gone = !reopened && readArchive().find((a) => a.id === id);
   if (gone) throw new Error(`${id} is ${gone.outcome} (archived): it needs a human, not a new run`);
-  const mine = listSessions().filter((x) => x.label === id);
-  if (mine.some((x) => x.state === 'running')) throw new Error(`${id} already has a running session`); // before its first event lands
+  // Any running session on the run, a person's terminal included: two harnesses would share one session or worktree.
+  if (listSessions().some((x) => x.label === id && x.state === 'running')) throw new Error(`${id} already has a running session`); // before its first event lands
   // A run left active by a session that was stopped or crashed here resumes that harness session instead of staying stuck.
-  const resume = resumeFor(r, mine.at(-1));
+  const resume = resumeFor(r, factorySessions(id).at(-1));
   if (r && !TERMINAL.includes(r.outcome) && !resume) throw new Error(`${id} already has an active run (${r.outcome || r.stage})`);
   const b = r ? budget(r) : null;
   if (b?.over) throw new Error(`run budget exceeded ${budgetWhy(b)}`);
@@ -238,6 +267,7 @@ export function pageData(extra = {}) {
   catch (e) { ruleData.rulesError = e.message; } // render runs after every record(): a bad config must not half-fail the event
   let idea = {};
   try { idea = { ideas: ideas(events, Object.fromEntries(runs.map((r) => [r.id, r]))) }; } catch (e) { idea = { ideasError: e.message }; } // never fail the event that triggered the render
+  const F_CMD = fCmd(); // per page build, so installing the plugin while the app runs clears fMissing without a restart
   return { generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)),
     harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), fCmd: F_CMD, ...(!F_CMD && { fMissing: true }),
     autoMerge: Object.fromEntries(Object.entries(projects()).map(([r, p]) => [r, p?.autoMerge !== false])), ...idea, ...extra };

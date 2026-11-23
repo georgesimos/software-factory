@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { spawn, spawnSync } from 'node:child_process';
-import { command } from '../core/src/platform.ts';
+import { command, systemRoot } from '../core/src/platform.ts';
 
 // Per session, older events are dropped past either cap, and a replay that reaches back past them starts with a 'dropped' event.
 const MAX_EVENTS = 5000;
@@ -18,7 +18,7 @@ const sessions = new Map();
 export const getSession = (id) => sessions.get(id);
 export const listSessions = () => [...sessions.values()].map(({ id, harness, mode, label, state, exit, started, ended, harnessSession }) => ({ id, harness, mode, label, state, exit, started, ended, harnessSession }));
 // A run that a killed session leaves active is resumed from it (server.ts), so its newest one is never forgotten, only emptied.
-const resumable = (x) => x.exit !== 0 && x.harnessSession && [...sessions.values()].filter((y) => y.label === x.label).at(-1) === x;
+const resumable = (x) => x.exit !== 0 && x.harnessSession && [...sessions.values()].filter((y) => y.label === x.label && y.mode !== 'terminal').at(-1) === x;
 
 function emit(s, e) {
   const ev = { n: s.next++, at: new Date().toISOString(), ...e };
@@ -47,13 +47,14 @@ export const resolveSpec = (spec, env, resolve) => command(spec.cmd, spec.args, 
 export function killTree(child, platform = process.platform, run, kill = process.kill, wait = false) {
   if (!child.pid) return;
   const args = ['/pid', String(child.pid), '/T', '/F'];
+  const taskkill = systemRoot(process.env, 'System32', 'taskkill.exe');
   if (platform !== 'win32') try { kill(-child.pid, 'SIGTERM'); } catch { child.kill(); } // the group is gone: the child alone, if it is not
-  else if (wait) (run ?? spawnSync)('taskkill', args, { stdio: 'ignore', windowsHide: true, timeout: 5_000 });
-  else (run ?? spawn)('taskkill', args, { stdio: 'ignore', windowsHide: true }).on('error', () => { /* taskkill missing: nothing else to try */ });
+  else if (wait) (run ?? spawnSync)(taskkill, args, { stdio: 'ignore', windowsHide: true, timeout: 5_000 });
+  else (run ?? spawn)(taskkill, args, { stdio: 'ignore', windowsHide: true }).on('error', () => { /* taskkill missing: nothing else to try */ });
 }
 // Detached children don't get the terminal's Ctrl-C, so a running session is stopped when this process ends: waited for,
 // since nothing after 'exit' or quit gets another turn of the event loop.
-export const stopAll = () => { for (const s of sessions.values()) if (s.state === 'running') s.stop(true); };
+export const stopAll = () => { for (const s of sessions.values()) if (s.state === 'running') { s.stop(true); s.stop = () => {}; } }; // once: quit, then 'exit', would taskkill twice
 process.once('exit', stopAll);
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(sig, () => { stopAll(); process.kill(process.pid, sig); }); // then the default action
 
@@ -63,7 +64,7 @@ export function startSession(h, opts, { cwd, env = process.env, label = '', modu
   if (typeof h.launch !== 'function' || !(h.modes || []).includes(opts.mode)) throw new Error(`${h.id} cannot launch in ${opts.mode} mode`);
   if (opts.mode === 'terminal' && opts.budget != null) throw new Error('a terminal session has no budget cap: run headless or sdk for a budget');
   const spec = h.launch(opts);
-  const s = { id: crypto.randomUUID(), harness: h.id, mode: opts.mode, label, state: 'running', exit: null, started: new Date().toISOString(), events: [], next: 0, listeners: new Set(), bytes: 0, stop: () => {}, harnessSession: undefined, ended: null };
+  const s = { id: crypto.randomUUID(), harness: h.id, mode: opts.mode, label, cwd, state: 'running', exit: null, started: new Date().toISOString(), events: [], next: 0, listeners: new Set(), bytes: 0, stop: () => {}, harnessSession: undefined, ended: null };
   sessions.set(s.id, s);
   const done = (exit) => {
     if (s.state !== 'running') return;
@@ -80,7 +81,7 @@ export function startSession(h, opts, { cwd, env = process.env, label = '', modu
   let c;
   try { c = resolveSpec(spec, env, resolve); } catch (e) { fail(e); return s; }
   // spec.stdin carries the prompt: as an argument its space and # would need cmd.exe quoting, which a .cmd shim can't get
-  const child = spawn(c.file, c.args, { cwd, env, stdio: [spec.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsVerbatimArguments: !!c.windowsVerbatimArguments });
+  const child = spawn(c.file, c.args, { cwd, env: { ...env, ...c.env }, stdio: [spec.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsVerbatimArguments: !!c.windowsVerbatimArguments });
   if (spec.stdin !== undefined) child.stdin.on('error', () => { /* exited before reading it: reported by close */ }).end(spec.stdin);
   s.stop = (wait) => killTree(child, process.platform, undefined, process.kill, wait);
   readline.createInterface({ input: child.stdout }).on('line', (line) => {
@@ -119,12 +120,12 @@ async function terminal(s, spec, { cwd, env, modules, resolve, done }) {
   const c = resolveSpec(spec, env, resolve);
   let p;
   // A .cmd shim's cmd.exe line goes to node-pty as one string: given an array, node-pty quotes each argument again.
-  try { p = pty.spawn(c.file, c.windowsVerbatimArguments ? c.args.join(' ') : c.args, { name: 'xterm-256color', cols: 120, rows: 32, cwd, env }); } catch (e) {
+  try { p = pty.spawn(c.file, c.windowsVerbatimArguments ? c.args.join(' ') : c.args, { name: 'xterm-256color', cols: 120, rows: 32, cwd, env: { ...env, ...c.env } }); } catch (e) {
     throw onPath(c.file, env) ? e : new Error(`${spec.cmd} is not installed`); // else a bad cwd or a broken pty passes through
   }
   s.write = (data) => { if (!stopped) p.write(data); }; // a stopped pty may already be gone
   s.resize = (cols, rows) => { if (!stopped) p.resize(cols, rows); };
-  s.stop = () => { stopped = true; p.kill(); };
+  s.stop = () => { stopped = true; killTree({ pid: p.pid, kill() {} }, process.platform, undefined, process.kill, true); try { p.kill(); } catch { /* gone */ } }; // the tree first, waited (taskkill /T on Windows walks it from the live root), then the pty
   p.onData((data) => emit(s, { type: 'output', data }));
   p.onExit(({ exitCode, signal }) => done(stopped ? 'stopped' : signal || exitCode));
 }
