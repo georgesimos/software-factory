@@ -260,6 +260,7 @@ export function rulesTest(cli) {
     ['ci', 'off', /required\|advisory\|skip/], ['diffCap', '400', /can only lower/], ['diffCap', '0', /can only lower/],
     ['checks.commands', '[]', /1-10/], ['checks.commands', '["a\\nb"]', /1-10/], ['guide.deploy', 'x', /unknown step "deploy"/],
     ['deploy.preview', 'maybe', /required\|advisory\|off/], ['deploy.production', 'required', /unknown rule/],
+    ['artifact', 'https://evil.example/artifact/x', /claude\.ai Artifact URL/], ['artifact', 'https://claude.ai/artifact/x?y=1', /claude\.ai Artifact URL/],
   ]) assert.throws(() => set('acme/rr', k, v, '--reason', 'x'), re);
   assert.throws(() => set('acme/rr', 'ci', 'skip', '--reason', 'x', '--until', '2020-01-01'), /--until/);
   assert.throws(() => set('acme/rr', 'ci', 'skip', '--reason', 'x', '--until', '2026-13-40'), /--until/);
@@ -378,6 +379,15 @@ export function rulesTest(cli) {
   record('acme/rr#2', 'intake', 'started', { title: 't' });
   assert.match(fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), /"rulesError":"skills.json acme\/rr.rules.ci: needs a reason/);
   fs.rmSync(path.join(io.dir, 'skills.json'));
+  // A hand-edited default artifact rule never opts every repo in: rules() skips it and says so.
+  fs.writeFileSync(path.join(io.dir, 'skills.json'), JSON.stringify({ default: { rules: { artifact: { value: 'https://claude.ai/artifact/x', reason: 'r', setBy: 'me', setAt: '2026-01-01' } } } }));
+  const hand = JSON.parse(cli(['rules', 'acme/rr']));
+  assert.equal(hand.policy.artifact, undefined);
+  assert.ok(hand.warnings.some((w) => /artifact is a per-repo opt-in/.test(w)));
+  fs.rmSync(path.join(io.dir, 'skills.json'));
+  assert.throws(() => set('default', 'artifact', 'https://claude.ai/artifact/FEMb-sU_9', '--reason', 'x'), /per-repo opt-in/); // publishing off the machine is never global
+  assert.equal(set('acme/rr', 'artifact', 'https://claude.ai/artifact/FEMb-sU_9', '--reason', 'phone view').policy.artifact.value, 'https://claude.ai/artifact/FEMb-sU_9'); // opt-in per repo
+  cli(['rules', 'unset', 'acme/rr', 'artifact']);
 }
 // Per-step runners: config resolution and validation, extra axes, F-stamped runner, invalid output = failed review.
 // Per-step models: field-by-field fill, presets, the CLI version fallback, the headless flags and the verifier stamp.

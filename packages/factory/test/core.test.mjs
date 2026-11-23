@@ -1,8 +1,10 @@
 // @ts-nocheck
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { CAP } from '../../core/src/constants.ts';
+import { execFileSync } from 'node:child_process';
 import { HERE } from '../factory.mjs';
 import { archive, io, read, readArchive, record, runDir } from '../../core/src/log.ts';
 import { axesFor, decide, gate, risk } from '../../core/src/gate.ts';
@@ -11,7 +13,7 @@ import { derive, getRun } from '../../core/src/derive.ts';
 import { facts, intake } from '../../core/src/github.ts';
 import { headlessArgs } from '../../core/src/review.ts';
 import { loop } from '../../core/src/project.ts';
-import { page, render } from '../../server/src/server.ts';
+import { artifact, page, render, residue } from '../../server/src/server.ts';
 import { rules } from '../../core/src/rules.ts';
 import { wtFile } from '../../core/src/workspace.ts';
 import { test } from 'node:test';
@@ -134,5 +136,84 @@ export function coreTest() {
   assert.ok(!html.includes('</script><script>alert'));
 }
 
+// The claude.ai Artifact page (#18): no skeleton, no reload timer, no local path, nothing dashboard.html doesn't carry, never a token.
+// It runs on a copy of the demo state, so the paths it plants never reach the other tests.
+export function artifactTest() {
+  const prev = io.dir;
+  io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-artifact-'));
+  fs.cpSync(prev, io.dir, { recursive: true });
+  try {
+    const dataOf = (h) => JSON.parse(h.match(/<script type="application\/json" id="data">([^<]*)<\/script>/)[1]);
+    const home = os.homedir(), user = os.userInfo().username;
+    fs.mkdirSync(runDir('evil/x#1'), { recursive: true });
+    fs.writeFileSync(wtFile('evil/x#1'), JSON.stringify({ path: path.join(home, 'wt', 'x-1'), branch: 'factory/issue-1' }));
+    // Paths in and outside $HOME, with spaces, in URLs and env strings, in free text and in onboard and skills config.
+    const planted = [`see ${path.join(home, 'notes.md')}`, 'cd /Volumes/Data/secret && x', '(C:/Users/bob/app)', 'C:\\Users\\Bob Smith\\app', 'C:\\Users\\Bob Smith',
+      'D:\\work\\app', '/srv/alice: done', '/Users/george/Library/Application Support/x', 'at file:///Users/al/x.mjs:3:9', 'vscode://file/home/al/x.ts',
+      'cwd:/Users/al/x', 'PATH=/a:/home/al/bin', '/factory approve', 'https://github.com/evil/x/pull/2', `\\\\wsl.localhost\\Ubuntu\\home\\${user}\\app`,
+      '\\\\fs01\\users\\bob', 'vscode-remote://ssh-remote+box/home/al/x', 'cwd:/data/proj/x', 'src:/code/acme/x', 'see /srv/a/b.md https://github.com/evil/x/pull/3 ok', 'GET /api/runs'];
+    record('evil/x#1', 'intake', 'passed', { summary: planted.join('\n'), sessionId: 's1', cwd: path.join(home, 'src', 'x') });
+    fs.writeFileSync(path.join(io.dir, 'skills.json'), JSON.stringify({ 'evil/x': { spec: { use: 'brief', path: '/Volumes/Data/briefs/spec.md' } } }));
+    fs.writeFileSync(path.join(io.dir, 'onboard.json'), JSON.stringify({ default: { ship: ['web'] }, 'evil/x': { ship: ['web'], path: '/Volumes/Data/clones/x' } }));
+    const before = fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), out = path.join(io.dir, 'artifact.html');
+    const line = execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), 'render', '--artifact', out], { env: { ...process.env, FACTORY_DIR: io.dir }, encoding: 'utf8' });
+    assert.equal(fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), before); // the local dashboard is left alone
+    const art = fs.readFileSync(out, 'utf8'), a = dataOf(art), full = dataOf(page());
+    assert.match(line, new RegExp(`artifact\\.html: ${Buffer.byteLength(art)} bytes, ${full.runs.length} runs`));
+    assert.ok(!/<!doctype|<html|<head>|<\/head>|<body|<\/body>|<\/html>|<meta charset|<meta name="viewport"|setTimeout\(tick, 10000\);/i.test(art));
+    assert.match(art, /<script type="application\/json" id="data">/);
+    assert.ok(!art.includes('</script><script>alert')); // a kept run's title still can't break out of the JSON tag
+    assert.deepEqual(Object.keys(a), Object.keys(full)); // nothing beyond what the dashboard shows
+    assert.deepEqual(a.runs.map((r) => r.id), full.runs.map((r) => r.id)); // every project the dashboard shows
+    assert.deepEqual(a.runs.map((r) => r.pr), full.runs.map((r) => r.pr)); // URLs survive
+    const loc = JSON.stringify(full), pub = JSON.stringify(a);
+    for (const p of [JSON.stringify(home).slice(1, -1), '/Volumes/Data/briefs/spec.md', '/Volumes/Data/clones/x']) assert.ok(loc.includes(p), p); // the local dashboard has them...
+    const leak = new RegExp(`${JSON.stringify(home).slice(1, -1).replace(/[\\.]/g, '\\$&')}|\\/(Users|home|Volumes|srv)\\b|(?<![A-Za-z])[A-Za-z]:(\\\\\\\\|\\/)|file:\\/\\/|Smith|Support|secret|\\/a:|wsl\\.localhost|fs01|ssh-remote|\\/data\\/|\\/code\\/`);
+    assert.match(loc, leak); // the check itself can see a leak
+    const hit = pub.match(leak);
+    assert.equal(hit, null, hit && pub.slice(Math.max(0, hit.index - 80), hit.index + 80)); // ...the published page has none, not even a fragment after a space
+    const x = a.runs.find((r) => r.id === 'evil/x#1');
+    assert.equal(x.worktree, undefined);
+    assert.ok(x.sessions.every((s) => !('cwd' in s)));
+    assert.match(pub, /\/factory approve/); // one segment, not a path
+    assert.match(pub, /GET \/api\/runs/); // a route, not a path
+    assert.match(pub, /\[local path\] https:\/\/github\.com\/evil\/x\/pull\/3 ok/); // a path stops at the URL after it
+    // The backstop: whatever the patterns miss, the login (as a path segment), the host name or a known path is refused.
+    for (const note of [`built in x\\${user}\\y`, `dev server http://${os.hostname()}:5173/x`]) assert.throws(() => artifact(page({ note })), /still carries/, note);
+    assert.match(pub, /https:\/\/github\.com\/evil\/x\/pull\/2/);
+    assert.deepEqual(a.skills.catalog, { global: [], projects: {} });
+    assert.deepEqual(a.onboard.default, { ship: ['web'] });
+    assert.throws(() => artifact(page({ ui: { token: 'secret' } })), /built for F ui|carries a token/);
+    assert.throws(() => artifact(page({ auth: { accessToken: 'x' } })), /carries a token/); // any key ending in token
+    assert.throws(() => artifact('<p>no skeleton</p>'), /no longer has/);
+    assert.throws(() => artifact(page().replace('setTimeout(tick, 10000);', '')), /exactly once/);
+  } finally {
+    fs.rmSync(io.dir, { recursive: true, force: true });
+    io.dir = prev;
+  }
+}
+
+// The backstop with a made-up machine: login X (whose profile repo is X/X), host build or Georges-MacBook-Pro.local.
+export function residueTest() {
+  const me = (host = 'build', projects = { 'X/X': { path: '/srv/clones/xx' } }) => ({ user: 'X1x', host, home: '/home/X1x', projects });
+  const raw = { runs: [{ id: 'X1x/X1x#3', worktree: '/srv/wt/x3', sessions: [{ cwd: '/srv/s/1' }] }] };
+  const check = (data, m = me()) => residue(JSON.stringify(data), raw, m);
+  // The owner/repo id, its project key and its GitHub URLs are not the login in a path, nor is prose that says "build".
+  const ok = { runs: [{ id: 'X1x/X1x#3', url: 'https://github.com/X1x/X1x/issues/3', pr: 'https://github.com/X1x/X1x/pull/4', remote: 'git@github.com:X1x/X1x.git',
+    note: 'X1x/X1x#3: build passed; see packages/build/x and src/app; npm run build' }], projects: ['X1x/X1x'] };
+  assert.deepEqual(check(ok, me('build', { 'X1x/X1x': { path: '/srv/clones/xx' } })), []);
+  assert.deepEqual(residue(JSON.stringify(ok), raw, me('app')), []);
+  assert.deepEqual(check({ note: 'uses ＠app/ui and @app/ui; step app:1' }, me('app')), []); // a scoped package and a step label, not the host
+  for (const [note, what, m] of [
+    ['C:\\work\\X1x\\proj', /login/], ['under /mnt/X1x/app', /login/], ['http://localhost:3000/home/X1x/proj', /home, clone or worktree/],
+    ['at /srv/clones/xx/src', /home, clone or worktree/, me('build', { 'X1x/X1x': { path: '/srv/clones/xx' } })], ['cd /srv/wt/x3', /worktree/], ['cwd /srv/s/1', /worktree/],
+    ['PR https://github.com/acme/app/pull/2\nhttp://localhost:3000/mnt/X1x/x', /login/], ['PR https://github.com/acme/app/pull/2,/mnt/X1x/x', /login/], // the GitHub exemption ends with its URL
+    ['open http://build.local:5173/x', /host/], ['http://build:5173/', /host/], ['me@build', /host/], ['\\\\build\\share', /host/], ['smb://build/share', /host/],
+    ['http://Georges-MacBook-Pro.local:5173/x', /host/, me('Georges-MacBook-Pro.local')], ['ran on Georges-MacBook-Pro.local', /host/, me('Georges-MacBook-Pro.local')],
+  ]) assert.match(check({ note }, m).join(), what, note);
+}
+
 setup();
 test('demo: derive, gate, decide, risk, metrics and the dashboard', coreTest);
+test('artifact backstop: refuses this machine\'s names and paths, not owner/repo ids or prose', residueTest);
+test('artifact: the claude.ai page built from the demo state', artifactTest); // runs after coreTest, on its state

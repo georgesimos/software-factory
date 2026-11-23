@@ -14,8 +14,10 @@ export function setAutoMerge(repo, on) {
   dashboard.render();
   return projects()[repo];
 }
+const ARTIFACT_URL = /^https:\/\/claude\.ai\/(code\/)?artifact\/[\w-]+$/;
 // Policy rules: a closed set of typed switches that F enforces. They can only make the factory stricter, or swap a
 // signal that can't be had (GitHub CI, e.g. when Actions billing fails) for one F measures itself (local checks).
+// One exception: `artifact` is a per-repo opt-in to publishing the dashboard off this machine, so `default` can't set it.
 // Not configurable, ever: TRUSTED, SENSITIVE, the code/security axes, --match-head-commit, imported runs escalating.
 export const RULES = {
   ci: [(v) => ['required', 'advisory', 'skip'].includes(v), 'required|advisory|skip'],
@@ -24,6 +26,7 @@ export const RULES = {
   'project.budgetUsd': [(v) => typeof v === 'number' && v > 0 && v <= PROJECT_BUDGET_USD, `dollars, above 0 and at most ${PROJECT_BUDGET_USD} (it can only lower the cap)`],
   'project.maxIssuesPerSession': [(v) => Number.isInteger(v) && v >= 1 && v <= MAX_ISSUES_PER_SESSION, `an integer 1-${MAX_ISSUES_PER_SESSION} (it can only lower the cap)`],
   'deploy.preview': [(v) => ['required', 'advisory', 'off'].includes(v), 'required|advisory|off (off is the built-in; required adds a merge condition)'],
+  artifact: [(v) => typeof v === 'string' && ARTIFACT_URL.test(v), 'a private claude.ai Artifact URL (https://claude.ai/artifact/<id>); opts this repo\'s runs in to republishing it'],
 };
 export const RULE_FIELDS = ['value', 'reason', 'setBy', 'setAt', 'until'];
 export const LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
@@ -57,6 +60,7 @@ export function rules(repo, cfg = readSkills(), now = Date.now()) {
   for (const scope of [...new Set([repo, 'default'])]) {
     for (const [key, x] of Object.entries(cfg[scope]?.rules || {})) {
       const what = `${key}=${JSON.stringify(x.value)} (${scope}: ${x.reason})`;
+      if (key === 'artifact' && scope === 'default') { warnings.push(`${what} is ignored: artifact is a per-repo opt-in`); continue; } // hand-edited skills.json
       if (x.until && x.until < today) { expired.push({ key, scope, ...x }); warnings.push(`${what} expired on ${x.until} and no longer applies; unset it or set it again with a new --until`); continue; }
       if (policy[key]) continue;
       policy[key] = { ...x, scope };
@@ -92,6 +96,7 @@ export function setRule(scope, key, raw, { reason, until } = {}) {
   if (step !== null) s.guide = { ...s.guide, [step]: String(raw ?? '') };
   else {
     if (!RULES[key]) checkRules({ [key]: {} }, `rules ${scope}`); // throws the unknown-rule message
+    if (key === 'artifact' && scope === 'default') throw new Error('artifact is a per-repo opt-in: set it on owner/repo, not default');
     if (['diffCap', 'project.budgetUsd', 'project.maxIssuesPerSession'].includes(key)) value = Number(raw);
     if (key === 'checks.commands') { try { value = JSON.parse(raw); } catch { value = [raw]; } }
     if (until !== undefined && !(isDay(until) && until >= dayOf())) throw new Error('--until must be YYYY-MM-DD, today or later');

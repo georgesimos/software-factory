@@ -783,7 +783,8 @@ function board(runs, selected) {
 const RULE_LABEL = { ci: (v) => ({ skip: 'CI skipped', advisory: 'CI advisory', required: 'CI required' })[v] || 'CI ' + v,
   'checks.commands': (v) => 'Local checks ×' + arr(v).length, diffCap: (v) => 'Diff cap ' + v,
   'project.budgetUsd': (v) => 'Project budget $' + v, 'project.maxIssuesPerSession': (v) => v + ' issues / session',
-  'deploy.preview': (v) => ({ required: 'Preview required', advisory: 'Preview advisory', off: 'Preview off' })[v] || 'Preview ' + v };
+  'deploy.preview': (v) => ({ required: 'Preview required', advisory: 'Preview advisory', off: 'Preview off' })[v] || 'Preview ' + v,
+  artifact: () => 'Publishes to Artifact' };
 const dayNow = () => new Date().toISOString().slice(0, 10);
 function ruleChips() {
   const seen = new Set(), out = [], today = dayNow();
@@ -925,9 +926,11 @@ function decision(r) {
     r.outcome === 'merged' ? 'Merged' : r.outcome === 'escalated' ? 'Escalated to a human' : r.decision.action === 'merge' ? 'Merging' : 'Escalating'), list(r.decision.reasons)];
   else if (r.imported) body = [head('idle', 'Tracked, not driven'), el('p', { class: 'muted', style: 'margin-top:10px' },
     `Imported${r.source ? ' from ' + srcName(r.source) : ''}. The factory will not build or merge it.`)];
+  else if (r.outcome === 'escalated') body = head('warn', 'Escalated to a human'); // e.g. an imported run: no decision event
   else body = el('p', { class: 'muted' }, 'No decision yet.');
+  const review = r.outcome === 'escalated' && r.pr ? el('p', { style: 'margin-top:10px' }, link(r.pr, 'Review and merge on GitHub')) : null; // approval is never taken from the page (#21)
   const rev = r.reverted ? el('div', { class: 'callout' }, el('b', {}, 'Reverted'), obj(r.reverted).reason ? ' · ' + r.reverted.reason : '', link(obj(r.reverted).pr, 'Revert PR')) : null;
-  return section('Decision', body, rev);
+  return section('Decision', body, review, rev);
 }
 
 function facts(r) {

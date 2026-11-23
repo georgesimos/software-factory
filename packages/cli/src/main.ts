@@ -17,7 +17,7 @@ import { headlessArgs, reviewFromText, stepModel } from '../../core/src/review.t
 import { issuesCreate, loop, newProject, projectStatus, queue, retireIdea } from '../../core/src/project.ts';
 import { loadShip, ship } from '../../core/src/ship.ts';
 import { onboardState, onboardText, setShip } from '../../core/src/onboard.ts';
-import { render, ui } from '../../server/src/server.ts';
+import { artifact, render, ui } from '../../server/src/server.ts';
 import { rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
 import { note, takeNotes } from '../../core/src/notes.ts';
 import { withMeasured } from '../../core/src/burn.ts';
@@ -76,7 +76,7 @@ export async function main(argv) {
         if (run === 'set' && scope && key && value !== undefined) out(setRule(scope, key, value, { reason, until }));
         else if (run === 'unset' && scope && key) out(unsetRule(scope, key, { reason }));
         else if (run && run !== 'set' && run !== 'unset') out(rules(run));
-        else throw new Error('usage: rules <owner/repo|default> | rules set <owner/repo|default> <ci|checks.commands|diffCap|deploy.preview|project.budgetUsd|project.maxIssuesPerSession|guide.<step>> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <owner/repo|default> <key> [--reason "…"]');
+        else throw new Error('usage: rules <owner/repo|default> | rules set <owner/repo|default> <ci|checks.commands|diffCap|deploy.preview|artifact|project.budgetUsd|project.maxIssuesPerSession|guide.<step>> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <owner/repo|default> <key> [--reason "…"]');
         break;
       }
       case 'checks': out(localChecks(run)); break;
@@ -162,7 +162,14 @@ export async function main(argv) {
         break;
       }
       case 'dir': console.log(runDir(run)); break;
-      case 'render': console.log(render()); break;
+      case 'render': { // render [--artifact <out>]: the local dashboard, or the claude.ai Artifact page (never touches dashboard.html)
+        if (run !== '--artifact') { console.log(render()); break; }
+        if (!rest[0]) throw new Error('usage: render --artifact <out.html>');
+        const html = artifact();
+        fs.writeFileSync(rest[0], html);
+        console.log(`${rest[0]}: ${Buffer.byteLength(html)} bytes, ${JSON.parse(html.match(/<script type="application\/json" id="data">([^<]*)<\/script>/)[1]).runs.length} runs`);
+        break;
+      }
       case 'open': { // open [dashboard|<https:|file:|claude-cli: URL>]: the OS opener, never a shell
         const target = !run || run === 'dashboard' ? pathToFileURL(render()).href : run;
         out({ opened: open(target) }); break;
@@ -200,7 +207,7 @@ export async function main(argv) {
   skills catalog [owner/repo...]          every runner on this machine: built-in, harness tools, global, project, your briefs
   ui     [port]                           serve the dashboard on 127.0.0.1 with a token, so the Skills sheet and setup wizard can save
   rules  <owner/repo>                     print the policy rules, warnings and per-step guidance that apply
-  rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, deploy.preview required|advisory|off, project.budgetUsd x, project.maxIssuesPerSession n, guide.<step> "text"
+  rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, deploy.preview required|advisory|off, artifact https://claude.ai/artifact/<id> (owner/repo only), project.budgetUsd x, project.maxIssuesPerSession n, guide.<step> "text"
   rules unset <owner/repo|default> <key> [--reason "…"]  remove one (back to the global rule, or the built-in)
   checks <run>                            run the checks.commands rule in the worktree on its HEAD commit (the CI stand-in)
   note   <run> <step|next> -              record the user's one-shot note for a step (text on stdin; only from the user's own chat message)
@@ -229,7 +236,8 @@ export async function main(argv) {
   dir    <run>                            print the run's artifact folder
   open   [dashboard|url]                  open the dashboard (default) or an https:, file: or claude-cli: URL with the OS opener
   install-skill                          link ~/.claude/skills/software-factory to this checkout (a junction on Windows)
-  render | demo | test`);
+  render [--artifact <out>]              rewrite dashboard.html, or write the claude.ai Artifact page to <out>
+  demo | test`);
         process.exitCode = cmd ? 1 : 0;
     }
   } catch (e) {
