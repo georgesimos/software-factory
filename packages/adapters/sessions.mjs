@@ -6,7 +6,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { command } from '../core/src/platform.ts';
 
 // Per session, older events are dropped past either cap, and a replay that reaches back past them starts with a 'dropped' event.
@@ -42,13 +42,18 @@ export const resolveSpec = (spec, env, resolve) => command(spec.cmd, spec.args, 
 // Stops a child and everything under it (claude's Bash tools: dev servers, watchers). Windows: taskkill /T, since through a
 // .cmd shim kill() would end only cmd.exe. POSIX: the child leads its own process group (spawned detached), so the group
 // gets SIGTERM. A spawn that failed with ENOENT keeps pid 0, and kill(0) or kill(-0) would signal our own group.
-export function killTree(child, platform = process.platform, run = spawn, kill = process.kill) {
+// wait: on quit, taskkill runs to the end (5 s at most) before this returns: Electron can exit first otherwise, and taskkill,
+// in the same kill-on-close job, dies with it while claude keeps writing in the worktree. Signals are synchronous anyway.
+export function killTree(child, platform = process.platform, run, kill = process.kill, wait = false) {
   if (!child.pid) return;
-  if (platform === 'win32') run('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }).on('error', () => { /* taskkill missing: nothing else to try */ });
-  else try { kill(-child.pid, 'SIGTERM'); } catch { child.kill(); } // the group is gone: the child alone, if it is not
+  const args = ['/pid', String(child.pid), '/T', '/F'];
+  if (platform !== 'win32') try { kill(-child.pid, 'SIGTERM'); } catch { child.kill(); } // the group is gone: the child alone, if it is not
+  else if (wait) (run ?? spawnSync)('taskkill', args, { stdio: 'ignore', windowsHide: true, timeout: 5_000 });
+  else (run ?? spawn)('taskkill', args, { stdio: 'ignore', windowsHide: true }).on('error', () => { /* taskkill missing: nothing else to try */ });
 }
-// Detached children don't get the terminal's Ctrl-C, so a running session is stopped when this process ends.
-export const stopAll = () => { for (const s of sessions.values()) if (s.state === 'running') s.stop(); };
+// Detached children don't get the terminal's Ctrl-C, so a running session is stopped when this process ends: waited for,
+// since nothing after 'exit' or quit gets another turn of the event loop.
+export const stopAll = () => { for (const s of sessions.values()) if (s.state === 'running') s.stop(true); };
 process.once('exit', stopAll);
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(sig, () => { stopAll(); process.kill(process.pid, sig); }); // then the default action
 
@@ -77,7 +82,7 @@ export function startSession(h, opts, { cwd, env = process.env, label = '', modu
   // spec.stdin carries the prompt: as an argument its space and # would need cmd.exe quoting, which a .cmd shim can't get
   const child = spawn(c.file, c.args, { cwd, env, stdio: [spec.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsVerbatimArguments: !!c.windowsVerbatimArguments });
   if (spec.stdin !== undefined) child.stdin.on('error', () => { /* exited before reading it: reported by close */ }).end(spec.stdin);
-  s.stop = () => killTree(child);
+  s.stop = (wait) => killTree(child, process.platform, undefined, process.kill, wait);
   readline.createInterface({ input: child.stdout }).on('line', (line) => {
     let data;
     try { data = JSON.parse(line); } catch { return emit(s, { type: 'text', data: line }); }
