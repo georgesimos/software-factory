@@ -92,7 +92,7 @@ export function derive(events) {
     else if (e.sessionId) r.sessions.find((x) => x.id === e.sessionId).last = e.ts;
     if (e.costUsd) r.costUsd = +((r.costUsd || 0) + e.costUsd).toFixed(4);
     if (e.tokens) r.tokens = (r.tokens || 0) + e.tokens;
-    if (e.stage === 'intake' && e.status === 'started') r.outcome = 'in-progress'; // resume after needs-info
+    if (e.stage === 'intake' && e.status === 'started') { r.outcome = 'in-progress'; delete r.humanMerge; delete r.reverted; } // resume after needs-info, or a new run after a revert
     if (r.outcome === 'awaiting-approval' && !OUTCOMES.includes(e.status)) r.outcome = 'in-progress'; // spec approved
     if (e.status === 'reverted') r.reverted = { pr: e.pr, reason: e.reason };
     if (e.stage === 'build' && e.status === 'started') r.iteration++;
@@ -111,6 +111,7 @@ export function derive(events) {
     if (e.stage !== 'review' && (e.runner || r.runners?.[e.stage])) (r.runners ??= {})[e.stage] = e.runner; // latest event of the stage wins
     if (e.stage === 'gate' && ['spec', 'build'].includes(e.next)) r.loopbacks.push({ iteration: r.iteration, route: e.next, reasons: e.reasons, ts: e.ts });
     if (e.stage === 'approve' && e.status === 'decided') r.decision = { action: e.action, reasons: e.reasons };
+    if (e.stage === 'approve' && e.status === 'merged' && e.by === 'human') r.humanMerge = { by: e.mergedBy, sha: e.sha, ts: e.ts }; // only sync records it
     if (OUTCOMES.includes(e.status)) r.outcome = e.status;
   }
   for (const r of Object.values(runs)) {
