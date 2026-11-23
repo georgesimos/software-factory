@@ -5,7 +5,8 @@ import path from 'node:path';
 import { addBurn, burnOf, finishBurn } from './derive.ts';
 import { costOf } from './constants.ts';
 import { io, stateDir } from './log.ts';
-import { ls, readArchive } from '../../factory/factory.mjs';
+import { readArchive } from '../../factory/factory.mjs';
+import { ls } from './workspace.ts';
 
 // ---------- measured burn: Claude Code transcripts of the sessions that recorded events ----------
 export const projectsRoot = () => io.projects || path.join(os.homedir(), '.claude', 'projects');

@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ls, projects } from '../../factory/factory.mjs';
+import { ls, projects } from './workspace.ts';
 import { checkGuide, checkRules, rules } from './rules.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { stateDir } from './log.ts';
