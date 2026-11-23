@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import { setup } from './setup.mjs';
 import { COST_CAP, TOKEN_CAP } from '../../core/src/constants.ts';
 import { HERE } from '../factory.mjs';
-import { record } from '../../core/src/log.ts';
+import { archive, record } from '../../core/src/log.ts';
 import { projects, saveProject } from '../../core/src/workspace.ts';
 import { command, opener } from '../../core/src/platform.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
@@ -148,6 +148,9 @@ test('launchSession(): an attached repo and an issue number only; #25\'s refusal
     record(`acme/app#${n}`, 'approve', o, {});
     assert.throws(() => launchSession({ repo: 'acme/app', issue: n }), new RegExp(`is ${o}: it needs a human`));
   }
+  assert.ok(archive(-1).archived >= 2, 'F archive moves the finished runs out of the log');
+  for (const [n, o] of [[80, 'escalated'], [81, 'rejected']])
+    assert.throws(() => launchSession({ repo: 'acme/app', issue: n }), new RegExp(`is ${o} \\(archived\\): it needs a human`), 'an archived run is still a human\'s call');
   record('acme/app#5', 'intake', 'started', { imported: true });
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 5 }), /imported/);
   process.env.STUB_LOGGED_OUT = '1'; harnessReady.clear();

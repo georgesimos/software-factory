@@ -13,7 +13,7 @@ import { derive, getRun } from '../../core/src/derive.ts';
 import { facts, intake } from '../../core/src/github.ts';
 import { headlessArgs } from '../../core/src/review.ts';
 import { loop } from '../../core/src/project.ts';
-import { artifact, page, render, residue } from '../../server/src/server.ts';
+import { SECRET, artifact, page, render, residue } from '../../server/src/server.ts';
 import { rules } from '../../core/src/rules.ts';
 import { wtFile } from '../../core/src/workspace.ts';
 import { test } from 'node:test';
@@ -191,6 +191,12 @@ export function artifactTest() {
     assert.throws(() => artifact(page({ auth: { accessToken: 'x' } })), /carries a token/); // any key ending in token
     assert.throws(() => artifact('<p>no skeleton</p>'), /no longer has/);
     assert.equal(dataOf(artifact(page({ reload: 10_000 }))).reload, undefined, 'updates arrive by republish');
+    const inApp = (x) => page().replace('<script type="module">', () => `${x}<script type="module">`); // in the bundle, outside the data
+    assert.throws(() => artifact(inApp(`<p>${os.homedir()}/notes</p>`)), /the app itself carries a home/);
+    for (const t of ['ghp_' + 'a'.repeat(36), 'sk-ant-' + 'b'.repeat(40), 'http://127.0.0.1:4173/?t=' + 'c'.repeat(32)]) {
+      assert.throws(() => artifact(inApp(`<i>${t}</i>`)), /carries a token/, t);
+      assert.throws(() => artifact(page({ note: t })), /carries a token/, t);
+    }
     const tail = page().replace(/<\/body>\s*<\/html>\s*$/, '');
     assert.throws(() => artifact(tail), /no longer has/, 'a missing </body> is not taken from inside the script');
   } finally {
@@ -222,4 +228,12 @@ export function residueTest() {
 setup();
 test('demo: derive, gate, decide, risk, metrics and the dashboard', coreTest);
 test('artifact backstop: refuses this machine\'s names and paths, not owner/repo ids or prose', residueTest);
-test('artifact: the claude.ai page built from the demo state', artifactTest); // runs after coreTest, on its state
+test('artifact: the claude.ai page built from the demo state', artifactTest);
+test('the committed app.html carries nothing from the machine that built it', () => {
+  const html = fs.readFileSync(path.join(HERE, 'app.html'), 'utf8'), host = os.hostname().split('.')[0];
+  for (const re of [/\/Users\//, /\/home\//, /[A-Z]:\\{1,2}Users/i, /~\/(?!\.claude\/|\s)/]) assert.doesNotMatch(html, re); // ~/.claude/… is the documented generic path
+  const user = os.userInfo().username;
+  if (user.length >= 3) assert.ok(!html.toLowerCase().includes(user.toLowerCase()), 'the login');
+  if (host.length >= 3) assert.ok(!html.toLowerCase().includes(host.toLowerCase()), 'the host name');
+  assert.doesNotMatch(html, SECRET);
+}); // runs after coreTest, on its state
