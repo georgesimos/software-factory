@@ -163,7 +163,7 @@ export function artifactTest() {
     assert.ok(!/<!doctype|<html|<head>|<\/head>|<body|<\/body>|<\/html>|<meta charset|<meta name="viewport"|setTimeout\(tick, 10000\);/i.test(art));
     assert.match(art, /<script type="application\/json" id="data">/);
     assert.ok(!art.includes('</script><script>alert')); // a kept run's title still can't break out of the JSON tag
-    assert.deepEqual(Object.keys(a), Object.keys(full)); // nothing beyond what the dashboard shows
+    assert.deepEqual(Object.keys(a), Object.keys(full).filter((k) => k !== 'fCmd')); // nothing beyond what the dashboard shows; F's local path stays home
     assert.deepEqual(a.runs.map((r) => r.id), full.runs.map((r) => r.id)); // every project the dashboard shows
     assert.deepEqual(a.runs.map((r) => r.pr), full.runs.map((r) => r.pr)); // URLs survive
     const loc = JSON.stringify(full), pub = JSON.stringify(a);

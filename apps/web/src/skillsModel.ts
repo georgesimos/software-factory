@@ -47,6 +47,16 @@ export const skillCommand = (scope: string, step: string, runner: unknown) => ru
   : `${F_CMD} skills set ${shq(scope)} ${shq(step)} ${shq(JSON.stringify(runner))}`;
 export const presetCommand = (name: string, scope: string) => `${F_CMD} skills preset ${shq(name)} ${shq(scope)}`;
 
+/**
+ * A new runner for a step keeps the model, effort and fallback set on it here, unless it moves to another harness's
+ * provider, whose models differ (the server refuses them). Without a carry-over, changing who runs a step reset them.
+ */
+export function keepModel(old: StepRunner | undefined, next: StepRunner): StepRunner {
+  if (!old || (next.use === 'provider' && !(old.use === 'provider' && old.harness === next.harness))) return next;
+  const { model, effort, fallback } = old;
+  return { ...next, ...(model && { model }), ...(effort && { effort }), ...(fallback && { fallback }) };
+}
+
 /** The picker's result, or the reason it can't be saved. Ported from pickRunner's Save. */
 export function pickResult(p: { runner: StepRunner | null; axis?: { name: string; globs: string } }): { runner: StepRunner; axis?: string; when?: string[] } | string {
   if (!p.runner) return 'Pick a runner, or fill in the name or path you chose.';

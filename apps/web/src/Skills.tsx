@@ -2,7 +2,7 @@ import { Badge, Button, Dialog, Dot, Input, Select, Table, Tabs } from '@softwar
 import { useState, type ReactNode } from 'react';
 import { post, type CatalogEntry, type Harness, type SkillsData, type StepRunner } from './data.ts';
 import {
-  SOURCES, editStep, entriesFor, kindOf, modelSource, pickResult, presetCommand, runnerKey, runnerName, setHere, skillCommand, stepLabel,
+  SOURCES, editStep, entriesFor, keepModel, kindOf, modelSource, pickResult, presetCommand, runnerKey, runnerName, setHere, skillCommand, stepLabel,
 } from './skillsModel.ts';
 
 // Who runs each step. Under `F ui` (a token) changes save through /api; otherwise each change copies the CLI command.
@@ -51,7 +51,7 @@ function SkillsBody({ skills: S, token, scope: first = 'default', onSaved }: Omi
   const row = (step: string) => {
     const here = setHere(S, scope, step), r = plan[step] ?? { use: 'default' }, isDef = !r.use || r.use === 'default';
     const label = stepLabel(step), axis = step.startsWith('review.') ? step.slice(7) : '';
-    const change = () => setPick({ title: label, step, current: r, done: (x) => save(step, x.runner) });
+    const change = () => setPick({ title: label, step, current: r, done: (x) => save(step, keepModel(here ? (cfg[scope] as Record<string, StepRunner>)[step] : undefined, x.runner)) });
     return (
       <tr key={step}>
         <th scope="row">{label} {(S.required ?? []).includes(axis) ? <Badge quiet>required</Badge> : null}</th>
@@ -78,7 +78,8 @@ function SkillsBody({ skills: S, token, scope: first = 'default', onSaved }: Omi
   const editAxis = (x: StepRunner | null) => {
     const { axis, when, ...runner } = x ?? {};
     setPick({ title: x ? 'Review · ' + axis : 'New review axis', step: 'axes.extra', current: x ? runner : null, axis: x ?? { axis: '', when: [] },
-      done: (p) => saveAxes(x ? own.map((y) => (y.axis === axis ? { axis: p.axis, when: p.when, ...p.runner } : y)) : [...own.filter((y) => y.axis !== p.axis), { axis: p.axis, when: p.when, ...p.runner }]) });
+      done: (p) => saveAxes(x ? own.filter((y) => y.axis === axis || y.axis !== p.axis).map((y) => (y.axis === axis ? { axis: p.axis, when: p.when, ...p.runner } : y)) // a rename onto another axis replaces it
+        : [...own.filter((y) => y.axis !== p.axis), { axis: p.axis, when: p.when, ...p.runner }]) });
   };
   const axisItem = (x: StepRunner, editable: boolean) => (
     <li key={(editable ? 'own:' : 'g:') + x.axis}>
@@ -131,7 +132,7 @@ function ModelCell({ S, scope, step, r, label, save }: { S: SkillsData; scope: s
   return (
     <div className="web-sk-model">
       <Select aria-label={`Model for ${label}`} value={m.set} onChange={on('model')}>
-        <option value="">{m.inherit}</option>{(S.models ?? []).map((x) => <option key={x} value={x}>{x}</option>)}
+        <option value="">{m.inherit}</option>{[...new Set([...(S.models ?? []), m.set].filter(Boolean))].map((x) => <option key={x} value={x}>{x}</option>)}
       </Select>
       <Select aria-label={`Effort for ${label}`} value={mine.effort ?? ''} onChange={on('effort')}>
         <option value="">{mine.effort ? 'Inherit' : r.effort ?? 'Default'}</option>{(S.efforts ?? []).map((x) => <option key={x} value={x}>{x}</option>)}

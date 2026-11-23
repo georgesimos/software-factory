@@ -1,10 +1,10 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import state from '../fixtures/state.json';
 import type { SkillsData } from '../src/data.ts';
 import { SkillsSheet } from '../src/Skills.tsx';
-import { editStep, pickResult, presetCommand, skillCommand } from '../src/skillsModel.ts';
+import { editStep, keepModel, pickResult, presetCommand, skillCommand } from '../src/skillsModel.ts';
 
 const S = state.skills as unknown as SkillsData; // default sets review.code {opus, high} and an a11y axis; acme/shop sets build {sonnet}
 const F = 'node ~/.claude/skills/software-factory/factory.mjs';
@@ -20,6 +20,13 @@ describe('skills rules (ported from dashboard.html)', () => {
   it('a project step it does not set starts from the global one', () => {
     expect(editStep(S, 'acme/shop', 'review.code', 'effort', 'low')).toEqual({ use: 'default', model: 'opus', effort: 'low' });
     expect(editStep(S, 'acme/shop', 'build', 'model', 'opus')).toEqual({ use: 'default', model: 'opus' });
+  });
+  it('a new runner keeps the step’s model, effort and fallback, unless it moves to another harness', () => {
+    const old = { use: 'default', model: 'opus', effort: 'high', fallback: ['sonnet'] };
+    expect(keepModel(old, { use: 'skill', name: 'x' })).toEqual({ use: 'skill', name: 'x', model: 'opus', effort: 'high', fallback: ['sonnet'] });
+    expect(keepModel(old, { use: 'provider', harness: 'codex' })).toEqual({ use: 'provider', harness: 'codex' });
+    expect(keepModel({ use: 'provider', harness: 'claude-code', name: 'a', model: 'haiku' }, { use: 'provider', harness: 'claude-code', name: 'b' })).toEqual({ use: 'provider', harness: 'claude-code', name: 'b', model: 'haiku' });
+    expect(keepModel(undefined, { use: 'skill', name: 'x' })).toEqual({ use: 'skill', name: 'x' });
   });
   it('builds the CLI command with every argument single-quoted', () => {
     expect(skillCommand('default', 'spec', { use: 'skill', name: "it's" })).toBe(`${F} skills set 'default' 'spec' '{"use":"skill","name":"it'\\''s"}'`);
@@ -107,6 +114,16 @@ describe('Skills sheet', () => {
     expect(within(again).getByRole('radio', { name: /a11y-review/ })).toBeChecked();
     await userEvent.click(within(again).getByRole('button', { name: 'Copy command' }));
     expect(writeText).toHaveBeenCalledWith(`${F} skills set 'default' 'build' '{"use":"skill","name":"a11y-review"}'`);
+  });
+
+  it('Escape in the runner picker closes the picker only; a model the list lacks still shows', async () => {
+    const onClose = vi.fn();
+    render(sheet({ onClose, skills: { ...S, models: ['fable', 'sonnet', 'haiku'] } }));
+    expect(screen.getByRole('combobox', { name: 'Model for Review · code' })).toHaveValue('opus');
+    await userEvent.click(screen.getByRole('button', { name: 'Change runner for Build' }));
+    fireEvent(screen.getByRole('dialog', { name: 'Runner for Build' }), new Event('cancel', { cancelable: true }));
+    expect(screen.queryByRole('dialog', { name: 'Runner for Build' })).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('with an empty catalog (the Artifact), a skill by name still works; a new axis is checked first', async () => {

@@ -11,7 +11,7 @@ import { budget, budgetWhy, derive } from '../../core/src/derive.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { ideas, startIdea } from '../../core/src/project.ts';
 import { metrics } from '../../core/src/gate.ts';
-import { onboardConfig, onboardState, readOnboard, setShip } from '../../core/src/onboard.ts';
+import { F_CMD, onboardConfig, onboardState, readOnboard, setShip } from '../../core/src/onboard.ts';
 import { projects, wtInfo } from '../../core/src/workspace.ts';
 import { dashboard, read, readArchive, sessionsFile, stateDir } from '../../core/src/log.ts';
 import { applyPreset, readSkills, setSkill, skillsData } from '../../core/src/skills.ts';
@@ -220,7 +220,7 @@ export function pageData(extra = {}) {
   let idea = {};
   try { idea = { ideas: ideas(events, Object.fromEntries(runs.map((r) => [r.id, r]))) }; } catch (e) { idea = { ideasError: e.message }; } // never fail the event that triggered the render
   return { generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)),
-    harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), ...idea, ...extra };
+    harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), fCmd: F_CMD, ...idea, ...extra };
 }
 export function page(extra = {}) {
   const data = JSON.stringify(pageData(extra)).replace(/</g, '\\u003c');
@@ -235,7 +235,7 @@ export function page(extra = {}) {
 // root (/Users, /home, …) or any /a/b, and runs to the next hard delimiter or URL, spaces included ("Application
 // Support", "Bob Smith"): over-redacting prose is the safe side. Web URLs survive: their slashes follow a word
 // character or '/'. Whatever the patterns miss, the residue check in artifact() refuses.
-const PATH_ONLY = new Set(['worktree', 'cwd', 'installPath', 'projectPath']);
+const PATH_ONLY = new Set(['worktree', 'cwd', 'installPath', 'projectPath', 'fCmd']); // fCmd: the page falls back to the ~ form
 const STOP = String.raw`\n\r"'\x60<>|(){}\[\];,&*?`;
 const BODY = String.raw`(?:(?:(?!\s+https?:\/\/)[^${STOP}])*[^\s${STOP}])?`;
 const ROOTS = 'Users|home|Volumes|srv|private|var|tmp|opt|mnt|media|root|usr|etc|Library|Applications|nix|workspaces?';
