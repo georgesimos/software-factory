@@ -2,3 +2,5 @@
 export * from './constants.ts';
 export * from './log.ts';
 export * from './derive.ts';
+export * from './burn.ts';
+export * from './gate.ts';
