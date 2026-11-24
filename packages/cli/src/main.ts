@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { COST_CAP } from '../../core/src/constants.ts';
 import { approval, facts, intake, merge, postmerge, revert } from '../../core/src/github.ts';
-import { setProject } from '../../core/src/projectset.ts';
+import { closeMerged, setProject } from '../../core/src/projectset.ts';
 import { archive, io, read, record, runDir } from '../../core/src/log.ts';
 import { budget, budgetWhy, derive, getRun } from '../../core/src/derive.ts';
 import { DEFAULT_PRESET, PRESETS, applyPreset, availablePlan, catalog, setSkill, skills } from '../../core/src/skills.ts';
@@ -25,7 +25,7 @@ import { withMeasured } from '../../core/src/burn.ts';
 import { installCli, linkSkill, open } from '../../core/src/platform.ts';
 import { pathToFileURL } from 'node:url';
 
-const GATED = new Set(['event', 'review', 'checks', 'notes', 'axes', 'worktree', 'deps', 'gate', 'intake', 'decide', 'merge', 'approval', 'postmerge', 'revert']);
+const GATED = new Set(['event', 'review', 'checks', 'notes', 'axes', 'worktree', 'deps', 'gate', 'intake', 'decide', 'merge', 'approval', 'postmerge', 'revert', 'close']);
 export async function main(argv: string[]) {
   // shortcut: the words are typed as present; a missing one is undefined at run time, and the command's own check (or its
   // callee's) reports it, as before typing. Index into rest the same way (rest[i]!).
@@ -148,6 +148,10 @@ export async function main(argv: string[]) {
         if (run !== 'create' || !rest[0] || !rest[1]) throw new Error('usage: issues create <owner/repo> <issues.json> [--yes]');
         out(await issuesCreate(rest[0], rest[1], { yes: rest.includes('--yes') })); break;
       }
+      case 'close': { // close RUN --merged <sha>: a git project's change request merged outside the factory; yours only
+        if (rest[0] !== '--merged' || !rest[1] || rest.length !== 2) throw new Error('usage: close <owner/repo#N> --merged <sha>');
+        out(closeMerged(run, rest[1])); break;
+      }
       case 'project': {
         if (run === 'set') { // project set <owner/repo> host|ci|base <value>|--unset [--reason "…"]: only from your own terminal
           const i = rest.indexOf('--reason'), reason = i < 0 ? undefined : rest.splice(i, 2)[1] ?? '';
@@ -253,6 +257,7 @@ export async function main(argv: string[]) {
                                           idea-to-app: record the idea, validate PLAN.md + issues.json, then (with --yes) create the private repo + scaffold
   issues create <owner/repo> <file.json> [--yes]  validate and preview an issue batch; with --yes create it (idempotent by key)
   project <owner/repo>                    idea-to-app status: plan, milestones, next issue, dependency order, burn, loop
+  close <owner/repo#N> --merged <sha>  a git project's escalated run you merged yourself (at the remote's UI): records the merge; the sha must be the base's commit that brought in the reviewed change; yours only, never an agent's
   project set <owner/repo> host|ci|base <value>|--unset [--reason "…"]  a project's host (github|git), CI provider (github-actions|local|none) or base branch (git hosts; on origin when it has one; --unset: the host's own); yours only, never an agent's; a relaxing change needs --reason, and a verified login on a GitHub project
   retire <owner/repo> --reason "<why>"     hide an idea that never got a repo (a leaked fixture) with a recorded event; the log is never rewritten
   loop   <owner/repo>                     next issue to build, or stop (first escalation, project budget, session cap, empty queue)

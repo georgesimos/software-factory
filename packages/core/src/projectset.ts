@@ -3,11 +3,14 @@
 // that relaxes what the factory checks (github to git, CI to less) needs a reason, and on a GitHub project a verified login.
 import { harnesses } from '../../adapters/harnesses/index.ts';
 import { builtin as hosts } from '../../adapters/hosts/index.ts';
+import { introduces } from '../../adapters/hosts/git.ts';
 import { audit, whoami } from './rules.ts';
 import { CI_ORDER, ciOf } from './ci.ts';
 import { cloneId, isGithubRemote, remoteParts, withoutUserinfo } from './remote.ts';
-import { git, hostFn, hostOf, originUrl, projects, projectsFile } from './workspace.ts';
-import { gh } from './github.ts';
+import { baseBranch, git, hostFn, hostOf, originUrl, projects, projectsFile } from './workspace.ts';
+import { getRun } from './derive.ts';
+import { record } from './log.ts';
+import { gh, parseRun } from './github.ts';
 import fs from 'node:fs';
 import type { Project } from './types.ts';
 
@@ -71,4 +74,43 @@ export function setProject(repo: string, key: string, value: string | null, { re
   const gone = Object.fromEntries((['base', 'ci'] as const).filter((k) => key === 'host' && k in next && p[k]).map((k) => [k, p[k]])); // what a host switch cleared
   audit(repo, value === null ? 'unset' : 'set', { key: `project.${key}`, from, ...(value !== null && { value }), ...(Object.keys(gone).length && { cleared: gone }), ...(reason && { reason }), setBy: who.by, ...(who.via === 'local' && { via: who.via }) });
   return { repo, key, from, to: value, by: who.by, via: who.via, ...(note && { note }) };
+}
+
+// F close RUN --merged <sha> (local-first §1.2, git host): a change request merged outside the factory, say a squash at the
+// remote's own review UI, which git can't see. Yours only, like F project set: it records a merge. The sha must be on the
+// base (fetched from origin when there is one) and be the commit that merged the reviewed commit; the run must be escalated, as sync's GitHub human-merge record requires.
+export function closeMerged(run: string, sha: string) {
+  humanOnly('recording a merge');
+  const { repo } = parseRun(run), p = projects()[repo];
+  if (hostOf(repo) === 'github') throw new Error(`${repo} is on GitHub: F sync records a human merge there itself`);
+  if (!p?.path) throw new Error(`${repo} is not attached; run sync first`);
+  if (!/^[0-9a-f]{7,40}$/i.test(sha)) throw new Error(`"${sha}" is not a commit sha`);
+  const base = baseBranch(repo, p.path), origin = !!originUrl(p.path), line = (e: unknown) => String((e as { stderr?: unknown })?.stderr || (e as Error)?.message || e).trim().split('\n')[0];
+  // origin's branch exactly (refs/heads/, never a tag of the same name), read from FETCH_HEAD: a stale tracking ref or a
+  // rewound base can't vouch for a commit origin no longer has
+  let tip: string;
+  try {
+    if (origin) git('-C', p.path, 'fetch', '-q', 'origin', `refs/heads/${base}`);
+    tip = git('-C', p.path, 'rev-parse', '--verify', '-q', `${origin ? 'FETCH_HEAD' : `refs/heads/${base}`}^{commit}`).trim();
+  } catch (e) { throw new Error(`cannot read ${base}${origin ? ' from origin' : ''} in ${p.path}: ${line(e)}`); }
+  let full: string;
+  try { full = git('-C', p.path, 'rev-parse', '--verify', '-q', `${sha}^{commit}`).trim(); } catch { throw new Error(`${sha} is an unknown or ambiguous commit in ${p.path}: give the full sha of the merge commit on ${base}`); }
+  try { git('-C', p.path, 'merge-base', '--is-ancestor', full, tip); }
+  catch (e) {
+    if ((e as { status?: number })?.status === 1) throw new Error(`${sha} is not on ${base}${origin ? ' at origin' : ''} in ${p.path}: give the merge commit on ${base}`);
+    throw new Error(`cannot check whether ${sha} is on ${base}: ${line(e)}`);
+  }
+  // shortcut: the merging commit may predate the escalation (GitHub's sync checks mergedAt); git has no trustworthy merge
+  // time. Upgrade when the git host records its change requests' history (5a's sync for git projects).
+  const r = getRun(run);
+  if (r.outcome !== 'escalated') throw new Error(`${run} is not escalated: only an escalated run is merged by hand`);
+  if (!r.reviewedSha) throw new Error(`${run} has no reviewed commit: nothing to check the merge against`);
+  // The sha must be the commit that brought exactly the reviewed change onto the base: a squash of it, a merge commit or a
+  // fast-forward. Extra files, a partial squash or its completion, a later commit and a revert are refused; an old git or a
+  // bad object throws. shortcut: a fast-forward is indistinguishable from an empty branch's base commit (known limits).
+  let ok: boolean;
+  try { ok = introduces(git, p.path, full, r.reviewedSha); } catch (e) { throw new Error(`cannot check ${sha} against the reviewed commit ${r.reviewedSha.slice(0, 7)}: ${(e as Error).message}`); }
+  if (!ok) throw new Error(`${sha} is not the commit that merged the reviewed commit ${r.reviewedSha.slice(0, 7)}: give the squash or merge commit that brought it onto ${base}`);
+  record(run, 'approve', 'merged', { by: 'human', mergedBy: whoami('recording a merge').by, sha: full });
+  return { run, merged: true, sha: full };
 }

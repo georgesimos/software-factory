@@ -403,6 +403,13 @@ The factory never imports its own `factory/*` branches. A sync only reads GitHub
 `F project set owner/repo host|ci|base <value>` changes a project's host, CI provider or base branch. Never run it yourself:
 it is the user's, refused inside an agent session. If a change is needed, show the user the command to run in their own terminal.
 
+`F close owner/repo#N --merged <sha>` records that the user merged an escalated run of a `git` project outside the factory,
+for example when the base is protected and the factory's push was refused. It is human-only too: show the user the command
+and never run it yourself. It is refused unless the sha is on the base and is the commit that brought exactly the reviewed change onto it (a
+squash of it, a merge commit or a fast-forward; never extra files, a partial squash, a later commit or a revert), and the
+run is escalated. On GitHub, `F sync`
+records a human merge itself.
+
 Run `F archive` now and then. It moves finished runs older than 14 days into compact summaries, which stay on the dashboard.
 
 `F retire owner/repo --reason "<why>"` hides an idea that never got a repo, such as a test fixture that leaked into the real log. It appends an owned `idea retired` event that `F project`, `F loop` and the dashboard skip, and it never rewrites the log. A later idea can then reuse the name. Run it only when the user asks for it in chat.

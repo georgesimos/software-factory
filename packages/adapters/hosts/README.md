@@ -31,7 +31,7 @@ Change requests (PRs on GitHub), all optional too:
 | Function | Returns | Must |
 |---|---|---|
 | `listChangeRequests(ctx, {repo, path})` | `{base, open: [{id, url, title, branch, headSha, closes, author, association}], doneBranches}` | The default branch, the open change requests, and the branches of recently merged or closed ones. |
-| `changeRequest(ctx, {repo, path, id})` | `{state: open\|merged\|closed\|unknown, approval, branch, fork, mergedAt, mergedBy, mergeSha}` | One change request. Throw when the host can't be read: the caller reports it. |
+| `changeRequest(ctx, {repo, path, id, base?})` | `{state: open\|merged\|closed\|unknown, approval, branch, fork, mergedAt, mergedBy, mergeSha}` | One change request. Throw when the host can't be read: the caller reports it. |
 | `merge(ctx, {repo, path, id, sha, base})` | `{merged, sha?, detail?}` | Merge exactly `sha`. Never force anything. |
 | `openChangeRequest(ctx, {repo, path, branch, base, title, body, labels})` | `{id, url?}` | Open one from a branch already pushed. |
 | `publicUrl`, `secretPatterns` | regexes | The host's public URLs (scrubbed from the published page) and token shapes (refused in it). |
@@ -42,6 +42,32 @@ host; `whoami` here says what a host vouches for.
 
 `git.ts` is the host for a clone not on GitHub. It has no server, so its `authStatus` fails and `F new` never uses it; the
 repo `contract()` runs only against hosts that can create a repo.
+
+Its change request is the branch itself, with id `<branch>@<sha7>`. `openChangeRequest` pushes the branch to origin, if
+there is one, with a plain push. It refuses a branch with nothing beyond the base. `merge` squashes exactly the reviewed
+sha onto the base it just fetched (`merge-tree --write-tree` and `commit-tree -p <seen>`, with no checkout). It then
+moves the base only by:
+- **A plain push of that commit.** The remote refuses it as a non-fast-forward if anyone moved the base on, and an
+  `ls-remote` just before the push refuses a base reset backwards or deleted since the fetch.
+- **With no remote, `update-ref refs/heads/<base> <new> <seen>`:** a compare-and-swap, forwards or backwards. When the
+  base is checked out, in one worktree at most:
+  - the worktree must exist and be clean;
+  - a dry run (`read-tree -m -u -n`) must show its files can follow, with no untracked file in the way;
+  - no ignored file may sit at, under, or in the way of a path the squash changes.
+
+  After the swap, the base's checkouts are listed again and that one's HEAD is re-read. Any change undoes the swap;
+  otherwise `read-tree -m -u` updates the files.
+
+A sha already on the base is "no changes", never merged: an empty branch and a human's fast-forward look the same to git,
+and `F close` records the human's. A squash that would change nothing is refused. `changeRequest` reads `merged` only from
+the factory's own squash, confirmed by its tree rather than its message. A conflict is `merge-tree`'s exit 1 with a tree
+on stdout. An unknown commit, or a git older than 2.38, says so instead.
+
+A refusal (a moved or protected base, a conflict, a dirty or missing checkout) returns `merged: false` with what to do next. It is
+never retried or forced, and `test/githost.test.mjs` greps this file for force flags. When the push is refused, merge at
+the host's own UI, then run `F close RUN --merged <sha>` from your own terminal. That records the human merge once the sha
+is on origin's base branch (read exactly, never a tag of the same name) and is the commit that brought exactly the
+reviewed change onto it. The plan's 4b entry lists the known limits.
 
 ## Test
 
