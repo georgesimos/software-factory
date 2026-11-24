@@ -188,7 +188,7 @@ export async function main(argv) {
         if (run) throw new Error('usage: install-cli');
         out(installCli(path.join(import.meta.dirname, '..', '..', 'factory', 'factory.mjs'), { home: os.homedir() })); break;
       case 'ui': await ui(Number(run) || 0); break;
-      case 'start': out(startRun(run)); break; // start owner/repo#N: a detached headless run in the attached clone, as POST /api/runs
+      case 'start': if (!run || rest.length) throw new Error('usage: start <owner/repo#N>'); out(startRun(run)); break; // start owner/repo#N: a detached headless run in the attached clone, as POST /api/runs
       case 'unclaim': // a person clears a run's claim (#25); CLI only, never an API route or a button
         if (!run || rest.some((x) => x !== '--force')) throw new Error('usage: unclaim <owner/repo#N> [--force]');
         out(unclaim(parseRun(run).id, rest.includes('--force'))); break;

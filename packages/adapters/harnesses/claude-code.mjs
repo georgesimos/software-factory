@@ -115,6 +115,10 @@ export default {
     }
     throw new Error(`claude-code has no ${mode} mode`);
   },
+  // A headless run's stream-json events (F start's log, a session's stdout): the session id is on its init line, and it
+  // ended cleanly when its last event is a successful result.
+  sessionOf: (e) => (typeof e?.session_id === 'string' && /^[\w-]{1,100}$/.test(e.session_id) ? e.session_id : undefined), // malformed: skipped, so a later valid one counts
+  exitOf: (e) => (e?.type === 'result' && e.subtype === 'success' && !e.is_error ? 0 : null),
   // The desktop app's own link for one of its sessions. Observed, not documented (ADR §5): best effort; callers fall back
   // to `claude --resume <id>` in a terminal when this returns null.
   openDesktop: (id) => (/^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(String(id)) ? `claude://claude.ai/epitaxy/${id}` : null),

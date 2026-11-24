@@ -23,6 +23,7 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-shome-'));
 const stubEnv = { ...process.env, PATH: [path.join(HERE, 'test', 'bin'), path.dirname(process.execPath)].join(path.delimiter), HOME: home, USERPROFILE: home };
 Object.assign(process.env, { PATH: stubEnv.PATH, HOME: home, USERPROFILE: home }); // detect() and login() spawn from this process's PATH
 const claude = harnesses.find((h) => h.id === 'claude-code');
+const codex = harnesses.find((h) => h.id === 'codex');
 const finished = (s) => new Promise((resolve) => { const ev = []; subscribe(s, (e) => { ev.push(e); if (e.type === 'exit') resolve(ev); }); });
 const LOCAL = 'local_0123abcd-0123-4567-89ab-0123456789ab';
 
@@ -206,7 +207,7 @@ test('launchSession(): an attached repo and an issue number only; #25\'s refusal
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 3 }), /not attached/);
   saveProject('acme/app', clone);
   for (const [x, re] of [[{ repo: 'acme/app', issue: '3' }, /positive issue number/], [{ repo: 'acme/app', issue: 0 }, /positive issue number/], [{ repo: '../x', issue: 3 }, /owner\/repo/],
-    [{ repo: 'acme/app', issue: 3, mode: 'nope' }, /modes are headless, terminal, sdk/], [{ repo: 'acme/app', issue: 3, harness: 'codex' }, /cannot launch/], [{ repo: 'acme/app', issue: 3, harness: 'nope' }, /cannot launch/]]) {
+    [{ repo: 'acme/app', issue: 3, mode: 'nope' }, /modes are headless, terminal, sdk/], [{ repo: 'acme/app', issue: 3, harness: 'codex' }, /Codex can't drive a factory run/], [{ repo: 'acme/app', issue: 3, harness: 'nope' }, /cannot launch/]]) {
     assert.throws(() => launchSession(x), re, JSON.stringify(x));
   }
   record('acme/app#4', 'intake', 'started', {});
@@ -790,4 +791,91 @@ test('launchSession() passes the host modules on: an sdk run in the attached clo
   await finished(launchSession({ repo: 'acme/app', issue: 8, mode: 'sdk' }, stubEnv, { [SDK]: sdk }));
   const { prompt, options } = sdk.rec.q;
   assert.deepEqual([prompt, options.cwd, options.maxBudgetUsd, options.permissionMode], ['/software-factory acme/app#8', projects()['acme/app'].path, COST_CAP, 'auto']);
+});
+
+// #59: Codex headless and terminal, against test/bin's codex stub. Codex runs steps and terminals, never a whole factory run.
+// The sandbox, as an allow-list: exactly one -s, read-only or workspace-write, and nothing that widens or bypasses it.
+// The one -c allowed restates -s for resume, which has no -s of its own.
+const BYPASS = /dangerously|yolo|full-auto|danger-full-access|bypass|network_access|writable_roots/i;
+const sandboxOf = (args) => {
+  assert.equal(args.filter((a) => a === '-s' || a === '--sandbox').length, 1, args.join(' '));
+  const mode = args[args.indexOf('-s') + 1];
+  assert.ok(['read-only', 'workspace-write'].includes(mode), args.join(' '));
+  assert.ok(!args.some((a) => a.startsWith('--config')), args.join(' '));
+  args.forEach((a, i) => { if (a === '-c') assert.equal(args[i + 1], `sandbox_mode=${mode}`, args.join(' ')); });
+  return mode;
+};
+test('codex launch(): exec --json with the prompt on stdin, the sandbox always read-only or (build) workspace-write, never widened or bypassed', () => {
+  assert.deepEqual(codex.launch({ mode: 'headless', prompt: '/x acme/app#3', budget: 4.5 }), { cmd: 'codex', args: ['exec', '--json', '-s', 'read-only', '-'], stdin: '/x acme/app#3' });
+  assert.deepEqual(codex.launch({ mode: 'headless', prompt: 'x', resume: '01a2-b3', write: true }).args, ['exec', '--json', '-s', 'workspace-write', 'resume', '-c', 'sandbox_mode=workspace-write', '01a2-b3', '-']);
+  assert.deepEqual(codex.launch({ mode: 'terminal', resume: 'abc' }), { cmd: 'codex', args: ['resume', 'abc'] });
+  assert.deepEqual(codex.launch({ mode: 'terminal' }), { cmd: 'codex', args: [] });
+  for (const resume of ['-x', '--yolo', 'a b', '', 'x'.repeat(101)]) for (const mode of ['headless', 'terminal'])
+    assert.throws(() => codex.launch({ mode, prompt: mode === 'headless' ? 'x' : undefined, resume }), /resume must be a codex session id/, `${mode} ${resume}`);
+  assert.throws(() => codex.launch({ mode: 'terminal', prompt: 'fix #3' }), /takes no prompt/);
+  assert.throws(() => codex.launch({ mode: 'headless' }), /needs a prompt/);
+  for (const budget of [0, -1, 0.004, NaN]) assert.throws(() => codex.launch({ mode: 'headless', prompt: 'x', budget }), /no run budget left/, String(budget));
+  assert.throws(() => codex.launch({ mode: 'sdk', prompt: 'x' }), /no sdk mode/);
+  for (const mode of codex.modes) for (const write of [false, true]) for (const resume of [undefined, 'abc-1']) {
+    const spec = codex.launch({ mode, prompt: mode === 'terminal' ? undefined : 'x', resume, write });
+    assert.doesNotMatch(JSON.stringify(spec), BYPASS, `${mode} write=${write} resume=${resume}`);
+    if (mode === 'headless') assert.equal(sandboxOf(spec.args), write ? 'workspace-write' : 'read-only');
+  }
+  for (const bad of [['-s', 'danger-full-access'], ['--dangerously-bypass-approvals-and-sandbox'], ['--yolo'], ['--full-auto'], ['-c', 'sandbox_workspace_write.network_access=true'], ['resume', '-c', 'sandbox_mode=workspace-write', 'x'], ['-c', 'sandbox_permissions=["disk-full-read-access"]'], ['--config', 'sandbox_mode=read-only']]) // the check itself catches each
+    assert.throws(() => { const args = ['exec', '--json', '-s', 'read-only', ...bad, '-']; assert.doesNotMatch(args.join(' '), BYPASS); sandboxOf(args); }, undefined, bad.join(' '));
+});
+
+test('codex headless session: the stub\'s JSONL events stream, its thread id is the harness session, the pid reaches onPid, a failed turn exits 1', async () => {
+  const pids = [], s = startSession(codex, { mode: 'headless', prompt: 'hello there' }, { cwd: home, env: stubEnv, label: 't', onPid: (p) => pids.push(p) });
+  const ev = await finished(s);
+  assert.equal(ev.find((e) => e.data?.type === 'item.completed').data.item.text, 'prompt: hello there');
+  assert.ok(ev.some((e) => e.type === 'stderr' && /ERROR a log line/.test(e.data)));
+  assert.deepEqual([s.harnessSession, ev.at(-1).code, pids.length, pids[0] > 0], ['stub-thread', 0, 1, true]);
+  assert.deepEqual(ev.find((e) => e.data?.type === 'thread.started').data.parentIds, [], 'childEnv: never the outer session ids');
+  const bad = startSession(codex, { mode: 'headless', prompt: 'x' }, { cwd: home, env: { ...stubEnv, STUB_FAIL: '1' }, label: 't' });
+  assert.equal((await finished(bad)).at(-1).code, 1);
+});
+
+test('Codex never drives a factory run: F start, POST /api/runs and POST /api/sessions refuse it, spawn nothing and leave no claim; a codex terminal claims under its pty\'s pid', async () => {
+  const id = 'acme/app#97', why = /Codex can't drive a factory run .*F skills set <owner\/repo> <step> .*"harness":"codex".*POST \/api\/sessions\/terminal/;
+  assert.throws(() => startRun(id, stubEnv, () => assert.fail('no spawn'), 'codex'), why);
+  assert.throws(() => launchSession({ repo: 'acme/app', issue: 97, harness: 'codex' }, stubEnv), why);
+  const tok = 't'.repeat(32), H = { host: '127.0.0.1:4646', origin: 'http://127.0.0.1:4646', 'content-type': 'application/json', 'x-factory-token': tok };
+  for (const url of ['/api/runs', '/api/sessions']) {
+    const r = uiHandle({ method: 'POST', url, headers: H, body: JSON.stringify(url === '/api/runs' ? { issue: id, harness: 'codex' } : { repo: 'acme/app', issue: 97, harness: 'codex' }) }, { token: tok, port: 4646 });
+    assert.match(JSON.parse(r.body).error, why, url);
+  }
+  const f = spawnSync(process.execPath, [path.join(HERE, 'factory.mjs'), 'start', id, 'codex'], { env: { ...stubEnv, FACTORY_DIR: io.dir }, encoding: 'utf8', timeout: 60_000 });
+  assert.notEqual(f.status, 0); assert.match(f.stderr, /usage: start <owner\/repo#N>/);
+  assert.equal(readClaim(id), undefined, 'no claim');
+  assert.deepEqual(fs.existsSync(runDir(id)) ? fs.readdirSync(runDir(id)) : [], [], 'no log or prompt');
+  const t = terminalSession({ repo: 'acme/app', issue: 97, harness: 'codex' }, stubEnv, { [PTY]: fakePty(undefined, process.ppid) });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual([readClaim(id).launcher, readClaim(id).pid], ['terminal', process.ppid], 'a person\'s codex terminal holds the run like a claude one');
+  const end = finished(t); t.stop(); await end;
+});
+
+test('F start logs, read by their own harness: a clean codex turn isn\'t misread as killed; no event or no such harness is unknown; a malformed first session id is skipped (#113)', () => {
+  const now = Date.now(), stamp = (t) => new Date(t).toISOString().replace(/[:.]/g, '-');
+  const log = (id, lines, name = 'codex') => {
+    fs.mkdirSync(runDir(id), { recursive: true });
+    const f = path.join(runDir(id), `headless-${stamp(now - 600_000)}${name ? `.${name}` : ''}.log`);
+    fs.writeFileSync(f, lines.join('\n') + '\n');
+    fs.utimesSync(f, new Date(now + 1_000), new Date(now + 1_000));
+    record(id, 'intake', 'started', {});
+  };
+  const go = (id) => { const calls = []; startRun(id, stubEnv, (file, args) => { calls.push(args); return { pid: process.pid, on() { return this; }, unref() {} }; }); return calls[0]; };
+  const started = JSON.stringify({ type: 'thread.started', thread_id: 'th-1' }), turn = JSON.stringify({ type: 'turn.started' }), init = (sid) => JSON.stringify({ type: 'system', subtype: 'init', session_id: sid });
+  log('acme/app#90', [started, turn, JSON.stringify({ type: 'turn.completed', usage: {} }), '2026-11-24T00:00:00Z ERROR after the turn']);
+  log('acme/app#91', [started, turn, JSON.stringify({ type: 'turn.failed', error: { message: 'x' } })]);
+  log('acme/app#93', [started, 'y'.repeat(1_100_000)]);
+  log('acme/app#95', [started, turn, JSON.stringify({ type: 'turn.completed', usage: {} })], 'nope');
+  log('acme/app#98', [init('a.b'), init('x'.repeat(101)), init('cl-98'), JSON.stringify({ type: 'assistant' })], ''); // a legacy claude log, killed
+  log('acme/app#99', [init('cl-99'), JSON.stringify({ type: 'assistant' })], 'claude-code');
+  assert.deepEqual(['90', '91', '93', '95', '98', '99'].map((n) => resumable().includes(`acme/app#${n}`)), [false, false, false, false, true, true], 'only claude-code sessions are offered: that is what a POST resumes');
+  for (const n of ['90', '93', '95']) assert.throws(() => go(`acme/app#${n}`), /already has an active run/, `${n}: clean, or unsure: no auto-resume`);
+  assert.throws(() => go('acme/app#91'), /left active by a codex session: claude-code can't resume it/, 'never a codex thread id to claude');
+  assert.deepEqual(go('acme/app#98').slice(0, 2), ['--resume', 'cl-98'], 'a malformed id is skipped, not taken');
+  assert.deepEqual(go('acme/app#99').slice(0, 2), ['--resume', 'cl-99']);
+  assert.ok(fs.readdirSync(runDir('acme/app#99')).filter((f) => /^headless-.*\.claude-code\.log$/.test(f)).length === 2, 'its own log says claude-code');
 });

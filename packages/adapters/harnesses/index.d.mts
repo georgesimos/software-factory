@@ -19,6 +19,8 @@ export interface Harness {
   models?(): unknown[];
   launch?(opts: object): unknown;
   openDesktop?(id: string): string | null;
+  sessionOf?(event: unknown): string | undefined;
+  exitOf?(event: unknown): 0 | null;
 }
 export function check(h: unknown, file: string): Harness;
 export function load(dir?: string): Promise<Harness[]>;
