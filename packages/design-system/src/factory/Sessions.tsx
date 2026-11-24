@@ -5,9 +5,10 @@ import { Tooltip } from '../components/Tooltip.tsx';
 import { CheckIcon, CopyIcon } from '../components/icons.tsx';
 import { formatAgo } from './model.ts';
 import { SOURCE_LABEL } from './SourceChip.tsx';
+import type { Session } from '@software-factory/core/types';
 
-/** A local agent session working on a run's branch. */
-export interface AgentSession { agent: 'claude-code' | 'codex' | (string & {}); id: string; cwd?: string; last?: string; hostId?: string } // hostId: its Claude desktop app session
+/** A local Claude Code / Codex session: core's Session (agent: the harness id, e.g. claude-code or codex; hostId: its Claude desktop app session). */
+export type AgentSession = Session;
 
 // Paths come from local logs: single-quote them for a POSIX shell, so $, `, \ and ! stay literal.
 export const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
@@ -34,7 +35,7 @@ export function SessionLink({ session: s, now }: { session: AgentSession; now?: 
   const where = [s.last ? formatAgo(s.last, now) : null, basename(s.cwd)].filter(Boolean).join(' · ');
   return (
     <div className="sf-session">
-      <span className="sf-session-agent"><i aria-hidden="true">{GLYPH[s.agent] ?? '◇'}</i>{SOURCE_LABEL[s.agent] ?? s.agent}</span>
+      <span className="sf-session-agent"><i aria-hidden="true">{GLYPH[s.agent ?? ''] ?? '◇'}</i>{SOURCE_LABEL[s.agent ?? ''] ?? s.agent}</span>
       <code className="sf-session-id" title={s.id}>{s.id.slice(0, 8)}</code>
       {where ? <span className="sf-session-where" title={s.cwd}>{where}</span> : null}
       {cmd ? (
@@ -59,7 +60,7 @@ export function SessionList({ sessions, now, action }: { sessions: AgentSession[
 /** Compact "N sessions" chip for list rows and cards. */
 export function SessionsChip({ sessions }: { sessions: AgentSession[] }) {
   if (!sessions.length) return null;
-  const agents = [...new Set(sessions.map((s) => s.agent))];
+  const agents = [...new Set(sessions.map((s) => s.agent ?? ''))];
   return (
     <Badge quiet title={agents.map((a) => SOURCE_LABEL[a] ?? a).join(', ')}>
       <span className="sf-source-glyphs" aria-hidden="true">{agents.map((a) => <i key={a}>{GLYPH[a] ?? '◇'}</i>)}</span>
