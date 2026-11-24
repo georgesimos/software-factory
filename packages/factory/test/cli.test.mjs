@@ -177,6 +177,14 @@ export function harnessTest(cli) {
   assert.deepEqual(JSON.parse(cli(['state', 'acme/app#10'], '', env)).sessions.map((x) => [x.agent, x.id]), [['fake-agent', 'fs-1']]);
   cli(['event', 'acme/fk#2', 'spec', 'passed'], '', env);
   assert.match(JSON.parse(cli(['risk', 'acme/fk#2', '.fake-agent/rules.md'], '', env)).reasons.join(), /sensitive paths: \.fake-agent\/rules\.md/); // its configDirs join the sensitive paths
+  // The same registry as .ts files (#52): F, spawned, loads them as the very same harnesses (launchGate and the codex
+  // allow-list key on these ids); a .ts beside its .mjs twin refuses the folder.
+  const regTs = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-reg-ts-'));
+  for (const f of ls(reg).filter((f) => f.endsWith('.mjs') && !f.startsWith('_'))) fs.copyFileSync(path.join(reg, f), path.join(regTs, f.replace(/\.mjs$/, '.ts')));
+  const envTs = { ...env, FACTORY_HARNESSES: regTs };
+  for (const args of [['onboard', '--json'], ['skills', 'catalog']]) assert.deepEqual(JSON.parse(cli(args, '', envTs)), JSON.parse(cli(args, '', env)), args.join(' '));
+  fs.copyFileSync(path.join(reg, 'codex.mjs'), path.join(regTs, 'codex.mjs'));
+  assert.throws(() => cli(['onboard', '--json'], '', envTs), /codex\.mjs and codex\.ts are both provider "codex": remove one/);
 }
 // Onboarding endpoints: the same checks as /skills, the same validated functions as the CLI, and a re-run that changes nothing.
 export function onboardTest(cli) {

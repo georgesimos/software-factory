@@ -8,9 +8,9 @@ import { pluginFiles } from '../../packages/adapters/registry.mjs';
 // (server → factory/app.html, project → factory/templates, ship → ship/ship.mjs). The plugin folders are read with
 // readdir + import(), so each plugin is an entry of its own, and every output is .mjs to pass the loaders' filters. Adapter
 // folders take the adapters' own filter (an <id>.ts builds to <id>.mjs; a .ts beside its .mjs twin fails the build); ship's
-// connectors keep theirs.
+// connectors keep theirs. Each adapter folder's index.mjs stays an entry too, so it keeps every export (as before).
 const root = path.resolve(import.meta.dirname, '../..');
-const plugins = (dir: string) => (dir.startsWith('packages/adapters/') ? pluginFiles(path.join(root, dir)) : fs.readdirSync(path.join(root, dir)).filter((f) => f.endsWith('.mjs') && !f.startsWith('_')))
+const plugins = (dir: string) => (dir.startsWith('packages/adapters/') ? ['index.mjs', ...pluginFiles(path.join(root, dir))] : fs.readdirSync(path.join(root, dir)).filter((f) => f.endsWith('.mjs') && !f.startsWith('_')))
   .map((f) => path.join(root, dir, f));
 const COPY = ['packages/factory/app.html', 'packages/factory/templates']; // data the code reads at run time
 
