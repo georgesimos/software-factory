@@ -1,4 +1,3 @@
-// @ts-nocheck
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
@@ -26,12 +25,14 @@ import { installCli, linkSkill, open } from '../../core/src/platform.ts';
 import { pathToFileURL } from 'node:url';
 
 const GATED = new Set(['event', 'review', 'checks', 'notes', 'axes', 'worktree', 'deps', 'gate', 'intake', 'decide', 'merge', 'approval', 'postmerge', 'revert']);
-export async function main(argv) {
-  const [cmd, run, ...rest] = argv;
+export async function main(argv: string[]) {
+  // shortcut: the words are typed as present; a missing one is undefined at run time, and the command's own check (or its
+  // callee's) reports it, as before typing. Index into rest the same way (rest[i]!).
+  const [cmd, run, ...rest] = argv as [string, string, ...string[]];
   const fb = rest.indexOf('--fallback'), fallback = fb < 0 ? undefined : rest.splice(fb, 2)[1] || 'configured runner unavailable'; // the configured runner couldn't run; the built-in did
   // "-" reads the JSON payload from stdin (use a quoted heredoc) so untrusted text never touches shell quoting.
-  const json = (s) => (s === '-' ? JSON.parse(fs.readFileSync(0, 'utf8')) : s ? JSON.parse(s) : {});
-  const out = (x) => console.log(JSON.stringify(x, null, 2));
+  const json = (s: string | undefined) => (s === '-' ? JSON.parse(fs.readFileSync(0, 'utf8')) : s ? JSON.parse(s) : {});
+  const out = (x: unknown) => console.log(JSON.stringify(x, null, 2));
   try {
     if (['sync', 'postmerge', 'revert', 'decide', 'merge', 'ship', 'onboard', 'ui'].includes(cmd)) ship.mod = await loadShip();
     if (cmd === 'onboard') await loadShipList(); // ui: serve() loads it
@@ -40,9 +41,9 @@ export async function main(argv) {
     if (GATED.has(cmd) && typeof run === 'string' && run.includes('#')) refuseClaimed(run);
     switch (cmd) {
       case 'event': {
-        const [stage, status] = rest, p = json(rest[2]);
-        const owned = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'approve:closed': 'sync', 'idea:retired': 'retire' };
-        const owner = owned[`${stage}:${status}`] || { gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop', ship: 'ship' }[stage];
+        const [stage, status] = rest as [string, string], p = json(rest[2]); // as argv above: record() checks them
+        const owned: Record<string, string> = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'approve:closed': 'sync', 'idea:retired': 'retire' };
+        const owner = owned[`${stage}:${status}`] || ({ gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop', ship: 'ship' } as Record<string, string>)[stage];
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
         if (stage === 'review' && p.role !== 'verifier') throw new Error('axis verdicts are recorded by "review", not by hand; "event" only takes the verifier usage record ({"role":"verifier",…})');
         if (stage === 'note') throw new Error('"note" is recorded by "note" and "notes", not by hand');
@@ -52,21 +53,21 @@ export async function main(argv) {
         record(run, stage, status, p, { fallback }); break;
       }
       case 'review': { // raw reviewer output on stdin, from any runner; invalid output is recorded as a failed review
-        const { status, payload } = reviewFromText(run, rest[0], fs.readFileSync(0, 'utf8'));
+        const { status, payload } = reviewFromText(run, rest[0]!, fs.readFileSync(0, 'utf8'));
         for (const k of ['tokens', 'costUsd', 'usage', 'model']) delete payload[k]; // usage comes from the orchestrator's flags, never the reviewer's own text
-        for (const [flag, k] of [['--tokens', 'tokens'], ['--cost-usd', 'costUsd']]) { // the orchestrator's usage numbers, kept even when the reply is invalid
+        for (const [flag, k] of [['--tokens', 'tokens'], ['--cost-usd', 'costUsd']] as const) { // the orchestrator's usage numbers, kept even when the reply is invalid
           const i = rest.indexOf(flag), v = i < 0 ? undefined : Number(rest[i + 1]);
-          if (i >= 0 && !(v >= 0)) throw new Error(`${flag} needs a number`);
+          if (i >= 0 && !(v! >= 0)) throw new Error(`${flag} needs a number`);
           if (i >= 0) payload[k] = v;
         }
         const mi = rest.indexOf('--model'), ui = rest.indexOf('--usage'); // record() validates both, as for "F event"; usage replaces --tokens with its sum
         if (mi >= 0) payload.model = rest[mi + 1];
-        if (ui >= 0) { try { payload.usage = JSON.parse(rest[ui + 1]); } catch { throw new Error('--usage needs JSON like {"input":1,"output":2,"cacheRead":3,"cacheWrite":4}'); } }
+        if (ui >= 0) { try { payload.usage = JSON.parse(rest[ui + 1]!); } catch { throw new Error('--usage needs JSON like {"input":1,"output":2,"cacheRead":3,"cacheWrite":4}'); } }
         record(run, 'review', status, payload, { fallback });
         out({ status, findings: payload.findings }); break;
       }
       case 'skills': { // skills <owner/repo> | skills set|unset <owner/repo|default> <step> [json] | skills preset <name> [scope] | skills catalog [owner/repo]
-        if (run === 'catalog') { out(catalog(rest)); break; }
+        if (run === 'catalog') { out(catalog(rest as Parameters<typeof catalog>[0])); break; } // skills.ts is still untyped
         if (run === 'unset') { out(setSkill(rest[0], rest[1], undefined)); break; }
         if (run === 'preset') { out(applyPreset(rest[0], rest[1])); break; }
         if (run !== 'set') { const k = skills(run || ''); out({ ...k, plan: availablePlan(k.plan), extra: Object.values(availablePlan({ ...k.extra })) }); break; }
@@ -75,7 +76,7 @@ export async function main(argv) {
         out(setSkill(scope, key, json(spec))); break;
       }
       case 'rules': { // rules <owner/repo> | rules set <scope> <key> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <scope> <key> [--reason "…"]
-        const flag = (f) => { const i = rest.indexOf(f); return i < 0 ? undefined : rest.splice(i, 2)[1] ?? ''; };
+        const flag = (f: string) => { const i = rest.indexOf(f); return i < 0 ? undefined : rest.splice(i, 2)[1] ?? ''; };
         const reason = flag('--reason'), until = flag('--until');
         const [scope, key, value] = rest;
         if (run === 'set' && scope && key && value !== undefined) out(setRule(scope, key, value, { reason, until }));
@@ -87,11 +88,11 @@ export async function main(argv) {
       case 'checks': out(localChecks(run)); break;
       case 'note': { // note <run> <step|next> - : the user's note on stdin (quoted heredoc); only from the user's own chat message
         if (!rest[0] || rest[1] !== '-') throw new Error('usage: note <run> <step|next> -   (the note text on stdin)');
-        out(note(run, rest[0], fs.readFileSync(0, 'utf8'))); break;
+        out(note(run, rest[0]!, fs.readFileSync(0, 'utf8'))); break;
       }
       case 'notes': out(takeNotes(run, rest)); break; // notes <run> <step…>: pending notes for the steps starting now, handed out once
       case 'automerge': { // per-project switch; decide() escalates everything when off
-        if (!['on', 'off'].includes(rest[0])) throw new Error('usage: automerge <owner/repo> on|off');
+        if (!['on', 'off'].includes(rest[0]!)) throw new Error('usage: automerge <owner/repo> on|off');
         out(setAutoMerge(run, rest[0] === 'on')); break;
       }
       case 'axes': { // no files: diff the run's worktree since the last reviewed commit (or the base branch)
@@ -113,19 +114,19 @@ export async function main(argv) {
       case 'gate': { const { status, ...p } = gate(getRun(run)); record(run, 'gate', status, p, { fallback }); out({ status, ...p }); break; }
       case 'intake': out(intake(run)); break;
       case 'sync': { // `sync` alone re-syncs every attached project
-        const list = run ? [[run, rest[0]]] : Object.entries(projects()).map(([k, v]) => [k, v.path]);
+        const list: [string, string | undefined][] = run ? [[run, rest[0]]] : Object.entries(projects()).map(([k, v]) => [k, v.path]);
         out(list.map(([k, p]) => sync(k, p))); break;
       }
       case 'projects': out(projects()); break;
       case 'onboard': { // onboard [--json] | onboard ship <owner/repo|default> web,mobile,database
-        if (run === 'ship') { out(setShip(rest[0], (rest[1] || '').split(',').map((k) => k.trim()).filter(Boolean))); break; }
+        if (run === 'ship') { out(setShip(rest[0]!, (rest[1] || '').split(',').map((k) => k.trim()).filter(Boolean))); break; }
         const st = onboardState();
         if (run === '--json') out(st); else console.log(onboardText(st));
         break;
       }
       case 'ship': { // thin alias: ship.mjs connectors | detect <owner/repo> | status <owner/repo> [sha]  (reads only)
         if (!ship.mod) throw new Error('the ship harness (packages/ship) is not installed next to the factory');
-        out(await ship.mod.main([run, ...rest].filter(Boolean), { path: projects()[rest[0]]?.path })); break;
+        out(await ship.mod.main([run, ...rest].filter(Boolean), { path: projects()[rest[0]!]?.path })); break;
       }
       case 'discover': out(discover([run, ...rest].filter(Boolean))); break;
       case 'decide': { const r = getRun(run); const f = r.imported ? {} : facts(r); const d = decide(r, f); record(run, 'approve', 'decided', { ...d, facts: f }); out({ ...d, facts: f }); break; }
@@ -136,11 +137,11 @@ export async function main(argv) {
       case 'revert': out(revert(run, rest.join(' ') || 'CI failed on the base branch after merge')); break;
       case 'queue': out(await queue(run)); break;
       case 'new': { // new "<idea>" [--name owner/repo] [--stack id] [--dry-run] [--yes] [--out dir] [--path dir] [--public] [--host id] [--tracker id]
-        const has = (f) => { const i = rest.indexOf(f); return i >= 0 && !!rest.splice(i, 1); };
-        const opt = (f) => { const i = rest.indexOf(f); return i < 0 ? undefined : rest.splice(i, 2)[1]; };
+        const has = (f: string) => { const i = rest.indexOf(f); return i >= 0 && !!rest.splice(i, 1); };
+        const opt = (f: string) => { const i = rest.indexOf(f); return i < 0 ? undefined : rest.splice(i, 2)[1]; };
         const o = { idea: run, name: opt('--name'), stack: opt('--stack'), out: opt('--out'), dest: opt('--path'), host: opt('--host'), tracker: opt('--tracker'), dryRun: has('--dry-run'), yes: has('--yes'), visibility: has('--public') ? 'public' : undefined };
         if (rest.length) throw new Error(`unknown arguments: ${rest.join(' ')}`);
-        out(await newProject(Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)))); break;
+        out(await newProject(Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Parameters<typeof newProject>[0])); break; // o has idea; only unset options are dropped
       }
       case 'issues': { // issues create <owner/repo> <file.json> [--yes]
         if (run !== 'create' || !rest[0] || !rest[1]) throw new Error('usage: issues create <owner/repo> <issues.json> [--yes]');
@@ -155,7 +156,7 @@ export async function main(argv) {
       case 'usage': { // measured (transcripts) or reported (payload) burn; no run: one line per run
         if (run) { const r = getRun(run); out({ run: r.id, ...(r.burn || { measured: false, total: null }), budget: budget(r) }); break; }
         const events = read();
-        out(Object.fromEntries(Object.values(withMeasured(derive(events), events)).filter((r) => r.burn).map((r) => [r.id, { measured: r.burn.measured, ...r.burn.total }])));
+        out(Object.fromEntries(Object.values(withMeasured(derive(events), events)).filter((r) => r.burn).map((r) => [r.id, { measured: r.burn!.measured, ...r.burn!.total }])));
         break;
       }
       case 'headless-args': { // the run's remaining budget; an imported checkout is someone else's code, so never -p there
@@ -163,7 +164,7 @@ export async function main(argv) {
         if (r.imported) throw new Error(`${run} is imported: never run claude -p in its checkout`);
         if (b.over) throw new Error(`run budget exceeded ${budgetWhy(b)}`);
         const si = rest.indexOf('--share'), share = si < 0 ? 1 : Number(rest[si + 1]), st = rest.indexOf('--step');
-        out(headlessArgs({ ...(st >= 0 && stepModel(run, rest[st + 1])), schema: rest.includes('--review') ? JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'factory', 'references', 'review.schema.json'), 'utf8')) : undefined, budget: COST_CAP - b.usd, write: rest.includes('--write'), share }));
+        out(headlessArgs({ ...(st >= 0 && stepModel(run, rest[st + 1]!)), schema: rest.includes('--review') ? JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'factory', 'references', 'review.schema.json'), 'utf8')) : undefined, budget: COST_CAP - b.usd, write: rest.includes('--write'), share }));
         break;
       }
       case 'dir': console.log(runDir(run)); break;
@@ -172,7 +173,7 @@ export async function main(argv) {
         if (!rest[0]) throw new Error('usage: render --artifact <out.html>');
         const html = artifact();
         fs.writeFileSync(rest[0], html);
-        console.log(`${rest[0]}: ${Buffer.byteLength(html)} bytes, ${JSON.parse(html.match(/<script type="application\/json" id="data">([^<]*)<\/script>/)[1]).runs.length} runs`);
+        console.log(`${rest[0]}: ${Buffer.byteLength(html)} bytes, ${JSON.parse(html.match(/<script type="application\/json" id="data">([^<]*)<\/script>/)![1]!).runs.length} runs`);
         break;
       }
       case 'open': { // open [dashboard|<https:|file:|claude-cli: URL>|<session id>]: the OS opener, never a shell
@@ -261,7 +262,7 @@ export async function main(argv) {
         process.exitCode = !cmd || ['help', '--help', '-h'].includes(cmd) ? 0 : 1;
     }
   } catch (e) {
-    console.error(`factory: ${e.message}`);
+    console.error(`factory: ${(e as Error).message}`);
     process.exitCode = 1;
   }
 }
