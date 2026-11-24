@@ -142,15 +142,16 @@ async function sdk(s, spec, { cwd, env, modules, done, onPid }) {
   if (aborted()) return done('stopped');
   let result;
   try {
-    // The SDK's own spawn, made here so the CLI's pid reaches the claim. stderr is read (else a full pipe stalls the CLI)
-    // and passed on to the options' stderr callback, as the SDK's default spawn does.
+    // The SDK's own spawn, made here so the CLI's pid reaches the claim (0.3.330 has no pid callback). stderr is read (else a
+    // full pipe stalls the CLI) and passed on to the options' stderr callback, as the SDK's default spawn does. With a custom
+    // spawn the SDK would put MCP servers' env and headers on the CLI's argv: 'initialize' sends them over stdin instead.
     const spawnClaudeCodeProcess = (o) => {
       const child = spawn(o.command, o.args, { cwd: o.cwd, env: o.env, signal: o.signal, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
       child.stderr.on('data', (d) => spec.options?.stderr?.(String(d)));
       if (child.pid) onPid(child.pid);
       return child;
     };
-    for await (const m of mod.query({ prompt: spec.prompt, options: { ...spec.options, cwd, env, abortController, spawnClaudeCodeProcess } })) {
+    for await (const m of mod.query({ prompt: spec.prompt, options: { ...spec.options, cwd, env, abortController, spawnClaudeCodeProcess, mcpServersDelivery: 'initialize' } })) {
       if (m?.type === 'result') result = m;
       emit(s, { type: 'event', data: m });
     }

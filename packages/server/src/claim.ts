@@ -70,17 +70,24 @@ export function takeClaim(id: string, launcher: string, fields: Partial<Claim> =
   }
   return {
     claim: c,
-    update(more: Partial<Claim>) { Object.assign(c, more); put(id, c, false); },
+    update(more: Partial<Claim>) { // only while it's still ours: F unclaim --force may have cleared it, and another launcher taken it
+      const now = readClaim(id);
+      if (now?.token !== c.token) throw new Error(`${id}'s claim was cleared${now ? ` and taken by ${now.launcher}` : ''} (F unclaim) before this harness started: stopped it`);
+      // shortcut: a takeover between this re-read and the rename (microseconds) is still overwritten; lock it if that shows up.
+      Object.assign(c, more); put(id, c, false);
+    },
     release() { dropClaim(id, c); },
   };
 }
 export const running = (id: string, c = readClaim(id)) => new Error(`${id} already has a running session (${c ? `${c.launcher}${c.pid ? `, pid ${c.pid}` : ', not started yet'}` : 'unreadable claim'}). `
-  + (c?.pid ? `If that process is gone: F unclaim ${id}` : `If nothing is starting it: F unclaim ${id} --force`) + ` (it deletes ${file(id)})`);
+  + (c?.pid ? `If that process is gone: F unclaim ${id}` : `If nothing is starting it (check for a running claude on ${id} first): F unclaim ${id} --force`) + ` (it deletes ${file(id)})`);
 // F unclaim <run>: a person clears a claim that blocks the run. Refused while it may be live (unreadable included), unless forced.
 export function unclaim(id: string, force = false) {
-  if (!fs.existsSync(file(id))) return { unclaimed: false, why: 'no claim' };
+  try { fs.lstatSync(file(id)); } catch { return { unclaimed: false, why: 'no claim' }; } // lstat: a dangling symlink is a claim too
   const c = readClaim(id);
-  if (!force && (!c || claimLive(c))) throw new Error(`${id}'s claim is ${c ? `live${c.pid ? ` (pid ${c.pid})` : ' (not started yet)'}` : 'unreadable'}: stop that process first, or F unclaim ${id} --force`);
-  fs.rmSync(file(id), { force: true });
+  if (!force && (!c || claimLive(c))) throw new Error(`${id}'s claim is ${c ? `live${c.pid ? ` (pid ${c.pid})` : ' (not started yet)'}` : 'unreadable'}: stop that process first, or (check for a running claude on ${id} first) F unclaim ${id} --force`);
+  // shortcut: no token re-check, so a claim a launcher takes over between the read above and this delete (microseconds) is
+  // deleted too; a person runs this once a run is stuck, so add the check if it ever races a launcher.
+  try { fs.unlinkSync(file(id)); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; } // unlink, not rmSync: that leaves a dangling symlink in place
   return { unclaimed: true, ...(c && { pid: c.pid, launcher: c.launcher }) };
 }

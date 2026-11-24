@@ -233,9 +233,10 @@ export function launchSession(x, env = process.env, modules = hostModules) {
   const { h, mode, cwd, id, resume, budget: left } = launchGate(x, modules);
   return claimed(id, 'session', (onPid) => startSession(h, { mode, prompt: `/software-factory ${id}`, resume, budget: left, write: true }, { cwd, env, label: id, modules, onPid }));
 }
-// A session started here holds the run's claim until it exits, under its harness's pid and start time (a pty's pid; the
-// SDK's is this process), so a harness this app leaves behind when killed still holds it. A failed start lets go at once;
-// a pid whose start time can't be read (POSIX) is stopped, as the claim couldn't tell it from a reused pid later.
+// A session started here holds the run's claim until it exits, under its harness's pid and start time (the headless child,
+// the pty, or the CLI the SDK spawns), so a harness this app leaves behind when killed still holds it. A failed start lets go at once;
+// a pid whose start time can't be read (POSIX) is stopped, as the claim couldn't tell it from a reused pid later, and so is
+// one whose claim was cleared (F unclaim --force) before it started.
 function claimed(id: string, launcher: string, start: (onPid: (pid: number) => void) => Session) {
   const cl = takeClaim(id, launcher); // pid 0 until the spawn
   let s: Session | undefined, bad: Error | undefined;

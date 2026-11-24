@@ -272,7 +272,7 @@ const claimAt = (id, c) => { fs.mkdirSync(runDir(id), { recursive: true }); fs.w
 test('takeClaim(): one launcher per run across processes; a dead, reused or foreign pid doesn\'t hold it', { skip: process.platform === 'win32' && 'start times are POSIX (ps)' }, () => {
   const id = 'acme/claims#1', file = path.join(runDir(id), 'claim.json');
   const a = takeClaim(id, 'start');
-  assert.throws(() => takeClaim(id, 'session'), /acme\/claims#1 already has a running session \(start, not started yet\)\. If nothing is starting it: F unclaim acme\/claims#1 --force/, 'pid 0: between its claim and its spawn');
+  assert.throws(() => takeClaim(id, 'session'), /acme\/claims#1 already has a running session \(start, not started yet\)\. If nothing is starting it \(check for a running claude on acme\/claims#1 first\): F unclaim acme\/claims#1 --force/, 'pid 0: between its claim and its spawn');
   a.update({ pid: process.pid, since: procStart(process.pid) });
   assert.throws(() => takeClaim(id, 'session'), /\(start, pid \d+\)/);
   a.release();
@@ -293,7 +293,7 @@ test('takeClaim(): one launcher per run across processes; a dead, reused or fore
     claimAt(id, c);
     assert.throws(() => takeClaim(id, 'session'), /already has a running session \(start, pid \d+\)\. If that process is gone: F unclaim acme\/claims#1 \(it deletes .*claim\.json\)/, why);
   }
-  assert.throws(() => unclaim(id), /claim is live \(pid \d+\): stop that process first, or F unclaim acme\/claims#1 --force/);
+  assert.throws(() => unclaim(id), /claim is live \(pid \d+\): stop that process first, or \(check for a running claude on acme\/claims#1 first\) F unclaim acme\/claims#1 --force/);
   const held = readClaim(id);
   assert.deepEqual(unclaim(id, true), { unclaimed: true, pid: held.pid, launcher: 'start' }, '--force: the user knows it is gone');
   assert.equal(readClaim(id), undefined);
@@ -312,8 +312,8 @@ test('takeClaim(): one launcher per run across processes; a dead, reused or fore
   assert.match(f(dot).stderr, /not started yet.*F unclaim o\/\.github#3 --force/);
   assert.equal(JSON.parse(f(dot, '--force').stdout).unclaimed, true);
   // Never stale by age: an hour-old claim with no pid yet, an unreadable one and an empty one hold until F unclaim --force.
-  for (const [body, re] of [[JSON.stringify({ pid: 0, launcher: 'start', at: new Date(Date.now() - 3_600_000).toISOString() }), /not started yet\)\. If nothing is starting it: F unclaim acme\/claims#1 --force/],
-    ['{', /\(unreadable claim\)\. If nothing is starting it: F unclaim acme\/claims#1 --force/], ['', /unreadable claim/]]) {
+  for (const [body, re] of [[JSON.stringify({ pid: 0, launcher: 'start', at: new Date(Date.now() - 3_600_000).toISOString() }), /not started yet\)\. If nothing is starting it \(check for a running claude on acme\/claims#1 first\): F unclaim acme\/claims#1 --force/],
+    ['{', /\(unreadable claim\)\. If nothing is starting it \(check for a running claude on acme\/claims#1 first\): F unclaim acme\/claims#1 --force/], ['', /unreadable claim/]]) {
     fs.writeFileSync(file, body);
     fs.utimesSync(file, new Date(Date.now() - 3_600_000), new Date(Date.now() - 3_600_000));
     assert.throws(() => takeClaim(id, 'session'), re, JSON.stringify(body));
@@ -326,6 +326,24 @@ test('takeClaim(): one launcher per run across processes; a dead, reused or fore
   const c = takeClaim(id, 'start'); claimAt(id, { pid: 0, launcher: 'other', token: 'x' });
   c.release();
   assert.equal(readClaim(id).launcher, 'other', 'release() never drops a claim another launcher took over');
+  unclaim(id, true);
+  // A, not started yet, is cleared with --force; B takes the run and starts. A's late update() must not overwrite B's claim.
+  const A = takeClaim(id, 'start');
+  unclaim(id, true);
+  const B = takeClaim(id, 'session');
+  B.update({ pid: process.pid, since: me });
+  assert.throws(() => A.update({ pid: 999_999_9, since: 'x' }), /claim was cleared and taken by session \(F unclaim\) before this harness started/);
+  A.release();
+  assert.deepEqual([readClaim(id).token, readClaim(id).pid], [B.claim.token, process.pid], "B's claim is intact");
+  B.release();
+  assert.equal(readClaim(id), undefined);
+  assert.throws(() => A.update({ pid: 1 }), /claim was cleared \(F unclaim\)/, 'cleared and not retaken: still not ours');
+  assert.equal(fs.existsSync(file), false);
+  fs.symlinkSync(path.join(runDir(id), 'gone'), file); // a dangling link: takeClaim refuses and names --force, which clears it
+  assert.throws(() => takeClaim(id, 'session'), /unreadable claim.*--force/);
+  assert.throws(() => unclaim(id), /unreadable/);
+  assert.equal(unclaim(id, true).unclaimed, true);
+  assert.throws(() => fs.lstatSync(file), /ENOENT/);
 });
 
 test('a claim held in another process refuses launchSession(), startRun() and a terminal, finished run or not; a stale one is dropped; a failed spawn leaves nothing', () => {
@@ -559,6 +577,7 @@ test('a stop while node-pty or the SDK loads is kept: nothing starts', async () 
 test('sdk mode: the CLI the SDK spawns goes through our spawn, so its pid reaches onPid (the claim)', async () => {
   const pids = [], children = [];
   const sdk = { async *query(q) {
+    sdk.opts = q.options;
     const child = q.options.spawnClaudeCodeProcess({ command: process.execPath, args: ['-e', 'process.stderr.write("warn"); setTimeout(() => {}, 200)'], env: process.env, signal: new AbortController().signal });
     children.push(child);
     yield { type: 'system', subtype: 'init', session_id: 'sdk-2' };
@@ -569,6 +588,7 @@ test('sdk mode: the CLI the SDK spawns goes through our spawn, so its pid reache
   assert.equal((await finished(s)).at(-1).code, 0);
   assert.deepEqual(pids, [children[0].pid]);
   assert.notEqual(pids[0], process.pid, 'the CLI, not this process');
+  assert.equal(sdk.opts.mcpServersDelivery, 'initialize', "MCP servers' env and headers stay off the CLI's argv");
 });
 
 test('sdk mode: the host env reaches the SDK, and a failed result exits 1', async () => {
