@@ -25,6 +25,7 @@ export interface FactoryEvent {
   harness?: string; sessionId?: string; hostSessionId?: string; cwd?: string; // hostSessionId: from CLAUDE_CODE_HOST_SESSION_ID only
   costUsd?: number; tokens?: number; usage?: Usage; model?: string;
   axis?: string; axes?: string[]; role?: string; sha?: string | null; findings?: Finding[]; runner?: Runner; localChecks?: LocalChecks;
+  summary?: string; questions?: string[]; // intake passed / needs-info
   next?: string; reasons?: string[]; action?: string; by?: string; via?: string; mergedBy?: string | null; reason?: string; // via: as Rule.via, on rules and note events
   connector?: string; env?: string; kind?: string; state?: string; at?: string; detail?: string; creator?: string; // ship
   id?: string; step?: string; text?: string; notes?: string[]; steps?: string[]; claim?: unknown; // note
@@ -54,10 +55,10 @@ export type Outcome = 'in-progress' | 'rejected' | 'needs-info' | 'merged' | 'es
 /** What derive() builds per run id; archive.jsonl holds the same shape with `archived` and `sessionEvents`. */
 export interface Run {
   id: string; iteration: number; outcome: Outcome; events: FactoryEvent[]; loopbacks: Loopback[];
-  /** iteration → axis → review */
-  reviews: Record<number, Record<string, AxisReview>>;
+  /** iteration → axis → review (string keys: it is JSON on the wire; a number index still works) */
+  reviews: Record<string, Record<string, AxisReview>>;
   /** iteration → axes requested */
-  axes?: Record<number, string[]>;
+  axes?: Record<string, string[]>;
   stage: string; status: string; started: string; updated: string; durationMs: number;
   title?: string; url?: string; pr?: string; branch?: string; spec?: string; issues?: number[]; children?: string[]; parent?: string;
   author?: string; association?: string; source?: string; imported?: boolean; origin?: string; originAssociation?: string;
@@ -70,6 +71,17 @@ export interface Run {
   /** server.ts runsData(): the worktree path, the dashboard's "Open in Claude" cwd. */
   worktree?: string;
   archived?: boolean; sessionEvents?: { ts: string; stage: string; status: string; sessionId: string }[];
+}
+
+/** gate.ts metrics(): the board's numbers over a list of runs. */
+export interface Metrics {
+  runs: number; inProgress: number; merged: number; humanMerged: number; escalated: number; rejected: number; needsInfo: number;
+  closed: number; awaitingApproval: number; split: number;
+  mergeRate: number | null; avgIterations: number | null; medianCycleMs: number | null;
+  reverts: number; revertRate: number | null; costUsd: number; costPerMergeUsd: number | null;
+  tokens: number; tokensPerMerge: number | null; measuredRuns: number;
+  /** stage → its share of all tokens, 0-1 */
+  stageShare: Record<string, number>;
 }
 
 /** A transcript message's usage: [ts, message id, model, input, output, cacheRead, cacheWrite5m, cacheWrite1h, fast (0|1)]. */

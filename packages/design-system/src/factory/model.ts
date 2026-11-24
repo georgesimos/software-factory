@@ -1,142 +1,34 @@
 // Data shapes emitted by factory.mjs (derive() / metrics() / discover() / sync()) and the
 // presentation rules the reference dashboard applies to them. Every field but `id` may be missing.
 import type { Tone } from '../tokens.ts';
+import type {
+  AxisReview, Burn as WireBurn, BurnCell as WireBurnCell, Deploy, FactoryEvent, Finding, Loopback as WireLoopback, Metrics as WireMetrics, Outcome, Run as WireRun, Runner, Severity,
+} from '@software-factory/core/types';
 
 export const STAGES = ['intake', 'spec', 'build', 'review', 'gate', 'approve'] as const;
 export type Stage = (typeof STAGES)[number];
 
-export const OUTCOMES = ['in-progress', 'merged', 'escalated', 'rejected', 'needs-info', 'closed', 'awaiting-approval', 'split'] as const;
-export type Outcome = (typeof OUTCOMES)[number];
+export const OUTCOMES = ['in-progress', 'merged', 'escalated', 'rejected', 'needs-info', 'closed', 'awaiting-approval', 'split'] as const satisfies readonly Outcome[];
+export type { Outcome };
+true satisfies ([Exclude<Outcome, (typeof OUTCOMES)[number]>] extends [never] ? true : never); // tsc fails when core adds an outcome missing here
 /** needs-info and awaiting-approval resume in their stage, so they are not terminal. */
 export const TERMINAL: readonly Outcome[] = ['merged', 'escalated', 'rejected', 'closed', 'split'];
 
 /** `factory` = the factory drove it. Imported runs carry the agent(s) found locally, joined by "+". */
 export type Source = 'factory' | 'claude-code' | 'codex' | 'human' | 'none' | (string & {});
 
-export type Severity = 'high' | 'medium' | 'low';
-export interface Finding {
-  severity?: Severity;
-  file?: string;
-  line?: number;
-  issue?: string;
-  route?: 'spec' | 'build';
-  /** A string is the dismissal reason. Dismissed findings never block. */
-  dismissed?: string | boolean;
-}
-export interface AxisReview { verdict?: 'passed' | 'failed'; findings?: Finding[]; runner?: Runner }
-/** Who runs a step (skills.json). `fallback` is the model's chain, or {from, reason} when the configured runner was unavailable. */
-export interface Runner {
-  use?: 'default' | 'skill' | 'brief' | 'provider' | (string & {});
-  name?: string;
-  harness?: string;
-  path?: string;
-  model?: string;
-  effort?: string;
-  fallback?: string[] | { from?: Runner; reason?: string };
-}
-/** Tokens and dollars for one slice of a run. `unpriced`: tokens on a model with no price. `used`: the model that served most of it. */
-export interface BurnCell { tokens: number; costUsd: number | null; unpriced?: number; used?: string | null }
-export interface Burn {
-  /** true: counted from session transcripts; false: reported by subagents. */
-  measured?: boolean;
-  total: BurnCell;
-  byStage?: Record<string, BurnCell>;
-  byIteration?: Record<string, BurnCell>;
-  byAxis?: Record<string, BurnCell>;
-  reported?: BurnCell | null;
-}
-export interface Loopback { iteration?: number; route?: 'spec' | 'build'; reasons?: string[]; ts?: string }
-
-export interface RunEvent {
-  ts?: string;
-  run?: string;
-  stage?: Stage;
-  status?: string;
-  axis?: string;
-  axes?: string[];
-  next?: string;
-  summary?: string;
-  reason?: string;
-  reasons?: string[];
-  questions?: string[];
-  spec?: string;
-  costUsd?: number;
-  tokens?: number;
-  [k: string]: unknown;
-}
-
-export interface Run {
-  id: string;
-  title?: string;
-  url?: string;
-  pr?: string;
-  branch?: string;
-  spec?: string;
-  stage?: Stage;
-  status?: string;
-  outcome?: Outcome;
-  iteration?: number;
-  /** iteration → axes requested */
-  axes?: Record<string, string[]>;
-  /** iteration → axis → review */
-  reviews?: Record<string, Record<string, AxisReview>>;
-  loopbacks?: Loopback[];
-  events?: RunEvent[];
-  decision?: { action?: 'merge' | 'escalate'; reasons?: string[] } | null;
-  reverted?: { pr?: string; reason?: string };
-  imported?: boolean;
-  source?: Source;
-  author?: string;
-  association?: string;
-  issues?: number[];
-  children?: string[];
-  parent?: string;
-  archived?: boolean;
-  costUsd?: number;
-  tokens?: number;
-  started?: string;
-  updated?: string;
-  durationMs?: number;
-  /** Local Claude Code / Codex sessions on the run's branch. */
-  sessions?: import('./Sessions.tsx').AgentSession[];
-  /** Latest deploy per connector and env, recorded by packages/ship. Never moves the run's stage. */
-  deploys?: Deploy[];
-  /** step → who ran it */
-  runners?: Record<string, Runner>;
-  burn?: Burn | null;
-  /** The user's one-shot notes (F note): pending until the next step starting takes them. */
-  notes?: { id?: string; step?: string; text?: string; by?: string; ts?: string; state?: 'pending' | 'applied' }[];
-  /** The run's local worktree (F ui only; never in an Artifact). */
-  worktree?: string;
-}
-
-export interface Deploy {
-  connector?: string;
-  kind?: string;
-  env?: string;
-  state?: string;
-  status?: string;
-  url?: string;
-  sha?: string;
-  at?: string;
-  detail?: string;
-  creator?: string;
-}
-
-export interface Metrics {
-  runs?: number;
-  inProgress?: number;
-  merged?: number;
-  escalated?: number;
-  awaitingApproval?: number;
-  mergeRate?: number | null;
-  avgIterations?: number | null;
-  medianCycleMs?: number | null;
-  reverts?: number;
-  revertRate?: number | null;
-  costUsd?: number;
-  costPerMergeUsd?: number | null;
-}
+// The wire shapes are core's (packages/core/src/types.ts: what derive(), metrics() and the server produce), imported as types
+// only, so the design system has no runtime dependency on core. The dashboard reads them loosely: embedded data, archives and
+// older logs may lack any field, so every field but a run's id is optional here.
+export type { Severity, Finding, AxisReview, Runner, Deploy };
+export type RunEvent = Partial<FactoryEvent>;
+export type Loopback = Partial<WireLoopback>;
+/** Tokens and dollars for one slice of a run; only tokens and costUsd are always there. */
+export type BurnCell = Pick<WireBurnCell, 'tokens' | 'costUsd'> & Partial<WireBurnCell>;
+type Cells = 'total' | 'byStage' | 'byIteration' | 'byAxis' | 'reported';
+export type Burn = Partial<Omit<WireBurn, Cells>> & { total: BurnCell; byStage?: Record<string, BurnCell>; byIteration?: Record<string, BurnCell>; byAxis?: Record<string, BurnCell>; reported?: BurnCell | null };
+export type Run = Partial<Omit<WireRun, 'events' | 'loopbacks' | 'burn'>> & { id: string; events?: RunEvent[]; loopbacks?: Loopback[]; burn?: Burn | null };
+export type Metrics = Partial<WireMetrics>;
 
 /** One entry of `factory.mjs discover`. */
 export interface DiscoveredRepo {
@@ -162,7 +54,7 @@ export const OUTCOME_LABEL: Record<Outcome | 'reverted', string> = {
 
 const arr = <T,>(x: T[] | undefined | null): T[] => (Array.isArray(x) ? x : []);
 export const outcomeOf = (r: Run): Outcome => (r.outcome && OUTCOMES.includes(r.outcome) ? r.outcome : 'in-progress');
-export const stageOf = (r: Run): Stage => (r.stage && STAGES.includes(r.stage) ? r.stage : 'intake');
+export const stageOf = (r: Run): Stage => (r.stage && (STAGES as readonly string[]).includes(r.stage) ? r.stage as Stage : 'intake');
 export const isDone = (r: Run) => TERMINAL.includes(outcomeOf(r)) || !!r.archived;
 export const isBlocking = (f: Finding) => (f.severity === 'high' || f.severity === 'medium') && !f.dismissed;
 export const isDismissed = (f: Finding) => f.dismissed != null && f.dismissed !== false;
