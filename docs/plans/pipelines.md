@@ -55,7 +55,7 @@ export const OPTIONAL_STEPS = BUILTIN_AXES.filter((a) => !REQUIRED_AXES.includes
 
 ## 3. The stored shape of the new parts
 
-There are two new keys, one per kind of change. Both sit in the same scopes as everything else, and a project wins over `default` key by key.
+There are two new keys, one per kind of change.
 
 ### Turning steps off: the rule `steps.off`
 
@@ -71,6 +71,10 @@ Turning a step off is a loosening, so it is a rule. That gives it, with no new m
 - the local-user guards.
 
 `asStrict('steps.off', next, old)` is true when `next ⊆ old`: turning fewer steps off is stricter.
+
+**Project scopes only, as `artifact` is.** A `default` entry is refused on write, and ignored with a warning on read.
+- **Why:** `rules()` lets a project win key by key. If `default` could hold a list, `F rules unset <project> steps.off` would fall back to that list. Unsetting would then turn steps off with no human-only check.
+- **What it gives:** with this rule, unsetting always means "nothing off", which only tightens. It also matches "one pipeline per project".
 
 ### Custom steps: the skills key `steps.custom`
 
@@ -94,14 +98,28 @@ Rules for custom steps:
 - **Order** is the array order within one slot. Built-in steps never reorder.
 - **Across scopes,** default's custom steps run first, then the project's. A project entry with the same `id` replaces default's in place, as `axes.extra` does per axis.
 - **`when`** (optional globs) makes the step run only when a changed file matches. With no `when`, it runs every time.
-- **Recording:** a custom step's result is recorded with `F event RUN <slot> failed|passed -`. A `failed` routes as the table says. Nothing a custom step reports can mark a locked step passed.
+- **`when`** applies to `build.after` steps only. A `spec.after` step runs before there is a diff, so it is always due.
+
+**Core enforces that custom steps run, as it does for the review axes.** The UI and SKILL.md don't.
+- **What's due:** `F steps RUN <slot>` works out which custom steps are due this iteration. That is the slot's list, with `when` matched against the same diff `F axes` uses. It records them on a `custom started {slot, ids, iteration}` event, which it owns as `F axes` owns `review started`.
+- **Results:** `F step RUN <id> passed|failed -` records one step's result, keyed by its `id`, so two steps in one slot are never confused. `F event` refuses these stages, as it refuses axis verdicts.
+- **Missing records:**
+  - **Before build:** `F event RUN build started` refuses while a due `spec.after` step has no result. It also refuses when that slot was never recorded this iteration but the resolved list isn't empty.
+  - **Before review:** `F axes` refuses in the same cases for `build.after`.
+  - **At the gate:** `gate()` refuses on a missing result, as it does for a missing verdict. It fails on a custom failure and routes it by slot (`spec.after` to spec, `build.after` to build).
+- **What a custom step can't do:** nothing it reports can mark a locked step passed.
 
 ## 4. Validation
 
 **Strict on write, lenient on read**, the way `dropUnknownModels` already treats models.
 
 **On write,** `setRule` and `setSkill` call `checkSkills`, which refuses:
-- **`steps.off`** unless it is an array of 1 to 10 distinct keys. Each key must be in `OPTIONAL_STEPS`, or be `review.<name>` with an extra-axis name. A locked key is refused with a message that names F's locked list. An empty array is refused: `F rules unset` turns everything back on.
+- **`steps.off`** unless all of these hold:
+  - it is set on a project scope;
+  - it is an array of 1 to 10 distinct keys;
+  - each key is in `OPTIONAL_STEPS`, or is `review.<name>` with an extra-axis name.
+
+  A locked key is refused with a message that names F's locked list. An empty array is refused: `F rules unset` turns everything back on.
 - **`steps.custom`** unless it is an array of at most 10 entries, each with:
   - an `id` that is a new lowercase name (`/^[a-z][a-z0-9-]{0,30}$/`), unique in the scope, and not a step key, built-in axis or slot name;
   - a `slot` of `spec.after` or `build.after`;
@@ -121,8 +139,8 @@ Rules for custom steps:
 | Change | Path | Guard |
 |---|---|---|
 | Change a step's runner | `F skills set <scope> <step> <runner>`, `POST /api/skills` | none new. The graph calls the same route the Skills sheet calls, so there is no second code path |
-| Turn steps off | `F rules set <scope> steps.off '[…]' --reason "…" [--until]`, `POST /api/onboard/rule` | `setRule`, plus `humanOnly('turning a pipeline step off')` for this key |
-| Turn steps back on | `F rules unset <scope> steps.off`, or `set` with a subset | the existing `guard`; no `humanOnly`, since it only tightens |
+| Turn steps off | `F rules set <project> steps.off '[…]' --reason "…" [--until]`, `POST /api/onboard/rule` | `setRule`, plus `humanOnly('turning a pipeline step off')` for this key |
+| Turn every step back on | `F rules unset <project> steps.off` | the existing `guard`; no `humanOnly`, since it only tightens. A `set` with a smaller list is still a `set`, so `humanOnly` applies to it |
 | Add, remove or reorder custom steps | `F skills set <scope> steps.custom '[…]'`, `POST /api/skills` | none new, as for `axes.extra` |
 
 **Turning a step off.** `setRule` calls `humanOnly`, so the CLI and `POST /api/onboard/rule` refuse in exactly the same cases. Both run the same function in a process that has the same environment check. The audit event is the ordinary rule event: `{stage: "rules", status: "set", key: "steps.off", value, reason, setBy}`.
@@ -131,12 +149,11 @@ Rules for custom steps:
 
 **Why removing a custom step needs no guard.** The floor F guarantees is the built-in pipeline. Anything above it (`steps.custom`, `axes.extra`, a stricter rule) is the user's own addition, and taking it away returns to that floor. Going below the floor is the one thing that is guarded, and only `steps.off` does it.
 
-**API.md.** Its line "No route approves, merges, or loosens rules, trust or the merge gate" is already inaccurate today. `POST /api/onboard/rule` sets any rule, including `ci skip`, `deploy.preview off` and a shorter `checks.commands`. Slice 3 rewrites the line to say what holds:
-- No route approves or merges.
-- Rules change only through `setRule`/`unsetRule`, with a reason and an audit event, and a local user can't loosen what a verified login set.
-- `steps.off`, the one rule that removes a review step, is also refused inside an agent session.
+**A local user's rule doesn't count toward an automatic merge.** A `steps.off` set by a local (unverified) user is recorded and shown. On a GitHub project, `decide()` escalates any run whose recorded axes it shaped, with the reason "a rule that removes a review needs a verified login before the factory merges on its own". This mirrors the existing rule for CI-relaxing rules.
 
-Whether the other loosening rules should also be `humanOnly` is a separate question, outside this note.
+**API.md: one deliberate exception.** The existing rules never loosen the merge gate. They tighten it, or they swap one check for another: `ci=skip` with no `checks.commands` still escalates, because `localResult` is `none`. `steps.off` is the first rule that removes a check. Slice 3 adds one sentence after "No route … loosens rules, trust or the merge gate":
+
+> One route does, deliberately: `POST /api/onboard/rule` with `steps.off` turns optional review steps off for one project. Like `F rules set`, it needs a reason and is audited, a local user can't undo a verified login's choice, and it is refused when F runs inside an agent session.
 
 ## 6. How the run reads it
 
@@ -149,6 +166,8 @@ Whether the other loosening rules should also be `humanOnly` is a separate quest
 
 The page draws its graph from this field, from `rules` and from `GET /api/state`, so the graph is never drawn statically. `GET /api/state` already embeds `skills` and `rules`, so the page needs no new route.
 
+**No local user name on the page.** `off[].by` is the GitHub login, or `"a local user (unverified)"` when the rule's `via` is `local`, so the OS user name (which can be `DOMAIN\user`) never reaches the page. Today's decide reasons do show it, through `byText`'s "(local, unverified)". The `steps.off` reason uses the same wording as the page, and changing `byText` itself is outside this note.
+
 **`F axes RUN`.** `axesFor` drops the axes in `off` after selecting them, and it never drops a required axis: the locked list is checked again here, not only on write.
 - **Snapshot per run:** `F axes` records the `off` list on the run's first `review started` event, and every later iteration uses that list. So turning a step off mid-run can't clear a failure the step already found. The change applies from the next run.
 - **Failed axes:** `reviewAxes` still re-reviews every axis that failed last time.
@@ -157,7 +176,7 @@ The page draws its graph from this field, from `rules` and from `GET /api/state`
 
 **SKILL.md, rewritten in PR 6:**
 - **Setup:** step 0.3 keeps `pipeline` with `plan`.
-- **Custom steps:** `spec.after` steps run after §2's spec is written, and `build.after` steps run after §3's checks. Each one gets `F notes` and its guidance like any step, and is recorded with `F event RUN <slot> …`.
+- **Custom steps:** after §2's spec is written, run `F steps RUN spec.after`; after §3's checks, run `F steps RUN build.after`. Run each step it returns. Each one gets `F notes` and its guidance like any step, and its result is recorded with `F step RUN <id> passed|failed -`.
 - **Review:** §4 is unchanged. `F axes` already returns the axes minus the turned-off ones, and the gate checks only recorded axes.
 - **Ground rule:** "Run `F rules set … steps.off` only when the user asks in chat, with their reason". It is the existing rules ground rule, naming the new key.
 
@@ -178,7 +197,8 @@ Slice 4 makes these changes, after PR 6 merges.
 4. **Custom steps:**
    - `steps.custom` with its validation and `pipelinePass`;
    - `decide` escalating on a dropped list;
-   - the `spec.after` and `build.after` loop-backs in `F event`;
+   - `F steps` and `F step`, with the refusals in `F event build started`, `F axes` and `gate()`;
+   - the loop-backs routed by slot;
    - the SKILL.md wording.
 
    This slice waits for PR 6.
