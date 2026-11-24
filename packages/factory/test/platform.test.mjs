@@ -48,9 +48,9 @@ test('claude-code notes(): an npm .cmd claude passes --version but not the headl
 
 test('harnesses (claude, codex, the template) spawn on Windows only a file found on PATH: .exe directly, npm .cmd via cmd.exe, else not installed', async () => {
   for (const f of ['claude-code', 'codex', '_template']) {
-    const src = fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'adapters', 'harnesses', `${f}.mjs`), 'utf8');
+    const src = fs.readFileSync(path.join(import.meta.dirname, '..', '..', 'adapters', 'harnesses', `${f}.ts`), 'utf8');
     assert.doesNotMatch(src, /spawnSync\(\s*['"`A-Z]/, f); // only spawnSync(s[0], …) from spawnFor()
-    const { spawnFor } = await import(`../../adapters/harnesses/${f}.mjs`);
+    const { spawnFor } = await import(`../../adapters/harnesses/${f}.ts`);
     const at = (...files) => (p) => files.includes(p);
     const env = { PATH: '"C:\\Tools\\x bin";C:\\npm', SystemRoot: 'D:\\WIN' }; // a quoted entry is valid on Windows
     assert.deepEqual(spawnFor('x', ['--version'], 'darwin', env, at()), ['x', ['--version'], {}], f);

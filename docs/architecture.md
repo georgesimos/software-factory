@@ -59,7 +59,7 @@ software-factory/
 │   ├── server/               @software-factory/server: `F ui` (uiHandle, UI_ROUTES, ui) and the dashboard renderer (page, render, runsData)
 │   ├── adapters/             @software-factory/adapters: one file per provider, loaded by name
 │   │   ├── registry.ts       loads one-file-per-provider folders (hosts/, trackers/)
-│   │   ├── harnesses/        AI harness registry (index.mjs) auto-loads every *.mjs except _*: claude-code.mjs, codex.mjs, _template.mjs
+│   │   ├── harnesses/        AI harness registry (index.ts) auto-loads every <id>.ts/.mjs except _*: claude-code.ts, codex.ts, _template.ts
 │   │   ├── HARNESSES.md      add a harness in 4 steps
 │   │   ├── hosts/            repo hosts: github.ts, _template.ts, index.ts (contract, types), README.md (recipe)
 │   │   └── trackers/         issue trackers: github-issues.ts, _template.ts, index.ts (contract, types), README.md
@@ -411,7 +411,7 @@ Each step can be run by the built-in brief, a user skill or brief, or a harness 
 
 **The setup wizard.** `F ui` opens a full-screen stepper on the dashboard (by itself when no project is attached, otherwise from **Set up**): Local AI → Repo → What you ship → Workflow → Rules → Review and start. Local AI shows each harness's desktop app first (`desktop()`, found on disk) and, under Background runs, the CLI the factory spawns headless. Its state comes from `POST /onboard`, and every write goes through `/onboard/{sync,ship,rule,automerge}` or `/skills`, with the same token, Host, Origin and content-type checks and the same validated functions as the CLI (`sync`, `setShip`, `setRule`/`unsetRule`, `setAutoMerge`, `setSkill`). Its position is kept in localStorage, so it resumes. Opened as a static file, it is read-only and shows the command for each step. `F onboard` prints the same steps in the terminal; `F onboard ship <scope> web,mobile,desktop` stores the ship choice in `onboard.json`.
 
-**AI harnesses are pluggable.** The core never names a harness for behaviour: runner validation, the catalog's provider tools, session import, the event's `harness`/`sessionId` stamp, extra sensitive config folders and the pinned `F headless-args` flags (from the `host` harness, `claude-code.mjs`) all come from `harnesses/*.mjs` (contract and recipe: `packages/factory/HARNESSES.md`). `models()` lists the aliases a runner may set as `model` and `fallback`, with the oldest CLI version each needs (see [§5.1](#51-runners)). The wizard's ship step lists `packages/ship`'s connectors from its own registry; "Create from an idea" turns on once `F new` exists and records the idea through `POST /idea`.
+**AI harnesses are pluggable.** The core never names a harness for behaviour: runner validation, the catalog's provider tools, session import, the event's `harness`/`sessionId` stamp, extra sensitive config folders and the pinned `F headless-args` flags (from the `host` harness, `claude-code.mjs`) all come from `harnesses/<id>.ts` (contract and recipe: `packages/adapters/HARNESSES.md`). `models()` lists the aliases a runner may set as `model` and `fallback`, with the oldest CLI version each needs (see [§5.1](#51-runners)). The wizard's ship step lists `packages/ship`'s connectors from its own registry; "Create from an idea" turns on once `F new` exists and records the idea through `POST /idea`.
 
 ```mermaid
 flowchart LR
@@ -427,7 +427,7 @@ flowchart LR
 
 1. **`F discover [roots…]`** walks the default roots (`~/Development`, `~/code`, `~/projects`, `~/src`, `~/repos`, `~/GitHub`…), skipping hidden folders, `node_modules`, `Library` and build output. It lists one entry per GitHub repo: the preferred clone (the attached one, else the most recently committed), the other clones, the last commit, the worktree count, and whether it is attached.
 2. **`F sync owner/repo <clone>`** attaches the repo and imports work already in flight:
-   - **Agent sessions are matched by branch,** through each harness adapter's `sessions()` (`harnesses/*.mjs`). Claude Code's come from `~/.claude/projects/<encoded clone path>*/*.jsonl` (`gitBranch`); Codex's from `~/.codex/sessions/**.jsonl` (first-line `session_meta.git`).
+   - **Agent sessions are matched by branch,** through each harness adapter's `sessions()` (`harnesses/<id>.ts`). Claude Code's come from `~/.claude/projects/<encoded clone path>*/*.jsonl` (`gitBranch`); Codex's from `~/.codex/sessions/**.jsonl` (first-line `session_meta.git`).
    - **Open PRs** become runs with `intake started/passed` (imported), then `build started/passed` with the PR and branch.
    - **Session-only branches** are imported if they are unmerged, local, have no PR, have been active in the last 14 days, and are not `factory/*`. When such a branch later gets a PR, the PR is attached to the same run.
    - **Runs finished elsewhere** are recorded as `approve closed`: a PR merged or closed outside the factory, or a session branch that was merged or deleted.

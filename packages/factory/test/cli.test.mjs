@@ -140,7 +140,7 @@ export function harnessTest(cli) {
       for (const n of h.notes?.() || []) assert.ok(typeof n.label === 'string' && [true, false, null].includes(n.ok) && typeof n.hint === 'string', at('note shape'));
       const hl = h.headless?.();
       if (hl) assert.ok(typeof hl.cmd === 'string' && Array.isArray(hl.args), at('headless shape'));
-      if (h.launch) for (const mode of h.modes) { // optional: only what to run, never a spawn (packages/adapters/sessions.mjs runs it)
+      if (h.launch) for (const mode of h.modes) { // optional: only what to run, never a spawn (packages/adapters/sessions.ts runs it)
         const l = h.launch({ mode, ...(mode !== 'terminal' && { prompt: 'p' }) }); // terminal takes no prompt (HARNESSES.md)
         assert.ok(typeof l.cmd === 'string' ? Array.isArray(l.args) && l.args.every((a) => typeof a === 'string') : typeof l.module === 'string' && typeof l.prompt === 'string', at(`launch ${mode} shape`));
       }
@@ -158,8 +158,8 @@ export function harnessTest(cli) {
   // A third harness: one file plus its stub binary, in a temp registry dir next to copies of the real adapters.
   const reg = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-reg-')), fbin = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-fbin-'));
   for (const f of ls(path.join(HERE, '..', 'adapters', 'harnesses')).filter((f) => f !== 'index.mjs')) fs.copyFileSync(path.join(HERE, '..', 'adapters', 'harnesses', f), path.join(reg, f));
-  const tpl = fs.readFileSync(path.join(HERE, '..', 'adapters', 'harnesses', '_template.mjs'), 'utf8');
-  fs.writeFileSync(path.join(reg, 'fake-agent.mjs'), tpl.replaceAll('my-agent', 'fake-agent').replaceAll('My Agent', 'Fake Agent')
+  const tpl = fs.readFileSync(path.join(HERE, '..', 'adapters', 'harnesses', '_template.ts'), 'utf8');
+  fs.writeFileSync(path.join(reg, 'fake-agent.ts'), tpl.replaceAll('my-agent', 'fake-agent').replaceAll('My Agent', 'Fake Agent')
     .replace('current: () => null', 'current: () => process.env.FAKE_SESSION || null')
     .replace('sessions: (repoPath, remoteUrl) => []', "sessions: (repoPath, remoteUrl) => remoteUrl.endsWith('/acme/app.git') ? [{ branch: 'dev/feat-a', id: 'fk-1', cwd: repoPath, last: new Date().toISOString() }] : []"));
   fs.writeFileSync(path.join(fbin, 'fake-agent'), "#!/usr/bin/env node\nconst a = process.argv.slice(2).join(' ');\nif (a === '--version') console.log('fake-agent 0.0.1');\nelse if (a === 'auth status') console.log('ok');\nelse process.exit(2);\n", { mode: 0o755 });

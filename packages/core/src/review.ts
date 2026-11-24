@@ -5,7 +5,7 @@ import { read } from './log.ts';
 import { resolvedSteps, skills, type ExtraAxisRunner, type StepRunner } from './skills.ts';
 import type { Runner } from './types.ts';
 
-// Pinned unattended flags come from the harness that runs the skill (claude-code.mjs: `claude -p`), so F names no harness.
+// Pinned unattended flags come from the harness that runs the skill (claude-code.ts: `claude -p`), so F names no harness.
 // `share`: how many headless runs spend the remaining budget at once (parallel reviewers). Each gets an equal cut,
 // in whole cents rounded down, so together they can't spend more than is left.
 export const MIN_SHARE_USD = 0.05;

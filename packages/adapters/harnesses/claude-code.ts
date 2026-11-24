@@ -2,16 +2,17 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
+import type { Harness } from './index.ts';
 
 // What to spawn for `name args`. On Windows only a file found on PATH (quoted entries unquoted), never the bare name, which
 // Windows looks up in the current folder (maybe an untrusted clone) first: an .exe directly, an npm .cmd shim through
 // cmd.exe /d /s /c like sessions do, only with plain args (no cmd.exe quoting is attempted). The shim runs a bare `node`, which
 // cmd.exe would look for in the current folder first: run it from the shim's own folder with that lookup off. Relative PATH
 // entries never count. null: not installed, or not runnable safely. Kept in this file: a harness is one file with node: builtins only.
-const isFile = (f) => { try { return fs.statSync(f).isFile(); } catch { return false; } };
+const isFile = (f: string) => { try { return fs.statSync(f).isFile(); } catch { return false; } };
 const PLAIN = /^[\w\-.,:/\\=@+~]+$/; // what cmd.exe passes as is: core/src/platform.ts command()'s rule
-export function spawnFor(name, args, platform = process.platform, env = process.env, exists = isFile) {
+export function spawnFor(name: string, args: string[], platform: string = process.platform, env: Record<string, string | undefined> = process.env, exists = isFile): [string, string[], SpawnSyncOptions] | null {
   if (platform !== 'win32') return [name, args, {}];
   for (const d of String(env.PATH ?? env.Path ?? '').split(';').map((x) => x.trim().replace(/^"(.*)"$/, '$1')).filter((x) => path.win32.isAbsolute(x))) {
     for (const ext of ['.exe', '.cmd']) {
@@ -26,13 +27,13 @@ export function spawnFor(name, args, platform = process.platform, env = process.
   return null;
 }
 // Both streams: some CLIs print status to stderr. No shell, argv only, bounded by a timeout.
-const run = (args) => {
+const run = (args: string[]) => {
   const s = spawnFor('claude', args);
-  const r = s ? spawnSync(s[0], s[1], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000, ...s[2] }) : { error: true };
+  const r: { error?: unknown; status?: number | null; stdout?: string | Buffer; stderr?: string | Buffer } = s ? spawnSync(s[0], s[1], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000, ...s[2] }) : { error: true };
   return { code: r.error ? -1 : r.status ?? -1, out: `${r.stdout || ''}${r.stderr || ''}` };
 };
-const ls = (d) => { try { return fs.readdirSync(d); } catch { return []; } };
-const found = (files, ok = fs.existsSync) => { const f = files.find((x) => x && ok(x)); return f ? { installed: true, path: f } : { installed: false }; };
+const ls = (d: string) => { try { return fs.readdirSync(d); } catch { return []; } };
+const found = (files: (string | undefined)[], ok: (f: string) => boolean = fs.existsSync) => { const f = files.find((x) => x && ok(x)); return f ? { installed: true, path: f } : { installed: false }; };
 
 // Built into Claude Code, no file on disk.
 const TOOLS = [
@@ -54,12 +55,12 @@ const MODELS = [
 // none denies anything outside the allowlist, where auto mode's classifier could approve other Bash. A schema adds the
 // structured-output contract (reviews); model, effort and fallback come from the step's runner. Budget: unknown -> no flag, spent -> refuse.
 const READ_ONLY_TOOLS = ['Bash(git diff:*)', 'Bash(git log:*)', 'Read', 'Grep', 'Glob'];
-function usdOf(budget) {
+function usdOf(budget?: number | null) {
   const usd = budget == null ? null : Math.floor(Number(budget) * 100 + 1e-9) / 100; // whole cents, rounded down (1e-9: 0.29 * 100 is 28.999…)
   if (usd != null && !(usd > 0)) throw new Error(`no run budget left (${budget}); escalate instead of running`); // 0, negative and NaN alike
   return usd;
 }
-function headlessArgs({ schema, budget, write = false, stream = false, model, effort, fallback } = {}) {
+function headlessArgs({ schema, budget, write = false, stream = false, model, effort, fallback }: { schema?: unknown; budget?: number | null; write?: boolean; stream?: boolean; model?: string; effort?: string; fallback?: string[] } = {}) {
   const usd = usdOf(budget);
   return [
     ...(stream ? ['--output-format', 'stream-json', '--verbose'] : ['--output-format', 'json']), '--setting-sources', 'user', '--strict-mcp-config',
@@ -84,7 +85,7 @@ export default {
   },
   login() {
     const r = run(['auth', 'status']);
-    let s = {};
+    let s: { loggedIn?: boolean; authMethod?: string } = {};
     try { s = JSON.parse(r.out); } catch { /* older CLI or not installed */ }
     const ok = r.code === 0 && s.loggedIn !== false;
     return { ok, hint: ok ? s.authMethod || 'signed in' : 'claude auth login' };
@@ -93,7 +94,7 @@ export default {
   efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   headlessArgs, // F headless-args prints these; F names no harness
   headless: () => ({ cmd: 'claude', args: ['-p', '<prompt>', ...headlessArgs()], note: 'Read-only default; F headless-args <run> --write switches to auto mode for build, --review adds the review schema.' }),
-  // launch() only says what to run; packages/adapters/sessions.mjs runs it. headless: NDJSON events on stdout (stream-json
+  // launch() only says what to run; packages/adapters/sessions.ts runs it. headless: NDJSON events on stdout (stream-json
   // needs --verbose). terminal: an interactive claude for a pseudo-terminal host (node-pty, H1 part 2).
   modes: ['headless', 'terminal', 'sdk'],
   launch({ mode, prompt, resume, budget, write = false }) {
@@ -118,8 +119,8 @@ export default {
   },
   // A headless run's stream-json events (F start's log, a session's stdout): the session id is on its init line, and it
   // ended cleanly when its last event is a successful result.
-  sessionOf: (e) => (typeof e?.session_id === 'string' && /^[\w-]{1,100}$/.test(e.session_id) ? e.session_id : undefined), // malformed: skipped, so a later valid one counts
-  exitOf: (e) => (e?.type === 'result' && e.subtype === 'success' && !e.is_error ? 0 : null),
+  sessionOf: (e: { session_id?: unknown } | null | undefined) => (typeof e?.session_id === 'string' && /^[\w-]{1,100}$/.test(e.session_id) ? e.session_id : undefined), // malformed: skipped, so a later valid one counts
+  exitOf: (e: { type?: string; subtype?: string; is_error?: boolean } | null | undefined) => (e?.type === 'result' && e.subtype === 'success' && !e.is_error ? 0 : null),
   // The desktop app's own link for one of its sessions. Observed, not documented (ADR §5): best effort; callers fall back
   // to `claude --resume <id>` in a terminal when this returns null.
   openDesktop: (id) => (/^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(String(id)) ? `claude://claude.ai/epitaxy/${id}` : null),
@@ -157,4 +158,4 @@ export default {
     }
     return out;
   },
-};
+} satisfies Harness;
