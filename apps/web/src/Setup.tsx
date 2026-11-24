@@ -199,7 +199,7 @@ function Repo({ data, ob, live, F, write, setScope, fail }: StepCtx) {
       {others.length ? <ul className="web-ob-list">{others.map((r) => <li key={r}><Dot tone="ok" /> {r} <span className="web-ob-path">{attached[r]?.path}</span> <Badge tone="ok">attached</Badge></li>)}</ul> : null}
       {items ? <IngestProgress items={items} /> : null}
       {repos.length ? <ProjectPicker repos={repos} selected={selected} onChange={setSelected} onSubmit={attach} />
-        : <div className="web-ob-card"><h4>No GitHub clones found</h4><span>Point discover at the folder that holds your clones:</span><Cmd cmd={`${F} discover <folder>`} /></div>}
+        : <div className="web-ob-card"><h4>No git clones found</h4><span>Point discover at the folder that holds your clones:</span><Cmd cmd={`${F} discover <folder>`} /></div>}
       <div className="web-ob-grid">{ideaCard}</div>
     </>
   );

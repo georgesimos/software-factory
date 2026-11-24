@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { read, runDir, factoryDir } from './log.ts';
 import { rules, setRule } from './rules.ts';
 import { adapterCtx } from './github.ts';
+import { requireGithub } from './workspace.ts';
 import { allRuns, budget } from './derive.ts';
 import { isSensitive, PROJECT_BUDGET_USD, MAX_ISSUES_PER_SESSION } from './constants.ts';
 import { claimedElsewhere, unclaimCmd, type Claim } from './claim.ts';
@@ -290,6 +291,7 @@ export async function issuesCreate(repo: string, file: string | undefined, { yes
   try { doc = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { throw new Error(`${file}: ${(e as Error).message}`); }
   doc = validateIssues(doc, fs.existsSync(planFile) ? validatePlan(fs.readFileSync(planFile, 'utf8')).milestonesText : undefined);
   const trackerId = p?.tracker || 'github-issues', tracker = (await trackers.load())[trackerId];
+  if (trackerId === 'github-issues') requireGithub(repo, 'creating issues');
   if (!tracker) throw new Error(`unknown tracker "${trackerId}"`);
   const items: Item[] = [...doc.issues, ...(doc.epic ? [{ key: 'epic', kind: 'epic', title: doc.epic.title, body: doc.epic.body || '', children: doc.issues.map((i) => i.key) }] : [])];
   const list = items.map((i) => ({ key: i.key, title: i.title, ...(i.kind ? { kind: i.kind } : { milestone: i.milestone, dependsOn: i.dependsOn }) }));
@@ -315,6 +317,7 @@ export async function issuesCreate(repo: string, file: string | undefined, { yes
 // shortcut: a closed dependency counts as done even if it was closed unbuilt.
 async function scan(repo: string) {
   const trackerId = projectState(repo)?.tracker || 'github-issues', t = (await trackers.load())[trackerId];
+  if (trackerId === 'github-issues') requireGithub(repo, 'reading the issue queue');
   if (!t) throw new Error(`unknown tracker "${trackerId}"`);
   const open = t.listOpen(adapterCtx(), { repo }), runs = allRuns(), ids = new Set(open.map((i) => i.id));
   const done = (id: string) => { const r = runs[`${repo}#${id}`]; return !r?.reverted && (r?.outcome === 'merged' || !ids.has(id)); };

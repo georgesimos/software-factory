@@ -102,22 +102,30 @@ The `Project` type in `core/src/types.ts` gains these optional fields:
 `{ host?: string; tracker?: string; ci?: string; base?: string; merge?: 'auto'|'ask' }`.
 - **Old entries.** An existing entry with none of these fields loads as host `github`, tracker `github-issues` and CI
   `github-actions`, which is exactly what it does today. The `merge` default is D1.
-- **New entries.** `F sync` (or attach) infers the host from `remote.origin.url`: `github.com` gives `github`; anything
-  else, or no remote, gives `git`. The tracker and CI default to `local` and `none` for a `git` host. The user changes
+- **New entries.** `F sync` (or attach) infers the host from `remote.origin.url`: `github.com`, `www.github.com` or
+  `ssh.github.com` (any port) gives `github`; any other network host gives `git`. A `local/` id is always `git`. With no
+  remote, or a local-path or `file://` origin, an `owner/repo` attached by path stays `github`, as it is today.
+  `F worktree RUN <path>` attaches through the same check. The host is set on the first attach and a re-sync never
+  changes it. The tracker and CI default to `local` and `none` for a `git` host. The user changes
   them with `F project set <repo> host|tracker|ci|base <id>`. That command validates the id against the loaded registry
   and writes an audit event like the one `F rules` writes.
 - **Project id.** Keep `owner/repo`, so `parseRun`'s `/^([\w.-]+)\/([\w.-]+)#(\d+)$/` and every logged event still parse.
   - The owner part must also pass `project.ts REPO` and `server.ts checkRepo`, which use the GitHub-login shape
     `[A-Za-z0-9][A-Za-z0-9-]{0,38}`. So:
-    - A clone whose remote isn't GitHub takes `owner/name` from its remote URL, parsed by the codex `slug()` rule for
-      any form (scp, ssh, https, file).
+    - A clone whose remote isn't GitHub takes `owner/name` from its remote URL, in any network form (scp, ssh, https).
+      Nested groups join into the owner with `-` (`grp/sub/app` gives `grp-sub/app`).
     - Every character of the owner outside `[A-Za-z0-9-]` becomes `-`, and the result is trimmed to 39 characters. The
       name keeps `[\w.-]`.
     - A clone with no remote becomes `local/<folder>`, sanitised the same way.
-  - The real remote URL is stored as `projects.json remote`.
+  - A `git` project's remote URL is stored as `projects.json remote`, without credentials: https loses its whole
+    `user[:token]@`, and other schemes lose a `:password`.
   - **Collisions:** two clones that map to one id (two `local/app` folders, or the same owner/name on two hosts)
-    aren't merged. Attaching refuses when the id already exists with a different path or remote: "<id> is already
-    <path>: attach this one with --as <id>".
+    aren't merged. Attaching refuses when the id already exists with a different remote. The ssh, scp and https forms
+    of one remote are equal, and a legacy entry counts as `github.com/<id>`. A second clone of the same repository
+    is not a collision. With no remote on either side, the folder is the identity (case-folded on Windows). If the
+    attached folder is gone (moved or deleted), the new path re-points the project and its runs stay with it. The
+    message is: "<id> is already attached to <remote or another folder>, and <path> is a different repository:
+    attach it under another id".
 - **Run ids.** These stay `owner/repo#N`. A local item's id is its integer N, taken from the file name
   `.factory/issues/0007-<slug>.md`.
   - An imported change request keeps sharing the issue number space on GitHub, where `sync.ts` relies on that.
@@ -309,8 +317,10 @@ None of the following may ever reach a published page, an artifact or a shared p
 - clone paths.
 
 The existing publish scrub (`server.ts`) gains these patterns from the host (`publicUrl`) and from the identity seam. A
-`local/` id is replaced with "a local project". A test builds a published page from a run with each of these values and
-asserts none of them appears in the output.
+project not on GitHub (a `git` host, or any `local/` id) is left out of the published page entirely: its runs, metrics,
+rules and list entries are dropped and no total counts them. It is not renamed, since even a stand-in says it exists. The
+residue backstop refuses a page that still names one. A test builds a published page from a run with each of these
+values and asserts none of them appears in the output.
 
 ### 2.4 Old config still loads (`rules.ts checkRules`)
 
@@ -425,16 +435,22 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
    - `F note` and `F rules` work without `gh`.
    - Tests: an old `skills.json` loads unchanged; a local rule relaxing CI escalates on a GitHub project.
    - Acceptance: the privacy test (§2.3) for the OS username, including `DOMAIN\user`.
-2. **Project config and repo identity.** (~500 lines)
-   - The `projects.json` fields (§1.1) with legacy inference, owner sanitising, the collision refusal, and
-     `F project set` (human-only and audited, §2.2 step 4).
-   - `Host.whoami` (github, git): core's `whoami()` asks the project's host.
-   - Acceptance: the privacy test (§2.3) for remote hostnames, `local/<folder>` ids and clone paths.
-   - `discover()` accepts any remote or none. `sync` attaches a `git`-host project without calling `gh`; for those
-     projects it skips the change-request import until 4b.
-   - `sync.ts`'s session match uses the real origin URL.
-   - The base branch through `host.baseBranch`, used by `workspace.ts worktree()` and `revert()`.
-   - Copy: "git clones" (Setup, ProjectPicker).
+2. **Project config and repo identity**, in two PRs.
+   - **2a** (~550 lines):
+     - The `projects.json` fields `host` and `remote` (§1.1). Each is set on the first attach and never changes; a
+       legacy entry is GitHub. The PR also adds owner sanitising and the collision refusal.
+     - Every `gh` path refuses a `git` project by name.
+     - `discover()` accepts any remote or none. `sync` attaches a `git`-host project without calling `gh`; for those
+       projects it skips the change-request import until 4b.
+     - `sync.ts`'s session match uses the real origin URL.
+     - The base branch comes from the clone for `git` projects (local refs when there is no remote), used by
+       `worktree()`.
+     - Copy: "git clones" (Setup, ProjectPicker).
+     - Acceptance: the privacy test (§2.3) for remote hostnames, `local/<folder>` ids and clone paths.
+   - **2b** (after PR 1):
+     - `F project set` (human-only and audited, §2.2 step 4).
+     - `Host.whoami` (github, git): core's `whoami()` asks the project's host.
+     - `host.baseBranch` behind the adapter, for `worktree()` and `revert()`.
 3. **CI family, a move plus `none`/`local`.** (~500 lines)
    - `adapters/ci/` registry, template, README, `contract()`, `github-actions`, `local`, `none`.
    - `facts()` and `postmerge()` call the provider.

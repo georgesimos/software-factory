@@ -205,7 +205,7 @@ export async function main(argv: string[]) {
       default:
         console.log(`usage: factory <command>        (F in SKILL.md; without install-cli: node packages/factory/factory.mjs <command>)
   help | --help | -h                      print this list
-  discover [roots...]                     find local GitHub clones for onboarding (default: ~/Development, ~/code, ...)
+  discover [roots...]                     find local git clones for onboarding (default: ~/Development, ~/code, ...)
   sync   [owner/repo] [local clone path]  attach a project and import open PRs + agent sessions (no args: all)
   projects                                list attached projects
   onboard [--json]                        setup state, step by step, with the command for each fix (the wizard: F ui)
