@@ -2,7 +2,7 @@
 // Same limits as guidance, and only ever from the user's own chat message. Recorded like rule
 // changes, outside record(): no stage/status of the run, no session, so burn and the gate never see them.
 import { randomUUID } from 'node:crypto';
-import { BUILTIN_AXES, STEP_KEYS, skills } from './skills.ts';
+import { STEP_KEYS, isBuiltinAxis, skills } from './skills.ts';
 import { TERMINAL } from './constants.ts';
 import { audit, isGuideKey, whoami } from './rules.ts';
 import { derive } from './derive.ts';
@@ -18,8 +18,8 @@ const ran = (r: Run, step: string) => r.events.some((e) => (step === 'verifier' 
   : step.startsWith('review.') ? e.stage === 'review' && e.axis === step.slice(7) : e.stage === step));
 // review.<axis> must be built in or in this repo's axes.extra
 const checkAxis = (run: string, step: string, at: string) => {
-  const axis = step.startsWith('review.') && step.slice(7), repo = run.split('#')[0];
-  if (axis && !BUILTIN_AXES.includes(axis) && !skills(repo).extra.some((x) => x.axis === axis)) throw new Error(`${at}: review.${axis} is not an axis of ${repo} (built-in, or axes.extra in F skills)`);
+  const axis = step.startsWith('review.') && step.slice(7), repo = run.split('#')[0] as string; // split always has a first part
+  if (axis && !isBuiltinAxis(axis) && !skills(repo).extra.some((x) => x.axis === axis)) throw new Error(`${at}: review.${axis} is not an axis of ${repo} (built-in, or axes.extra in F skills)`);
 };
 
 export function note(run: string, step: string, text: unknown) {

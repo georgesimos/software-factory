@@ -16,7 +16,7 @@ export const REQUIRED_AXES: BuiltinAxis[] = ['code', 'security']; // axesFor alw
 export type StepKey = 'intake' | 'spec' | 'build' | `review.${BuiltinAxis}` | 'verifier' | 'postmerge';
 export const STEP_KEYS: StepKey[] = ['intake', 'spec', 'build', ...BUILTIN_AXES.map((a) => `review.${a}` as const), 'verifier', 'postmerge'];
 export const isStepKey = (k: unknown): k is StepKey => STEP_KEYS.some((x) => x === k);
-const isBuiltinAxis = (a: unknown): a is BuiltinAxis => BUILTIN_AXES.some((x) => x === a);
+export const isBuiltinAxis = (a: unknown): a is BuiltinAxis => BUILTIN_AXES.some((x) => x === a);
 
 /** A step's runner in skills.json, as checkRunner() admits it. */
 export interface StepRunner { use: string; name?: string; path?: string; harness?: string; model?: string; effort?: string; fallback?: string[] }
