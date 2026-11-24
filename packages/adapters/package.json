@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "license": "Apache-2.0",
-  "description": "One file per provider: AI harnesses, repo hosts, issue trackers. Loaded by name from their folders.",
+  "description": "One file per provider: AI harnesses, repo hosts, issue trackers, CI providers. Loaded by name from their folders.",
   "type": "module",
   "engines": { "node": ">=24.12" },
   "exports": {
     "./harnesses": "./harnesses/index.ts",
+    "./ci": "./ci/index.ts",
     "./hosts": "./hosts/index.ts",
     "./trackers": "./trackers/index.ts"
   },

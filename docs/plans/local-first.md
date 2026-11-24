@@ -383,8 +383,8 @@ with a named reason; for the earlier steps it refuses to start. Nothing gets ret
 | `host.openChangeRequest` | Escalate: "could not open a change request at <host>". |
 | `host.changeRequest` `unknown`, or `headSha ≠ reviewedSha` | Escalate: "change request head is <x>, not the reviewed commit <y>" / "change request state unknown". |
 | `merge: ask` and no `F approve RUN --merge` on `reviewedSha` yet | Wait. The run is `awaiting-approval`; it neither merges nor escalates as a failure. |
-| `ci.checks` `fail` / `pending` / `none` / `unknown` under `ci=required` | Escalate: `CI checks are "<state>" (<ci provider>)`. `none` from the `none` provider says "no CI provider: set ci=local with checks.commands, or approve the merge yourself". |
-| `ci.checks` throws | Escalate: "CI provider <id> failed: <detail>". This replaces today's uncaught throw in `facts()`. |
+| `ci.checks` `fail` / `pending` / `none` / `unknown` under `ci=required` | Escalate: `CI checks are "<state>"`, plus ` (<ci provider>: <detail>)` when the provider gives one. `none` from the `none` provider says "no CI provider (ci none): set ci local with a checks.commands rule". |
+| `ci.checks` throws, or the id is unknown | Escalate under every `ci` rule: "CI provider <id> failed: <detail>" / "unknown CI provider …". This replaced the uncaught throw in `facts()`. |
 | `host.merge` `merged: false` / lease rejected / push rejected (branch protection, required reviews) | Escalate with the host's detail. Never retried, force-pushed or merged around. |
 | `tracker.markDone`, `host.comment` | Warn only: they're cosmetic (today's `relabelMerged` rule). |
 | Optional function missing | Escalate: `host "<id>" cannot <verb>`. |
@@ -461,7 +461,7 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
        - `base` is for `git` hosts: a branch on origin when the clone has one (runs fetch it from there), else a local
          branch; never a tag, sha or `@{-1}`. `base --unset` returns to the host's own, audited as an unset.
        - An unknown stored `ci` counts as the strictest, so any change from it needs a reason.
-       - `ci` is recorded only, until PR 3 gives it a registry and a reader. `tracker` waits for a second tracker.
+       - `ci` is read by the gate from PR 3 on. `tracker` waits for a second tracker.
        - `merge` waits for PR 7 (D1), together with guarding `F automerge`, which today turns auto-merge on unguarded.
      - `Host.whoami` (github, git): core's `whoami()` takes a verified login first on every project, so a git or
        `local/` project's verified rules stay changeable by their author; the OS user alone is unverified and #131's
@@ -473,7 +473,16 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
    - `adapters/ci/` registry, template, README, `contract()`, `github-actions`, `local`, `none`.
    - `facts()` and `postmerge()` call the provider.
    - The local-checks helper is pulled out, and `decide()` keeps calling it.
-   - `F ci RUN [--watch]`.
+   - `F ci RUN [--watch]` and `logTail` (not in PR 3; they follow with PR 6, which replaces SKILL.md's gh calls).
+   - Landed as:
+     - A project's provider is `projects.json` `ci`, else `github-actions` on GitHub and `local` on `git` (core's `ciOf`).
+       Core imports the three providers by name, as the hosts are; a new one (Jenkins) is a file plus one line, documented
+       in `adapters/ci/README.md` and not shipped.
+     - Fail closed: an unknown id, `github-actions` on a project not on GitHub, a provider that throws or answers a state
+       outside the five each escalate under every `ci` rule, `skip` included, and `F postmerge` says `unknown`.
+     - `local` passes on `checks.commands`, so on a GitHub project a pass from it needs that rule from a verified login.
+       `local` never passes with no `checks.commands` rule or no reviewed commit.
+     - `F project set ci github-actions` is refused off GitHub; `host git` clears an explicit `ci github-actions`.
 4a. **GitHub host, a move.** (~400 lines)
    - `openChangeRequest`, `listChangeRequests`, `changeRequest`, `merge` and `comment` on `hosts/github.ts`, moved out of
      `github.ts` and `sync.ts`.

@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { CAP, DOCS, MAX_DIFF, SEO, SOURCE, TEST, TRUSTED, UI, blocking, byText, isLocal, sensitive } from './constants.ts';
 import { budget, budgetWhy } from './derive.ts';
-import type { AxisReview, Deploy, Metrics, Rule, Run } from './types.ts';
+import type { AxisReview, Deploy, LocalChecks, Metrics, Rule, Run } from './types.ts';
 
 /** An extra review axis from skills.json: added when a changed file matches one of its globs. */
 export interface ExtraAxis { axis: string; when: string[] }
@@ -9,6 +9,22 @@ export interface ExtraAxis { axis: string; when: string[] }
 export interface Facts {
   association?: string; autoMerge?: boolean; checks?: string; additions?: number; deletions?: number; files?: string[];
   rules?: Record<string, Rule>; deploys?: Deploy[];
+  /** The CI provider that gave checks (absent: github-actions, as before providers); ciDetail: its one-line why; ciBroken: it
+   *  couldn't answer (unknown, wrong host, threw), which escalates under every ci rule; host: the project's (absent: github). */
+  ci?: string; ciDetail?: string; ciBroken?: string; host?: string;
+}
+
+/** F's own checks (F checks) on sha against the checks.commands rule: pass only on that commit, with that command list, every
+ *  exit 0. decide() and the local CI provider both judge them here. */
+export function localResult(lc: LocalChecks | undefined, cmds: unknown, sha: string | undefined): { state: 'pass' | 'fail' | 'none'; text: string } {
+  const short = (s: string | undefined) => String(s || 'none').slice(0, 7);
+  const failing = (lc?.commands || []).filter((c) => c.exit !== 0).map((c) => c.cmd);
+  return !Array.isArray(cmds) || !cmds.length ? { state: 'none', text: 'no checks.commands rule replaces CI, so nothing was checked' }
+    : !lc ? { state: 'none', text: 'Local checks: not run ("F checks")' }
+    : !sha || lc.sha !== sha ? { state: 'none', text: `Local checks: ran on ${short(lc.sha)}, not the reviewed commit ${short(sha)}` }
+    : JSON.stringify((lc.commands || []).map((c) => c.cmd)) !== JSON.stringify(cmds) ? { state: 'none', text: 'Local checks: ran a different command list than the checks.commands rule now has' }
+    : lc.state !== 'pass' || failing.length ? { state: 'fail', text: `Local checks: fail (${failing.join(', ') || 'unknown'})` }
+    : { state: 'pass', text: `Local checks: pass (${cmds.join(', ')})` };
 }
 
 export function axesFor(files: string[], extra: ExtraAxis[] = []) {
@@ -58,7 +74,11 @@ export function decide(r: Run, f: Facts) {
   // CI: required unless a rule says otherwise. Not required never means green: F's own local checks on the reviewed commit stand in, or the run escalates.
   const pol = f.rules || {}, ci = pol.ci?.value || 'required', cmds = pol['checks.commands']?.value;
   const by = (x: Rule) => `set by ${byText(x)} on ${String(x.setAt).slice(0, 10)}: ${x.reason}`;
-  if (ci === 'required' && f.checks !== 'pass') why.push(`CI checks are "${f.checks ?? 'unknown'}"`);
+  if (f.ciBroken) why.push(f.ciBroken); // fail closed, even under ci=skip: a provider that can't answer never reads as fine
+  else if (ci === 'required' && f.checks !== 'pass') why.push(`CI checks are "${f.checks ?? 'unknown'}"${f.ciDetail ? ` (${f.ci}: ${f.ciDetail})` : ''}`);
+  // CI provider local passes on checks.commands: on a verified host, that rule must come from a verified login too
+  if ((f.host ?? 'github') === 'github' && f.ci === 'local' && f.checks === 'pass' && pol['checks.commands'] && isLocal(pol['checks.commands']))
+    why.push(`rule checks.commands was set by ${byText(pol['checks.commands'])}: CI provider local passes on it, and on a GitHub project that needs a verified login (gh auth login) before the factory merges on its own`);
   // A rule that relaxes CI counts only from a verified login: a local (OS user) one is recorded and shown, never merged on.
   // Only when the merge relies on it: with GitHub CI green, the relaxation changes nothing.
   if (f.checks !== 'pass') for (const [k, x] of [[`ci=${ci}`, ci !== 'required' && pol.ci], ['checks.commands', ci !== 'required' && cmds && pol['checks.commands']]] as const)
@@ -66,14 +86,8 @@ export function decide(r: Run, f: Facts) {
   const ruleNote = ci === 'required' ? null : `CI not required by rule ci=${ci}, ${by(pol.ci as Rule)}${ci === 'advisory' ? ` (CI is "${f.checks ?? 'unknown'}")` : ''}`;
   let local = null;
   if (ci !== 'required' || cmds) {
-    const lc = r.localChecks, short = (s: string | undefined) => String(s || 'none').slice(0, 7);
-    const failing = (lc?.commands || []).filter((c) => c.exit !== 0).map((c) => c.cmd);
-    local = !cmds ? { ok: false, text: 'no checks.commands rule replaces CI, so nothing was checked' }
-      : !lc ? { ok: false, text: 'Local checks: not run ("F checks")' }
-      : lc.sha !== r.reviewedSha ? { ok: false, text: `Local checks: ran on ${short(lc.sha)}, not the reviewed commit ${short(r.reviewedSha)}` }
-      : JSON.stringify((lc.commands || []).map((c) => c.cmd)) !== JSON.stringify(cmds) ? { ok: false, text: 'Local checks: ran a different command list than the checks.commands rule now has' }
-      : lc.state !== 'pass' || failing.length ? { ok: false, text: `Local checks: fail (${failing.join(', ') || 'unknown'})` }
-      : { ok: true, text: `Local checks: pass (${(cmds as string[]).join(', ')})` };
+    const l = localResult(r.localChecks, cmds, r.reviewedSha);
+    local = { ok: l.state === 'pass', text: l.text };
   }
   const ciLine = [ruleNote, local?.text].filter(Boolean).join('. ');
   if (local && !local.ok) why.push(ciLine);
