@@ -75,6 +75,8 @@ In the commands below:
 | A PR exists and `gh pr checks` is red, and `policy.ci` is unset or `required` | Go to Build with the failing log. Use `gh run view <id> --log-failed \| tail -n 80`. Under `advisory` or `skip`, red CI is not a reason to rebuild. |
 | Otherwise | Continue from the recorded stage, using the last gate's `next`. |
 
+A start refused with `already has a running session (…, pid N)` means another process holds the run's claim. Leave it while that pid runs. Once it is gone (crashed, rebooted) and the claim still blocks, tell the user to run `F unclaim RUN`; it refuses while the pid looks alive, and `--force` is the user's call, never yours.
+
 ## 1. Intake: is it worth building?
 
 1. Run `F intake RUN` and check its output:
