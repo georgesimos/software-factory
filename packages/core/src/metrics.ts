@@ -27,7 +27,8 @@ const hitRatio = (c: Cell) => { const p = c.input + c.cacheRead + c.cacheWrite; 
 export const repoOf = (id: string) => id.split(/[#:]/)[0] as string; // split always has a first part
 const day = (ts: unknown) => String(ts).slice(0, 10); // UTC: every ts here is an ISO string from toISOString()
 
-export function logMetrics(events: FactoryEvent[], { project, since, measured = {}, archive = [] }: { project?: string | null; since?: string | null; measured?: Measured; archive?: Run[] } = {}) {
+// runs: withMeasured(derive(events), …) when the caller already has it (sheetMetrics() asks for many projects and ranges); read only.
+export function logMetrics(events: FactoryEvent[], { project, since, measured = {}, archive = [], runs: given }: { project?: string | null; since?: string | null; measured?: Measured; archive?: Run[]; runs?: Record<string, Run> } = {}) {
   const from = since == null || since === '' ? -Infinity : Date.parse(since);
   if (Number.isNaN(from)) throw new RangeError('since must be an ISO date like 2026-11-01');
   const inScope = (id: string) => !project || repoOf(id) === project;
@@ -35,7 +36,7 @@ export function logMetrics(events: FactoryEvent[], { project, since, measured = 
   // When a run ended: the event that ended it (a later revert moves `updated`, not this).
   const endedAt = (r: Run) => r.events?.findLast((e) => e.status === r.outcome)?.ts ?? r.updated;
   // The full log, so `since` never cuts a run in half; rows and outcomes are then filtered by their own timestamps.
-  const runs = withMeasured(derive(events), events, measured, archive);
+  const runs = given ?? withMeasured(derive(events), events, measured, archive);
   const total = cell(), by: Record<Dim, Record<string, Cell>> = { day: {}, project: {}, stage: {}, axis: {}, model: {}, harness: {} };
   const put = (ts: string, run: string, { stage, axis, model, harness }: { stage?: string; axis?: string | null; model?: string; harness?: string }, fill: (c: Cell) => void) => {
     if (!inScope(run) || !after(ts)) return;
