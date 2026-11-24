@@ -116,6 +116,13 @@ export async function projectTest({ uiHandle, read, project: { validateIssues, v
   const FH = await hosts.load(path.join(reg, 'hosts')), FT = await trackers.load(path.join(reg, 'trackers'));
   hosts.contract(FH.fake, { ctx: {}, repo: 'acme/contract', clone });
   trackers.contract(FT.fake, { ctx: {}, repo: 'acme/contract' });
+  // the same fakes as .ts files, with type annotations Node strips: they load from FACTORY_HOSTS/TRACKERS dirs and pass alike
+  const typed = (src) => src.replace("export const id = 'fake';", "export const id: string = 'fake';");
+  put(path.join(reg, 'ts', 'hosts', 'fake.ts'), typed(FAKE_HOST));
+  put(path.join(reg, 'ts', 'trackers', 'fake.ts'), typed(FAKE_TRACKER));
+  const TH = await hosts.load(path.join(reg, 'ts', 'hosts')), TT = await trackers.load(path.join(reg, 'ts', 'trackers'));
+  hosts.contract(TH.fake, { ctx: {}, repo: 'acme/contract', clone });
+  trackers.contract(TT.fake, { ctx: {}, repo: 'acme/contract' });
   put(path.join(root, 'bad', 'half.mjs'), "export const id = 'half';\nexport const listOpen = () => [];\n");
   await assert.rejects(trackers.load(path.join(root, 'bad')), /half.mjs: missing createIssues, dependencies/);
 

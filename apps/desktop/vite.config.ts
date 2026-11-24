@@ -1,13 +1,17 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { defineConfig } from 'vite';
+import { pluginFiles } from '../../packages/adapters/registry.mjs';
 
 // The Electron main, the server and core as plain JS (#56). A packaged app's code sits under node_modules, where Node
 // won't strip types. preserveModules keeps the repo layout under dist/, so every import.meta.dirname path still lands
 // (server → factory/app.html, project → factory/templates, ship → ship/ship.mjs). The plugin folders are read with
-// readdir + import(), so each plugin is an entry of its own, and every output is .mjs to pass the loaders' filters.
+// readdir + import(), so each plugin is an entry of its own, and every output is .mjs to pass the loaders' filters. Adapter
+// folders take the adapters' own filter (an <id>.ts builds to <id>.mjs; a .ts beside its .mjs twin fails the build); ship's
+// connectors keep theirs. Each adapter folder's index (.mjs or .ts) stays an entry too, so it keeps every export.
 const root = path.resolve(import.meta.dirname, '../..');
-const plugins = (dir: string) => fs.readdirSync(path.join(root, dir)).filter((f) => f.endsWith('.mjs') && !f.startsWith('_')).map((f) => path.join(root, dir, f));
+const plugins = (dir: string) => (dir.startsWith('packages/adapters/') ? [...fs.readdirSync(path.join(root, dir)).filter((f) => f === 'index.mjs' || f === 'index.ts'), ...pluginFiles(path.join(root, dir))] : fs.readdirSync(path.join(root, dir)).filter((f) => f.endsWith('.mjs') && !f.startsWith('_')))
+  .map((f) => path.join(root, dir, f));
 const COPY = ['packages/factory/app.html', 'packages/factory/templates']; // data the code reads at run time
 
 export default defineConfig({

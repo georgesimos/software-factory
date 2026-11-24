@@ -1,11 +1,20 @@
 # Add an AI harness in 4 steps
 
 A harness (Gemini CLI, Cursor agent, Aider, ...) is **one file plus its stub binary**. The registry (`harnesses/index.mjs`)
-loads every `harnesses/*.mjs` by itself. The runner validation, the Skills catalog, session import in `F sync`, the event
+loads every `harnesses/<id>.mjs` (or `<id>.ts`) by itself. The runner validation, the Skills catalog, session import in `F sync`, the event
 stamp, the sensitive paths, `F onboard` and the setup wizard all read it, so nothing else in the repo changes.
 
-1. **Copy the template.** `cp harnesses/_template.mjs harnesses/<id>.mjs`. The `id` must equal the file name. Files starting
-   with `_` are never loaded. Import only `node:` builtins, never `factory.mjs`.
+**`.mjs` or `.ts`.** A harness is `<id>.mjs`, or `<id>.ts` where Node strips types: not under `node_modules`, not in a
+`"type": "commonjs"` package, and on a Node with `process.features.typescript` on (Node 24 has it; F refuses a `.ts` file
+on a Node without it and says to use `.mjs`). `.mjs` loads everywhere, so it is the safe format for a harness kept outside
+this repo. Never keep `<id>.ts` and `<id>.mjs` side by side (a compiled twin): the registry refuses the folder and says to
+remove one. `index.*`, `_*` and declaration files (`*.d.ts`, `*.d.mts`) are never loaded.
+Node only strips types, it compiles nothing: a `.ts` file must use erasable syntax only (no `enum`, `namespace`,
+parameter properties or other TypeScript that emits code; type-only imports as `import type`). The desktop build
+would compile those, but F under Node fails on them, naming the file.
+
+1. **Copy the template.** `cp harnesses/_template.mjs harnesses/<id>.mjs`. The `id` must equal the file name without its extension.
+   Files starting with `_` are never loaded. Import only `node:` builtins, never `factory.mjs`.
 2. **Fill in the contract.** Run the CLI only through `spawnSync` with an argv array and a timeout, on Windows only through the template's `spawnFor()` (an `.exe` or npm `.cmd` shim found on PATH, never a bare name that Windows looks up in the current folder first), and read both streams,
    since some CLIs print status to stderr. `detect()` and `login()` must never throw.
 

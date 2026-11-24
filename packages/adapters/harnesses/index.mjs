@@ -1,9 +1,10 @@
-// AI harness registry: every *.mjs file in this folder is one harness, loaded in file-name order.
-// Files starting with "_" (the template) and this file are skipped. HARNESSES.md is the recipe for adding one.
+// AI harness registry: every <id>.mjs (or <id>.ts) file in this folder is one harness, loaded in file-name order.
+// Files starting with "_" (the template), this file and declaration files are skipped (../registry.mjs pluginFiles()).
+// HARNESSES.md is the recipe for adding one.
 // The core reaches harnesses only through `harnesses`; it never names one.
-import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { importPlugin, pluginFiles, stem } from '../registry.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ID = /^[a-z][a-z0-9-]{0,30}$/;
@@ -15,7 +16,7 @@ const OPTIONAL = ['headless', 'providerTools', 'sessions', 'notes', 'current', '
 export function check(h, file) {
   const at = `harnesses/${file}`;
   if (!h || typeof h !== 'object') throw new Error(`${at}: must \`export default\` an adapter object`);
-  if (!ID.test(h.id || '') || h.id !== path.basename(file, '.mjs')) throw new Error(`${at}: id must be lowercase and equal the file name`);
+  if (!ID.test(h.id || '') || h.id !== stem(file)) throw new Error(`${at}: id must be lowercase and equal the file name`);
   for (const k of ['label', 'install']) if (typeof h[k] !== 'string' || !h[k].trim()) throw new Error(`${at}: ${k} must be a non-empty string`);
   for (const k of ['detect', 'login']) if (typeof h[k] !== 'function') throw new Error(`${at}: ${k}() is required`);
   for (const k of OPTIONAL) if (h[k] !== undefined && typeof h[k] !== 'function') throw new Error(`${at}: ${k} must be a function`);
@@ -25,9 +26,8 @@ export function check(h, file) {
 }
 
 export async function load(dir = HERE) {
-  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.mjs') && !f.startsWith('_') && f !== 'index.mjs').sort();
   const out = [];
-  for (const f of files) out.push(check((await import(pathToFileURL(path.join(dir, f)).href)).default, f));
+  for (const f of pluginFiles(dir)) out.push(check((await importPlugin(dir, f, `harnesses/${f}`)).default, f));
   return out;
 }
 

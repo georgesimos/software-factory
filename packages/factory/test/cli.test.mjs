@@ -12,6 +12,7 @@ import { derive } from '../../core/src/derive.ts';
 import { relabelMerged } from '../../core/src/github.ts';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
+import { pluginFiles, stem } from '../../adapters/registry.mjs';
 import { hooks } from '../../core/src/ship.ts';
 import { io, read, record, runDir } from '../../core/src/log.ts';
 import { ls, saveProject } from '../../core/src/workspace.ts';
@@ -121,8 +122,8 @@ export function harnessTest(cli) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-hhome-'));
   const saved = { PATH: process.env.PATH, HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, STUB_LOGGED_OUT: process.env.STUB_LOGGED_OUT };
   const withEnv = (env, fn) => { Object.assign(process.env, env); try { return fn(); } finally { for (const [k, v] of Object.entries(saved)) v === undefined ? delete process.env[k] : (process.env[k] = v); } };
-  const files = ls(path.join(HERE, '..', 'adapters', 'harnesses')).filter((f) => f.endsWith('.mjs') && !f.startsWith('_') && f !== 'index.mjs').sort();
-  assert.deepEqual(harnesses.map((h) => h.id + '.mjs'), files); // auto-loaded, template skipped, id = file name
+  const files = pluginFiles(path.join(HERE, '..', 'adapters', 'harnesses'));
+  assert.deepEqual(harnesses.map((h) => h.id), files.map(stem)); // auto-loaded, template skipped, id = file name
   for (const h of harnesses) {
     const at = (m) => `${h.id}: ${m}`;
     withEnv({ PATH: [bin, node].join(path.delimiter), HOME: home, USERPROFILE: home }, () => {
@@ -177,6 +178,17 @@ export function harnessTest(cli) {
   assert.deepEqual(JSON.parse(cli(['state', 'acme/app#10'], '', env)).sessions.map((x) => [x.agent, x.id]), [['fake-agent', 'fs-1']]);
   cli(['event', 'acme/fk#2', 'spec', 'passed'], '', env);
   assert.match(JSON.parse(cli(['risk', 'acme/fk#2', '.fake-agent/rules.md'], '', env)).reasons.join(), /sensitive paths: \.fake-agent\/rules\.md/); // its configDirs join the sensitive paths
+  // The same registry as .ts files (#52): F, spawned, loads them as the very same harnesses (launchGate and the codex
+  // allow-list key on these ids); a .ts beside its .mjs twin refuses the folder.
+  const regTs = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-reg-ts-'));
+  for (const f of pluginFiles(reg)) fs.copyFileSync(path.join(reg, f), path.join(regTs, `${stem(f)}.ts`));
+  const envTs = { ...env, FACTORY_HARNESSES: regTs };
+  for (const args of [['onboard', '--json'], ['skills', 'catalog']]) assert.deepEqual(JSON.parse(cli(args, '', envTs)), JSON.parse(cli(args, '', env)), args.join(' '));
+  fs.copyFileSync(path.join(regTs, 'codex.ts'), path.join(regTs, 'codex.mjs'));
+  assert.throws(() => cli(['onboard', '--json'], '', envTs), /: codex\.mjs and codex\.ts are both provider "codex": remove one/);
+  fs.rmSync(path.join(regTs, 'codex.mjs'));
+  fs.writeFileSync(path.join(regTs, 'kind.ts'), "enum Kind { A }\nexport default { id: 'kind', label: 'Kind', kind: Kind.A };\n"); // strip-only: no enum
+  assert.throws(() => cli(['onboard', '--json'], '', envTs), /harnesses\/kind\.ts: .*enum/i);
 }
 // Onboarding endpoints: the same checks as /skills, the same validated functions as the CLI, and a re-run that changes nothing.
 export function onboardTest(cli) {
@@ -825,7 +837,10 @@ export function worktreeTest(cli) {
   fs.rmSync(path.join(w.path, 'wip.txt'));
   cli(['rules', 'set', 'acme/wt', 'checks.commands', '["test -f missing.txt","true","kill -KILL $$"]', '--reason', 'Actions billing'], '', env2);
   const c2 = JSON.parse(cli(['checks', R], '', env2));
-  assert.deepEqual([c2.state, c2.commands.map((c) => c.exit)], ['fail', [1, 0, 'SIGKILL']]); // a kill is not a timeout
+  const [, , killed] = c2.commands.map((c) => c.exit);
+  assert.deepEqual([c2.state, c2.commands.map((c) => c.exit).slice(0, 2)], ['fail', [1, 0]]);
+  if (process.platform === 'win32') assert.ok(killed !== 0 && killed !== 'timeout', String(killed)); // Windows: a killed child shows as an exit code
+  else assert.equal(killed, 'SIGKILL'); // a kill is not a timeout
   assert.equal(derive(read())[R].localChecks.state, 'fail');
   cli(['rules', 'unset', 'acme/wt', 'checks.commands'], '', env2);
   cli(['event', R, 'build', 'started'], '', env2);
