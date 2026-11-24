@@ -5,7 +5,7 @@ export interface Harness {
   label: string;
   install: string;
   detect(): { installed?: boolean; version?: string | null };
-  login(): unknown;
+  login(): { ok: boolean; hint: string };
   configDirs?: string[];
   efforts?: string[];
   modes?: string[];
