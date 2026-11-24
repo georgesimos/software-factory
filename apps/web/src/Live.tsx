@@ -7,7 +7,8 @@ import { post } from './data.ts';
 
 // Sessions this F ui (the desktop app) started, live (#58): factory runs (headless, sdk) and a person's own harness in a
 // pseudo-terminal, shown with xterm.js. Start a terminal in an attached repo, stop any session, resume an exited one in a
-// terminal, or open it in the Claude desktop app when the harness has a link for it.
+// terminal, or open it in the Claude desktop app when the harness has a link for it (only Claude Code has: other harnesses' rows
+// say Resume…, which shows how to resume it, as RunDetail's do, and only where Resume can't continue it here: no terminal).
 export interface LiveSession { id: string; harness: string; mode: string; label: string; state: string; exit?: unknown; started: string; harnessSession?: string }
 type Event = { type: string; data?: unknown; code?: unknown; message?: string };
 
@@ -105,7 +106,7 @@ export function LiveSessions({ open, onClose, token, repos, terminal }: { open: 
                 <Button size="sm" variant="ghost" onClick={() => show(s.id)}>Show</Button>
                 {s.state === 'running' ? <Button size="sm" variant="ghost" onClick={() => act('/sessions/stop', { id: s.id }, `Stopped ${s.label}.`)}>Stop</Button> : null}
                 {s.state !== 'running' && s.harnessSession && terminal ? <Button size="sm" variant="ghost" onClick={() => act('/sessions/terminal', { ...repoAndIssue(s.label), harness: s.harness, resume: s.harnessSession }, `Resumed ${s.label} in a terminal.`)}>Resume</Button> : null}
-                {s.harnessSession && s.state !== 'running' ? <Button size="sm" variant="ghost" onClick={() => act('/sessions/open', { harness: s.harness, id: s.harnessSession }, 'Opened in the Claude app.', s.state !== 'running' && !!terminal)}>Open in Claude</Button> : null}
+                {s.harnessSession && s.state !== 'running' && (s.harness === 'claude-code' || !terminal) ? <Button size="sm" variant="ghost" onClick={() => act('/sessions/open', { harness: s.harness, id: s.harnessSession }, 'Opened in the Claude app.', s.state !== 'running' && !!terminal)}>{s.harness === 'claude-code' ? 'Open in Claude' : 'Resume…'}</Button> : null}
               </span>
             </li>
           ))}

@@ -56,6 +56,24 @@ describe('Sessions sheet (#58)', () => {
     expect(calls.find(([u]) => u === '/api/sessions/open')![1]).toEqual({ harness: 'claude-code', id: 'abc-1' });
   });
 
+  it('a Codex session has no Claude link: its row says Resume…, which shows the resume command (#59)', async () => {
+    serve((url) => (url === '/api/sessions/open' ? new Response(JSON.stringify({ resume: { command: 'codex resume cx-1', cwd: '/w' } })) : undefined), [{ ...exited, harness: 'codex', harnessSession: 'cx-1' }]);
+    sheet(false);
+    const [row] = await screen.findAllByRole('listitem');
+    expect(within(row!).queryByRole('button', { name: 'Open in Claude' })).toBeNull();
+    await userEvent.click(within(row!).getByRole('button', { name: 'Resume…' }));
+    expect(calls.find(([u]) => u === '/api/sessions/open')![1]).toEqual({ harness: 'codex', id: 'cx-1' });
+    expect(await screen.findByText('No desktop session for it: run codex resume cx-1 in a terminal in /w.')).toBeTruthy();
+  });
+
+  it('in the desktop app (a terminal) a Codex row has Resume only: Resume… would just point to it', async () => {
+    serve(undefined, [{ ...exited, harness: 'codex', harnessSession: 'cx-1' }]);
+    sheet(true);
+    const [row] = await screen.findAllByRole('listitem');
+    expect(within(row!).getByRole('button', { name: 'Resume' })).toBeTruthy();
+    expect(within(row!).queryByRole('button', { name: 'Resume…' })).toBeNull();
+  });
+
   it('no Open in Claude while the session runs here: the server refuses a second harness on its run', async () => {
     serve(undefined, [{ ...running, harnessSession: 'run-1' }]);
     sheet();
