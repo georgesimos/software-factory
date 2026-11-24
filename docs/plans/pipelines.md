@@ -97,8 +97,7 @@ Turning a step off is a loosening, so it is a rule. That gives it, with no new m
 Rules for custom steps:
 - **Order** is the array order within one slot. Built-in steps never reorder.
 - **Across scopes,** default's custom steps run first, then the project's. A project entry with the same `id` replaces default's in place, as `axes.extra` does per axis.
-- **`when`** (optional globs) makes the step run only when a changed file matches. With no `when`, it runs every time.
-- **`when`** applies to `build.after` steps only. A `spec.after` step runs before there is a diff, so it is always due.
+- **`when`** (optional globs, `build.after` only) makes the step run only when a changed file matches. With no `when`, it runs every time. A `spec.after` step runs before there is a diff, so it is always due.
 
 **Core enforces that custom steps run, as it does for the review axes.** The UI and SKILL.md don't.
 - **What's due:** `F steps RUN <slot>` works out which custom steps are due this iteration. That is the slot's list, with `when` matched against the same diff `F axes` uses. It records them on a `custom started {slot, ids, iteration}` event, which it owns as `F axes` owns `review started`.
@@ -107,6 +106,9 @@ Rules for custom steps:
   - **Before build:** `F event RUN build started` refuses while a due `spec.after` step has no result. It also refuses when that slot was never recorded this iteration but the resolved list isn't empty.
   - **Before review:** `F axes` refuses in the same cases for `build.after`.
   - **At the gate:** `gate()` refuses on a missing result, as it does for a missing verdict. It fails on a custom failure and routes it by slot (`spec.after` to spec, `build.after` to build).
+- **Due stays due:** once `F steps` has recorded a step as due, it stays due for that iteration even if it is removed from config. Otherwise removing a failing step would clear its failure.
+- **A missing result escalates, never strands the run.** A due step with no result makes `decide()` escalate through `F merge`, with the reason "custom step <id> has no result". So a broken runner never leaves a run where `gate()` refuses forever. Slice 4 tests this.
+- **`F step` has `F review`'s contract.** Output outside the contract records a failure, never a pass, and a runner never fixes up its own JSON.
 - **What a custom step can't do:** nothing it reports can mark a locked step passed.
 
 ## 4. Validation
@@ -139,21 +141,29 @@ Rules for custom steps:
 | Change | Path | Guard |
 |---|---|---|
 | Change a step's runner | `F skills set <scope> <step> <runner>`, `POST /api/skills` | none new. The graph calls the same route the Skills sheet calls, so there is no second code path |
-| Turn steps off | `F rules set <project> steps.off '[…]' --reason "…" [--until]`, `POST /api/onboard/rule` | `setRule`, plus `humanOnly('turning a pipeline step off')` for this key |
-| Turn every step back on | `F rules unset <project> steps.off` | the existing `guard`; no `humanOnly`, since it only tightens. A `set` with a smaller list is still a `set`, so `humanOnly` applies to it |
-| Add, remove or reorder custom steps | `F skills set <scope> steps.custom '[…]'`, `POST /api/skills` | none new, as for `axes.extra` |
+| Turn steps off | `F rules set <project> steps.off '[…]' --reason "…" [--until]`; over HTTP, `POST /api/onboard/rule` only with the desktop app's confirmation | `setRule`, plus `humanOnly('turning a pipeline step off')` for this key, plus the confirmation over HTTP (below) |
+| Turn every step back on | `F rules unset <project> steps.off`, also over HTTP | the existing `guard`; no `humanOnly` and no confirmation, since it only tightens. A `set` with a smaller list is still a `set`, so the turning-off guards apply to it |
+| Add or reorder custom steps | `F skills set <scope> steps.custom '[…]'`, `POST /api/skills` | none new: it only adds checks |
+| Remove a custom step | the same paths | `humanOnly('removing a custom step')` on any `steps.custom` write that drops an existing `id` |
 
-**Turning a step off.** `setRule` calls `humanOnly`, so the CLI and `POST /api/onboard/rule` refuse in exactly the same cases. Both run the same function in a process that has the same environment check. The audit event is the ordinary rule event: `{stage: "rules", status: "set", key: "steps.off", value, reason, setBy}`.
+**Turning a step off.** `setRule` calls `humanOnly`, so the CLI refuses inside an agent session. The audit event is the ordinary rule event: `{stage: "rules", status: "set", key: "steps.off", value, reason, setBy}`.
 - **A cycle to break:** `projectset.ts` imports `rules.ts`, so `humanOnly` moves to `rules.ts`, or to a small module of its own, to avoid a circular import.
-- **A known limit:** `humanOnly` checks the F process, not whoever sent the HTTP request. When the app runs `F ui` outside an agent session, the boundary is the per-launch token, exactly as for every other write route. Moving this choice behind a per-request confirmation is a later upgrade.
+- **Over HTTP, the token isn't enough.** `humanOnly` checks the F process, and the per-launch token lives in a URL. The owner opens the dashboard in browser panes that agents can drive and read URLs from. So a `steps.off` set over HTTP needs a person's confirmation outside the page:
+  - **In the desktop app:** the route needs the 5c confirmation dialog in the Electron main process, the same mechanism as approvals.
+  - **With no dialog** (plain `F ui` in a browser): the route refuses, and its error gives the exact `F rules set <project> steps.off '[…]' --reason "…"` command to run in a terminal.
+  - **In the F process:** `humanOnly` applies as well.
+  - **Unsetting** `steps.off` tightens, so it stays allowed everywhere.
 
-**Why removing a custom step needs no guard.** The floor F guarantees is the built-in pipeline. Anything above it (`steps.custom`, `axes.extra`, a stricter rule) is the user's own addition, and taking it away returns to that floor. Going below the floor is the one thing that is guarded, and only `steps.off` does it.
+  So slice 3 waits for 5c.
+
+**Removing a custom step.** The floor F guarantees is the built-in pipeline. Adding a custom step or reordering custom steps stays unguarded, since it only adds checks above that floor. Removing one is guarded, because `pipelinePass` escalates on a dropped step, and an agent session's `F skills set` would otherwise get the same effect silently.
+- **Known gap, not fixed here:** removing an `axes.extra` entry has the same problem today. Any `F skills set` can drop an extra axis with no `humanOnly`.
 
 **A local user's rule doesn't count toward an automatic merge.** A `steps.off` set by a local (unverified) user is recorded and shown. On a GitHub project, `decide()` escalates any run whose recorded axes it shaped, with the reason "a rule that removes a review needs a verified login before the factory merges on its own". This mirrors the existing rule for CI-relaxing rules.
 
 **API.md: one deliberate exception.** The existing rules never loosen the merge gate. They tighten it, or they swap one check for another: `ci=skip` with no `checks.commands` still escalates, because `localResult` is `none`. `steps.off` is the first rule that removes a check. Slice 3 adds one sentence after "No route … loosens rules, trust or the merge gate":
 
-> One route does, deliberately: `POST /api/onboard/rule` with `steps.off` turns optional review steps off for one project. Like `F rules set`, it needs a reason and is audited, a local user can't undo a verified login's choice, and it is refused when F runs inside an agent session.
+> One route does, deliberately: `POST /api/onboard/rule` with `steps.off` turns optional review steps off for one project. It needs the desktop app's confirmation dialog, and without one it refuses and names the CLI command. Like `F rules set`, it needs a reason and is audited, a local user can't undo a verified login's choice, and it is refused when F runs inside an agent session.
 
 ## 6. How the run reads it
 
@@ -169,7 +179,9 @@ The page draws its graph from this field, from `rules` and from `GET /api/state`
 **No local user name on the page.** `off[].by` is the GitHub login, or `"a local user (unverified)"` when the rule's `via` is `local`, so the OS user name (which can be `DOMAIN\user`) never reaches the page. Today's decide reasons do show it, through `byText`'s "(local, unverified)". The `steps.off` reason uses the same wording as the page, and changing `byText` itself is outside this note.
 
 **`F axes RUN`.** `axesFor` drops the axes in `off` after selecting them, and it never drops a required axis: the locked list is checked again here, not only on write.
-- **Snapshot per run:** `F axes` records the `off` list on the run's first `review started` event, and every later iteration uses that list. So turning a step off mid-run can't clear a failure the step already found. The change applies from the next run.
+- **Snapshot per run, which can only shrink:** `F axes` records the `off` list on the run's first `review started` event. Each later iteration turns off the snapshot intersected with the live rule.
+  - **Turning a step off mid-run** can't clear a failure the step already found. It applies from the next run.
+  - **Unsetting the rule, or its expiry, mid-run** turns the step back on for this run.
 - **Failed axes:** `reviewAxes` still re-reviews every axis that failed last time.
 
 **`F decide`.** It lists each turned-off axis in its reasons, with the rule's reason and `setBy` ("review.seo off by rule steps.off, set by …: …"), as it does today for `ci`. A turned-off axis therefore shows on every decision it shaped.
@@ -188,15 +200,17 @@ Slice 4 makes these changes, after PR 6 merges.
    - The core part is `pipeline(repo)`, `LOCKED_STEPS` and `OPTIONAL_STEPS`, read-only, with `off` and `custom` always empty until slices 3 and 4.
    - The page part is `apps/web` and the desktop bundle.
 2. **Change a step's runner from the graph,** through `POST /api/skills`.
-3. **Turn steps off:**
+3. **Turn steps off** (waits for 5c's confirmation dialog):
    - the `steps.off` rule and its `asStrict` case;
    - `humanOnly` in `setRule`;
    - `pipelinePass` for `steps.off`;
    - the `axesFor` drop, the snapshot, and the `decide` reason;
+   - the HTTP confirmation, or the refusal that names the CLI command;
    - the API.md line.
 4. **Custom steps:**
    - `steps.custom` with its validation and `pipelinePass`;
-   - `decide` escalating on a dropped list;
+   - `decide` escalating on a dropped list, and on a due step with no result;
+   - `humanOnly` on a write that removes a custom step;
    - `F steps` and `F step`, with the refusals in `F event build started`, `F axes` and `gate()`;
    - the loop-backs routed by slot;
    - the SKILL.md wording.
