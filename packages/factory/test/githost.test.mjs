@@ -117,10 +117,25 @@ test('no remote: a clean checked-out base fast-forwards with its files; a dirty 
   const ok5 = host.merge(ctx(), { repo: 'local/l1', path: d, id: 'factory/issue-5', sha: head5, base: 'main' });
   assert.deepEqual([ok5.merged, g(d, 'rev-parse', 'main^'), fs.readFileSync(path.join(d, 'f5.txt'), 'utf8').trim(), g(d, 'status', '--porcelain')], [true, at5, '5', '']);
   assert.equal(host.merge(ctx(), { repo: 'local/l1', path: d, id: 'factory/issue-5', sha: head5, base: 'main' }).merged, false, 'merged twice: changes nothing');
+  // the files can't follow after the swap (an untracked file appears between the dry run and read-tree): the swap is undone
+  const head9 = work(d, 9), at9 = g(d, 'rev-parse', 'main');
+  const late = host.merge(ctx((a) => { if (a.includes('read-tree') && !a.includes('-n')) fs.writeFileSync(path.join(d, 'f9.txt'), 'mine\n'); }), { repo: 'local/l1', path: d, id: 'factory/issue-9', sha: head9, base: 'main' });
+  assert.deepEqual([late.merged, /^cannot update main's files in .*l1 \(.*f9\.txt.*\): merge again$/.test(late.detail), g(d, 'rev-parse', 'main'), fs.readFileSync(path.join(d, 'f9.txt'), 'utf8')], [false, true, at9, 'mine\n'], late.detail);
+  fs.rmSync(path.join(d, 'f9.txt'));
   // main checked out in a worktree that was deleted: missing, never taken as clean
   g(d, 'checkout', '-q', '--detach'); const wt = path.join(root, 'l1-wt'); g(d, 'worktree', 'add', '-q', wt, 'main'); fs.rmSync(wt, { recursive: true, force: true });
   const gone = host.merge(ctx(), { repo: 'local/l1', path: d, id: 'factory/issue-4', sha: head4, base: 'main' });
   assert.deepEqual([gone.merged, /^main is checked out in .*l1-wt, which is missing: git worktree prune/.test(gone.detail)], [false, true], gone.detail);
+});
+
+test('a git older than 2.38 (no merge-tree --write-tree) says so, and is never read as a conflict', () => {
+  const d = repo('v1'), head = work(d, 1), at = g(d, 'rev-parse', 'main');
+  const old = (out) => { const c = ctx(); const git = c.git; return { ...c, git: (...a) => (a[0] === 'version' ? (out === null ? assert.fail('no git') : out) : git(...a)) }; };
+  assert.deepEqual(host.merge(old('git version 2.30.1\n'), { repo: 'local/v1', path: d, id: 'factory/issue-1', sha: head, base: 'main' }), { merged: false, detail: 'git 2.30 is too old: merging needs git 2.38 or later (merge-tree --write-tree)' });
+  assert.throws(() => host.mergeTree(old('git version 2.37.9').git, d, 'main', head), /git 2\.37 is too old/);
+  assert.equal(host.mergeTreeMissing(old('git version 2.38.0').git), null);
+  assert.deepEqual(host.merge(old(null), { repo: 'local/v1', path: d, id: 'factory/issue-1', sha: head, base: 'main' }), { merged: false, detail: 'cannot run git version: is git installed?' });
+  assert.equal(g(d, 'rev-parse', 'main'), at, 'nothing moved');
 });
 
 test('F close RUN --merged <sha>: yours only, git projects only, the sha on the base and containing the reviewed commit, the run escalated', () => {

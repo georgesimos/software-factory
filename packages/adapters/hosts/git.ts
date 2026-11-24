@@ -42,14 +42,17 @@ const hasOrigin = (git: Git, path: string) => !!tryGit(git, '-C', path, 'remote'
 const firstLine = (e: unknown) => String((e as { stderr?: unknown })?.stderr || (e as Error)?.message || e).trim().split('\n').filter((l) => !/^(hint|To) /.test(l))[0] || 'refused';
 const treeOf = (git: Git, path: string, c: string) => git('-C', path, 'rev-parse', `${c}^{tree}`).trim();
 
-// merge-tree --write-tree needs git 2.38: checked once, so an old git says so instead of failing as a conflict
-let tooOld: string | null | undefined;
+// merge-tree --write-tree needs git 2.38: checked once per git, so an old git says so instead of failing as a conflict.
+// A failed `git version` isn't remembered: it says so, and the next call asks again.
+const versions = new WeakMap<Git, string | null>();
 export function mergeTreeMissing(git: Git): string | null {
-  if (tooOld === undefined) {
-    const v = /(\d+)\.(\d+)/.exec(tryGit(git, 'version') ?? '');
-    tooOld = v && (+v[1]! > 2 || (+v[1]! === 2 && +v[2]! >= 38)) ? null : `git ${v ? `${v[1]}.${v[2]}` : 'of unknown version'} is too old: merging needs git 2.38 or later (merge-tree --write-tree)`;
-  }
-  return tooOld;
+  if (versions.has(git)) return versions.get(git)!;
+  const out = tryGit(git, 'version');
+  if (out === null) return 'cannot run git version: is git installed?';
+  const v = /(\d+)\.(\d+)/.exec(out);
+  const missing = v && (+v[1]! > 2 || (+v[1]! === 2 && +v[2]! >= 38)) ? null : `git ${v ? `${v[1]}.${v[2]}` : `"${out}"`} is too old: merging needs git 2.38 or later (merge-tree --write-tree)`;
+  versions.set(git, missing);
+  return missing;
 }
 // The tree of merging theirs into ours with no checkout, or null on a conflict: exit 1 with the conflicted tree on stdout.
 // git also exits 1 for an unknown commit, with nothing on stdout; that and anything else throws its first line.
