@@ -50,7 +50,7 @@ export function intake(run: string) {
   if (parent) Object.assign(meta, { origin: parent.id, originAssociation: parent.originAssociation || parent.association });
   record(run, 'intake', 'started', meta);
   // Only the reporter and repo insiders may shape requirements; others could steer a trusted issue into auto-merge.
-  const counts = (c: Comment) => c.author === meta.author || TRUSTED.includes(c.association);
+  const counts = (c: Comment) => (!!c.author && c.author === meta.author) || TRUSTED.includes(c.association); // a deleted account ('') is nobody's
   return {
     ...meta, state: i.state, body: i.body, mentions,
     comments: comments.filter(counts).map((c) => ({ author: c.author, association: c.association, created_at: c.created_at, body: c.body })),
@@ -73,8 +73,12 @@ export function openPRs(repo: string, path = projects()[repo]?.path) {
 export function facts(r: Run): Facts {
   const { repo, n } = parseRun(r.id);
   const host = hostOf(repo), onGit = host !== 'github', on = onGit ? { host } : {}; // GitHub's facts keep their keys
-  const ask = (() => { try { return trackerFn(trackerOf(repo), 'trust', 'tell who wrote an item'); } catch (e) { return (e as Error).message; } })();
-  const who = typeof ask === 'string' ? { trustBroken: `${ask}, so ${r.id}'s author is unknown and not trusted` } : { association: ask(adapterCtx(), { repo, id: n }) };
+  const t = (() => { try { return trackerOf(repo); } catch (e) { return { why: (e as Error).message }; } })();
+  const ask = typeof t !== 'string' ? t.why : (() => { try { return trackerFn(t, 'trust', 'tell who wrote an item'); } catch (e) { return (e as Error).message; } })();
+  const said = typeof ask === 'string' ? undefined : ask(adapterCtx(), { repo, id: n }) as unknown;
+  const who = typeof ask === 'string' ? { trustBroken: `${ask}, so ${r.id}'s author is unknown and not trusted` }
+    : typeof said === 'string' && said && said !== 'null' ? { association: said } // no answer is never trusted, and never intake's recorded association instead
+    : { trustBroken: `tracker "${t as string}" gave no author association for ${r.id}, so its author is unknown and not trusted` };
   const autoMerge = projects()[repo]?.autoMerge !== false;
   const policy = rules(repo).policy; // a broken config throws here, so decide/merge fail and the run escalates
   const pv = policy['deploy.preview']?.value, dep: { deploys?: Deploy[] } = {};
@@ -92,10 +96,15 @@ export function facts(r: Run): Facts {
 }
 // A git project's diff: the reviewed commit against its fork point from the base (three dots), as GitHub counts a PR's.
 // numstat -z: "added<TAB>deleted<TAB>path<NUL>"; a binary file's "-" counts 0 lines, as on GitHub.
+// --attr-source=<empty tree>: the branch's own .gitattributes can't mark files -diff to count as binary (git 2.40+, else refused).
+const EMPTY_TREE = { sha1: '4b825dc642cb6eb9a060e54bf8d69288fbee4904', sha256: '6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321' };
 function gitDiff(repo: string, sha: string) {
   const at = projects()[repo]?.path;
   if (!at) throw new Error(`no local clone registered for ${repo}`);
-  const rows = git('-C', at, 'diff', '--numstat', '-z', '--no-renames', `${baseRef(at, baseBranch(repo, at))}...${sha}`).split('\0').filter(Boolean).map((l) => l.split('\t'));
+  const [maj = 0, min = 0] = (/(\d+)\.(\d+)/.exec(git('--version')) ?? []).slice(1).map(Number);
+  if (maj < 2 || (maj === 2 && min < 40)) throw new Error('git 2.40 or later is needed to count a git project\'s diff');
+  const empty = git('-C', at, 'rev-parse', '--show-object-format').trim() === 'sha256' ? EMPTY_TREE.sha256 : EMPTY_TREE.sha1;
+  const rows = git('-C', at, `--attr-source=${empty}`, 'diff', '--numstat', '-z', '--no-renames', `${baseRef(at, baseBranch(repo, at))}...${sha}`).split('\0').filter(Boolean).map((l) => l.split('\t'));
   const lines = (i: number) => rows.reduce((t, x) => t + (Number(x[i]) || 0), 0);
   return { additions: lines(0), deletions: lines(1), files: rows.map((x) => ({ path: x.slice(2).join('\t') })) };
 }
@@ -177,7 +186,7 @@ export function revert(run: string, reason: string) {
   const base = baseBranch(repo, repoPath);
   const branch = `factory/revert-${n}`, wt = path.join(runDir(run), 'revert');
   git('-C', repoPath, 'fetch', '-q', 'origin', base);
-  git('-C', repoPath, 'worktree', 'add', '-q', '-B', branch, wt, `origin/${base}`);
+  git('-C', repoPath, 'worktree', 'add', '-q', '-B', branch, wt, `refs/remotes/origin/${base}`); // a full ref: see baseRef
   try {
     git('-C', wt, 'revert', '--no-edit', pm.sha);
     git('-C', wt, 'push', '-q', '-u', 'origin', branch);

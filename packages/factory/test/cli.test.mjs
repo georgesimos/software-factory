@@ -796,7 +796,9 @@ export function syncTest(cli) {
   assert.match(JSON.parse(cli(['intake', 'acme/app#30'], '', env)).notAnIssue, /closed/);
   assert.deepEqual(JSON.parse(cli(['intake', 'acme/app#31'], '', env)), { notAnIssue: '#31 is a pull request' });
   const outsider = JSON.parse(cli(['intake', 'acme/app#32'], '', env)); // the reporter's own comments count; a stranger's never do
-  assert.deepEqual([outsider.comments.map((c) => c.body), outsider.ignoredComments], [['repro steps'], 1]);
+  assert.deepEqual([outsider.comments.map((c) => c.body), outsider.ignoredComments], [['repro steps'], 2]); // a deleted account's comment is a stranger's
+  const ghost = JSON.parse(cli(['intake', 'acme/app#35'], '', env)); // a deleted reporter: an unnamed commenter is never taken for them
+  assert.deepEqual([ghost.author, ghost.comments, ghost.ignoredComments], ['', [], 1]);
   // Spec approval: only a trusted "/factory approve" after the wait started counts.
   record('acme/app#21', 'intake', 'started', { title: 't', association: 'NONE' });
   cli(['event', 'acme/app#21', 'spec', 'awaiting-approval'], '', env);

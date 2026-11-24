@@ -62,7 +62,7 @@ export function gate(r: Run) {
 export function decide(r: Run, f: Facts) {
   if (r.imported) return { action: 'escalate', reasons: [`imported ${r.source || ''} run: the factory did not spec or build it`] };
   const why = [];
-  const assoc = f.association ?? r.association; // facts() reads it live from the tracker
+  const assoc = Object.hasOwn(f, 'association') ? f.association : r.association; // facts() reads it live from the tracker; its null is never intake's
   if (f.trustBroken) why.push(f.trustBroken); // the tracker can't say: never intake's recorded association instead
   else if (!TRUSTED.includes(assoc)) why.push(`author association "${assoc || 'unknown'}" is not trusted`);
   if (r.originAssociation && !TRUSTED.includes(r.originAssociation)) why.push(`split from ${r.origin}, whose author "${r.originAssociation}" is not trusted`);

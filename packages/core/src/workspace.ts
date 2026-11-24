@@ -35,8 +35,13 @@ export function hostFn<K extends 'whoami' | 'baseBranch' | 'listChangeRequests' 
   if (!f) throw new Error(`host "${id}" cannot ${verb}`);
   return f as NonNullable<Host[K]>;
 }
-/** projects.json tracker, else github-issues on a GitHub project and local (its own files, docs/plans/local-first.md 5b) on a git one. */
-export const trackerOf = (repo: string) => projects()[repo]?.tracker ?? (hostOf(repo) === 'github' ? 'github-issues' : 'local');
+/** projects.json tracker, else github-issues on a GitHub project and local (its own files, docs/plans/local-first.md 5b) on a git one.
+ *  GitHub Issues only on a GitHub project: elsewhere the repo name it would ask about isn't this project, so it can't say who wrote an item. */
+export const trackerOf = (repo: string) => {
+  const host = hostOf(repo), t = projects()[repo]?.tracker ?? (host === 'github' ? 'github-issues' : 'local');
+  if (t === 'github-issues' && host !== 'github') throw new Error(`tracker github-issues reads GitHub, and ${repo} is on ${host}`);
+  return t;
+};
 /** The tracker's function, or a refusal naming the tracker and what it can't do. */
 export function trackerFn<K extends 'getItem' | 'comments' | 'trust'>(id: string, fn: K, verb: string): NonNullable<Tracker[K]> {
   const f = Object.hasOwn(builtinTrackers, id) ? (builtinTrackers as Record<string, Tracker>)[id]![fn] : undefined;
@@ -47,7 +52,9 @@ export function trackerFn<K extends 'getItem' | 'comments' | 'trust'>(id: string
 export const baseBranch = (repo: string, repoPath: string, host = hostOf(repo)) =>
   hostFn(host, 'baseBranch', 'tell the base branch')({ gh, git }, { repo, path: repoPath, ...(projects()[repo]?.base && { base: projects()[repo]!.base }) });
 /** The ref for a base branch in a clone: origin's copy when the clone has one, else the local branch (no remote). */
-export const baseRef = (repoPath: string, base: string) => { try { git('-C', repoPath, 'rev-parse', '--verify', '-q', `origin/${base}^{commit}`); return `origin/${base}`; } catch { return base; } };
+// The base as a full ref, never a short name: a tag main or a branch origin/main, which anyone with the clone (a build agent in its
+// worktree too) can create, would otherwise stand in for it and hide the run's diff.
+export const baseRef = (repoPath: string, base: string) => { const r = `refs/remotes/origin/${base}`; try { git('-C', repoPath, 'rev-parse', '--verify', '-q', `${r}^{commit}`); return r; } catch { return `refs/heads/${base}`; } };
 export const wtFile = (run: string) => path.join(runDir(run), 'worktree.json');
 export const wtInfo = (run: string): WorktreeInfo | null => { try { return JSON.parse(fs.readFileSync(wtFile(run), 'utf8')); } catch { return null; } };
 // One git worktree per run, sharing the clone's object store (not a second clone). A resume recreates it from the pushed branch.
@@ -66,11 +73,11 @@ export function worktree(run: string, repoPath?: string): WorktreeInfo {
   fs.mkdirSync(runDir(run), { recursive: true });
   git('-C', repoPath, 'worktree', 'prune');
   if (remote) git('-C', repoPath, 'fetch', '-q', 'origin', base);
-  let from = remote ? `origin/${base}` : base;
+  let from = remote ? `refs/remotes/origin/${base}` : `refs/heads/${base}`; // full refs: see baseRef
   let fetched = false;
-  if (remote) try { git('-C', repoPath, 'fetch', '-q', 'origin', `${branch}:refs/remotes/origin/${branch}`); from = `origin/${branch}`; fetched = true; } catch { /* first run: nothing pushed yet */ }
+  if (remote) try { git('-C', repoPath, 'fetch', '-q', 'origin', `${branch}:refs/remotes/origin/${branch}`); from = `refs/remotes/origin/${branch}`; fetched = true; } catch { /* first run: nothing pushed yet */ }
   // a git project pushes nothing yet: a resume starts from its local branch, never resets it to the base
-  if (local && !fetched) try { git('-C', repoPath, 'rev-parse', '--verify', '-q', `refs/heads/${branch}`); from = branch; } catch { /* first run */ }
+  if (local && !fetched) try { git('-C', repoPath, 'rev-parse', '--verify', '-q', `refs/heads/${branch}`); from = `refs/heads/${branch}`; } catch { /* first run */ }
   git('-C', repoPath, 'worktree', 'add', '-q', '-B', branch, wt, from);
   const info: WorktreeInfo = { repoPath, path: wt, branch, base };
   fs.writeFileSync(wtFile(run), JSON.stringify(info, null, 2));

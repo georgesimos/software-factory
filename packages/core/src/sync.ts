@@ -153,7 +153,7 @@ export function sync(repo: string, repoPath?: string) {
     added.push(id);
   }
   // shortcut: only local branches count as session work; a session on a remote-only branch is skipped until it has a PR.
-  const unmerged = new Set(git('-C', repoPath, 'branch', '--no-merged', baseRef ?? `origin/${base}`, '--format=%(refname:short)').split('\n').map((b) => b.trim()).filter(Boolean));
+  const unmerged = new Set(git('-C', repoPath, 'branch', '--no-merged', baseRef ?? `refs/remotes/origin/${base}`, '--format=%(refname:short)').split('\n').map((b) => b.trim()).filter(Boolean));
   const openHeads = new Set(prs.map((p) => p.branch));
   const done = new Set(doneBranches); // squash-merged branches still look unmerged to git
   const recent = new Date(Date.now() - 14 * 864e5).toISOString();

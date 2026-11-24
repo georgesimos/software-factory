@@ -336,3 +336,47 @@ test('5a: facts() on a git project reads the diff from git, and trust it can\'t 
   assert.equal(decide(run, { ...green, association: 'OWNER' }).action, 'merge', 'the baseline merges');
   assert.deepEqual(decide(run, { ...green, trustBroken: why }), { action: 'escalate', reasons: [why] });
 });
+
+// #138 review round 1
+const F = (...a) => execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...ID, FACTORY_DIR: io.dir } });
+const big = (d, n) => { g(d, 'checkout', '-q', '-b', `factory/issue-${n}`, 'main'); commit(d, '.github/workflows/ci.yml', 'x\n'.repeat(400)); const s = commit(d, 'src/x.ts', 'y\n'); g(d, 'checkout', '-q', 'main'); return s; };
+test('#138 r1 finding 1: a tag or branch named like the base never hides the diff from facts() or F axes', () => {
+  const want = [401, ['.github/workflows/ci.yml', 'src/x.ts']], seen = (repo, sha) => { const f = facts({ id: `${repo}#5`, events: [], reviewedSha: sha }); return [f.additions, f.files]; };
+  const d = repo('sh1'); sync('local/sh1', d); const s1 = big(d, 5);
+  g(d, 'tag', 'main', s1); // no remote: a tag main would win over refs/heads/main
+  assert.deepEqual(seen('local/sh1', s1), want);
+  const { d: d2 } = remote('sh2'); sync('local/sh2', d2); const s2 = big(d2, 5);
+  g(d2, 'branch', 'origin/main', s2); // a local branch origin/main would win over refs/remotes/origin/main
+  assert.deepEqual(seen('local/sh2', s2), want);
+  // F axes in the run's worktree, which shares the clone's refs
+  record('local/sh2#6', 'intake', 'started', { title: 't' });
+  const wt = JSON.parse(F('worktree', 'local/sh2#6')).path;
+  commit(wt, 'src/page.tsx', 'p\n');
+  g(d2, 'branch', '-f', 'origin/main', g(wt, 'rev-parse', 'HEAD'));
+  const ax = JSON.parse(F('axes', 'local/sh2#6'));
+  assert.deepEqual([ax.files, ax.axes], [['src/page.tsx'], ['code', 'security', 'ux', 'ui', 'seo']]);
+});
+test('#138 r1 findings 3 and 4: GitHub Issues never decides trust off GitHub, and no association is never trusted or read from intake', () => {
+  const prev = io.gh;
+  io.gh = path.join(HERE, 'test', 'gh-stub.mjs');
+  try {
+    const d = repo('gi'); sync('local/gi', d);
+    const pj = path.join(io.dir, 'projects.json');
+    fs.writeFileSync(pj, JSON.stringify({ ...JSON.parse(fs.readFileSync(pj, 'utf8')), 'local/gi': { path: d, host: 'git', tracker: 'github-issues' } }));
+    const f = facts({ id: 'local/gi#5', events: [], association: 'OWNER' });
+    assert.deepEqual([f.association, f.trustBroken], [undefined, 'tracker github-issues reads GitHub, and local/gi is on git, so local/gi#5\'s author is unknown and not trusted']);
+    for (const n of ['33', '34']) { // GitHub's answer has no association: never trusted, never intake's OWNER instead
+      const x = facts({ id: `acme/app#${n}`, events: [], association: 'OWNER' });
+      assert.deepEqual([x.association, x.trustBroken], [undefined, `tracker "github-issues" gave no author association for acme/app#${n}, so its author is unknown and not trusted`], n);
+    }
+    const run = { id: 'acme/app#33', iteration: 0, axes: { 0: ['code'] }, reviews: { 0: { code: { verdict: 'passed', findings: [] } } }, pr: '1', reviewedSha: 'abc', association: 'OWNER', loopbacks: [], events: [] };
+    const green = { autoMerge: true, checks: 'pass', additions: 1, deletions: 0, files: ['a.txt'], rules: {} };
+    assert.deepEqual(decide(run, { ...green, association: null }).reasons, ['author association "unknown" is not trusted'], 'a null from the tracker is never intake\'s OWNER');
+  } finally { io.gh = prev; }
+});
+test('#138 r1 finding 5: a file marked -diff still counts its lines, as GitHub counts them', () => {
+  const d = repo('ad'); commit(d, '.gitattributes', '*.ts -diff\n'); sync('local/ad', d); // the clone's checked-out tree, where git reads attributes
+  g(d, 'checkout', '-q', '-b', 'factory/issue-5'); const s = commit(d, 'src/x.ts', 'a\n'.repeat(300)); g(d, 'checkout', '-q', 'main');
+  const f = facts({ id: 'local/ad#5', events: [], reviewedSha: s });
+  assert.deepEqual([f.additions, f.files], [300, ['src/x.ts']]);
+});
