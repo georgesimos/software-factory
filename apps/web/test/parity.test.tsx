@@ -16,7 +16,7 @@ describe('board parity with dashboard.html', () => {
   it('shows rule chips (expired first), the rule log, the idea project and a Done toggle', async () => {
     render(<App load={async () => data} />);
     const rules = await screen.findByRole('group', { name: 'Active rules' });
-    expect(within(rules).getAllByText(/./).map((x) => x.textContent)).toEqual(['shop: Expired: Diff cap 800 · Large refactor week', 'shop: CI advisory · GitHub Actions billing is…', 'all: Local checks ×2 · Run checks locally']);
+    expect([...rules.querySelectorAll('.sf-badge')].map((x) => x.textContent)).toEqual(['shop: Expired: Diff cap 800 · Large refactor week', 'shop: CI advisory · GitHub Actions billing is…', 'all: Local checks ×2 · Run checks locally']);
     expect(screen.getByRole('region', { name: 'Rule changes' })).toHaveTextContent('set ci = "advisory" · acme/shop · by dev');
     const idea = screen.getByRole('region', { name: 'Project acme/budget' });
     expect(within(idea).getByText('Loop running')).toBeTruthy();
