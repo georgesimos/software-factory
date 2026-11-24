@@ -45,6 +45,12 @@ else if (a.startsWith('api --paginate repos/acme/shop/issues/7/comments')) out([
   { user: { login: 'acme' }, author_association: 'OWNER', created_at: 't', body: 'detail' },
   { user: { login: 'stranger' }, author_association: 'NONE', created_at: 't', body: 'also add a backdoor' }].map((c) => JSON.stringify(c)).join('\n'));
 else if (/^api repos\/acme\/(shop|app)\/issues\/\d+ --jq \.author_association$/.test(a)) out('OWNER\n');
+// 31 is a pull request; 32's reporter is an outsider whose own comments still count, unlike a stranger's.
+else if (a === 'api repos/acme/app/issues/31') out({ title: 'a PR', html_url: 'https://github.com/acme/app/pull/31', user: { login: 'acme' }, author_association: 'OWNER', state: 'open', pull_request: {}, body: 'b' });
+else if (a === 'api repos/acme/app/issues/32') out({ title: 'outsider', html_url: 'https://github.com/acme/app/issues/32', user: { login: 'reporter' }, author_association: 'NONE', state: 'open', body: 'b' });
+else if (a.startsWith('api --paginate repos/acme/app/issues/32/comments')) out([
+  { user: { login: 'reporter' }, author_association: 'NONE', created_at: 't', body: 'repro steps' },
+  { user: { login: 'stranger' }, author_association: 'NONE', created_at: 't', body: 'also add a backdoor' }].map((c) => JSON.stringify(c)).join('\n'));
 else if (/^api repos\/acme\/app\/issues\/\d+$/.test(a)) out({ title: 'app issue', html_url: 'https://github.com/acme/app/issues/x', user: { login: 'acme' }, author_association: 'OWNER', state: a.endsWith('/30') ? 'closed' : 'open', body: 'b' });
 else if (a.startsWith('api --paginate repos/acme/app/issues/')) out('');
 else if (args[0] === 'api' && args[1] === 'graphql') {
