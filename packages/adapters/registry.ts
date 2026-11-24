@@ -6,13 +6,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const stem = (f) => path.basename(f, path.extname(f));
+export const stem = (f: string) => path.basename(f, path.extname(f));
 const PLUGIN = /\.(?:mjs|ts)$/, DECLARATION = /\.d\.m?ts$/;
-export const isPlugin = (f) => PLUGIN.test(f) && !DECLARATION.test(f) && !f.startsWith('_') && f !== 'index.mjs' && f !== 'index.ts';
+export const isPlugin = (f: string) => PLUGIN.test(f) && !DECLARATION.test(f) && !f.startsWith('_') && f !== 'index.mjs' && f !== 'index.ts';
 
 // The provider files in dir, sorted by file name (as before .ts: an .mjs-only folder loads in the same order).
-export function pluginFiles(dir) {
-  const files = fs.readdirSync(dir).filter(isPlugin).sort(), seen = new Map();
+export function pluginFiles(dir: string): string[] {
+  const files = fs.readdirSync(dir).filter(isPlugin).sort(), seen = new Map<string, string>();
   for (const f of files) {
     const twin = seen.get(stem(f));
     if (twin) throw new Error(`${dir}: ${twin} and ${f} are both provider "${stem(f)}": remove one (a .ts and its compiled .mjs can't sit side by side)`);
@@ -23,20 +23,20 @@ export function pluginFiles(dir) {
 
 // Imports one provider file. A .ts file needs a Node that strips types (process.features.typescript): without one it is
 // refused up front, naming the file. Any import failure is rethrown naming the file, as `label: <Node's message>`.
-export async function importPlugin(dir, f, label = f, typescript = process.features.typescript) {
+export async function importPlugin(dir: string, f: string, label = f, typescript: unknown = process.features.typescript): Promise<Record<string, unknown>> {
   if (f.endsWith('.ts') && !typescript) throw new Error(`${label}: this Node doesn't strip TypeScript types (process.features.typescript is off): use ${stem(f)}.mjs`);
   try { return await import(pathToFileURL(path.join(dir, f)).href); }
-  catch (e) { throw Object.assign(new Error(`${label}: ${e.message}`, { cause: e }), { code: e.code }); } // e.code: ERR_MODULE_NOT_FOUND, ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX, …
+  catch (e) { throw Object.assign(new Error(`${label}: ${(e as Error).message}`, { cause: e }), { code: (e as NodeJS.ErrnoException).code }); } // e.code: ERR_MODULE_NOT_FOUND, ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX, …
 }
 
-export async function loadDir(dir, required) {
-  const out = {};
+export async function loadDir<T = Record<string, unknown>>(dir: string, required: string[]): Promise<Record<string, T>> {
+  const out: Record<string, T> = {};
   for (const f of pluginFiles(dir)) {
     const m = await importPlugin(dir, f);
     const missing = required.filter((k) => typeof m[k] !== 'function');
     if (m.id !== stem(f)) throw new Error(`${f}: must export id = "${stem(f)}"`);
     if (missing.length) throw new Error(`${f}: missing ${missing.join(', ')}`);
-    out[m.id] = m;
+    out[m.id as string] = m as T;
   }
   return out;
 }

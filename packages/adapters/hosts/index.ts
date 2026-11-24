@@ -4,11 +4,20 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadDir } from '../registry.ts';
 
+// README.md is the contract; loadDir() checks the required functions at load time.
+export type Ctx = { gh: (...args: string[]) => string; git: (...args: string[]) => string };
+export interface Host {
+  id: string;
+  authStatus(ctx: Ctx): { ok: boolean; login?: string; detail?: string };
+  createRepo(ctx: Ctx, opts: { repo: string; visibility: string; description?: string }): { created: boolean; url: string };
+  pushInitial(ctx: Ctx, opts: { repo: string; path: string; branch?: string }): { pushed: boolean; remote?: string; branch?: string };
+}
+
 export const REQUIRED = ['authStatus', 'createRepo', 'pushInitial'];
-export const load = (dir = process.env.FACTORY_HOSTS || path.dirname(fileURLToPath(import.meta.url))) => loadDir(dir, REQUIRED);
+export const load = (dir = process.env.FACTORY_HOSTS || path.dirname(fileURLToPath(import.meta.url))) => loadDir<Host>(dir, REQUIRED);
 
 // The shared contract every host must pass. ctx = {gh, git}; repo is a name not yet created; clone is a local repo with one commit.
-export function contract(p, { ctx, repo, clone }) {
+export function contract(p: Host, { ctx, repo, clone }: { ctx: Ctx; repo: string; clone: string }) {
   const a = p.authStatus(ctx);
   assert.equal(typeof a.ok, 'boolean', `${p.id}: authStatus().ok`);
   if (a.ok) assert.equal(typeof a.login, 'string', `${p.id}: authStatus().login`);

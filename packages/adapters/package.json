@@ -10,5 +10,12 @@
     "./harnesses": "./harnesses/index.mjs",
     "./hosts": "./hosts/index.ts",
     "./trackers": "./trackers/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "~5.9.3"
   }
 }
