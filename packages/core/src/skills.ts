@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { hostOf, ls, projects } from './workspace.ts';
+import { hostOf, ls, projects, trackerOf } from './workspace.ts';
 import { audit, checkGuide, checkRules, checkScope, rules, whoami } from './rules.ts';
 import { harnesses, type Harness } from '../../adapters/harnesses/index.ts';
 import { stateDir } from './log.ts';
@@ -19,20 +19,21 @@ export const isStepKey = (k: unknown): k is StepKey => STEP_KEYS.some((x) => x =
 // docs/plans/pipelines.md §2: what no config can turn off or move. gate, merge and watch (F postmerge) are F's own decisions, not runners.
 export const LOCKED_STEPS = ['intake', 'spec', 'build', ...REQUIRED_AXES.map((a) => `review.${a}`), 'verifier', 'gate', 'merge', 'watch'];
 export const OPTIONAL_STEPS = BUILTIN_AXES.filter((a) => !REQUIRED_AXES.includes(a)).map((a) => `review.${a}`);
-// When axesFor (gate.ts) selects each built-in axis: always, or when a UI, SEO or docs file changes.
-// shortcut: a copy of axesFor's choice for display; make axesFor read it when gate.ts is next changed (after #138).
-const AXIS_WHEN: Record<BuiltinAxis, 'always' | 'ui' | 'seo' | 'docs'> = { code: 'always', security: 'always', ux: 'ui', ui: 'ui', seo: 'seo', docs: 'docs' };
+// When axesFor (gate.ts) selects each built-in axis: always, or when a UI, SEO or docs file changes. axesFor reads this table,
+// so the Pipelines page and the engine can't disagree.
+export const AXIS_WHEN: Record<BuiltinAxis, 'always' | 'ui' | 'seo' | 'docs'> = { code: 'always', security: 'always', ux: 'ui', ui: 'ui', seo: 'seo', docs: 'docs' };
 /** The pipeline's structure for the Pipelines page (docs/plans/pipelines.md §6). Read-only: off and custom stay empty until slices 3 and 4. */
 export function pipeline(repo: string, extra: ExtraAxis[] = []) {
   const attached = !!projects()[repo], host = attached ? hostOf(repo) : null;
-  // shortcut: on main only GitHub projects have a tracker; use trackerOf (workspace.ts) once #138 merges
-  const tracker = host === 'github' ? 'github-issues' : null;
+  const warnings: string[] = [];
+  let tracker: string | null = null;
+  if (host) try { const t = trackerOf(repo); tracker = t === 'local' ? null : t; } catch (e) { warnings.push((e as Error).message); } // local: no tracker yet (5b)
   return {
     host, tracker, locked: LOCKED_STEPS, optional: OPTIONAL_STEPS,
     steps: ['intake', 'spec', 'build', 'review', 'verifier', 'gate', 'merge', 'watch'],
     intake: ['pass', 'split', 'needs-info', 'reject'], loops: ['spec', 'build'], // intake's outcomes; where the gate loops back to
     axes: [...BUILTIN_AXES.map((axis) => ({ axis, when: AXIS_WHEN[axis] as string | string[] })), ...extra.map((x) => ({ axis: x.axis, when: x.when }))],
-    off: [] as string[], custom: { 'spec.after': [], 'build.after': [] }, warnings: [] as string[],
+    off: [] as string[], custom: { 'spec.after': [], 'build.after': [] }, warnings,
   };
 }
 export const isBuiltinAxis = (a: unknown): a is BuiltinAxis => BUILTIN_AXES.some((x) => x === a);

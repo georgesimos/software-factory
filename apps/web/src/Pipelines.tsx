@@ -86,7 +86,7 @@ function Graph({ scope, p, plan, S, cap, costCap }: { scope: string; p: Pipeline
           <li>Custom steps: {Object.values(p.custom).flat().length || 'none'}</li>
           {p.warnings.map((x) => <li key={x} data-bad>{x}</li>)}
         </ul>
-        <p className="web-pl-note">Who runs a step changes in Skills. {trackerName(p.tracker) ?? 'The tracker'} issues labelled factory:ready start here.</p>
+        <p className="web-pl-note">Who runs a step changes in Skills. Issues labelled factory:ready{p.tracker ? ` in ${trackerName(p.tracker)}` : ''} start here.</p>
         <details><summary>pipeline.json</summary><pre>{JSON.stringify(p, null, 2)}</pre></details>
       </aside>
     </>

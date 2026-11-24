@@ -2,7 +2,8 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { test } from 'node:test';
-import { BUILTIN_AXES, LOCKED_STEPS, OPTIONAL_STEPS, REQUIRED_AXES, setSkill, skills, skillsData } from '../../core/src/skills.ts';
+import { axesFor } from '../../core/src/gate.ts';
+import { AXIS_WHEN, BUILTIN_AXES, LOCKED_STEPS, OPTIONAL_STEPS, REQUIRED_AXES, setSkill, skills, skillsData } from '../../core/src/skills.ts';
 import { projects, projectsFile } from '../../core/src/workspace.ts';
 import { setup } from './setup.mjs';
 
@@ -34,4 +35,15 @@ test('pipelines: F skills carries the pipeline: host and tracker of an attached 
   assert.deepEqual([skills('local/notes').pipeline.host, skills('local/notes').pipeline.tracker], ['git', null]);
   for (const s of ['', 'acme/unattached']) assert.deepEqual([skills(s).pipeline.host, skills(s).pipeline.tracker], [null, null], s);
   assert.deepEqual(skillsData(['acme/app']).plans['acme/app'].pipeline.host, 'github'); // what GET /api/state embeds
+  // a tracker F refuses (GitHub Issues off GitHub) is no tracker, with F's own reason as a warning
+  attach('local/gi', { host: 'git', tracker: 'github-issues' });
+  assert.deepEqual([skills('local/gi').pipeline.tracker, skills('local/gi').pipeline.warnings], [null, ['tracker github-issues reads GitHub, and local/gi is on git']]);
+});
+
+test('pipelines: axesFor selects from the same table the page shows', () => {
+  const sample = { ui: 'src/a.css', seo: 'app/sitemap.ts', docs: 'README.md' };
+  assert.deepEqual(axesFor([]), BUILTIN_AXES.filter((a) => AXIS_WHEN[a] === 'always'));
+  for (const [when, f] of Object.entries(sample)) assert.deepEqual(axesFor([f]), BUILTIN_AXES.filter((a) => AXIS_WHEN[a] === 'always' || AXIS_WHEN[a] === when), when);
+  AXIS_WHEN.seo = 'docs'; // the table drives the choice, not a copy of it
+  try { assert.ok(axesFor(['README.md']).includes('seo')); } finally { AXIS_WHEN.seo = 'seo'; }
 });

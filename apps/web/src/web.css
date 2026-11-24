@@ -285,7 +285,7 @@
 .web-pl-strip i[data-locked] { background: var(--sf-color-ink-3); }
 .web-pl-main { position: relative; min-width: 0; border: 1px solid var(--sf-color-line); border-radius: var(--sf-radius-lg); background: var(--sf-color-sunken); }
 .web-pl-canvas { position: relative; margin: var(--sf-space-4); transform-origin: 0 0; }
-.web-pl-scroll { overflow: auto; max-height: calc(100dvh - 200px); }
+.web-pl-scroll { overflow: auto; height: calc(100dvh - 240px); min-height: 320px; } /* the sheet's height; a wide graph scrolls inside, at zoom 1 */
 .web-pl-zoom { position: absolute; top: var(--sf-space-2); right: var(--sf-space-2); z-index: 1; display: flex; gap: 2px; background: var(--sf-color-surface); border: 1px solid var(--sf-color-line); border-radius: var(--sf-radius-md); }
 .web-pl-canvas svg { position: absolute; inset: 0; overflow: visible; }
 .web-pl-canvas path { fill: none; stroke: var(--sf-color-ink-3); stroke-width: 1.25; }

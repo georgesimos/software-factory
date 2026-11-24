@@ -48,6 +48,8 @@ describe('Pipelines sheet', () => {
     expect(screen.getByText(/host github/)).toBeInTheDocument();
     expect(screen.getByText('pipeline.json').closest('details')).toHaveTextContent('"tracker": "github-issues"');
     const canvas = graph.closest('.web-pl-canvas') as HTMLElement;
+    expect(canvas.style.transform).toBe('scale(1)'); // opens readable, at zoom 1; Fit is a button
+    expect(screen.getByText(/Issues labelled factory:ready in GitHub Issues start here\./)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }));
     expect(canvas.style.transform).toBe('scale(0.9)');
     fireEvent.click(screen.getByRole('button', { name: 'Fit' })); // no layout in jsdom: the smallest zoom, never 0
@@ -61,6 +63,7 @@ describe('Pipelines sheet', () => {
     expect(screen.getByText(/host git/)).toBeInTheDocument();
     expect(screen.getByText(/1 warning ·/)).toBeInTheDocument();
     expect(screen.getByText('steps.off on default is ignored')).toBeInTheDocument();
+    expect(screen.getByText(/Issues labelled factory:ready start here\./)).toBeInTheDocument();
   });
   it('opens from the header', async () => {
     render(<App load={async () => data} />);

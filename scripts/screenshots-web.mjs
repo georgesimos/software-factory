@@ -48,10 +48,9 @@ for (const theme of ['light', 'dark']) {
     await overflow('skills sheet');
     if (await page.evaluate(() => { const d = document.querySelector('dialog.web-sk'); return d.scrollWidth > d.clientWidth; })) problems.push(`${tag}: the Skills sheet scrolls sideways`);
     await save('skills');
-    await page.keyboard.press('Escape'); // then the Pipelines sheet, fitted to its width
+    await page.keyboard.press('Escape'); // then the Pipelines sheet, as it opens (zoom 1)
     await page.getByRole('button', { name: 'Pipelines' }).click();
     await page.waitForSelector('dialog.web-pl[open] .web-pl-canvas li');
-    await page.getByRole('button', { name: 'Fit' }).click();
     await overflow('pipelines sheet');
     if (await page.evaluate(() => { const d = document.querySelector('dialog.web-pl'); return d.scrollWidth > d.clientWidth; })) problems.push(`${tag}: the Pipelines sheet scrolls sideways`);
     await save('pipelines');
