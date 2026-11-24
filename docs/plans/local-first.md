@@ -519,7 +519,8 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
        - a conflict, an old git, and an empty branch;
        - a commit that only claims the factory's squash in its message;
        - `F close`'s acceptance table: accepts a squash onto a moved base, merge commits, and fast-forwards; refuses
-         extra files, a partial squash or its completion, a later commit, a revert, and a changed-again commit.
+         extra files, a partial squash, a later commit, a revert, and a changed-again commit. A commit completing a
+         same-file partial squash passes: the tree check means the base then holds exactly the reviewed change.
      - Not here: `listChangeRequests` and sync for `git` projects, and core calling the git host's `merge`. `facts()` and
        `merge()` in core still `requireGithub`, so they come with 5a's `facts()` split. `approval` is `null` until PR 7.
        `comment` waits for PR 6.
@@ -545,10 +546,31 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
        which is fail-safe.
      - **`F close` doesn't check that the merge came after the escalation**, because git has no trustworthy merge
        time.
+     - **A side line merged with `-s ours`.** A correct squash on a side branch, merged into the base with `-s ours`, is
+       accepted by `F close --merged` (its first parent and tree check pass on the side line), though the base lacks
+       the change.
 5a. **`facts()` split and the GitHub tracker, a move.** (~400 lines)
    - `github-issues.getItem` and `approval` take over intake's and approval's gh calls.
    - `intake()` and `facts()` read trust through the tracker.
    - On the `git` host, diff and files come from git.
+   - Landed as:
+     - `trackers/github-issues.ts` gains `getItem` (intake's issue read), `comments` (intake's and approval's) and `trust`
+       (the `--jq .author_association` read `facts()` makes at merge time; not in §1.3). `getItem` has no comments:
+       intake stops at a pull request or a closed issue before it reads them, as before. Core finds them with
+       `trackerOf`/`trackerFn` from a `builtin` map, as it finds hosts. Proof: the factory tests' full gh argv log on
+       `origin/main` and on the move commit diff empty.
+     - `facts()` on a `git` project: the diff is `git diff --numstat <base>...<reviewedSha>` in the clone. A tracker
+       without `trust` (the `local` default, until 5b) sets `trustBroken`, and `decide()` escalates on it rather than
+       falling back to intake's recorded association. CI comes from the project's provider, as on GitHub. Its facts
+       carry `host`; GitHub's keep their keys.
+     - `listChangeRequests` on `hosts/git.ts`, and sync reads it for every host. A git project's open change requests
+       are its `factory/*` branches, which sync never imports. Sync never closes a factory run from `doneBranches`:
+       `git branch --merged` also lists a branch just cut from the base.
+     - Two #137 items: `changeRequest` on a reviewed sha the clone doesn't have reads `unknown` with a detail, and
+       `openChangeRequest` says what to run when origin's base was rewound since the last fetch.
+     - Not here: core's `merge()`, `postmerge()`, `revert()` and intake still `requireGithub` (intake needs the local
+       tracker, 5b). A git run records no change request until `F pr RUN` (PR 6), so `decide()` still escalates it as
+       "no PR recorded". Sync's state-only `gh pr view` and postmerge's `mergeCommit` lookup stay in core.
 5b. **Local tracker.** (~600 lines)
    - `trackers/local.ts` (D3, D4).
    - `.factory/` added to `SENSITIVE`.

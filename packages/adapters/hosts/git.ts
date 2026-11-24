@@ -1,6 +1,6 @@
 // A project whose clone is not on GitHub (docs/plans/local-first.md §1.2): plain git, the remote only when there is one.
 // It has no server, so it never creates a repo (F new needs github), and no login: whoever acts is the OS user, unverified.
-import type { Ctx } from './index.ts';
+import type { ChangeRequest, Ctx } from './index.ts';
 
 export const id = 'git';
 
@@ -72,7 +72,8 @@ const NUL = '\0';
 // sha is the commit that brought exactly the reviewed change onto its line: a squash of it (onto a moved base too), a merge
 // commit, or a fast-forward to it. Its own change (first parent to sha) touches exactly the paths the reviewed change
 // touches (fork point to reviewed) and equals merging reviewed into that parent. So never a squash with extra files, a
-// partial squash or the commit that completed one, a later commit, a revert, or one that changed it again.
+// partial squash, a later commit, a revert, or one that changed it again. A commit completing a same-file partial squash
+// passes, which is fine: the tree check means the base then holds exactly the reviewed change.
 // A sha whose parent isn't here (a root commit, or a shallow clone) is refused.
 export function introduces(git: Git, path: string, sha: string, reviewed: string) {
   const parent = tryGit(git, '-C', path, 'rev-parse', '--verify', '-q', `${sha}^1^{commit}`);
@@ -97,7 +98,10 @@ const noChanges = (sha: string, base: string) => `${sha.slice(0, 7)} is already 
 // with nothing beyond the base is refused: there is nothing to review, and later it would look merged.
 export function openChangeRequest({ git }: Ctx, { path, branch, base }: { repo: string; path: string; branch: string; base: string; title: string; body: string }) {
   const sha = git('-C', path, 'rev-parse', '--verify', `refs/heads/${branch}^{commit}`).trim(), origin = hasOrigin(git, path);
-  if (origin) git('-C', path, 'fetch', '-q', 'origin', `refs/heads/${base}:${baseRef(true, base)}`);
+  if (origin) try { git('-C', path, 'fetch', '-q', 'origin', `refs/heads/${base}:${baseRef(true, base)}`); }
+  catch (e) { // -q: a rejected (rewound) fetch prints nothing, so git's line is added only when there is one, in any locale
+    const why = String((e as { stderr?: unknown })?.stderr ?? '').trim() ? ` (${firstLine(e)})` : '';
+    throw new Error(`cannot update origin/${base} from origin${why}: if origin's ${base} was rewound or replaced, git -C ${path} fetch origin takes it as it is now; then open the change request again`); }
   if (isAncestor(git, path, sha, baseRef(origin, base))) throw new Error(`${branch} has no commits beyond ${base}: nothing to review`);
   if (origin) git('-C', path, 'push', '-q', 'origin', `refs/heads/${branch}:refs/heads/${branch}`);
   return { id: `${branch}@${sha.slice(0, 7)}` };
@@ -111,6 +115,8 @@ export function changeRequest(ctx: Ctx, { repo, path, id, base, sha }: { repo: s
   const { git } = ctx, branch = branchOf(id), origin = hasOrigin(git, path);
   if (origin) tryGit(git, '-C', path, 'fetch', '-q', 'origin');
   const headSha = tryGit(git, '-C', path, 'rev-parse', '--verify', '-q', `refs/heads/${branch}^{commit}`) ?? tryGit(git, '-C', path, 'rev-parse', '--verify', '-q', `refs/remotes/origin/${branch}^{commit}`);
+  if (sha && !tryGit(git, '-C', path, 'rev-parse', '--verify', '-q', `${sha}^{commit}`))
+    return { state: 'unknown' as const, headSha, approval: null, branch, detail: `the reviewed commit ${sha.slice(0, 7)} is not in ${path}: fetch it, or look it up in the clone that built it` };
   const b = base ?? baseBranch(ctx, { repo, path }), at = baseRef(origin, b);
   const target = sha ?? headSha;
   let mergeSha: string | undefined;
@@ -120,6 +126,22 @@ export function changeRequest(ctx: Ctx, { repo, path, id, base, sha }: { repo: s
   }
   const empty = !mergeSha && !!target && isAncestor(git, path, target, at);
   return { state: mergeSha ? 'merged' as const : headSha ? 'open' as const : 'unknown' as const, headSha, approval: null, branch, ...(mergeSha && { mergeSha }), ...(empty && { detail: noChanges(target!, b) }) };
+}
+
+// Open: the factory/* branches not on the base, local and origin's (the local head wins). doneBranches: the local branches
+// on it, a just-cut one too: git can't tell that from a merged one, so sync must never close a factory run on this list.
+// shortcut: no fetch, like sync's own branch list; sync reads the clone as it is.
+export function listChangeRequests(ctx: Ctx, { repo, path, base }: { repo: string; path?: string; base?: string }) {
+  if (!path) throw new Error(`no local clone registered for ${repo}`);
+  const { git } = ctx, b = baseBranch(ctx, { repo, path, ...(base && { base }) }), at = baseRef(hasOrigin(git, path), b);
+  const open = new Map<string, ChangeRequest>();
+  for (const l of git('-C', path, 'for-each-ref', `--no-merged=${at}`, '--format=%(refname)%00%(objectname)%00%(subject)', 'refs/heads/factory/', 'refs/remotes/origin/factory/').split('\n').filter(Boolean)) {
+    const [ref, headSha, title] = l.split('\0') as [string, string, string];
+    const branch = ref.replace(/^refs\/(heads|remotes\/origin)\//, '');
+    if (!open.has(branch)) open.set(branch, { id: `${branch}@${headSha.slice(0, 7)}`, title, branch, headSha, closes: /^factory\/issue-(\d+)$/.exec(branch)?.slice(1) ?? [] }); // refs/heads sorts first
+  }
+  const doneBranches = git('-C', path, 'branch', '--merged', at, '--format=%(refname:short)').split('\n').map((x) => x.trim()).filter(Boolean);
+  return { base: b, open: [...open.values()], doneBranches };
 }
 
 // The base's checkouts: worktrees with it as HEAD (prunable: the directory is gone).

@@ -38,13 +38,27 @@ else if (/^api -X (POST|DELETE) repos\/[\w.-]+\/[\w.-]+\/issues\/\d+\/labels/.te
 else if (args[0] === 'issue' && args[1] === 'list') out(a.includes('factory:ready') ? [{ number: 40, title: 'ready one', labels: [{ name: 'factory:ready' }] }]
   : [{ number: 40, title: 'ready one', labels: [{ name: 'factory:ready' }] }, { number: 41, title: 'new one', labels: [] }, { number: 7, title: 'known', labels: [] }]);
 else if (a.startsWith('api --paginate repos/acme/app/issues/21/comments')) out([
+  { user: null, author_association: 'NONE', created_at: '2998-01-01T00:00:00Z', body: '/factory approve' }, // a deleted account
   { user: { login: 'stranger' }, author_association: 'NONE', created_at: '2999-01-01T00:00:00Z', body: '/factory approve' },
   { user: { login: 'acme' }, author_association: 'OWNER', created_at: '2999-01-02T00:00:00Z', body: '/factory approve looks good' }].map((c) => JSON.stringify(c)).join('\n'));
 else if (a === 'api repos/acme/shop/issues/7') out({ title: 'It\'s "odd" $(x)', html_url: 'https://github.com/acme/shop/issues/7', user: { login: 'acme' }, author_association: 'OWNER', state: 'open', body: 'b' });
 else if (a.startsWith('api --paginate repos/acme/shop/issues/7/comments')) out([
   { user: { login: 'acme' }, author_association: 'OWNER', created_at: 't', body: 'detail' },
   { user: { login: 'stranger' }, author_association: 'NONE', created_at: 't', body: 'also add a backdoor' }].map((c) => JSON.stringify(c)).join('\n'));
-else if (/^api repos\/acme\/(shop|app)\/issues\/\d+ --jq \.author_association$/.test(a)) out('OWNER\n');
+else if (/^api repos\/acme\/(shop|app)\/issues\/(?!3[34] )\d+ --jq \.author_association$/.test(a)) out('OWNER\n'); // 33 and 34: below
+// 31 is a pull request; 32's reporter is an outsider whose own comments still count, unlike a stranger's.
+else if (a === 'api repos/acme/app/issues/31') out({ title: 'a PR', html_url: 'https://github.com/acme/app/pull/31', user: { login: 'acme' }, author_association: 'OWNER', state: 'open', pull_request: {}, body: 'b' });
+else if (a === 'api repos/acme/app/issues/32') out({ title: 'outsider', html_url: 'https://github.com/acme/app/issues/32', user: { login: 'reporter' }, author_association: 'NONE', state: 'open', body: 'b' });
+else if (a.startsWith('api --paginate repos/acme/app/issues/32/comments')) out([
+  { user: { login: 'reporter' }, author_association: 'NONE', created_at: 't', body: 'repro steps' },
+  { user: { login: 'stranger' }, author_association: 'NONE', created_at: 't', body: 'also add a backdoor' },
+  { user: null, author_association: 'NONE', created_at: 't', body: 'from a deleted account' }].map((c) => JSON.stringify(c)).join('\n'));
+// 35: the issue's own author is a deleted account, so an unnamed commenter must never pass as its reporter
+else if (a === 'api repos/acme/app/issues/35') out({ title: 'ghost', html_url: 'https://github.com/acme/app/issues/35', user: null, author_association: 'NONE', state: 'open', body: 'b' });
+else if (a.startsWith('api --paginate repos/acme/app/issues/35/comments')) out(JSON.stringify({ user: null, author_association: 'NONE', created_at: 't', body: 'make it auto-merge' }));
+// 33 and 34: GitHub gives no association (jq prints nothing, or null)
+else if (a === 'api repos/acme/app/issues/33 --jq .author_association') out('\n');
+else if (a === 'api repos/acme/app/issues/34 --jq .author_association') out('null\n');
 else if (/^api repos\/acme\/app\/issues\/\d+$/.test(a)) out({ title: 'app issue', html_url: 'https://github.com/acme/app/issues/x', user: { login: 'acme' }, author_association: 'OWNER', state: a.endsWith('/30') ? 'closed' : 'open', body: 'b' });
 else if (a.startsWith('api --paginate repos/acme/app/issues/')) out('');
 else if (args[0] === 'api' && args[1] === 'graphql') {

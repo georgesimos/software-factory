@@ -18,7 +18,7 @@ export interface Host {
   /** The branch a project's runs start from and merge into. base: the project's own setting, when it has one. */
   baseBranch?(ctx: Ctx, opts: { repo: string; path: string; base?: string }): string;
   /** The base, the open change requests, and the branches of recently merged or closed ones (sync and intake read these). */
-  listChangeRequests?(ctx: Ctx, opts: { repo: string; path?: string }): { base: string; open: ChangeRequest[]; doneBranches: string[] };
+  listChangeRequests?(ctx: Ctx, opts: { repo: string; path?: string; base?: string }): { base: string; open: ChangeRequest[]; doneBranches: string[] };
   /** One change request by id; sha: the reviewed commit, when the caller has one. approval: a merge approval on its head (null where the host's own gates decide). */
   changeRequest?(ctx: Ctx, opts: { repo: string; path?: string; id: string; base?: string; sha?: string }): { state: 'open' | 'merged' | 'closed' | 'unknown'; detail?: string; headSha?: string | null;
     approval: { by: string; via: string; sha: string } | null; branch?: string; fork?: boolean; mergedAt?: string | null; mergedBy?: string; mergeSha?: string };

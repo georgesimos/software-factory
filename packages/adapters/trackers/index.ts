@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadDir } from '../registry.ts';
+import * as githubIssues from './github-issues.ts';
 import type { Ctx } from '../hosts/index.ts';
 
 // README.md is the contract; loadDir() checks the required functions at load time.
@@ -12,14 +13,24 @@ export interface Item {
 }
 export interface Created { key: string; id: string; url?: string; created: boolean }
 export interface OpenIssue { id: string; title: string; labels: string[]; key?: string | null; body?: string }
+/** One item as intake reads it, never model-typed. association: the author's standing on the tracker (GitHub's author_association). */
+export interface TrackerItem { id: string; title: string; url?: string; author: string; association: string; state: string; isChangeRequest: boolean; body?: string | null }
+export interface Comment { author: string; association: string; created_at: string; body?: string | null }
 export interface Tracker {
   id: string;
   createIssues(ctx: Ctx, opts: { repo: string; items: Item[]; existing?: Record<string, { id: string; url?: string | undefined }>; onCreated?: (r: Created) => void }): Created[];
   listOpen(ctx: Ctx, opts: { repo: string }): OpenIssue[];
   dependencies(item: OpenIssue): string[];
+  /** One item; intake reads its comments only once it knows it is an open issue. */
+  getItem?(ctx: Ctx, opts: { repo: string; id: string }): TrackerItem;
+  comments?(ctx: Ctx, opts: { repo: string; id: string }): Comment[];
+  /** The item author's association, alone (facts() re-reads it at merge time). */
+  trust?(ctx: Ctx, opts: { repo: string; id: string }): string;
 }
 
 export const REQUIRED = ['createIssues', 'listOpen', 'dependencies'];
+// The trackers an attached project can have, imported by name so core reaches them synchronously (as hosts/index.ts builtin).
+export const builtin: Record<'github-issues', Tracker> = { 'github-issues': githubIssues };
 export const load = (dir = process.env.FACTORY_TRACKERS || path.dirname(fileURLToPath(import.meta.url))) => loadDir<Tracker>(dir, REQUIRED);
 
 // The shared contract every tracker must pass, against an empty project `repo`.

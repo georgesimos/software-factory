@@ -13,6 +13,8 @@ import * as host from '../../adapters/hosts/git.ts';
 import { derive } from '../../core/src/derive.ts';
 import { io, read, record } from '../../core/src/log.ts';
 import { closeMerged } from '../../core/src/projectset.ts';
+import { facts, openPRs } from '../../core/src/github.ts';
+import { decide } from '../../core/src/gate.ts';
 import { sync } from '../../core/src/sync.ts';
 
 setup();
@@ -276,4 +278,105 @@ test('finding 5: a branch with nothing beyond the base is never opened, merged o
   const { bare, d: c } = remote('f5r'); g(c, 'branch', 'factory/issue-1', 'origin/main');
   assert.throws(() => host.openChangeRequest(ctx(), { repo: 'acme/f5r', path: c, branch: 'factory/issue-1', base: 'main', title: 't', body: 'b' }), /has no commits beyond main/);
   assert.throws(() => g(bare, 'rev-parse', '--verify', '-q', 'refs/heads/factory/issue-1'), undefined, 'nothing was pushed');
+});
+
+// ---- local-first PR 5a ----
+test('5a: listChangeRequests lists the factory branches not on the base, local and origin\'s, and a just-cut one is done, never open', () => {
+  const { d } = remote('lc1');
+  work(d, 1); g(d, 'push', '-q', 'origin', 'factory/issue-1');
+  g(d, 'checkout', '-q', 'factory/issue-1'); const h1 = commit(d, 'more.txt', 'm\n', 'issue 1, more'); g(d, 'checkout', '-q', 'main'); // local is ahead of origin's: the local head wins
+  const h2 = work(d, 2); g(d, 'push', '-q', 'origin', 'factory/issue-2'); g(d, 'branch', '-q', '-D', 'factory/issue-2'); // on origin only
+  g(d, 'branch', 'factory/issue-3'); // just cut from the base: nothing to review
+  g(d, 'checkout', '-q', '-b', 'dev/x'); commit(d, 'x.txt', 'x\n'); g(d, 'checkout', '-q', 'main'); // not the factory's
+  const l = host.listChangeRequests(ctx(), { repo: 'acme/lc1', path: d });
+  assert.deepEqual(l, { base: 'main', doneBranches: ['factory/issue-3', 'main'], open: [
+    { id: `factory/issue-1@${h1.slice(0, 7)}`, title: 'issue 1, more', branch: 'factory/issue-1', headSha: h1, closes: ['1'] },
+    { id: `factory/issue-2@${h2.slice(0, 7)}`, title: 'issue 2', branch: 'factory/issue-2', headSha: h2, closes: ['2'] }] });
+  // no remote: the local base
+  const n = repo('lc2'), h = work(n, 7); g(n, 'branch', 'factory/issue-8');
+  assert.deepEqual(host.listChangeRequests(ctx(), { repo: 'local/lc2', path: n }), { base: 'main', doneBranches: ['factory/issue-8', 'main'], open: [{ id: `factory/issue-7@${h.slice(0, 7)}`, title: 'issue 7', branch: 'factory/issue-7', headSha: h, closes: ['7'] }] });
+  // core reads it for a git project, and sync with it: nothing of the factory's is imported, nothing closed, no gh
+  sync('local/lc2', n);
+  assert.deepEqual(openPRs('local/lc2').open.map((p) => p.branch), ['factory/issue-7']);
+  record('local/lc2#7', 'intake', 'started', { title: 't' });
+  const s = sync('local/lc2', n);
+  assert.deepEqual([s.added, s.attached, s.closed, s.humanMerged], [[], [], [], []]);
+  assert.equal(derive(read())['local/lc2#7'].outcome, 'in-progress');
+});
+
+test('5a: changeRequest on a reviewed sha the clone doesn\'t have is unknown, with a detail, never a throw', () => {
+  const d = repo('u1'), head = work(d, 1), missing = 'c'.repeat(40);
+  assert.deepEqual(host.changeRequest(ctx(), { repo: 'local/u1', path: d, id: 'factory/issue-1', base: 'main', sha: missing }),
+    { state: 'unknown', headSha: head, approval: null, branch: 'factory/issue-1', detail: `the reviewed commit ccccccc is not in ${d}: fetch it, or look it up in the clone that built it` });
+});
+
+test('5a: openChangeRequest says what to do when origin\'s base was rewound, and that remedy works', () => {
+  const { bare, d } = remote('w1'), init = g(d, 'rev-parse', 'main');
+  commit(d, 'b.txt', 'b\n'); g(d, 'push', '-q', 'origin', 'main');
+  g(bare, 'update-ref', 'refs/heads/main', init); // someone rewound origin's main
+  const head = work(d, 1);
+  assert.throws(() => host.openChangeRequest(ctx(), { repo: 'acme/w1', path: d, branch: 'factory/issue-1', base: 'main', title: 't', body: 'b' }),
+    { message: `cannot update origin/main from origin: if origin's main was rewound or replaced, git -C ${d} fetch origin takes it as it is now; then open the change request again` });
+  assert.throws(() => g(bare, 'rev-parse', '--verify', '-q', 'refs/heads/factory/issue-1'), undefined, 'nothing was pushed');
+  g(d, 'fetch', '-q', 'origin');
+  assert.deepEqual(host.openChangeRequest(ctx(), { repo: 'acme/w1', path: d, branch: 'factory/issue-1', base: 'main', title: 't', body: 'b' }), { id: `factory/issue-1@${head.slice(0, 7)}` });
+});
+
+test('5a: facts() on a git project reads the diff from git, and trust it can\'t read escalates, never falling back to intake\'s', () => {
+  const d = repo('fa'); commit(d, 'a.txt', 'a\nb\n', 'two lines'); sync('local/fa', d);
+  g(d, 'checkout', '-q', '-b', 'factory/issue-5'); commit(d, 'a.txt', 'a\nc\n'); const reviewed = commit(d, 'src/x.txt', 'x\ny\n'); g(d, 'checkout', '-q', 'main');
+  commit(d, 'late.txt', 'l\n', 'the base moves on'); // not the run's change
+  const R = { id: 'local/fa#5', events: [], reviewedSha: reviewed, association: 'OWNER' };
+  const f = facts(R), why = 'tracker "local" cannot tell who wrote an item, so local/fa#5\'s author is unknown and not trusted';
+  assert.deepEqual([f.trustBroken, f.association, f.additions, f.deletions, f.files, f.host], [why, undefined, 3, 1, ['a.txt', 'src/x.txt'], 'git']);
+  assert.deepEqual(facts({ ...R, reviewedSha: undefined }).files, [], 'nothing reviewed yet: no diff');
+  // decide(): the run's recorded OWNER never stands in for trust the tracker couldn't read
+  const run = { id: 'local/fa#5', iteration: 0, axes: { 0: ['code'] }, reviews: { 0: { code: { verdict: 'passed', findings: [] } } }, pr: 'factory/issue-5@x', reviewedSha: reviewed, association: 'OWNER', loopbacks: [], events: [] };
+  const green = { autoMerge: true, checks: 'pass', additions: 3, deletions: 1, files: ['a.txt'], rules: {} };
+  assert.equal(decide(run, { ...green, association: 'OWNER' }).action, 'merge', 'the baseline merges');
+  assert.deepEqual(decide(run, { ...green, trustBroken: why }), { action: 'escalate', reasons: [why] });
+});
+
+// #138 review round 1
+const F = (...a) => execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...ID, FACTORY_DIR: io.dir } });
+const big = (d, n) => { g(d, 'checkout', '-q', '-b', `factory/issue-${n}`, 'main'); commit(d, '.github/workflows/ci.yml', 'x\n'.repeat(400)); const s = commit(d, 'src/x.ts', 'y\n'); g(d, 'checkout', '-q', 'main'); return s; };
+test('#138 r1 finding 1: a tag or branch named like the base never hides the diff from facts() or F axes', () => {
+  const want = [401, ['.github/workflows/ci.yml', 'src/x.ts']], seen = (repo, sha) => { const f = facts({ id: `${repo}#5`, events: [], reviewedSha: sha }); return [f.additions, f.files]; };
+  const d = repo('sh1'); sync('local/sh1', d); const s1 = big(d, 5);
+  g(d, 'tag', 'main', s1); // no remote: a tag main would win over refs/heads/main
+  assert.deepEqual(seen('local/sh1', s1), want);
+  const { d: d2 } = remote('sh2'); sync('local/sh2', d2); const s2 = big(d2, 5);
+  g(d2, 'branch', 'origin/main', s2); // a local branch origin/main would win over refs/remotes/origin/main
+  assert.deepEqual(seen('local/sh2', s2), want);
+  // F axes in the run's worktree, which shares the clone's refs
+  record('local/sh2#6', 'intake', 'started', { title: 't' });
+  const wt = JSON.parse(F('worktree', 'local/sh2#6')).path;
+  commit(wt, 'src/page.tsx', 'p\n');
+  g(d2, 'branch', '-f', 'origin/main', g(wt, 'rev-parse', 'HEAD'));
+  const ax = JSON.parse(F('axes', 'local/sh2#6'));
+  assert.deepEqual([ax.files, ax.axes], [['src/page.tsx'], ['code', 'security', 'ux', 'ui', 'seo']]);
+});
+test('#138 r1 findings 3 and 4: GitHub Issues never decides trust off GitHub, and no association is never trusted or read from intake', () => {
+  const prev = io.gh;
+  io.gh = path.join(HERE, 'test', 'gh-stub.mjs');
+  try {
+    const d = repo('gi'); sync('local/gi', d);
+    const pj = path.join(io.dir, 'projects.json');
+    fs.writeFileSync(pj, JSON.stringify({ ...JSON.parse(fs.readFileSync(pj, 'utf8')), 'local/gi': { path: d, host: 'git', tracker: 'github-issues' } }));
+    const f = facts({ id: 'local/gi#5', events: [], association: 'OWNER' });
+    assert.deepEqual([f.association, f.trustBroken], [undefined, 'tracker github-issues reads GitHub, and local/gi is on git, so local/gi#5\'s author is unknown and not trusted']);
+    for (const n of ['33', '34']) { // GitHub's answer has no association: never trusted, never intake's OWNER instead
+      const x = facts({ id: `acme/app#${n}`, events: [], association: 'OWNER' });
+      assert.deepEqual([x.association, x.trustBroken], [undefined, `tracker "github-issues" gave no author association for acme/app#${n}, so its author is unknown and not trusted`], n);
+    }
+    const run = { id: 'acme/app#33', iteration: 0, axes: { 0: ['code'] }, reviews: { 0: { code: { verdict: 'passed', findings: [] } } }, pr: '1', reviewedSha: 'abc', association: 'OWNER', loopbacks: [], events: [] };
+    const green = { autoMerge: true, checks: 'pass', additions: 1, deletions: 0, files: ['a.txt'], rules: {} };
+    assert.deepEqual(decide(run, { ...green, association: null }).reasons, ['author association "unknown" is not trusted'], 'a null from the tracker is never intake\'s OWNER');
+  } finally { io.gh = prev; }
+});
+test('#138 r1 finding 5: a file marked -diff still counts its lines, as GitHub counts them', () => {
+  const d = repo('ad'); commit(d, '.gitattributes', '*.ts -diff\n'); sync('local/ad', d); // the clone's checked-out tree, where git reads attributes
+  g(d, 'checkout', '-q', '-b', 'factory/issue-5'); const s = commit(d, 'src/x.ts', 'a\n'.repeat(300)); g(d, 'checkout', '-q', 'main');
+  const f = facts({ id: 'local/ad#5', events: [], reviewedSha: s });
+  assert.deepEqual([f.additions, f.files], [300, ['src/x.ts']]);
 });

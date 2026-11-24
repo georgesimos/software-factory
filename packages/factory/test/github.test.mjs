@@ -7,7 +7,7 @@ import { setup } from './setup.mjs';
 
 setup();
 test('spec approval counts only a trusted comment from a later second than the wait started, compared as times', () => {
-  const c = (created_at, body = '/factory approve', author_association = 'OWNER') => ({ user: { login: 'acme' }, author_association, created_at, body });
+  const c = (created_at, body = '/factory approve', association = 'OWNER') => ({ author: 'acme', association, created_at, body });
   const since = '2026-11-23T10:00:00.900Z'; // F's ms stamp; GitHub's are whole seconds
   // "…:00Z" sorts after "…:00.900Z" as a string, but was posted up to 900 ms before the wait began: it never saw this spec.
   assert.deepEqual(approvalVote([c('2026-11-23T10:00:00Z')], since), { decision: 'waiting' });
