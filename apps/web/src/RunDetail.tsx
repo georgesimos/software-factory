@@ -133,8 +133,8 @@ const startable = (r: Run) => !r.imported && !r.archived && /^[\w.-]+\/[\w.-]+#\
 export type StartState = { text: string; bad?: boolean; busy?: boolean };
 /** Under F ui, for a run whose session here stopped or crashed: POST /api/sessions resumes it headless. */
 export type Resume = { go: () => void; state?: StartState };
-function Start({ run: r, resume }: { run: Run; resume?: Resume }) {
-  if (!resume) return <Cmd cmd={`/software-factory ${r.id}`} />; // the Claude Code prompt to paste
+function Start({ run: r, resume, live }: { run: Run; resume?: Resume; live: boolean }) {
+  if (!resume) return <>{live ? <p className="web-sk-note">No Start here: its session is still running, here or in Claude Code, and the run's claim refuses a second one. Continue it in that session:</p> : null}<Cmd cmd={`/software-factory ${r.id}`} /></>; // the Claude Code prompt to paste
   const st = resume.state;
   return (
     <div className="web-start">
@@ -236,7 +236,7 @@ export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, h
       <Epic run={r} find={find} href={href} />
       {r.sessions?.length || open || startable(r) ? (
         <Section title="Sessions">
-          {startable(r) ? <Start run={r} resume={resume} /> : null}
+          {startable(r) ? <Start run={r} resume={resume} live={!!token} /> : null}
           {open ? <p className="web-links"><a href={open} title="Opens a new Claude Code terminal here (prompt pre-filled, not sent). Requires the claude-cli handler: send one message in any interactive claude session first.">Open in Claude</a></p> : null}
           {r.sessions?.length ? <SessionList sessions={r.sessions} now={now} /> : null}
         </Section>

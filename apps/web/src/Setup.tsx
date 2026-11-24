@@ -311,7 +311,26 @@ function Rules({ data, ob, live, F, scope, scopePicker, write, fail, setStatus, 
   );
 }
 
-function Start({ data, ob, live, F, scope, scopePicker, S }: StepCtx) {
+// Under F ui with a project picked: start an issue headless through POST /api/runs (F start). Otherwise the prompt to paste.
+function StartIssue({ repo, token }: { repo: string; token: string }) {
+  const [n, setN] = useState(''), [st, setSt] = useState<{ text: string; bad?: boolean; busy?: boolean }>(), ok = /^[1-9]\d{0,9}$/.test(n.trim());
+  const go = async () => {
+    setSt({ text: '', busy: true });
+    try {
+      const x = await post<{ pid?: number; log?: string }>('/runs', { issue: `${repo}#${n.trim()}` }, token);
+      setSt({ text: `Started ${repo}#${n.trim()} headless (pid ${x.pid ?? '?'}). It shows on the board once it records its first step.` });
+    } catch (e) { setSt({ text: (e as Error).message, bad: true }); }
+  };
+  return (
+    <form className="web-start web-ob-start" onSubmit={(e) => { e.preventDefault(); if (ok) void go(); }}>
+      <label className="web-ob-field">Issue #<Input aria-label={`Issue number in ${repo}`} inputMode="numeric" value={n} placeholder="42" onChange={(e) => setN(e.target.value)} /></label>
+      <Button type="submit" size="sm" variant="primary" disabled={!ok || st?.busy}>{st?.busy ? 'Starting…' : 'Start'}</Button>
+      <p className="web-sk-status" role="status" data-bad={st?.bad || undefined}>{st?.busy ? '' : st?.text}</p>
+    </form>
+  );
+}
+
+function Start({ data, ob, live, F, scope, scopePicker, S, token }: StepCtx) {
   const R = (live ? ob?.rules?.[scope] : data.rules?.[scope]) ?? {}, repo = scope === 'default' ? '<owner/repo>' : scope;
   return (
     <>
@@ -320,7 +339,9 @@ function Start({ data, ob, live, F, scope, scopePicker, S }: StepCtx) {
       <h4 className="web-ob-cli">F skills {scope}</h4><pre className="web-ob-pre" data-out="skills">{JSON.stringify(S.plans?.[scope] ?? {}, null, 2)}</pre>
       <h4 className="web-ob-cli">F rules {scope}</h4>{Object.keys(R).length ? <pre className="web-ob-pre" data-out="rules">{JSON.stringify(R, null, 2)}</pre> : <Cmd cmd={`${F} rules ${shq(scope)}`} />}
       <h4>First run</h4>
-      <p>In Claude Code, factory an issue:</p><Cmd cmd={`/software-factory ${repo}#<issue>`} />
+      {live && token && scope !== 'default' ? <><p>Start an issue here, headless in the attached clone:</p><StartIssue key={scope} repo={scope} token={token} /><p>Or in Claude Code:</p></>
+        : <p>In Claude Code, factory an issue{live ? ' (pick a project above to start one here)' : ''}:</p>}
+      <Cmd cmd={`/software-factory ${repo}#<issue>`} />
       <p>Or see which issues are ready:</p><Cmd cmd={`${F} queue ${repo}`} />
     </>
   );

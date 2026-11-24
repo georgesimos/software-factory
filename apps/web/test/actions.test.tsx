@@ -18,6 +18,16 @@ describe('run actions (#27)', () => {
     expect(screen.queryByRole('button', { name: /Resume factory/ })).toBeNull();
   });
 
+  it('under F ui, an active run that is not resumable keeps the prompt to copy and says why there is no Start (#22)', () => {
+    const { unmount } = render(<RunDetail run={run('acme/shop#45')} cap={3} costCap={5} />);
+    expect(screen.queryByText(/No Start here/)).toBeNull(); // the read-only page needs no explanation
+    unmount();
+    render(<RunDetail run={run('acme/shop#45')} cap={3} costCap={5} token="tok" />);
+    expect(screen.getByText(/No Start here: its session is still running, here or in Claude Code/)).toBeTruthy();
+    expect(screen.getByText('/software-factory acme/shop#45')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Start|Resume factory/ })).toBeNull();
+  });
+
   it('escalated, rejected, merged, split and awaiting-approval runs offer neither: those are a human’s call', () => {
     for (const id of ['acme/shop#44', 'acme/shop#41', 'acme/shop#43', 'acme/shop#46', 'acme/shop#49']) {
       const { unmount } = render(<RunDetail run={run(id)} cap={3} costCap={5} />);
