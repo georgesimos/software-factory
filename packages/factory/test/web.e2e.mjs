@@ -81,8 +81,8 @@ try {
     assert.equal(await wiz.getByRole('button', { name: 'acme/app' }).getAttribute('aria-pressed'), 'true');
     await wiz.getByRole('checkbox', { name: /^Web/ }).check();
     await status.filter({ hasText: 'Saved: web for acme/app' }).waitFor(); // each toggle saves
-    await wiz.getByRole('checkbox', { name: /^Database/ }).check();
-    await status.filter({ hasText: 'Saved: web, database for acme/app' }).waitFor();
+    await wiz.getByRole('checkbox', { name: /^Desktop/ }).check();
+    await status.filter({ hasText: 'Saved: web, desktop for acme/app' }).waitFor();
     assert.match(await wiz.locator('[data-ship="web"]').innerText(), /github-deployments/); // from packages/ship's registry
     assert.match(await wiz.locator('[data-ship="mobile"]').innerText(), /no connector yet/);
     await shot(page, '1280-light-3-ship');
@@ -120,7 +120,7 @@ try {
     await ctx.close();
   }
   assert.equal(json('projects.json')['acme/app'].autoMerge, false);
-  assert.deepEqual(json('onboard.json')['acme/app'].ship, ['web', 'database']);
+  assert.deepEqual(json('onboard.json')['acme/app'].ship, ['web', 'desktop']);
   assert.deepEqual(skills()['acme/app'].build, { use: 'provider', harness: 'codex' });
   assert.deepEqual(skills()['acme/app'].rules['checks.commands'].value, ['pnpm test', 'pnpm lint']);
 
@@ -206,7 +206,7 @@ try {
     await shot(page, '1280-light-static-1');
     await wiz.getByRole('button', { name: /What you ship/ }).click();
     await wiz.getByRole('checkbox', { name: /^Mobile/ }).check();
-    assert.match(await wiz.locator('.web-ob-cmd code').first().innerText(), /onboard ship 'acme\/app' web,mobile,database$/);
+    assert.match(await wiz.locator('.web-ob-cmd code').first().innerText(), /onboard ship 'acme\/app' web,mobile,desktop$/);
     assert.equal(fs.readFileSync(path.join(DIR, 'onboard.json'), 'utf8').includes('mobile'), false); // the read-only page never writes
     await shot(page, '1280-light-static-3');
     await wiz.getByRole('button', { name: /^Close/ }).click();
