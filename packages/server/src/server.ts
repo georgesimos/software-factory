@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { CAP, COST_CAP, TERMINAL, TOKEN_CAP } from '../../core/src/constants.ts';
+import { CAP, COST_CAP, TERMINAL, TOKEN_CAP, isLocal } from '../../core/src/constants.ts';
 import { hooks, loadShipList } from '../../core/src/ship.ts';
 import { LOGIN, rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
 import { budget, budgetWhy, derive } from '../../core/src/derive.ts';
@@ -532,7 +532,11 @@ const LOCAL_PATH = new RegExp([
   String.raw`(?<!\w)\/(?:${ROOTS})(?![\w.-])${BODY}`, // also after ':' or '=' (PATH=/a:/Users/…, cwd:/Users/…)
   String.raw`(?<![\w.\/~-])\/(?!api\/)[^\s\/${STOP}]+\/${BODY}`, // any other path with 2+ segments (cwd:/data/x); "/factory approve" and /api/… routes stay
 ].join('|'), 'g');
-const scrub = (v: unknown, under = ''): unknown => typeof v === 'string' ? v.replace(LOCAL_PATH, '[local path]')
+// A local (unverified) author is the OS user, which may be DOMAIN\user: never published. Its setBy/by becomes LOCAL_USER, and so
+// does the name in "set by <name> (local, unverified)" (gate.ts reasons); residue() refuses any that is left.
+const LOCAL_USER = 'a local user';
+const LOCAL_BY_TEXT = /\bset by [^\n"]{1,100}? \(local, unverified\)/g;
+const scrub = (v: unknown, under = ''): unknown => typeof v === 'string' ? v.replace(LOCAL_BY_TEXT, `set by ${LOCAL_USER} (local, unverified)`).replace(LOCAL_PATH, '[local path]')
   : Array.isArray(v) ? v.map((x) => scrub(x))
   : v && typeof v === 'object' ? scrubKeys(v, under) : v;
 // Keys too: a burn cell's models map is keyed by model id, which a provider runner may give as a file path. Counts that land on
@@ -544,6 +548,7 @@ function scrubKeys(v: object, under: string) {
   const out = Object.create(null); // a "__proto__" key stays a key
   for (const [k, x] of Object.entries(v)) {
     if (PATH_ONLY.has(k)) continue;
+    if ((k === 'setBy' || k === 'by') && isLocal(v)) { out[k] = LOCAL_USER; continue; }
     const c = k.replace(LOCAL_PATH, '[local path]'), key = labels && /token$/i.test(c) ? '[redacted]' : c, y = scrub(x, under === 'reviews' ? 'reviews:axes' : k);
     out[key] = typeof out[key] === 'number' && typeof y === 'number' ? out[key] + y : y;
   }
@@ -565,11 +570,21 @@ export function residue(json: string, raw: RawPage, me = machine()) {
   let text = json.replace(/(?:https?:\/\/)?(?:www\.)?github\.com[/:][^\s"\\,]*/gi, ''); // JSON text: \n is two characters, so stop at '\' too
   for (const id of ids) text = text.replace(new RegExp(String.raw`(?<![\w.\/\\-])${esc(id)}(?![\w.-])`, 'g'), '');
   if (me.user.length >= 3 && new RegExp(String.raw`(?:\\\\|\/)${esc(me.user)}(?![\w.-])`, 'i').test(text)) left.push('the login name in a path');
+  if (localNames(raw).some((n) => n !== LOCAL_USER && new RegExp(String.raw`(?<![\w.\/\\-])${esc(jsonOf(n))}(?![\w.-])`, 'i').test(text))) left.push('a local user name'); // a whole token, as ids are
   const short = me.host.split('.')[0]!, hosts: string[] = [];
   if (me.host.includes('.') && me.host.length >= 3) hosts.push(String.raw`(?<![\w-])${esc(me.host)}(?![\w-])`);
   if (short.length >= 3) hosts.push(String.raw`(?<![\w-])${esc(short)}(?=\.local\b)`, String.raw`(?:(?<=[\w.-])[@＠]|\\\\\\\\|\/\/)${esc(short)}(?![\w.-])`); // user@host, not @scope/pkg
   if (hosts.length && new RegExp(hosts.join('|'), 'i').test(json)) left.push('the host name');
   return left;
+}
+// Every OS user name the raw page holds as a local rule's or note's author.
+function localNames(v: unknown, out: string[] = []): string[] {
+  if (Array.isArray(v)) for (const x of v) localNames(x, out);
+  else if (v && typeof v === 'object') {
+    if (isLocal(v)) for (const k of ['setBy', 'by']) { const n = (v as Record<string, unknown>)[k]; if (typeof n === 'string' && n) out.push(n); }
+    for (const x of Object.values(v)) localNames(x, out);
+  }
+  return out;
 }
 const DATA_TAG = /(<script type="application\/json" id="data">)([^<]*)(<\/script>)/;
 // GitHub, Anthropic and OpenAI key shapes, and an F ui URL with its token.

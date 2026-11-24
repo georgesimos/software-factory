@@ -28,6 +28,9 @@ export const costOf = (model: unknown, t: number[], fast?: unknown): number | nu
 // Value lists are readonly unknown[]: their .includes() tests values read from the log or GitHub, which may be anything.
 export const USAGE_KEYS = ['input', 'output', 'cacheRead', 'cacheWrite'];
 export const TRUSTED: readonly unknown[] = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+// A rule or note whose author is the OS user, not a verified GitHub login (rules.ts whoami), and how it is shown.
+export const isLocal = (x: { via?: unknown } | null | undefined) => x?.via === 'local';
+export const byText = (x: { setBy?: unknown; by?: unknown; via?: unknown }) => `${x.setBy ?? x.by}${isLocal(x) ? ' (local, unverified)' : ''}`;
 export const OUTCOMES: readonly unknown[] = ['rejected', 'needs-info', 'merged', 'escalated', 'closed', 'awaiting-approval', 'split'];
 export const TERMINAL: readonly unknown[] = ['rejected', 'merged', 'escalated', 'closed', 'split']; // needs-info / awaiting-approval resume later
 export const STAGES: readonly unknown[] = ['intake', 'spec', 'build', 'review', 'gate', 'approve', 'ship']; // ship: deploy observations, recorded only by packages/ship's track()

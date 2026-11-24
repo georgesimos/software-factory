@@ -1,5 +1,6 @@
 import fs from 'node:fs';
-import { MAX_DIFF, MAX_ISSUES_PER_SESSION, PROJECT_BUDGET_USD } from './constants.ts';
+import os from 'node:os';
+import { MAX_DIFF, MAX_ISSUES_PER_SESSION, PROJECT_BUDGET_USD, isLocal } from './constants.ts';
 import { STEP_KEYS, isObj, isStepKey, readSkills, writeSkills, type ScopeConfig, type SkillsConfig } from './skills.ts';
 import { dashboard } from './log.ts';
 import { gh } from './github.ts';
@@ -30,8 +31,13 @@ export const RULES: Record<string, [check: (v: unknown) => boolean, want: string
   'deploy.preview': [oneOf('required', 'advisory', 'off'), 'required|advisory|off (off is the built-in; required adds a merge condition)'],
   artifact: [(v) => typeof v === 'string' && ARTIFACT_URL.test(v), 'a private claude.ai Artifact URL (https://claude.ai/artifact/<id>); opts this repo\'s runs in to republishing it'],
 };
-export const RULE_FIELDS = ['value', 'reason', 'setBy', 'setAt', 'until'];
+export const RULE_FIELDS = ['value', 'reason', 'setBy', 'via', 'setAt', 'until'];
 export const LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
+// Who changed a rule or wrote a note, and how sure F is: 'github' (gh api user, a verified login; also every rule with no via)
+// or 'local' (the OS user, which can be DOMAIN\user on Windows: weaker, so it can't relax a merge condition; see gate.ts).
+export type Via = 'github' | 'local';
+export const LOCAL_BY = /^[^\x00-\x1f\x7f]{1,100}$/;
+
 export const isDay = (s: unknown): boolean => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s)) && new Date(s).toISOString().startsWith(s); // a string: ["2026-11-01"] read as one
 export const dayOf = (now = Date.now()) => new Date(now).toISOString().slice(0, 10); // UTC; a rule applies through its whole `until` day
 export const isGuideKey = (k: string) => k === '*' || isStepKey(k) || /^review\.[a-z][a-z0-9-]{0,30}$/.test(k); // review.<extra axis> too
@@ -46,7 +52,8 @@ export function checkRules(v: unknown, at: string): void {
     if (!rule[0](x.value)) throw new Error(`${at}.${k}: must be ${rule[1]}, got ${JSON.stringify(x.value)}`);
     const reason = x.reason;
     if (typeof reason !== 'string' || !reason.trim() || reason.length > 200) throw new Error(`${at}.${k}: needs a reason (--reason "…", at most 200 characters)`);
-    if (typeof x.setBy !== 'string' || !LOGIN.test(x.setBy)) throw new Error(`${at}.${k}: setBy must be a GitHub login`);
+    if (x.via !== undefined && x.via !== 'github' && x.via !== 'local') throw new Error(`${at}.${k}: via must be github or local`);
+    if (isLocal(x) ? !(typeof x.setBy === 'string' && LOCAL_BY.test(x.setBy)) : !(typeof x.setBy === 'string' && LOGIN.test(x.setBy))) throw new Error(`${at}.${k}: setBy must be ${isLocal(x) ? 'a user name (1-100 characters)' : 'a GitHub login'}`);
     if (typeof x.setAt !== 'string' || isNaN(Date.parse(x.setAt))) throw new Error(`${at}.${k}: setAt must be a timestamp`);
     if (x.until !== undefined && !isDay(x.until)) throw new Error(`${at}.${k}: until must be YYYY-MM-DD`);
   }
@@ -78,12 +85,21 @@ export function rules(repo: string, cfg: SkillsConfig = readSkills(), now = Date
   }
   return { repo, policy, guide, expired, warnings };
 }
-// The person changing a rule (or writing a note) is whoever gh is logged in as; it is never typed in.
-export const whoami = (doing = 'changing the rule') => {
+// The person changing a rule (or writing a note), never typed in: whoever gh is logged in as, or, with no gh login, the OS user
+// (via 'local'), so rules and notes still save on a machine without GitHub. at: for tests.
+export function whoami(doing = 'changing the rule', at = { user: () => os.userInfo().username }): { by: string; via: Via } {
   let login = '';
-  try { login = gh('api', 'user', '--jq', '.login').trim(); } catch { /* below */ }
-  if (!LOGIN.test(login)) throw new Error(`cannot tell who is ${doing}: "gh api user" failed (run gh auth login)`);
-  return login;
+  try { login = gh('api', 'user', '--jq', '.login').trim(); } catch { /* not installed or not logged in: the OS user */ }
+  if (LOGIN.test(login)) return { by: login, via: 'github' };
+  let user = '';
+  try { user = String(at.user()).trim(); } catch { /* no OS user (uid without a passwd entry): below */ }
+  if (!LOCAL_BY.test(user)) throw new Error(`cannot tell who is ${doing}: "gh api user" failed and there is no OS user name`);
+  return { by: user, via: 'local' };
+}
+const stamp = (who: { by: string; via: Via }) => ({ setBy: who.by, ...(who.via === 'local' && { via: who.via }) }); // a GitHub login is stored as before: no via
+// A local (unverified) user can't replace or remove a rule a verified login set: that could only ever loosen it.
+const guard = (who: { by: string; via: Via }, old: Rule | undefined, key: string) => {
+  if (who.via === 'local' && old && !isLocal(old)) throw new Error(`rule ${key} was set by ${old.setBy} (GitHub): changing it needs that verified login (gh auth login), not the local user ${who.by}`);
 };
 // Rule changes (stage "rules") and notes (stage "note") are owned events in the log, written here outside record():
 // they never move a run, and F event refuses them.
@@ -105,11 +121,11 @@ export function setRule(scope: string, key: string, raw: unknown, { reason, unti
     if (key === 'checks.commands') { try { value = JSON.parse(String(raw)); } catch { value = [raw]; } } // JSON.parse makes a string of raw anyway
     if (until !== undefined && !(isDay(until) && until >= dayOf())) throw new Error('--until must be YYYY-MM-DD, today or later');
   }
-  const setBy = whoami();
-  if (step === null) s.rules = { ...s.rules, [key]: { value, reason, setBy, setAt: new Date().toISOString(), ...(until && { until }) } };
+  const who = whoami();
+  if (step === null) { guard(who, s.rules?.[key], key); s.rules = { ...s.rules, [key]: { value, reason, ...stamp(who), setAt: new Date().toISOString(), ...(until && { until }) } }; }
   cfg[scope] = s;
   writeSkills(cfg); // validates the whole config first
-  audit(scope, 'set', { key, value, ...(reason && { reason }), ...(until && { until }), setBy });
+  audit(scope, 'set', { key, value, ...(reason && { reason }), ...(until && { until }), ...stamp(who) });
   return rules(scope);
 }
 export function unsetRule(scope: string, key: string, { reason }: { reason?: string } = {}) {
@@ -117,12 +133,13 @@ export function unsetRule(scope: string, key: string, { reason }: { reason?: str
   const cfg = readSkills(), s: ScopeConfig = { ...cfg[scope] }, step = key.startsWith('guide.') ? key.slice(6) : null;
   const bag = step !== null ? 'guide' : 'rules', k = step ?? key, cur = s[bag];
   if (!cur || !Object.hasOwn(cur, k)) throw new Error(`no ${bag === 'guide' ? 'guidance' : 'rule'} "${key}" set for ${scope}`);
-  const setBy = whoami();
+  const who = whoami();
+  if (bag === 'rules') guard(who, cur[k] as Rule, k);
   const without = <T,>(m: Record<string, T> = {}) => { const { [k]: _gone, ...left } = m; return left; }; // a copy without k
   if (bag === 'guide') s.guide = without(s.guide); else s.rules = without(s.rules);
   if (!Object.keys(s[bag] ?? {}).length) delete s[bag];
   cfg[scope] = s;
   writeSkills(cfg);
-  audit(scope, 'unset', { key, ...(reason && { reason }), setBy });
+  audit(scope, 'unset', { key, ...(reason && { reason }), ...stamp(who) });
   return rules(scope);
 }
