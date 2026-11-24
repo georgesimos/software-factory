@@ -94,7 +94,7 @@ export function startSession(h, opts, { cwd, env: parent = process.env, label = 
   readline.createInterface({ input: child.stdout }).on('line', (line) => {
     let data;
     try { data = JSON.parse(line); } catch { return emit(s, { type: 'text', data: line }); }
-    if (s.harnessSession === undefined && typeof data?.session_id === 'string') s.harnessSession = data.session_id; // kept past the event caps
+    if (s.harnessSession === undefined) s.harnessSession = h.sessionOf?.(data); // kept past the event caps
     emit(s, { type: 'event', data });
   });
   readline.createInterface({ input: child.stderr }).on('line', (line) => emit(s, { type: 'stderr', data: line }));

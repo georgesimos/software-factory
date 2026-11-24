@@ -8,7 +8,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ID = /^[a-z][a-z0-9-]{0,30}$/;
 // models(): the aliases a runner on this harness may pick (per-step model, effort and fallback); efforts: its effort levels.
-const OPTIONAL = ['headless', 'providerTools', 'sessions', 'notes', 'current', 'headlessArgs', 'models'];
+// sessionOf(event) and exitOf(lastEvent): a launchable harness's session id and clean exit (0, else null) in its headless output.
+const OPTIONAL = ['headless', 'providerTools', 'sessions', 'notes', 'current', 'headlessArgs', 'models', 'launch', 'sessionOf', 'exitOf'];
 
 // Shape check at load time; behaviour is checked by the shared contract test in factory.mjs.
 export function check(h, file) {

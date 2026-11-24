@@ -101,7 +101,7 @@ export const UI_ROUTES = {
   },
   '/onboard/automerge': ({ repo, on }) => { setAutoMerge(repo, on); return onboardConfig(); },
   '/sessions': (x) => ({ session: launchSession(x).id }),
-  '/runs': ({ issue }) => startRun(issue),
+  '/runs': ({ issue, harness }) => startRun(issue, process.env, spawn, harness),
   '/sessions/terminal': (x) => ({ session: terminalSession(x).id }),
   '/sessions/input': ({ id, data, cols, rows }) => { // keystrokes and size for a terminal session
     const s = getSession(id);
@@ -204,16 +204,19 @@ export function terminalSession({ harness = 'claude-code', repo, issue, resume }
 // Here and among F start's logs alike, newest first, the first session that is running, exited 0, or wrote r's last event:
 // a later resume that died before its first event doesn't hide the one that wrote it (#105), and a clean exit since still
 // refuses. The newer of the two.
-function resumeOf(id: string, r) {
+// That session (its harness and harnessSession) when a start would resume it, else undefined.
+function resumeOf(id: string, r): { harness: string; harnessSession: string } | undefined {
   const mine = factorySessions(id);
   const here = [...mine].reverse().find((x) => x.state === 'running' || x.exit === 0 || covers(r, x)) ?? mine.at(-1);
-  const there = detachedRun(id, r);
-  return resumeFor(r, there && !(Date.parse(here?.started) > Date.parse(there.started)) ? there : here);
+  const there = detachedRun(id, r), last = there && !(Date.parse(here?.started) > Date.parse(there.started)) ? there : here;
+  return resumeFor(r, last) ? last : undefined;
 }
-function activeRun(id: string, r, instead: string) {
-  const resume = resumeOf(id, r);
-  if (r && !TERMINAL.includes(r.outcome) && !resume) throw new Error(`${id} already has an active run (${r.outcome || r.stage}): its harness may still be working it (a skill run in another claude); ${instead}`);
-  return resume;
+// A start resumes on the harness that ran the session: a Claude session id never reaches codex, nor the other way round.
+function activeRun(id: string, r, instead: string, harness?: string) {
+  const last = resumeOf(id, r);
+  if (r && !TERMINAL.includes(r.outcome) && !last) throw new Error(`${id} already has an active run (${r.outcome || r.stage}): its harness may still be working it (a skill run in another claude); ${instead}`);
+  if (last && harness && last.harness !== harness) throw new Error(`${id} was left active by a ${last.harness} session: resume it on ${last.harness}, not ${harness}`);
+  return last?.harnessSession;
 }
 // Why no start may take run r at all, for launchGate and resumable() alike.
 function closedWhy(id: string, r, archive = readArchive()) {
@@ -226,7 +229,9 @@ function closedWhy(id: string, r, archive = readArchive()) {
   return gone ? `${id} is ${gone.outcome} (archived): it needs a human, not a new run` : undefined;
 }
 // The checks every factory start passes (#25), for a live session here (launchSession) and a detached run (startRun).
-function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue }, modules = hostModules) {
+// No harness named: the one a resume would continue on (so the dashboard's Resume agrees with resumable()), else claude-code.
+function launchGate({ harness, mode = 'headless', repo, issue }: { harness?: string; mode?: string; repo?: unknown; issue?: unknown }, modules = hostModules) {
+  if (harness === undefined) { const id = `${repo}#${issue}`, r = derive(read())[id]; harness = (r && resumeOf(id, r)?.harness) || 'claude-code'; } // a run's own id only: derive's keys
   const h = harnesses.find((y) => y.id === harness);
   if (!h?.launch) throw new Error(`harness ${String(harness).slice(0, 40)} cannot launch sessions`);
   if (!(h.modes || []).includes(mode)) throw new Error(`${h.id} modes are ${(h.modes || []).join(', ')}`);
@@ -243,7 +248,7 @@ function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue },
   const on = runningOn(id); // before its first event lands
   if (on) throw inApp(id, on);
   if (held && claimLive(held)) throw running(id, held); // another process's, or a harness this app left running
-  const resume = activeRun(id, r, 'wait until that run is done');
+  const resume = activeRun(id, r, 'wait until that run is done', h.id);
   const b = r ? budget(r) : null;
   if (b?.over) throw new Error(`run budget exceeded ${budgetWhy(b)}`);
   if (!(Date.now() - (harnessReady.get(h.id) || 0) < 60_000)) { // spawnSync twice: once a minute, not per request
@@ -285,24 +290,26 @@ type Session = { id: string; stop: () => void };
 // the claim, which a later launcher may have taken over). Of the newest 20 logs that name a harness session, newest first, the
 // first that wrote r's last event (its life, from the time in its name to its last write, covers it) or that exited 0:
 // a later start that died before writing doesn't hide the one that wrote it, and a clean exit since refuses.
-const LOG = /^headless-(\d{4}-\d\d-\d\dT\d\d)-(\d\d)-(\d\d)-(\d{3}Z)\.log$/;
+// Its name ends .<harness>.log; a plain .log is claude-code's (written before codex could run).
+const LOG = /^headless-(\d{4}-\d\d-\d\dT\d\d)-(\d\d)-(\d\d)-(\d{3}Z)(?:\.([a-z][a-z0-9-]{0,30}))?\.log$/;
 function detachedRun(id: string, r) {
   let names: string[] = [];
   try { names = fs.readdirSync(runDir(id)).filter((f) => LOG.test(f)).sort().reverse().slice(0, 20); } catch { /* no folder */ }
   for (const n of names) {
-    const [, d, mm, ss, ms] = LOG.exec(n)!;
+    const [, d, mm, ss, ms, harness = 'claude-code'] = LOG.exec(n)!;
     let st: fs.Stats;
     try { st = fs.statSync(path.join(runDir(id), n)); } catch { continue; } // gone meanwhile
-    const x = { state: 'exited', started: `${d}:${mm}:${ss}.${ms}`, ended: st.mtime.toISOString() }, seen = readLog(path.join(runDir(id), n), st);
+    const x = { state: 'exited', harness, started: `${d}:${mm}:${ss}.${ms}`, ended: st.mtime.toISOString() }, seen = readLog(path.join(runDir(id), n), st, harness);
     if (seen?.harnessSession && (covers(r, x) || seen.exit === 0)) return { ...x, ...seen };
   }
   return undefined;
 }
-// One F start log's harness session (its first init line) and exit: 0 when its last stream-json event is a successful
-// result, null when it is any other event (killed), 'unknown' when the tail holds none (unsure: never auto-resumed).
-// stderr shares the log, so a later line that isn't an event, JSON or not, doesn't count. Read once per size and mtime.
+// One F start log's harness session and exit, as its harness reads its own events (sessionOf, exitOf): the first session id
+// in the head; 0 when the last event is a clean end, null when it is any other event (killed), 'unknown' when the tail holds
+// none or no harness of that id is loaded (unsure: never auto-resumed). An event is a JSON object with a string type: stderr
+// shares the log, so a later line that isn't one, JSON or not, doesn't count. Read once per size and mtime.
 const logs = new Map<string, { key: string; seen: { harnessSession?: string; exit: 0 | null | 'unknown' } }>();
-function readLog(file: string, st: fs.Stats) {
+function readLog(file: string, st: fs.Stats, harness: string) {
   const key = `${st.size}:${st.mtimeMs}`, hit = logs.get(file);
   if (hit?.key === key) return hit.seen;
   let head = '', tail = '';
@@ -310,22 +317,23 @@ function readLog(file: string, st: fs.Stats) {
     const fd = fs.openSync(file, 'r'), at = (n: number, from: number) => { const b = Buffer.alloc(Math.min(st.size, n)); return b.subarray(0, fs.readSync(fd, b, 0, b.length, from)).toString('utf8'); };
     try { head = at(64 * 1024, 0); tail = at(1024 * 1024, Math.max(0, st.size - 1024 * 1024)); } finally { fs.closeSync(fd); }
   } catch { return undefined; }
-  let last;
-  for (const l of tail.trimEnd().split('\n').reverse()) { // shortcut: a result line over 1 MB is cut, so reads as unknown; read back to its start if that matters
-    try { const e = JSON.parse(l); if (e && typeof e === 'object' && typeof e.type === 'string') { last = e; break; } } catch { /* stderr, or cut at the tail's start */ }
-  }
-  const seen = { harnessSession: /"session_id":"([\w-]{1,100})"/.exec(head)?.[1], exit: !last ? 'unknown' as const : last.type === 'result' && last.subtype === 'success' && !last.is_error ? 0 as const : null };
+  const h = harnesses.find((y) => y.id === harness), event = (l: string) => { try { const e = JSON.parse(l); return e && typeof e === 'object' && typeof e.type === 'string' ? e : undefined; } catch { return undefined; } };
+  let last, harnessSession;
+  for (const l of tail.trimEnd().split('\n').reverse()) if ((last = event(l))) break; // shortcut: a last event over 1 MB is cut, so reads as unknown; read back to its start if that matters
+  for (const l of head.split('\n')) { const e = event(l); if ((harnessSession = e && h?.sessionOf?.(e))) break; }
+  const seen = { harnessSession, exit: !last || !h?.exitOf ? 'unknown' as const : h.exitOf(last) };
   logs.set(file, { key, seen });
   return seen;
 }
 // F start and POST /api/runs (#25): the factory on one issue as a detached headless harness that outlives F and F ui, with
 // launchSession's checks. Not a session here: GET /api/sessions doesn't list it and quitting doesn't stop it. The prompt
-// and output are files in the run's folder, so nothing waits on F. run is for tests (child_process.spawn's shape).
-export function startRun(issue, env = process.env, run = spawn) {
-  const { h, cwd, id, resume, budget: left } = launchGate(parseRun(issue));
+// and output are files in the run's folder, so nothing waits on F. run is for tests (child_process.spawn's shape). harness:
+// as launchGate's (none: the one a resume continues on, else claude-code); the log's name says which, for readLog.
+export function startRun(issue, env = process.env, run = spawn, harness?: string) {
+  const { h, cwd, id, resume, budget: left } = launchGate({ ...parseRun(issue), harness });
   const cl = takeClaim(id, 'start'); // before the spawn: a second launcher now waits on this claim, not on the run's first event
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const log = path.join(runDir(id), `headless-${stamp}.log`), prompt = path.join(runDir(id), `headless-${stamp}.prompt`);
+  const log = path.join(runDir(id), `headless-${stamp}.${h.id}.log`), prompt = path.join(runDir(id), `headless-${stamp}.${h.id}.prompt`);
   fs.mkdirSync(runDir(id), { recursive: true }); // the claim's folder is the id lowercased: on a case-sensitive disk, not this one
   let child;
   try {

@@ -23,6 +23,7 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-shome-'));
 const stubEnv = { ...process.env, PATH: [path.join(HERE, 'test', 'bin'), path.dirname(process.execPath)].join(path.delimiter), HOME: home, USERPROFILE: home };
 Object.assign(process.env, { PATH: stubEnv.PATH, HOME: home, USERPROFILE: home }); // detect() and login() spawn from this process's PATH
 const claude = harnesses.find((h) => h.id === 'claude-code');
+const codex = harnesses.find((h) => h.id === 'codex');
 const finished = (s) => new Promise((resolve) => { const ev = []; subscribe(s, (e) => { ev.push(e); if (e.type === 'exit') resolve(ev); }); });
 const LOCAL = 'local_0123abcd-0123-4567-89ab-0123456789ab';
 
@@ -206,7 +207,7 @@ test('launchSession(): an attached repo and an issue number only; #25\'s refusal
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 3 }), /not attached/);
   saveProject('acme/app', clone);
   for (const [x, re] of [[{ repo: 'acme/app', issue: '3' }, /positive issue number/], [{ repo: 'acme/app', issue: 0 }, /positive issue number/], [{ repo: '../x', issue: 3 }, /owner\/repo/],
-    [{ repo: 'acme/app', issue: 3, mode: 'nope' }, /modes are headless, terminal, sdk/], [{ repo: 'acme/app', issue: 3, harness: 'codex' }, /cannot launch/], [{ repo: 'acme/app', issue: 3, harness: 'nope' }, /cannot launch/]]) {
+    [{ repo: 'acme/app', issue: 3, mode: 'nope' }, /modes are headless, terminal, sdk/], [{ repo: 'acme/app', issue: 3, harness: 'codex', mode: 'sdk' }, /codex modes are headless, terminal/], [{ repo: 'acme/app', issue: 3, harness: 'nope' }, /cannot launch/]]) {
     assert.throws(() => launchSession(x), re, JSON.stringify(x));
   }
   record('acme/app#4', 'intake', 'started', {});
@@ -790,4 +791,81 @@ test('launchSession() passes the host modules on: an sdk run in the attached clo
   await finished(launchSession({ repo: 'acme/app', issue: 8, mode: 'sdk' }, stubEnv, { [SDK]: sdk }));
   const { prompt, options } = sdk.rec.q;
   assert.deepEqual([prompt, options.cwd, options.maxBudgetUsd, options.permissionMode], ['/software-factory acme/app#8', projects()['acme/app'].path, COST_CAP, 'auto']);
+});
+
+// #59: Codex headless and terminal, against test/bin's codex stub.
+test('codex launch(): exec --json with the prompt on stdin, the sandbox always named (read-only, build workspace-write), never a bypass', () => {
+  const h = codex.launch({ mode: 'headless', prompt: '/software-factory acme/app#3', budget: 4.5 });
+  assert.deepEqual(h, { cmd: 'codex', args: ['exec', '--json', '-s', 'read-only', '-'], stdin: '/software-factory acme/app#3' });
+  assert.deepEqual(codex.launch({ mode: 'headless', prompt: 'x', write: true }).args, ['exec', '--json', '-s', 'workspace-write', '-']);
+  assert.deepEqual(codex.launch({ mode: 'headless', prompt: 'x', resume: '01a2-b3', write: true }).args, ['exec', '--json', '-s', 'workspace-write', 'resume', '-c', 'sandbox_mode=workspace-write', '01a2-b3', '-']);
+  assert.deepEqual(codex.launch({ mode: 'terminal', resume: 'abc' }), { cmd: 'codex', args: ['resume', 'abc'] });
+  assert.deepEqual(codex.launch({ mode: 'terminal' }), { cmd: 'codex', args: [] });
+  for (const resume of ['-x', '--yolo', 'a b', '', 'x'.repeat(101)]) for (const mode of ['headless', 'terminal'])
+    assert.throws(() => codex.launch({ mode, prompt: mode === 'headless' ? 'x' : undefined, resume }), /resume must be a codex session id/, `${mode} ${resume}`);
+  assert.throws(() => codex.launch({ mode: 'terminal', prompt: 'fix #3' }), /takes no prompt/);
+  assert.throws(() => codex.launch({ mode: 'headless' }), /needs a prompt/);
+  for (const budget of [0, -1, 0.004, NaN]) assert.throws(() => codex.launch({ mode: 'headless', prompt: 'x', budget }), /no run budget left/, String(budget));
+  assert.throws(() => codex.launch({ mode: 'sdk', prompt: 'x' }), /no sdk mode/);
+  // Every spec any harness can launch: no flag or setting that turns the sandbox or approvals off.
+  for (const h of harnesses.filter((x) => x.launch)) for (const mode of h.modes) for (const write of [false, true]) for (const resume of [undefined, 'abc-1']) {
+    if (mode === 'sdk') continue; // an in-process SDK takes options, not argv: its policy is checked in its own test
+    const spec = h.launch({ mode, prompt: mode === 'terminal' ? undefined : 'x', resume, write });
+    assert.doesNotMatch(JSON.stringify(spec), /dangerously|yolo|danger-full-access|bypass/i, `${h.id} ${mode} write=${write} resume=${resume}`);
+    if (h.id === 'codex' && mode === 'headless') assert.equal(spec.args[spec.args.indexOf('-s') + 1], write ? 'workspace-write' : 'read-only');
+  }
+});
+
+test('codex headless session: the stub\'s JSONL events stream, its thread id is the harness session, the pid reaches onPid, a failed turn exits 1', async () => {
+  const pids = [], s = startSession(codex, { mode: 'headless', prompt: 'hello there' }, { cwd: home, env: stubEnv, label: 't', onPid: (p) => pids.push(p) });
+  const ev = await finished(s);
+  assert.equal(ev.find((e) => e.data?.type === 'item.completed').data.item.text, 'prompt: hello there');
+  assert.ok(ev.some((e) => e.type === 'stderr' && /ERROR a log line/.test(e.data)));
+  assert.deepEqual([s.harnessSession, ev.at(-1).code, pids.length, pids[0] > 0], ['stub-thread', 0, 1, true]);
+  assert.deepEqual(ev.find((e) => e.data?.type === 'thread.started').data.parentIds, [], 'childEnv: never the outer session ids');
+  const bad = startSession(codex, { mode: 'headless', prompt: 'x' }, { cwd: home, env: { ...stubEnv, STUB_FAIL: '1' }, label: 't' });
+  assert.equal((await finished(bad)).at(-1).code, 1);
+});
+
+test('codex F start logs: clean is a last turn.completed, past stderr; turn.failed or a cut-off turn is resumed on codex; no event is unknown; a session resumes only on its own harness', () => {
+  const now = Date.now(), stamp = (t) => new Date(t).toISOString().replace(/[:.]/g, '-');
+  const log = (id, lines, name = 'codex') => {
+    fs.mkdirSync(runDir(id), { recursive: true });
+    const f = path.join(runDir(id), `headless-${stamp(now - 600_000)}${name ? `.${name}` : ''}.log`);
+    fs.writeFileSync(f, lines.join('\n') + '\n');
+    fs.utimesSync(f, new Date(now + 1_000), new Date(now + 1_000));
+    record(id, 'intake', 'started', {});
+  };
+  const go = (id, harness) => { const calls = []; startRun(id, stubEnv, (file, args) => { calls.push([path.basename(file), args]); return { pid: process.pid, on() { return this; }, unref() {} }; }, harness); return calls[0]; };
+  const started = JSON.stringify({ type: 'thread.started', thread_id: 'th-1' }), turn = JSON.stringify({ type: 'turn.started' });
+  log('acme/app#90', [started, turn, JSON.stringify({ type: 'turn.completed', usage: {} }), '2026-11-24T00:00:00Z ERROR after the turn']);
+  log('acme/app#91', [started, turn, JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'x' } })]); // killed mid-turn
+  log('acme/app#92', [started, turn, JSON.stringify({ type: 'turn.failed', error: { message: 'x' } })]);
+  log('acme/app#93', [started, 'y'.repeat(1_100_000)]);
+  log('acme/app#94', [JSON.stringify({ type: 'system', subtype: 'init', session_id: 'cl-1' }), JSON.stringify({ type: 'assistant' })], ''); // a legacy claude log, killed
+  log('acme/app#95', [started, turn, JSON.stringify({ type: 'turn.completed', usage: {} })], 'nope'); // no such harness: unsure
+  assert.deepEqual(['90', '91', '92', '93', '94', '95'].map((n) => resumable().includes(`acme/app#${n}`)), [false, true, true, false, true, false]);
+  assert.throws(() => go('acme/app#90'), /already has an active run/, 'a clean codex turn: not resumed (claude\'s parser would read it as killed)');
+  assert.throws(() => go('acme/app#93'), /already has an active run/, 'unsure means no auto-resume');
+  assert.throws(() => go('acme/app#95'), /already has an active run/);
+  assert.throws(() => go('acme/app#91', 'claude-code'), /left active by a codex session: resume it on codex, not claude-code/, 'never a codex thread id to claude');
+  assert.throws(() => go('acme/app#94', 'codex'), /left active by a claude-code session/, 'never a claude session id to codex');
+  assert.deepEqual(go('acme/app#91'), ['codex', ['exec', '--json', '-s', 'workspace-write', 'resume', '-c', 'sandbox_mode=workspace-write', 'th-1', '-']], 'no harness named: the dashboard\'s Resume continues on codex');
+  assert.deepEqual(go('acme/app#92', 'codex')[1].slice(4, 8), ['resume', '-c', 'sandbox_mode=workspace-write', 'th-1']);
+  assert.deepEqual(go('acme/app#94')[1].slice(0, 2), ['--resume', 'cl-1']);
+  assert.match(fs.readdirSync(runDir('acme/app#91')).find((f) => f.endsWith('.log') && f !== `headless-${stamp(now - 600_000)}.codex.log`), /^headless-.*\.codex\.log$/, 'its own log says codex');
+});
+
+test('F start <run> codex, for real: the detached stub codex reads its prompt, logs its events and holds the claim; a finished turn is not resumed', { skip: process.platform === 'win32' && 'the stub runs under a cmd.exe shim there' }, async () => {
+  const id = 'acme/app#96', f = spawnSync(process.execPath, [path.join(HERE, 'factory.mjs'), 'start', id, 'codex'], { env: { ...stubEnv, FACTORY_DIR: io.dir }, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(f.status, 0, f.stderr);
+  const { pid, log } = JSON.parse(f.stdout);
+  assert.match(path.basename(log), /\.codex\.log$/);
+  assert.equal(readClaim(id)?.pid, pid, 'the codex process\'s pid is the claim\'s');
+  await logged(log, /"turn\.completed"/);
+  assert.match(fs.readFileSync(log, 'utf8'), /prompt: \/software-factory acme\/app#96/);
+  assert.match(fs.readFileSync(log, 'utf8'), /"argv":\["exec","--json","-s","workspace-write","-"\]/, 'build: workspace-write');
+  for (let i = 0; i < 100; i++) { try { process.kill(pid, 0); } catch { break; } await new Promise((res) => setTimeout(res, 20)); }
+  record(id, 'intake', 'started', {});
+  assert.throws(() => startRun(id, stubEnv, () => assert.fail('no spawn')), /already has an active run/);
 });
