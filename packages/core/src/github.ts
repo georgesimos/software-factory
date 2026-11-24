@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { TRUSTED } from './constants.ts';
 import { decide, localResult } from './gate.ts';
-import { ciBroken, ciChecks } from './ci.ts';
+import { ciBroken, ciChecks, ciOf } from './ci.ts';
 import { derive, getRun } from './derive.ts';
 import { exec } from './platform.ts';
 import { baseBranch, git, projects, requireGithub } from './workspace.ts';
@@ -27,7 +27,9 @@ interface GhRepository {
   done?: { nodes: { headRefName: string }[] } | null;
 }
 /** postmerge(): CI on the merge commit, and its production deploys. */
-export interface PostMerge { sha?: string; state: string; reason?: string; failed?: string[]; advisory?: boolean; deploys?: Deploy[] }
+// SKILL.md §7 says what to do on each (test/ci.test.mjs checks it names them all).
+export const POSTMERGE_STATES = ['no-pr', 'not-merged', 'skipped', 'unknown', 'pending', 'none', 'pass', 'fail'] as const;
+export interface PostMerge { sha?: string; state: typeof POSTMERGE_STATES[number]; reason?: string; failed?: string[]; advisory?: boolean; deploys?: Deploy[] }
 
 export const gh = (...args: string[]): string => exec(io.gh, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 export const parseRun = (run: string) => {
@@ -158,6 +160,13 @@ export function postmerge(run: string): PostMerge {
   const policy = rules(repo).policy, ci = policy.ci?.value, broken = ciBroken(repo);
   if (broken) return { sha, state: 'unknown', reason: broken, ...deploys }; // fail closed: never "skipped" or "pass"
   if (ci === 'skip') return { sha, state: 'skipped', reason: 'rule ci=skip: CI on the base branch is not watched, so it never triggers a revert', ...deploys };
+  // shortcut: F checks runs only in a run's worktree, never on the merge commit, so local CI can't watch the base after a merge;
+  // run checks.commands in a fresh worktree of the merge commit here once that is wanted. Until then a definite skipped, never a state that can't change.
+  if (ciOf(repo) === 'local') {
+    let base = 'the base branch';
+    try { base = baseBranch(repo, projects()[repo]?.path ?? ''); } catch { /* the reason still says what to do */ }
+    return { sha, state: 'skipped', reason: `CI provider local: ${base} after the merge is not checked, so it never triggers a revert; run the checks.commands on ${base} yourself`, ...deploys };
+  }
   const c = ciChecks(repo, { path: projects()[repo]?.path, sha }, (s) => localResult(r.localChecks, policy['checks.commands']?.value, s));
   const why = c.broken ?? (c.state !== 'pass' && c.ci !== 'github-actions' ? c.detail : undefined);
   return { sha, state: c.state, failed: c.failed ?? [], ...(why && { reason: why }), ...(ci === 'advisory' && { advisory: true }), ...deploys }; // advisory: report red, don't revert on it

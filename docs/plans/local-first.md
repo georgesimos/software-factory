@@ -483,6 +483,8 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
      - `local` passes on `checks.commands`, so on a GitHub project a pass from it needs that rule from a verified login.
        `local` never passes with no `checks.commands` rule or no reviewed commit.
      - `F project set ci github-actions` is refused off GitHub; `host git` clears an explicit `ci github-actions`.
+     - `local` after a merge: `F postmerge` says `skipped` with the reason (a shortcut: `F checks` runs only in a run's
+       worktree). SKILL.md §7 says what to do on every postmerge state, `unknown` included.
 4a. **GitHub host, a move.** (~400 lines)
    - `openChangeRequest`, `listChangeRequests`, `changeRequest`, `merge` and `comment` on `hosts/github.ts`, moved out of
      `github.ts` and `sync.ts`.

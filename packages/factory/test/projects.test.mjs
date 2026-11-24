@@ -75,6 +75,14 @@ test('attach refuses an id that is already another repository; a second clone of
     git(a, 'remote', 'remove', 'origin');
     assert.throws(() => sync('local/trunk', clone('t/trunk', '', 'trunk')), /cannot tell the base branch .*no main or master branch$/);
     assert.equal(projects()['local/trunk'], undefined, 'a clone with no base branch is not attached');
+    // an origin with nothing fetched yet attaches on the local main, and says to fetch; its worktree still needs origin's
+    const e = clone('e/empty', 'git@gitlab.com:acme/empty.git');
+    git(e, 'update-ref', '-d', 'refs/remotes/origin/main');
+    assert.equal(sync('acme/empty', e).note, 'nothing is fetched from origin yet, so acme/empty is attached on its local main; run git fetch origin before its first run');
+    assert.throws(() => worktree('acme/empty#1'), /no main or master branch on origin, and no origin\/HEAD \(git fetch origin/);
+    const o = clone('e/fetched', 'git@gitlab.com:acme/fetched.git'); // fetched, but no main or master on origin: refused, not guessed
+    git(o, 'update-ref', '-d', 'refs/remotes/origin/main'); git(o, 'update-ref', 'refs/remotes/origin/dev', 'HEAD');
+    assert.throws(() => sync('acme/fetched', o), /no main or master branch on origin/);
     const g = clone('g/thing', 'https://pat:s3cret@gitlab.com/acme/thing.git');
     sync('acme/thing', g);
     assert.deepEqual([projects()['acme/thing'].host, projects()['acme/thing'].remote], ['git', 'https://gitlab.com/acme/thing.git']);

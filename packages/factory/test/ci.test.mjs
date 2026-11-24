@@ -10,7 +10,8 @@ import { setup } from './setup.mjs';
 import { builtin, contract, load } from '../../adapters/ci/index.ts';
 import { ciChecks, ciOf } from '../../core/src/ci.ts';
 import { decide, localResult } from '../../core/src/gate.ts';
-import { facts, postmerge } from '../../core/src/github.ts';
+import { POSTMERGE_STATES, facts, postmerge } from '../../core/src/github.ts';
+import { HERE } from '../factory.mjs';
 import { io, record } from '../../core/src/log.ts';
 import { setRule } from '../../core/src/rules.ts';
 import { projects, projectsFile } from '../../core/src/workspace.ts';
@@ -28,6 +29,7 @@ else if (/^api repos\\/acme\\/ci\\/issues\\/\\d+ --jq \\.author_association$/.te
 else if (a.includes('--json additions,deletions,files')) out({ additions: 3, deletions: 1, files: [{ path: 'src/a.ts' }, { path: 'src/a.test.ts' }] });
 else if (a.includes('--json bucket')) { if (process.env.STUB_CI_FAIL) { process.stderr.write('HTTP 502: Bad Gateway\\n'); process.exit(1); } out([{ bucket: 'pass' }]); }
 else if (a.includes('--json mergeCommit')) out({ mergeCommit: { oid: ${JSON.stringify(MERGED)} } });
+else if (a.includes('--json defaultBranchRef')) out('main\\n');
 else if (a.startsWith('run list')) out([{ status: 'completed', conclusion: 'success', name: 'ci', url: 'https://github.com/acme/ci/actions/runs/1' }]);
 else process.exit(1);
 `);
@@ -77,6 +79,7 @@ test('decide: a provider that can\'t answer escalates under every ci rule; a loc
   // not passing: the provider says why
   assert.deepEqual(decide(run, { ...green, ci: 'local', checks: 'none', ciDetail: 'Local checks: not run ("F checks")' }).reasons, ['CI checks are "none" (local: Local checks: not run ("F checks"))']);
   assert.deepEqual(decide(run, { ...green, checks: 'fail' }).reasons, ['CI checks are "fail"'], 'GitHub\'s, as before');
+  assert.deepEqual(decide(run, { ...green, checks: 'unknown', ciDetail: 'no commit to read CI for' }).reasons, ['CI checks are "unknown" (github-actions: no commit to read CI for)'], 'facts with no ci key are GitHub\'s');
 });
 
 test('facts and postmerge read the project\'s provider: GitHub\'s by default, F\'s own checks with ci local, and fail closed', () => {
@@ -102,13 +105,14 @@ test('facts and postmerge read the project\'s provider: GitHub\'s by default, F\
     project('acme/ci', { ci: 'local' });
     setRule('acme/ci', 'ci', 'required', { reason: 'back on' });
     fs.rmSync(ghLog, { force: true });
-    assert.deepEqual([facts(run).checks, facts(run).ciDetail], ['none', 'no checks.commands rule replaces CI, so nothing was checked']);
+    assert.deepEqual([facts(run).checks, facts(run).ciDetail], ['none', 'no checks.commands rule, so nothing was checked']);
     setRule('acme/ci', 'checks.commands', '["pnpm test"]', { reason: 'what CI ran' });
     const checked = { ...run, localChecks: ran() }, f = facts(checked);
     assert.deepEqual([f.checks, f.ci], ['pass', 'local']);
     assert.equal(decide(checked, f).action, 'merge');
     assert.ok(!calls().some((c) => c.includes('pr checks') || c.startsWith('run list')), 'GitHub CI is never read');
-    assert.equal(postmerge(run.id).state, 'none', 'F checks never ran on the merge commit');
+    // F checks never runs on the merge commit: a definite skipped that says so, never a "none" that can't change
+    assert.deepEqual(postmerge(run.id), { sha: MERGED, state: 'skipped', reason: 'CI provider local: main after the merge is not checked, so it never triggers a revert; run the checks.commands on main yourself' });
     // an unknown provider: escalates even under ci=skip, and postmerge says unknown, never skipped
     project('acme/ci', { ci: 'jenkins' });
     setRule('acme/ci', 'ci', 'skip', { reason: 'no CI' });
@@ -129,4 +133,10 @@ test('facts and postmerge read the project\'s provider: GitHub\'s by default, F\
     project('acme/ci', { ci: 'boom' });
     assert.deepEqual(ciChecks('acme/ci', { sha: SHA }, () => ({})), { ci: 'boom', state: 'unknown', broken: 'CI provider boom failed: connection refused' });
   } finally { io.gh = gh; delete process.env.STUB_CI_FAIL; delete builtin.odd; delete builtin.boom; }
+});
+
+test('SKILL.md §7 says what to do on every state F postmerge returns', () => {
+  const md = fs.readFileSync(path.join(HERE, 'SKILL.md'), 'utf8'), s7 = md.slice(md.indexOf('## 7. Watch main'), md.indexOf('## Publish to the Artifact'));
+  for (const st of POSTMERGE_STATES) assert.ok(s7.includes(`\`${st}\``), `§7 names "${st}"`);
+  assert.match(s7, /`unknown`[^\n]*Stop polling[^\n]*factory:needs-human/);
 });

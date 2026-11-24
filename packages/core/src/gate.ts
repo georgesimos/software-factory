@@ -19,7 +19,7 @@ export interface Facts {
 export function localResult(lc: LocalChecks | undefined, cmds: unknown, sha: string | undefined): { state: 'pass' | 'fail' | 'none'; text: string } {
   const short = (s: string | undefined) => String(s || 'none').slice(0, 7);
   const failing = (lc?.commands || []).filter((c) => c.exit !== 0).map((c) => c.cmd);
-  return !Array.isArray(cmds) || !cmds.length ? { state: 'none', text: 'no checks.commands rule replaces CI, so nothing was checked' }
+  return !Array.isArray(cmds) || !cmds.length ? { state: 'none', text: 'no checks.commands rule, so nothing was checked' }
     : !lc ? { state: 'none', text: 'Local checks: not run ("F checks")' }
     : !sha || lc.sha !== sha ? { state: 'none', text: `Local checks: ran on ${short(lc.sha)}, not the reviewed commit ${short(sha)}` }
     : JSON.stringify((lc.commands || []).map((c) => c.cmd)) !== JSON.stringify(cmds) ? { state: 'none', text: 'Local checks: ran a different command list than the checks.commands rule now has' }
@@ -75,7 +75,7 @@ export function decide(r: Run, f: Facts) {
   const pol = f.rules || {}, ci = pol.ci?.value || 'required', cmds = pol['checks.commands']?.value;
   const by = (x: Rule) => `set by ${byText(x)} on ${String(x.setAt).slice(0, 10)}: ${x.reason}`;
   if (f.ciBroken) why.push(f.ciBroken); // fail closed, even under ci=skip: a provider that can't answer never reads as fine
-  else if (ci === 'required' && f.checks !== 'pass') why.push(`CI checks are "${f.checks ?? 'unknown'}"${f.ciDetail ? ` (${f.ci}: ${f.ciDetail})` : ''}`);
+  else if (ci === 'required' && f.checks !== 'pass') why.push(`CI checks are "${f.checks ?? 'unknown'}"${f.ciDetail ? ` (${f.ci ?? 'github-actions'}: ${f.ciDetail})` : ''}`);
   // CI provider local passes on checks.commands: on a verified host, that rule must come from a verified login too
   if ((f.host ?? 'github') === 'github' && f.ci === 'local' && f.checks === 'pass' && pol['checks.commands'] && isLocal(pol['checks.commands']))
     why.push(`rule checks.commands was set by ${byText(pol['checks.commands'])}: CI provider local passes on it, and on a GitHub project that needs a verified login (gh auth login) before the factory merges on its own`);

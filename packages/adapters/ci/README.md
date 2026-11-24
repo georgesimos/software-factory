@@ -7,7 +7,7 @@ with `F project set <repo> ci <id>`. With none set, it is `github-actions` on a 
 | id | What it reads |
 |---|---|
 | `github-actions` | GitHub's checks: `gh pr checks` for a PR, `gh run list --commit` for a base-branch commit. GitHub projects only. |
-| `local` | `F checks`: the `checks.commands` rule, run in the run's worktree. It passes only on the reviewed commit, with the same command list the rule has now, every exit 0. With no `checks.commands` rule it is `none`. |
+| `local` | `F checks`: the `checks.commands` rule, run in the run's worktree. It passes only on the reviewed commit, with the same command list the rule has now, every exit 0. With no `checks.commands` rule it is `none`. It never checks the merge commit, so `F postmerge` says `skipped`, with why. |
 | `none` | Nothing: always `none`. With the `ci` rule at `required` (the default) every merge escalates. |
 
 From most to least checked: `github-actions`, `local`, `none`. Moving down that order relaxes what the factory checks, so
