@@ -9,12 +9,13 @@ import { test } from 'node:test';
 import { setup } from './setup.mjs';
 import { COST_CAP, TOKEN_CAP } from '../../core/src/constants.ts';
 import { HERE } from '../factory.mjs';
-import { archive, io, record, runDir } from '../../core/src/log.ts';
+import { archive, io, read, record, runDir } from '../../core/src/log.ts';
+import { derive } from '../../core/src/derive.ts';
 import { projects, saveProject, wtFile } from '../../core/src/workspace.ts';
 import { command, opener } from '../../core/src/platform.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { MAX_BYTES, killTree, listSessions, resolveSpec, startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
-import { artifact, budgetLeft, harnessReady, launchSession, page, resumable, resumeFor, serve, startRun, terminalSession, uiHandle } from '../../server/src/server.ts';
+import { artifact, budgetLeft, harnessReady, launchSession, openSession, page, resumable, resumeFor, serve, startRun, terminalSession, uiHandle } from '../../server/src/server.ts';
 import { procStart, readClaim, statTicks, takeClaim, unclaim } from '../../core/src/claim.ts';
 
 setup();
@@ -69,6 +70,58 @@ test('Windows: a headless launch runs through npm\'s claude.cmd, because the pro
   assert.equal(c.file, 'C:\\Windows\\system32\\cmd.exe');
   assert.match(c.args[3], /^""C:\\npm\\claude\.cmd" --resume 0123abcd-\S+ -p --output-format stream-json --verbose /);
   assert.throws(() => command(h.cmd, ['-p', h.stdin, ...h.args.slice(1)], win), /cmd\.exe quoting/, 'as an argument it would be refused');
+});
+
+test('record() stamps the desktop session id from CLAUDE_CODE_HOST_SESSION_ID only, valid ones only; derive keeps it on the session', () => {
+  const env = (k, v) => { if (v === undefined) delete process.env[k]; else process.env[k] = v; };
+  const forged = { hostSessionId: 'local_ffffffff-ffff-4fff-8fff-ffffffffffff' };
+  try {
+    env('CLAUDE_CODE_SESSION_ID', 'cli-1'); env('CLAUDE_CODE_HOST_SESSION_ID', LOCAL);
+    assert.equal(record('acme/host#1', 'intake', 'started', forged).hostSessionId, LOCAL, 'the env wins; the payload\'s is dropped');
+    env('CLAUDE_CODE_HOST_SESSION_ID', `${LOCAL}; open -a Calculator`);
+    assert.equal(record('acme/host#2', 'intake', 'started').hostSessionId, undefined, 'not a local_<uuid>: not recorded');
+    env('CLAUDE_CODE_HOST_SESSION_ID', undefined);
+    assert.equal(record('acme/host#3', 'intake', 'started', forged).hostSessionId, undefined, 'a payload alone never sets it');
+    env('CLAUDE_CODE_SESSION_ID', undefined); env('CLAUDE_CODE_HOST_SESSION_ID', LOCAL);
+    assert.equal(record('acme/host#4', 'intake', 'started', forged).hostSessionId, undefined, 'not inside claude-code: an inherited id isn\'t this run\'s');
+  } finally { env('CLAUDE_CODE_SESSION_ID', undefined); env('CLAUDE_CODE_HOST_SESSION_ID', undefined); }
+  assert.deepEqual(derive(read())['acme/host#1'].sessions.map((x) => [x.id, x.hostId]), [['cli-1', LOCAL]]);
+  assert.deepEqual(derive(read())['acme/host#2'].sessions.map((x) => [x.id, x.hostId]), [['cli-1', undefined]]);
+});
+
+test('openSession() (F open <id>, POST /api/sessions/open): the desktop app when there is a desktop id, else how to resume it where it ran', () => {
+  const opened = [], launch = (url) => { opened.push(url); return url; }; // the OS opener, stubbed
+  for (const bad of [undefined, 7, '--resume', 'a b', '../x', 'x'.repeat(101)]) assert.throws(() => openSession({ id: bad }, launch), /id must be a session id/, String(bad));
+  assert.throws(() => openSession({ harness: 'nope', id: 'cli-1' }, launch), /no harness/);
+  assert.deepEqual(openSession({ id: LOCAL }, launch), { opened: `claude://claude.ai/epitaxy/${LOCAL}` }, 'its own desktop id');
+  const later = LOCAL.replace('0123abcd', 'fedcba98'), at = (id, host, run) => { process.env.CLAUDE_CODE_SESSION_ID = id; process.env.CLAUDE_CODE_HOST_SESSION_ID = host; try { record(run, 'intake', 'started'); } finally { delete process.env.CLAUDE_CODE_SESSION_ID; delete process.env.CLAUDE_CODE_HOST_SESSION_ID; } };
+  at('cli-7', later, 'acme/open#2'); at('cli-7', LOCAL, 'acme/open#1'); // one CLI session, two runs: the newer write is #1's
+  assert.deepEqual(openSession({ id: 'cli-7' }, launch), { opened: `claude://claude.ai/epitaxy/${LOCAL}` }, 'the desktop id last recorded with the CLI session\'s events');
+  record('acme/host#5', 'intake', 'started', { harness: 'claude-code', sessionId: 'term-9', cwd: '/work/acme' }); // a plain terminal: no desktop id
+  assert.deepEqual(openSession({ id: 'term-9' }, launch), { resume: { command: 'claude --resume term-9', cwd: '/work/acme' } });
+  assert.deepEqual(openSession({ id: 'never-seen' }, launch), { resume: { command: 'claude --resume never-seen' } });
+  assert.deepEqual(opened, [`claude://claude.ai/epitaxy/${LOCAL}`, `claude://claude.ai/epitaxy/${LOCAL}`], 'the opener only ever gets the claude:// link');
+  const cl = takeClaim('acme/host#5', 'start'); // F start on that run: a resume would put a second harness on it
+  assert.throws(() => openSession({ id: 'term-9' }, launch), /acme\/host#5 already has a running session \(start, not started yet\)/);
+  cl.release();
+  fs.writeFileSync(path.join(runDir('acme/host#5'), 'claim.json'), '{'); // unreadable: live, as takeClaim treats it
+  assert.throws(() => openSession({ id: 'term-9' }, launch), /\(unreadable claim\)\. If nothing is starting it.*F unclaim acme\/host#5 --force/);
+  fs.rmSync(path.join(runDir('acme/host#5'), 'claim.json'));
+  const c7 = takeClaim('acme/open#1', 'session'); // opening the desktop chat that drove it adds no harness
+  assert.deepEqual([openSession({ id: LOCAL }, launch), openSession({ id: 'cli-7' }, launch)], [{ opened: `claude://claude.ai/epitaxy/${LOCAL}` }, { opened: `claude://claude.ai/epitaxy/${LOCAL}` }]);
+  c7.release();
+  assert.equal(opened.length, 4, 'opened only the desktop links, never while a resume was refused');
+});
+
+test('a spawned harness never inherits the ids of the session F runs in: headless, terminal and sdk', async () => {
+  const env = { ...stubEnv, CLAUDE_CODE_SESSION_ID: 'outer-1', CLAUDE_CODE_HOST_SESSION_ID: LOCAL };
+  const ev = await finished(startSession(claude, { mode: 'headless', prompt: 'x' }, { cwd: home, env }));
+  assert.deepEqual(ev.find((e) => e.data?.subtype === 'init').data.parentIds, []);
+  const pty = fakePty(), sdk = fakeSdk();
+  const t = startSession(claude, { mode: 'terminal' }, { cwd: home, env, modules: { [PTY]: pty } });
+  await new Promise((r) => setTimeout(r, 20)); const end = finished(t); t.stop(); await end;
+  await finished(startSession(claude, { mode: 'sdk', prompt: 'x' }, { cwd: home, env, modules: { [SDK]: sdk } }));
+  for (const e of [pty.rec.env, sdk.rec.q.options.env]) assert.deepEqual([e.CLAUDE_CODE_SESSION_ID, e.CLAUDE_CODE_HOST_SESSION_ID, e.PATH], [undefined, undefined, stubEnv.PATH]);
 });
 
 test('openDesktop(): only a desktop session id gets the link, and opener() takes that one claude: URL only', () => {
@@ -236,11 +289,12 @@ test('startRun() (F start, POST /api/runs): launchSession\'s checks, then a deta
   record('acme/app#40', 'approve', 'escalated', {});
   assert.throws(() => startRun('acme/app#40', stubEnv, () => assert.fail('no spawn')), /escalated: it needs a human/);
   const calls = [], fake = (file, args, opts) => { calls.push({ file, args, opts }); return { pid: process.pid, on() { return this; }, unref() {} }; }; // a live pid
-  const r = startRun('acme/app#41', stubEnv, fake);
+  const r = startRun('acme/app#41', { ...stubEnv, CLAUDE_CODE_SESSION_ID: 'outer-1', CLAUDE_CODE_HOST_SESSION_ID: LOCAL }, fake);
   const [{ file, args, opts }] = calls;
   assert.equal(path.basename(file), 'claude');
   assert.deepEqual([args[0], args.includes('stream-json'), opts.detached, opts.windowsHide, fs.realpathSync(opts.cwd)], ['-p', true, true, true, fs.realpathSync(projects()['acme/app'].path)]);
   assert.ok(opts.stdio.every((fd) => typeof fd === 'number'), 'files, not pipes: nothing waits on F');
+  assert.deepEqual([opts.env.CLAUDE_CODE_SESSION_ID, opts.env.CLAUDE_CODE_HOST_SESSION_ID], [undefined, undefined], 'childEnv: never the ids of the session F runs in');
   assert.deepEqual([opts.env.FACTORY_CLAIM, args.some((a) => a.includes(opts.env.FACTORY_CLAIM))], [readClaim('acme/app#41').token, false], 'its harness holds the claim: the token in env, never argv');
   assert.deepEqual([r.pid, path.dirname(r.log), fs.readFileSync(r.log.replace(/\.log$/, '.prompt'), 'utf8')], [process.pid, runDir('acme/app#41'), '/software-factory acme/app#41']);
   assert.throws(() => startRun('acme/app#41', stubEnv, fake), /already has a running session \(start, pid \d+\)/, 'not twice before its first event');
@@ -487,7 +541,8 @@ test('/api/sessions: POST starts one behind the token and Origin checks; GET lis
   assert.equal(req('POST', '/api/sessions/stop', { id }, { 'x-factory-token': 'z'.repeat(32) }).status, 403);
   assert.equal(req('GET', `/api/sessions/${id}/events`, undefined, { 'x-factory-token': 'y'.repeat(32) }).status, 403);
   assert.equal(req('GET', '/api/sessions/00000000-0000-0000-0000-000000000000/events').status, 404);
-  assert.match(JSON.parse(req('POST', '/api/sessions/open', { id: 'not-a-desktop-id' }).body).error, /claude --resume/);
+  assert.deepEqual(JSON.parse(req('POST', '/api/sessions/open', { id: 'not-a-desktop-id' }).body), { resume: { command: 'claude --resume not-a-desktop-id' } }, 'no desktop id: how to resume it');
+  assert.match(JSON.parse(req('POST', '/api/sessions/open', { id: '--resume x' }).body).error, /id must be a session id/);
 });
 
 test('F ui streams a live session over HTTP as server-sent events, to the end', async () => {
@@ -642,7 +697,7 @@ test('sdk mode: the CLI the SDK spawns goes through our spawn, so its pid reache
 test('sdk mode: the host env reaches the SDK, and a failed result exits 1', async () => {
   const sdk = fakeSdk(), env = { ...stubEnv, FACTORY_MARK: 'x' };
   await finished(startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, env, modules: { [SDK]: sdk } }));
-  assert.equal(sdk.rec.q.options.env, env);
+  assert.deepEqual(sdk.rec.q.options.env, env);
   for (const [result, code] of [[{ type: 'result', subtype: 'success' }, 0], [{ type: 'result', subtype: 'error_max_budget_usd' }, 1], [{ type: 'result', subtype: 'success', is_error: true }, 1], [null, 1]]) {
     assert.equal((await finished(startSession(claude, { mode: 'sdk', prompt: 'hi' }, { cwd: home, modules: { [SDK]: fakeSdk(false, result) } }))).at(-1).code, code, JSON.stringify(result));
   }

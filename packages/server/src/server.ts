@@ -13,7 +13,7 @@ import { ideas, startIdea } from '../../core/src/project.ts';
 import { metrics } from '../../core/src/gate.ts';
 import { fCmd, onboardConfig, onboardState, readOnboard, setShip } from '../../core/src/onboard.ts';
 import { projects, wtInfo } from '../../core/src/workspace.ts';
-import { dashboard, read, readArchive, runDir, sessionsFile, stateDir } from '../../core/src/log.ts';
+import { HOST_ID, dashboard, read, readArchive, runDir, sessionsFile, stateDir } from '../../core/src/log.ts';
 import { applyPreset, readSkills, setSkill, skillsData } from '../../core/src/skills.ts';
 import { sync } from '../../core/src/sync.ts';
 import { note } from '../../core/src/notes.ts';
@@ -21,8 +21,8 @@ import { measure, withMeasured } from '../../core/src/burn.ts';
 import { logMetrics } from '../../core/src/metrics.ts';
 import { open } from '../../core/src/platform.ts';
 import { spawn } from 'node:child_process';
-import { getSession, killTree, listSessions, resolveSpec, startSession, stopAll, subscribe } from '../../adapters/sessions.mjs';
-import { claimLive, procStart, readClaim, running, takeClaim, withClaim } from '../../core/src/claim.ts';
+import { childEnv, getSession, killTree, listSessions, resolveSpec, startSession, stopAll, subscribe } from '../../adapters/sessions.mjs';
+import { claimLive, procStart, readClaim, refuseClaimed, running, takeClaim, withClaim } from '../../core/src/claim.ts';
 
 // `F ui`: the dashboard on a loopback port, where the Skills sheet can save. Pure, so the self-test can drive it.
 export const same = (a, b) => typeof a === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -114,11 +114,7 @@ export const UI_ROUTES = {
     return { ok: true };
   },
   '/sessions/stop': ({ id }) => { const s = getSession(id); if (s?.state !== 'running') throw new Error('no running session with that id'); s.stop(); return { ok: true }; },
-  '/sessions/open': ({ harness = 'claude-code', id }) => { // the desktop app's own link for a session, when the harness has one
-    const h = harnesses.find((y) => y.id === harness), url = h?.openDesktop?.(id);
-    if (!url) throw new Error(`no desktop link for ${String(id).slice(0, 60)}: run claude --resume <id> in a terminal instead`);
-    return { opened: open(url) };
-  },
+  '/sessions/open': (x) => openSession(x),
 };
 // POST /api/sessions: start the factory on one issue in an attached clone (#25's checks). The request names a repo and an
 // issue only; the folder comes from projects() and the prompt is built here, so no request text reaches the harness.
@@ -300,7 +296,7 @@ export function startRun(issue, env = process.env, run = spawn) {
     fs.writeFileSync(prompt, spec.stdin ?? '');
     const stdin = fs.openSync(prompt, 'r'), out = fs.openSync(log, 'a');
     try {
-      child = run(c.file, c.args, { cwd, env: withClaim({ ...env, ...c.env }, cl.claim.token), stdio: [stdin, out, out], detached: true, windowsHide: true, windowsVerbatimArguments: !!c.windowsVerbatimArguments });
+      child = run(c.file, c.args, { cwd, env: withClaim(childEnv({ ...env, ...c.env }), cl.claim.token), stdio: [stdin, out, out], detached: true, windowsHide: true, windowsVerbatimArguments: !!c.windowsVerbatimArguments }); // the host's ids out, the claim's token in
       child.on('error', () => { /* no pid: refused below */ });
     } finally { fs.closeSync(stdin); fs.closeSync(out); }
     if (!child.pid) throw new Error(`${spec.cmd} did not start`);
@@ -313,6 +309,29 @@ export function startRun(issue, env = process.env, run = spawn) {
   }
   child.unref();
   return { pid: child.pid, log };
+}
+
+// F open <session> and POST /api/sessions/open (#26): a session in the Claude desktop app on this machine when it has a
+// desktop id, its own (local_<uuid>) or the one F recorded with a CLI session's events; else how to resume it, and where.
+// Nothing here runs a shell: the opener gets one validated claude:// link, and the resume command is only shown. Opening a
+// desktop session adds no harness; a resume does, so it is refused while a launcher holds a live (or unreadable) claim on a
+// run that session worked on (its events, or this app's session label). A session with no recorded run can't be checked.
+export function openSession({ harness = 'claude-code', id }: { harness?: string; id?: unknown }, opener: (url: string) => string = open) {
+  const h = harnesses.find((y) => y.id === harness);
+  if (!h) throw new Error(`no harness ${String(harness).slice(0, 40)}`);
+  const sid = typeof id === 'string' ? id : '';
+  if (!HOST_ID.test(sid) && !SESSION_ID.test(sid)) throw new Error('id must be a session id');
+  const runs = Object.entries(derive(read())), mine = listSessions().find((x) => x.harnessSession === sid)?.label;
+  const seen = runs.flatMap(([, r]) => r.sessions ?? []).filter((x) => x.id === sid && (!x.agent || x.agent === h.id))
+    .sort((a, b) => (a.last ?? '').localeCompare(b.last ?? '')); // the latest last: one CLI session can drive several runs
+  const url = h.openDesktop?.(HOST_ID.test(sid) ? sid : seen.map((x) => x.hostId).filter(Boolean).at(-1) ?? ''), cwd = seen.at(-1)?.cwd;
+  if (url) return { opened: opener(url) };
+  if (!h.modes?.includes('terminal')) throw new Error(`${h.id} has no desktop link or terminal resume for ${sid}`);
+  for (const run of new Set([...runs.filter(([, r]) => r.sessions?.some((x) => x.id === sid)).map(([k]) => k), ...(mine?.includes('#') ? [mine] : [])])) {
+    refuseClaimed(run, {}); // no token: any live claim, an unreadable one included (F unclaim --force), refuses
+  }
+  const spec = h.launch({ mode: 'terminal', resume: sid });
+  return { resume: { command: [spec.cmd, ...spec.args].join(' '), ...(cwd && { cwd }) } }; // started outside the desktop app
 }
 
 // The F ui server, unprinted: the desktop main loads `url` in its window; F ui prints it. Resolves once listening.
@@ -405,7 +424,7 @@ export function page(extra = {}) {
 // root (/Users, /home, …) or any /a/b, and runs to the next hard delimiter or URL, spaces included ("Application
 // Support", "Bob Smith"): over-redacting prose is the safe side. Web URLs survive: their slashes follow a word
 // character or '/'. Whatever the patterns miss, the residue check in artifact() refuses.
-const PATH_ONLY = new Set(['worktree', 'cwd', 'installPath', 'projectPath', 'fCmd']); // fCmd: the page falls back to the ~ form
+const PATH_ONLY = new Set(['worktree', 'cwd', 'installPath', 'projectPath', 'fCmd', 'hostId', 'hostSessionId']); // fCmd: the page falls back to the ~ form; hostId: a desktop session on this machine
 const STOP = String.raw`\n\r"'\x60<>|(){}\[\];,&*?`;
 const BODY = String.raw`(?:(?:(?!\s+https?:\/\/)[^${STOP}])*[^\s${STOP}])?`;
 const ROOTS = 'Users|home|Volumes|srv|private|var|tmp|opt|mnt|media|root|usr|etc|Library|Applications|nix|workspaces?';

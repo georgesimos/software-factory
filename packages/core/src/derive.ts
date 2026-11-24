@@ -91,8 +91,11 @@ export function derive(events: FactoryEvent[]): Record<string, Run> {
     r.started ??= e.ts;
     for (const k of ['title', 'url', ...(e.status === 'reverted' ? [] : ['pr']), 'branch', 'spec', 'issues', 'children']) if (e[k]) (r as Record<string, unknown>)[k] = e[k];
     if (e.stage === 'intake' && e.status === 'started') for (const k of ['author', 'association', 'source', 'imported', 'origin', 'originAssociation']) if (e[k]) (r as Record<string, unknown>)[k] = e[k];
-    if (e.sessionId && !(r.sessions ||= []).some((x) => x.id === e.sessionId)) r.sessions.push({ agent: e.harness, id: e.sessionId, cwd: e.cwd, last: e.ts });
-    else if (e.sessionId) ((r.sessions as Session[]).find((x) => x.id === e.sessionId) as Session).last = e.ts; // found: pushed above when new
+    if (e.sessionId && !(r.sessions ||= []).some((x) => x.id === e.sessionId)) r.sessions.push({ agent: e.harness, id: e.sessionId, cwd: e.cwd, last: e.ts, ...(e.hostSessionId && { hostId: e.hostSessionId }) });
+    else if (e.sessionId) { // found: pushed above when new
+      const x = (r.sessions as Session[]).find((y) => y.id === e.sessionId) as Session;
+      x.last = e.ts; if (e.hostSessionId) x.hostId = e.hostSessionId;
+    }
     if (e.costUsd) r.costUsd = +((r.costUsd || 0) + e.costUsd).toFixed(4);
     if (e.tokens) r.tokens = (r.tokens || 0) + e.tokens;
     if (e.stage === 'intake' && e.status === 'started') { r.outcome = 'in-progress'; delete r.humanMerge; delete r.reverted; } // resume after needs-info, or a new run after a revert

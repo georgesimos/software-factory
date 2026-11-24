@@ -5,7 +5,7 @@ if (a === '--version') process.stdout.write('2.1.304 (Claude Code)\n');
 else if (a === 'auth status') { process.stdout.write(JSON.stringify({ loggedIn: !out, authMethod: out ? 'none' : 'claude.ai' }, null, 2) + '\n'); process.exit(out ? 1 : 0); }
 else if (process.argv.includes('-p') && a.includes('--output-format stream-json --verbose')) { // headless launch: NDJSON events
   const ev = (x) => process.stdout.write(JSON.stringify(x) + '\n');
-  ev({ type: 'system', subtype: 'init', session_id: 'stub-session', cwd: process.cwd(), argv: process.argv.slice(2) });
+  ev({ type: 'system', subtype: 'init', session_id: 'stub-session', cwd: process.cwd(), argv: process.argv.slice(2), parentIds: [process.env.CLAUDE_CODE_SESSION_ID, process.env.CLAUDE_CODE_HOST_SESSION_ID].filter(Boolean) });
   if (process.env.STUB_BIG) for (let i = 0; i < Number(process.env.STUB_BIG); i++) ev({ type: 'assistant', i, pad: 'x'.repeat(64 * 1024) }); // output past the byte cap
   if (process.env.STUB_CHILD) import('node:child_process').then(({ spawn }) => { // a Bash tool's dev server: a grandchild that outlives a plain kill
     ev({ type: 'grandchild', pid: spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }).pid });

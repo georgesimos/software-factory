@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import state from '../fixtures/state.json';
@@ -34,8 +34,12 @@ describe('board parity with dashboard.html', () => {
     render(<App load={async () => data} />);
     const panel = await screen.findByRole('complementary');
     expect(within(panel).getByRole('heading', { name: 'Add newsletter signup to footer' })).toBeTruthy();
-    fireEvent.keyDown(document.body, { key: ']' });
-    expect(screen.queryByRole('complementary')).toBeNull();
+    // The keydown listener re-attaches in a deps-less effect: a press can reach the previous render's handler (#110).
+    // Retrying is safe because ] sets collapsed from the handler's own `shown`, so a stale press never hides it twice.
+    await waitFor(() => {
+      fireEvent.keyDown(document.body, { key: ']' });
+      expect(screen.queryByRole('complementary')).toBeNull();
+    });
     const card = document.querySelector<HTMLAnchorElement>(`.web-board a[href="#${CSS.escape(encodeURIComponent('acme/shop#43'))}"]`)!;
     fireEvent.click(card);
     expect(within(screen.getByRole('complementary')).getByRole('heading', { name: 'Add newsletter signup to footer' })).toBeTruthy();
@@ -91,5 +95,10 @@ describe('run detail parity', () => {
     expect(openInClaude({ ...r, worktree: '/a/../b', sessions: [] })).toBeNull();
     expect(openInClaude({ ...r, worktree: '//server/share', sessions: [] })).toBeNull();
     expect(openInClaude({ ...r, id: "a/b#1'; rm" })).toBeNull();
+    const host = 'local_0123abcd-0123-4567-89ab-0123456789ab'; // #26: a run driven from the desktop app opens that session there
+    expect(openInClaude({ ...r, sessions: [{ agent: 'claude-code', id: 'cli-2', last: '2026-11-01' }, { agent: 'claude-code', id: 'cli-1', hostId: host, last: '2026-11-02' }] })).toBe(`claude://claude.ai/epitaxy/${host}`);
+    for (const later of [{ agent: 'claude-code', id: 'cli-2' }, { agent: 'codex', id: 'cx-1', hostId: host }]) // a plain terminal or codex drove it since
+      expect(openInClaude({ ...r, sessions: [{ agent: 'claude-code', id: 'cli-1', hostId: host, last: '2026-11-01' }, { ...later, last: '2026-11-02' }] })).toMatch(/^claude-cli:\/\/open\?/);
+    expect(openInClaude({ ...r, sessions: [{ agent: 'claude-code', id: 'cli-1', hostId: `${host}/../x` }] })).toMatch(/^claude-cli:\/\/open\?/);
   });
 });
