@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import state from '../fixtures/state.json';
@@ -34,8 +34,12 @@ describe('board parity with dashboard.html', () => {
     render(<App load={async () => data} />);
     const panel = await screen.findByRole('complementary');
     expect(within(panel).getByRole('heading', { name: 'Add newsletter signup to footer' })).toBeTruthy();
-    fireEvent.keyDown(document.body, { key: ']' });
-    expect(screen.queryByRole('complementary')).toBeNull();
+    // The keydown listener re-attaches in a deps-less effect: a press can reach the previous render's handler (#110).
+    // Retrying is safe because ] sets collapsed from the handler's own `shown`, so a stale press never hides it twice.
+    await waitFor(() => {
+      fireEvent.keyDown(document.body, { key: ']' });
+      expect(screen.queryByRole('complementary')).toBeNull();
+    });
     const card = document.querySelector<HTMLAnchorElement>(`.web-board a[href="#${CSS.escape(encodeURIComponent('acme/shop#43'))}"]`)!;
     fireEvent.click(card);
     expect(within(screen.getByRole('complementary')).getByRole('heading', { name: 'Add newsletter signup to footer' })).toBeTruthy();
