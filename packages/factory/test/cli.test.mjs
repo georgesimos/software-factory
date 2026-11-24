@@ -167,6 +167,7 @@ export function harnessTest(cli) {
   const env = { FACTORY_DIR: fdir, FACTORY_HARNESSES: reg, PATH: [fbin, bin, node].join(path.delimiter), HOME: home, USERPROFILE: home, FACTORY_GIT: path.join(HERE, 'test', 'git-stub.mjs') };
   const st = JSON.parse(cli(['onboard', '--json'], '', env));
   assert.deepEqual(st.harnesses.map((h) => [h.id, h.installed, h.login?.ok]), [['claude-code', true, true], ['codex', true, true], ['fake-agent', true, true]]);
+  assert.deepEqual(st.harnesses.map((h) => h.app && [typeof h.app.installed, h.app.sessions, h.app.opens]), [['boolean', true, true], ['boolean', true, false], null]); // fake-agent has no desktop()
   assert.match(cli(['onboard'], '', env), /✓ Fake Agent 0\.0\.1/);
   assert.ok(st.hooks.ship && st.hooks.connectors.some((c) => c.id === 'github-deployments' && c.kind === 'web-deploy'), 'ship connectors come from packages/ship\'s registry');
   assert.deepEqual(JSON.parse(cli(['skills', 'catalog'], '', env)).global.find((e) => e.group === 'Fake Agent').runner, { use: 'provider', harness: 'fake-agent' });

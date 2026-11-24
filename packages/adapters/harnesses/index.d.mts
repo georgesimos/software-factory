@@ -15,6 +15,8 @@ export interface Harness {
   install: string;
   detect(): { installed?: boolean; version?: string | null };
   login(): { ok: boolean; hint: string };
+  /** Its desktop app on this machine, found on disk. at: where to look (tests). */
+  desktop?(at?: { platform?: string; home?: string; env?: Record<string, string | undefined>; root?: string }): { installed: boolean; path?: string };
   configDirs?: string[];
   efforts?: string[];
   modes?: string[];

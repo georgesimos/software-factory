@@ -32,6 +32,7 @@ const run = (args) => {
   return { code: r.error ? -1 : r.status ?? -1, out: `${r.stdout || ''}${r.stderr || ''}` };
 };
 const ls = (d) => { try { return fs.readdirSync(d); } catch { return []; } };
+const found = (files, ok = fs.existsSync) => { const f = files.find((x) => x && ok(x)); return f ? { installed: true, path: f } : { installed: false }; };
 
 // Built into Claude Code, no file on disk.
 const TOOLS = [
@@ -122,6 +123,16 @@ export default {
   // The desktop app's own link for one of its sessions. Observed, not documented (ADR §5): best effort; callers fall back
   // to `claude --resume <id>` in a terminal when this returns null.
   openDesktop: (id) => (/^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(String(id)) ? `claude://claude.ai/epitaxy/${id}` : null),
+  // The Claude desktop app, where its installers put it; at (platform, home, env, root) is for tests. macOS, checked on a Mac:
+  // /Applications/Claude.app (bundle com.anthropic.claudefordesktop) or ~/Applications. Windows, best effort and unchecked:
+  // %LOCALAPPDATA%\AnthropicClaude\claude.exe (the per-user installer), %LOCALAPPDATA%\Programs\Claude and
+  // %ProgramFiles%\Claude; a Microsoft Store (MSIX) install under WindowsApps isn't seen. Linux, best effort: a
+  // claude-desktop .desktop entry (no official Linux app).
+  desktop({ platform = process.platform, home = os.homedir(), env = process.env, root = path.parse(os.homedir()).root } = {}) {
+    if (platform === 'darwin') return found([path.join(root, 'Applications'), path.join(home, 'Applications')].map((d) => path.join(d, 'Claude.app')));
+    if (platform === 'win32') return found([env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'AnthropicClaude', 'claude.exe'), env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs', 'Claude', 'Claude.exe'), env.ProgramFiles && path.join(env.ProgramFiles, 'Claude', 'Claude.exe')]);
+    return found([path.join(root, 'usr', 'share', 'applications'), path.join(home, '.local', 'share', 'applications')].map((d) => path.join(d, 'claude-desktop.desktop')));
+  },
   providerTools: () => TOOLS,
   notes(platform = process.platform, env = process.env, exists = isFile) {
     // An npm .cmd shim answers --version, so detect() says ready, but headless runs pass flags (Bash(git diff:*), a prompt) cmd.exe would need quoted.

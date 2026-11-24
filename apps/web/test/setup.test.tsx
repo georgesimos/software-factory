@@ -69,6 +69,20 @@ describe('Setup wizard', () => {
     expect(calls).toEqual(['/api/onboard']);
   });
 
+  it('live: Local AI leads with each desktop app, then its CLI under Background runs', async () => {
+    const hs = [
+      { id: 'claude-code', label: 'Claude Code', install: 'curl x', installed: false, version: null, login: null, notes: [], app: { installed: true, path: '/Applications/Claude.app', sessions: true, opens: true } },
+      { id: 'codex', label: 'Codex', install: 'npm i codex', installed: true, version: '0.141.0', login: { ok: false, hint: 'codex login' }, notes: [], app: { installed: false, sessions: true, opens: false } },
+      { id: 'other', label: 'Other', install: 'x', installed: true, version: '1.0.0', login: { ok: true, hint: 'signed in' }, notes: [], app: null },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ harnesses: hs, repos: [], projects: {}, rules: {} }), { status: 200 })));
+    wizard({ token: 'tok' });
+    const card = async (id: string) => (await screen.findByText(hs.find((h) => h.id === id)!.label)).closest('[data-harness]')!.textContent;
+    expect(await card('claude-code')).toMatch(/Claude CodeDesktop app installed \/Applications\/Claude\.appThe factory reads its sessions and can open a run in the app\.Background runs Not installedcurl x/);
+    expect(await card('codex')).toMatch(/CodexDesktop app not foundThe factory reads its sessions\.Background runs 0\.141\.0InstalledNot signed incodex login/);
+    expect(await card('other')).toMatch(/^ OtherBackground runs 1\.0\.0InstalledSigned in · signed in/); // no desktop(): CLI only
+  });
+
   const live = (reply: (url: string, body: { ship?: string[] }) => Response | Promise<Response>) => vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
     if (url === '/api/onboard') return new Response(JSON.stringify({ harnesses: [], repos: [], projects: { 'acme/app': { path: '/x' }, 'acme/two': { path: '/y' } }, rules: {} }), { status: 200 });
     return reply(url, JSON.parse(String(init.body)));

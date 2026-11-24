@@ -24,6 +24,7 @@ would compile those, but F under Node fails on them, naming the file.
    | `install` | yes | the install command the wizard shows when the binary is missing |
    | `detect()` | yes | `{installed, version}` (e.g. from `<bin> --version`) |
    | `login()` | yes | `{ok, hint}`; when `!ok`, `hint` is the login command |
+   | `desktop(at?)` | no | `{installed, path?}`: its desktop app, found on disk (never launched), shown first on its Local AI card. `at` (`{platform, home, env, root}`) is for tests. Name each path you couldn't check as best effort |
    | `headless()` | no | `{cmd, args, note}`: how the orchestrator runs it unattended (display only) |
    | `headlessArgs(opts)` | no | the host harness only: pinned unattended flags `F headless-args` prints (`{schema, budget, write, model, effort, fallback}`) |
 | `providerTools()` | no | `[{name, desc, tool?}]` for the runner picker. The core builds the runner, so a harness can only offer itself. Return `[]` when not installed |

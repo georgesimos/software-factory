@@ -81,7 +81,9 @@ export function onboardState() {
   const hs = harnesses.map((h) => {
     const d = h.detect() || {};
     return { id: h.id, label: h.label, install: h.install, installed: !!d.installed, version: d.version || null,
-      login: d.installed ? h.login() : null, notes: d.installed ? h.notes?.() || [] : [], headless: h.headless?.() || null };
+      login: d.installed ? h.login() : null, notes: d.installed ? h.notes?.() || [] : [], headless: h.headless?.() || null,
+      // its desktop app, and what the factory does with it: imports its local sessions, opens a run in it
+      app: h.desktop ? { ...h.desktop(), sessions: !!h.sessions, opens: !!h.openDesktop } : null };
   });
   return { harnesses: hs, repos: discover(), hooks: { ...hooks(), connectors: shipConnectors() }, ...onboardConfig() };
 }
@@ -91,7 +93,8 @@ export function onboardText(s: ReturnType<typeof onboardState>, platform = proce
   if (platform === 'win32') L.push('The commands below quote for a POSIX shell: run them in Git Bash (cmd.exe and PowerShell read \'…\' differently).', '');
   L.push('1. Local AI');
   for (const h of s.harnesses) {
-    L.push(`   ${mark(h.installed)} ${h.label}${h.version ? ' ' + h.version : ''}${h.installed ? '' : `   install: ${h.install}`}`);
+    if (h.app) L.push(`   ${mark(h.app.installed)} ${h.label} desktop app${h.app.path ? '  ' + h.app.path : ': not found'}`);
+    L.push(`   ${mark(h.installed)} ${h.label}${h.app ? ' CLI (background runs)' : ''}${h.version ? ' ' + h.version : ''}${h.installed ? '' : `   install: ${h.install}`}`);
     if (h.login) L.push(`     ${mark(h.login.ok)} login: ${h.login.hint}`);
     for (const n of h.notes) L.push(`     ${mark(n.ok)} ${n.label}: ${n.hint}`);
   }
