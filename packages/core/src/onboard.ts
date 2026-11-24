@@ -1,4 +1,3 @@
-// @ts-nocheck
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,7 +20,7 @@ export const claudeDir = (home = os.homedir(), env = process.env) => (env.CLAUDE
 // { cmd, via }: via is 'skill' (the linked skill), 'plugin' (found in the plugin registry) or 'self' (this file); null when there is no F.
 export function fFound(platform = process.platform, home = os.homedir(), entry = path.join(import.meta.dirname, '..', '..', 'factory', 'factory.mjs'), env = process.env) {
   const linked = path.join(claudeDir(home, env), 'skills', 'software-factory', 'factory.mjs');
-  let here = entry, viaLink = false;
+  let here: string | null = entry, viaLink = false;
   try { here = fs.realpathSync(entry); viaLink = fs.realpathSync(linked) === here; } catch { viaLink = !fs.existsSync(entry) && fs.existsSync(linked); } // the desktop build ships no factory.mjs: the installed skill's
   const via = viaLink ? 'skill' : fs.existsSync(entry) ? 'self' : 'plugin';
   if (via === 'plugin') here = pluginEntry(home, env);
@@ -29,7 +28,7 @@ export function fFound(platform = process.platform, home = os.homedir(), entry =
   if (platform === 'win32') return { cmd: `node "${viaLink ? linked : here}"`, via };
   return { cmd: viaLink ? (env.CLAUDE_CONFIG_DIR ? `node ${shq(linked)}` : 'node ~/.claude/skills/software-factory/factory.mjs') : `node ${shq(here)}`, via };
 }
-export const fCmd = (...a) => fFound(...a)?.cmd ?? null;
+export const fCmd = (...a: Parameters<typeof fFound>) => fFound(...a)?.cmd ?? null;
 // The software-factory plugin's factory.mjs from <config>/plugins/installed_plugins.json, which Claude Code writes as
 // {"version":2,"plugins":{"<name>@<marketplace>":[{"scope","installPath","lastUpdated",…}]}}. Read as untrusted: only a string,
 // absolute installPath whose factory.mjs really resolves inside <config>/plugins counts. User scope only (a project or local
@@ -39,26 +38,28 @@ export const fCmd = (...a) => fFound(...a)?.cmd ?? null;
 export function pluginEntry(home = os.homedir(), env = process.env) {
   try { return pluginEntryOrThrow(home, env); } catch { return null; } // a registry shape nobody foresaw must not break every page build
 }
-function pluginEntryOrThrow(home, env) {
+// An entry of installed_plugins.json: untrusted, so every field is checked before use.
+type PluginInstall = { scope?: unknown; installPath?: unknown; lastUpdated?: unknown } | null;
+function pluginEntryOrThrow(home: string, env: NodeJS.ProcessEnv) {
   const dir = path.join(claudeDir(home, env), 'plugins');
-  let reg, root;
+  let reg, root: string;
   try { reg = JSON.parse(fs.readFileSync(path.join(dir, 'installed_plugins.json'), 'utf8')); root = fs.realpathSync(dir); } catch { return null; }
   const plugins = reg && typeof reg.plugins === 'object' && !Array.isArray(reg.plugins) ? reg.plugins : {};
-  const found = Object.entries(plugins).filter(([k, v]) => k.startsWith('software-factory@') && Array.isArray(v)).flatMap(([, v]) => v).map((e) => {
+  const found = Object.entries(plugins).filter(([k, v]) => k.startsWith('software-factory@') && Array.isArray(v)).flatMap(([, v]) => v as PluginInstall[]).map((e) => {
     if (!e || e.scope !== 'user' || typeof e.installPath !== 'string' || !path.isAbsolute(e.installPath)) return null;
-    let f;
+    let f: string;
     try { f = fs.realpathSync(path.join(e.installPath, 'packages', 'factory', 'factory.mjs')); } catch { return null; }
     const rel = path.relative(root, f);
     return rel && rel.split(path.sep)[0] !== '..' && !path.isAbsolute(rel) ? { f, at: typeof e.lastUpdated === 'string' ? Date.parse(e.lastUpdated) || 0 : 0 } : null; // not a date: oldest
-  }).filter(Boolean).sort((a, b) => b.at - a.at);
+  }).filter((x) => x !== null).sort((a, b) => b.at - a.at);
   return found[0]?.f ?? null;
 }
-export const shq = (x) => (/^[\w@%+=:,./~-]+$/.test(String(x)) ? String(x) : "'" + String(x).replace(/'/g, "'\\''") + "'");
+export const shq = (x: unknown) => (/^[\w@%+=:,./~-]+$/.test(String(x)) ? String(x) : "'" + String(x).replace(/'/g, "'\\''") + "'");
 export const onboardFile = () => path.join(stateDir(), 'onboard.json');
 export const SHIP_KINDS = ['web', 'mobile', 'database'];
 export const readOnboard = () => { try { return JSON.parse(fs.readFileSync(onboardFile(), 'utf8')); } catch { return {}; } };
 // "What you ship" is only stored for now; packages/ship reads it once it exists.
-export function setShip(scope, kinds) {
+export function setShip(scope: string, kinds: unknown) {
   checkScope(scope);
   if (!Array.isArray(kinds) || !kinds.every((k) => SHIP_KINDS.includes(k))) throw new Error(`ship must be a list of ${SHIP_KINDS.join('|')}`);
   const o = readOnboard();
@@ -72,8 +73,8 @@ export function setShip(scope, kinds) {
 // The cheap part, returned after every wizard write.
 export function onboardConfig() {
   const ps = projects(), scopes = ['default', ...Object.keys(ps)];
-  let ruleMap = {}, rulesError;
-  try { const cfg = readSkills(); ruleMap = Object.fromEntries(scopes.map((s) => [s, rules(s, cfg)])); } catch (e) { rulesError = e.message; }
+  let ruleMap: Record<string, ReturnType<typeof rules>> = {}, rulesError: string | undefined;
+  try { const cfg = readSkills(); ruleMap = Object.fromEntries(scopes.map((s) => [s, rules(s, cfg)])); } catch (e) { rulesError = (e as Error).message; }
   return { projects: ps, ship: readOnboard(), skills: skillsData(Object.keys(ps)), rules: ruleMap, ...(rulesError && { rulesError }) };
 }
 export function onboardState() {
@@ -84,9 +85,9 @@ export function onboardState() {
   });
   return { harnesses: hs, repos: discover(), hooks: { ...hooks(), connectors: shipConnectors() }, ...onboardConfig() };
 }
-export function onboardText(s, platform = process.platform) {
+export function onboardText(s: ReturnType<typeof onboardState>, platform = process.platform) {
   const f = fFound(platform), F_CMD = f?.cmd ?? null; // now, not at import: a plugin installed while the app runs counts
-  const mark = (b) => (b ? '✓' : b === null || b === undefined ? '?' : '✗'), L = [], scopes = ['default', ...Object.keys(s.projects)];
+  const mark = (b: unknown) => (b ? '✓' : b === null || b === undefined ? '?' : '✗'), L: string[] = [], scopes = ['default', ...Object.keys(s.projects)];
   if (platform === 'win32') L.push('The commands below quote for a POSIX shell: run them in Git Bash (cmd.exe and PowerShell read \'…\' differently).', '');
   L.push('1. Local AI');
   for (const h of s.harnesses) {
@@ -101,7 +102,7 @@ export function onboardText(s, platform = process.platform) {
   L.push(`   ${s.hooks.create ? '·' : '-'} Create from an idea: ${s.hooks.create ? `/software-factory new: <idea>  (or ${F_CMD} new "<idea>" --dry-run)` : 'coming soon'}`);
   L.push('', '3. What you ship');
   for (const sc of scopes) L.push(`   ${sc}: ${(s.ship[sc]?.ship || []).join(', ') || 'not chosen'}   ${F_CMD} onboard ship ${sc} web,mobile,database`);
-  const c = s.hooks.connectors;
+  const c = s.hooks.connectors as { label: string; kind: string }[] | { error?: string } | null; // the page also takes an { error } here
   L.push(`   connectors: ${Array.isArray(c) ? c.map((x) => `${x.label} (${x.kind})`).join(', ') || 'none yet' : c?.error ? 'error: ' + c.error : 'coming soon'}`);
   L.push('', '4. Workflow');
   for (const sc of scopes) {
