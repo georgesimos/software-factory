@@ -1,7 +1,7 @@
 // GitHub Issues tracker, through the logged-in `gh`. Each issue body ends with a hidden key marker, so a re-run
 // (even without the local key map) finds what an interrupted run already created instead of creating it twice.
 import type { Ctx } from '../hosts/index.ts';
-import type { Created, Item, OpenIssue } from './index.ts';
+import type { Comment, Created, Item, OpenIssue, TrackerItem } from './index.ts';
 
 export const id = 'github-issues';
 
@@ -47,4 +47,14 @@ export function listOpen({ gh }: Ctx, { repo }: { repo: string }): OpenIssue[] {
 }
 
 // "Depends on #3, #5" lines in the body. Ordering only: trust still comes from the issue's author.
-export const dependencies = (item: OpenIssue) => [...new Set([...String(item.body || '').matchAll(/^depends on\b(.*)$/gim)].flatMap((m) => [...m[1]!.matchAll(/#(\d+)/g)].map((x) => x[1])))];
+export const dependencies = (item: OpenIssue) => [...new Set([...String(item.body || '').matchAll(/^depends on\b(.*)$/gim)].flatMap((m) => [...m[1]!.matchAll(/#(\d+)/g)].map((x) => x[1]!)))]; // group 1 always matches
+
+// The issue itself, so title, author and association are never model-typed. GitHub serves pull requests here too.
+export function getItem({ gh }: Ctx, { repo, id }: { repo: string; id: string }): TrackerItem {
+  const i: { pull_request?: unknown; state: string; title: string; html_url: string; user: { login: string }; author_association: string; body?: string | null } = JSON.parse(gh('api', `repos/${repo}/issues/${id}`));
+  return { id, title: i.title, url: i.html_url, author: i.user.login, association: i.author_association, state: i.state, isChangeRequest: !!i.pull_request, body: i.body };
+}
+export const comments = ({ gh }: Ctx, { repo, id }: { repo: string; id: string }): Comment[] =>
+  (gh('api', '--paginate', `repos/${repo}/issues/${id}/comments`, '--jq', '.[]').split('\n').filter(Boolean).map((l) => JSON.parse(l)) as { user: { login: string }; author_association: string; created_at: string; body?: string | null }[])
+    .map((c) => ({ author: c.user.login, association: c.author_association, created_at: c.created_at, body: c.body }));
+export const trust = ({ gh }: Ctx, { repo, id }: { repo: string; id: string }) => gh('api', `repos/${repo}/issues/${id}`, '--jq', '.author_association').trim();

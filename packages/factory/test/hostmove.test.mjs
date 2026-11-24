@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import * as github from '../../adapters/hosts/github.ts';
+import * as issues from '../../adapters/trackers/github-issues.ts';
 import { SECRET } from '../../server/src/server.ts';
 
 const logged = (answers) => { const calls = []; return { calls, gh: (...a) => { calls.push(a); const s = a.join(' '); for (const [k, v] of answers) if (s.startsWith(k)) return typeof v === 'string' ? v : JSON.stringify(v); throw new Error(`unexpected gh ${s}`); } }; };
@@ -27,6 +28,23 @@ test('the GitHub host makes exactly the gh calls core made before the move', () 
   const o = logged([['pr create', 'https://github.com/acme/app/pull/99\n']]);
   assert.deepEqual(github.openChangeRequest({ gh: o.gh }, { repo: 'acme/app', branch: 'factory/revert-3', base: 'main', title: 'Revert: x', body: 'b', labels: ['factory:needs-human'] }), { id: 'https://github.com/acme/app/pull/99', url: 'https://github.com/acme/app/pull/99' });
   assert.deepEqual(o.calls, [['pr', 'create', '-R', 'acme/app', '--base', 'main', '--head', 'factory/revert-3', '--title', 'Revert: x', '--body', 'b', '--label', 'factory:needs-human']]);
+});
+
+// Local-first PR 5a: intake's, facts()'s and approval()'s issue reads moved to trackers/github-issues.ts, same gh calls.
+test('the GitHub tracker makes exactly the gh calls core made before the move', () => {
+  const issue = { number: 3, pull_request: undefined, state: 'open', title: 'T', html_url: 'https://github.com/acme/app/issues/3', user: { login: 'rep' }, author_association: 'NONE', body: null };
+  const g = logged([['api repos/acme/app/issues/3', issue]]);
+  assert.deepEqual(issues.getItem({ gh: g.gh }, { repo: 'acme/app', id: '3' }), { id: '3', title: 'T', url: issue.html_url, author: 'rep', association: 'NONE', state: 'open', isChangeRequest: false, body: null });
+  assert.equal(issues.getItem({ gh: logged([['api', { ...issue, pull_request: {} }]]).gh }, { repo: 'acme/app', id: '3' }).isChangeRequest, true);
+  assert.deepEqual(g.calls, [['api', 'repos/acme/app/issues/3']]);
+  const raw = [{ user: { login: 'rep' }, author_association: 'NONE', created_at: '2026-11-20T00:00:00Z', body: 'more', id: 9 }, { user: { login: 'o' }, author_association: 'OWNER', created_at: '2026-11-21T00:00:00Z', body: null }];
+  const c = logged([['api --paginate', raw.map((x) => JSON.stringify(x)).join('\n') + '\n']]);
+  assert.deepEqual(issues.comments({ gh: c.gh }, { repo: 'acme/app', id: '3' }), [
+    { author: 'rep', association: 'NONE', created_at: '2026-11-20T00:00:00Z', body: 'more' }, { author: 'o', association: 'OWNER', created_at: '2026-11-21T00:00:00Z', body: null }]);
+  assert.deepEqual(c.calls, [['api', '--paginate', 'repos/acme/app/issues/3/comments', '--jq', '.[]']]);
+  const t = logged([['api', 'MEMBER\n']]);
+  assert.equal(issues.trust({ gh: t.gh }, { repo: 'acme/app', id: '3' }), 'MEMBER');
+  assert.deepEqual(t.calls, [['api', 'repos/acme/app/issues/3', '--jq', '.author_association']]);
 });
 
 test('server.ts\'s leak check and scrub come from the hosts, unchanged', () => {

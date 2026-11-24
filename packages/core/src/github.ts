@@ -5,17 +5,14 @@ import { decide, localResult } from './gate.ts';
 import { ciBroken, ciChecks, ciOf } from './ci.ts';
 import { derive, getRun } from './derive.ts';
 import { exec } from './platform.ts';
-import { baseBranch, git, hostFn, hostOf, projects, requireGithub } from './workspace.ts';
+import { baseBranch, git, hostFn, hostOf, projects, requireGithub, trackerFn, trackerOf } from './workspace.ts';
 import { io, read, readArchive, record, runDir } from './log.ts';
 import { shipTrack } from './ship.ts';
 import { rules } from './rules.ts';
 import type { Facts } from './gate.ts';
+import type { Comment } from '../../adapters/trackers/index.ts';
 import type { Deploy, Run } from './types.ts';
 
-// GitHub's JSON, as far as F reads it: gh output is parsed, never validated beyond what the code checks.
-interface GhUser { login: string }
-interface GhIssue { pull_request?: unknown; state: string; title: string; html_url: string; user: GhUser; author_association: string; body?: string | null }
-export interface GhComment { user: GhUser; author_association: string; created_at: string; body?: string | null }
 /** postmerge(): CI on the merge commit, and its production deploys. */
 // SKILL.md §7 says what to do on each (test/ci.test.mjs checks it names them all).
 export const POSTMERGE_STATES = ['no-pr', 'not-merged', 'skipped', 'unknown', 'pending', 'none', 'pass', 'fail'] as const;
@@ -27,7 +24,7 @@ export const parseRun = (run: string) => {
   if (!m) throw new Error(`run must look like owner/repo#N, got "${run}"`);
   return { repo: `${m[1]}/${m[2]}`, n: m[3] as string }; // matched: every group is set
 };
-// Fetches the issue itself so title/author/association are never model-typed. Prints what intake should read.
+// Reads the item from the project's tracker so title/author/association are never model-typed. Prints what intake should read.
 export function intake(run: string) {
   const { repo, n } = parseRun(run);
   if (process.env.FACTORY_FIXTURES && repo === 'eval/golden') return intakeFixture(run, n); // offline eval: no GitHub
@@ -40,22 +37,23 @@ export function intake(run: string) {
     .filter((p) => p.branch !== `factory/issue-${n}` && p.closes.includes(n))
     .map((p) => p.url);
   if (inProgress.length) return { inProgress }; // nothing recorded: someone is already on it
-  const i: GhIssue = JSON.parse(gh('api', `repos/${repo}/issues/${n}`));
-  if (i.pull_request) return { notAnIssue: `#${n} is a pull request` };
+  const t = trackerOf(repo), ctx = adapterCtx();
+  const i = trackerFn(t, 'getItem', 'read an item')(ctx, { repo, id: n });
+  if (i.isChangeRequest) return { notAnIssue: `#${n} is a pull request` };
   if (i.state !== 'open') return { notAnIssue: `#${n} is ${i.state}` };
   // Advisory only: PRs naming the issue in their title without a formal closing link.
   const mentions = prs.filter((p) => p.branch !== `factory/issue-${n}` && new RegExp(`(^|[^\\w])#${n}(?!\\d)`).test(p.title)).map((p) => ({ url: p.url, title: p.title }));
-  const comments: GhComment[] = gh('api', '--paginate', `repos/${repo}/issues/${n}/comments`, '--jq', '.[]').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-  const meta: { title: string; url: string; author: string; association: string; origin?: string; originAssociation?: string | undefined } = { title: i.title, url: i.html_url, author: i.user.login, association: i.author_association };
+  const comments = trackerFn(t, 'comments', 'read comments')(ctx, { repo, id: n });
+  const meta: { title: string; url?: string | undefined; author: string; association: string; origin?: string; originAssociation?: string | undefined } = { title: i.title, url: i.url, author: i.author, association: i.association };
   // A split child is authored by whoever ran the split; it inherits its parent's (possibly untrusted) author.
   const parent = [...Object.values(derive(read())), ...readArchive()].find((r) => (r.children || []).includes(run));
   if (parent) Object.assign(meta, { origin: parent.id, originAssociation: parent.originAssociation || parent.association });
   record(run, 'intake', 'started', meta);
   // Only the reporter and repo insiders may shape requirements; others could steer a trusted issue into auto-merge.
-  const counts = (c: GhComment) => c.user.login === meta.author || TRUSTED.includes(c.author_association);
+  const counts = (c: Comment) => c.author === meta.author || TRUSTED.includes(c.association);
   return {
     ...meta, state: i.state, body: i.body, mentions,
-    comments: comments.filter(counts).map((c) => ({ author: c.user.login, association: c.author_association, created_at: c.created_at, body: c.body })),
+    comments: comments.filter(counts).map((c) => ({ author: c.author, association: c.association, created_at: c.created_at, body: c.body })),
     ignoredComments: comments.filter((c) => !counts(c)).length,
   };
 }
@@ -75,7 +73,7 @@ export function openPRs(repo: string) {
 export function facts(r: Run): Facts {
   const { repo, n } = parseRun(r.id);
   requireGithub(repo, 'reading CI and the diff');
-  const association = gh('api', `repos/${repo}/issues/${n}`, '--jq', '.author_association').trim();
+  const association = trackerFn(trackerOf(repo), 'trust', 'tell who wrote the item')(adapterCtx(), { repo, id: n });
   const autoMerge = projects()[repo]?.autoMerge !== false;
   const policy = rules(repo).policy; // a broken config throws here, so decide/merge fail and the run escalates
   const pv = policy['deploy.preview']?.value, dep: { deploys?: Deploy[] } = {};
@@ -123,16 +121,15 @@ export function approval(run: string) {
   requireGithub(repo, 'reading spec approval');
   const since = [...r.events].reverse().find((e) => e.status === 'awaiting-approval')?.ts;
   if (!since) throw new Error(`${run} is not awaiting approval`);
-  const comments: GhComment[] = gh('api', '--paginate', `repos/${repo}/issues/${n}/comments`, '--jq', '.[]').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-  return approvalVote(comments, since);
+  return approvalVote(trackerFn(trackerOf(repo), 'comments', 'read comments')(adapterCtx(), { repo, id: n }), since);
 }
 // The latest trusted "/factory approve|reject" posted after `since`. GitHub stamps comments to the whole second and F to the
 // millisecond, so only a comment from a later second counts: one in the same second may predate the spec it would approve.
 // Compared as times, never strings ("…:00Z" sorts after "…:00.900Z"). An unparsable created_at never counts.
-export function approvalVote(comments: GhComment[], since: string) {
+export function approvalVote(comments: Comment[], since: string) {
   const from = Math.floor(Date.parse(since) / 1000) * 1000 + 1000;
-  const vote = comments.filter((c) => Date.parse(c.created_at) >= from && TRUSTED.includes(c.author_association))
-    .map((c) => ({ by: c.user.login, m: /^\s*\/factory\s+(approve|reject)\b/i.exec(c.body || '') })).filter((x) => x.m).pop();
+  const vote = comments.filter((c) => Date.parse(c.created_at) >= from && TRUSTED.includes(c.association))
+    .map((c) => ({ by: c.author, m: /^\s*\/factory\s+(approve|reject)\b/i.exec(c.body || '') })).filter((x) => x.m).pop();
   return vote ? { decision: ((vote.m as RegExpExecArray)[1] as string).toLowerCase(), by: vote.by } : { decision: 'waiting' }; // filtered on m; group 1 always matches
 }
 // After a merge: CI on the merge commit of the base branch.

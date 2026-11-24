@@ -9,6 +9,7 @@ import { io, read, record, runDir, stateDir } from './log.ts';
 import { rules } from './rules.ts';
 import { withClaim } from './claim.ts';
 import { builtin as builtinHosts, type Host } from '../../adapters/hosts/index.ts';
+import { builtin as builtinTrackers, type Tracker } from '../../adapters/trackers/index.ts';
 import type { Project, WorktreeInfo } from './types.ts';
 
 /** What execFileSync throws: Node types it as a plain Error. */
@@ -33,6 +34,14 @@ export function hostFn<K extends 'whoami' | 'baseBranch' | 'listChangeRequests' 
   const f = Object.hasOwn(builtinHosts, id) ? (builtinHosts as Record<string, Host>)[id]![fn] : undefined;
   if (!f) throw new Error(`host "${id}" cannot ${verb}`);
   return f as NonNullable<Host[K]>;
+}
+/** projects.json tracker, else github-issues on a GitHub project and local (its own files, docs/plans/local-first.md 5b) on a git one. */
+export const trackerOf = (repo: string) => projects()[repo]?.tracker ?? (hostOf(repo) === 'github' ? 'github-issues' : 'local');
+/** The tracker's function, or a refusal naming the tracker and what it can't do. */
+export function trackerFn<K extends 'getItem' | 'comments' | 'trust'>(id: string, fn: K, verb: string): NonNullable<Tracker[K]> {
+  const f = Object.hasOwn(builtinTrackers, id) ? (builtinTrackers as Record<string, Tracker>)[id]![fn] : undefined;
+  if (!f) throw new Error(`tracker "${id}" cannot ${verb}`);
+  return f as NonNullable<Tracker[K]>;
 }
 /** The branch `repo`'s runs start from, from its host (host: before projects.json has it, at attach). */
 export const baseBranch = (repo: string, repoPath: string, host = hostOf(repo)) =>
