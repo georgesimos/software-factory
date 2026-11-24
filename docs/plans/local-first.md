@@ -171,11 +171,12 @@ secretPatterns?: RegExp[]                                    // added to server.
   - `headSha` is the branch's current head.
   - `approval` is the latest `F approve RUN --merge` event in the log, valid only while `headSha` equals the approved
     sha, with `via: 'local'`.
-  - `state` is `merged` when the base branch contains the factory's own `mergeSha`, or contains `headSha` (a human's
-    merge or fast-forward).
+  - `state` is `merged` when the base branch has the factory's own squash of the reviewed sha (confirmed by its tree), or
+    contains the reviewed sha (a human's merge or fast-forward). Without the reviewed sha, only the squash counts: a
+    branch just cut from the base is on it too.
   - A human squash merge elsewhere (at a remote with a review UI) isn't detectable from git. The run stays escalated
     until the user runs `F close RUN --merged <sha>` at a terminal, which records `humanMerge` like #21's sync does and
-    requires that `<sha>` is on the base.
+    requires that `<sha>` is on the base and brought the reviewed change onto it.
 - `listChangeRequests`: the local and remote `factory/*` branches not yet on the base, and `doneBranches` from
   `git branch --merged`. Squash merges are missed there too, as `sync.ts` already notes for GitHub.
 - `merge`:
@@ -503,12 +504,16 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
    - A temp-repo contract test: a moved base makes the plain push fail as non-fast-forward and leaves the remote unchanged; no-remote `update-ref` CAS; no force flag anywhere (§1.2).
    - Landed as: `openChangeRequest`, `changeRequest` and `merge` on `hosts/git.ts` (see its README section), and `F close
      RUN --merged <sha>` (`closeMerged` in `projectset.ts`: human-only, git projects only, the sha must be on the base and
-     contain the run's reviewed commit (merging that commit into it changes nothing), the run must be escalated; it records the same `approve merged` event as sync's GitHub human-merge). A protected base is
+     be the commit that brought the run's reviewed change onto it (merging the reviewed commit into the sha changes
+     nothing, and into its first parent it would), the run must be escalated; it records the same `approve merged` event as sync's GitHub human-merge). A protected base is
      the refused push: its detail says to merge at the host and then run `F close`. `test/githost.test.mjs` covers:
      - the no-force grep, and every `update-ref` comparing against the sha it saw;
      - a moved base during the push, which leaves the remote untouched;
-     - a moved ref during the CAS, a dirty checked-out base, and a conflict;
-     - each `F close` refusal.
+     - a moved ref during the CAS, a checked-out base moved forwards or reset backwards just before the swap, a dirty or
+       missing checkout, an untracked file in the way, and a conflict;
+     - a retry or a human's fast-forward (merged, nothing pushed), a squash that changes nothing, a branch just cut from
+       the base, and a commit that only claims the factory's squash in its message;
+     - each `F close` refusal: a later commit, a revert, and an unknown reviewed commit (git's error, not "not merged").
      - Not here: `listChangeRequests` and sync for `git` projects, and core calling the git host's `merge`. `facts()` and
        `merge()` in core still `requireGithub`, so they come with 5a's `facts()` split. `approval` is `null` until PR 7.
        `comment` waits for PR 6.

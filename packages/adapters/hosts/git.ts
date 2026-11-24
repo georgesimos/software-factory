@@ -34,11 +34,42 @@ export function baseBranch({ git }: Ctx, { path, base }: { repo: string; path: s
 
 // ---- change requests (local-first PR 4b): a change request is the branch factory/issue-N at a sha ----
 // Rule: no force flag ever touches a base branch. The base moves only by a plain push (the remote refuses a non-fast-forward)
-// or `update-ref <ref> <new> <seen>` (refused unless the ref still holds what was seen). test/githost.test.mjs greps this file.
+// or `update-ref <ref> <new> <old>` (refused unless the ref still holds old). test/githost.test.mjs greps this file.
+type Git = Ctx['git'];
 const branchOf = (id: string) => id.split('@')[0]!;
-const tryGit = (git: Ctx['git'], ...a: string[]) => { try { return git(...a).trim(); } catch { return null; } };
-const hasOrigin = (git: Ctx['git'], path: string) => !!tryGit(git, '-C', path, 'remote', 'get-url', 'origin');
+const tryGit = (git: Git, ...a: string[]) => { try { return git(...a).trim(); } catch { return null; } };
+const hasOrigin = (git: Git, path: string) => !!tryGit(git, '-C', path, 'remote', 'get-url', 'origin');
 const firstLine = (e: unknown) => String((e as { stderr?: unknown })?.stderr || (e as Error)?.message || e).trim().split('\n').filter((l) => !/^(hint|To) /.test(l))[0] || 'refused';
+const treeOf = (git: Git, path: string, c: string) => git('-C', path, 'rev-parse', `${c}^{tree}`).trim();
+
+// merge-tree --write-tree needs git 2.38: checked once, so an old git says so instead of failing as a conflict
+let tooOld: string | null | undefined;
+export function mergeTreeMissing(git: Git): string | null {
+  if (tooOld === undefined) {
+    const v = /(\d+)\.(\d+)/.exec(tryGit(git, 'version') ?? '');
+    tooOld = v && (+v[1]! > 2 || (+v[1]! === 2 && +v[2]! >= 38)) ? null : `git ${v ? `${v[1]}.${v[2]}` : 'of unknown version'} is too old: merging needs git 2.38 or later (merge-tree --write-tree)`;
+  }
+  return tooOld;
+}
+// The tree of merging theirs into ours with no checkout, or null on a conflict: exit 1 with the conflicted tree on stdout.
+// git also exits 1 for an unknown commit, with nothing on stdout; that and anything else throws its first line.
+export function mergeTree(git: Git, path: string, ours: string, theirs: string): string | null {
+  const old = mergeTreeMissing(git);
+  if (old) throw new Error(old);
+  try { return git('-C', path, 'merge-tree', '--write-tree', '--no-messages', ours, theirs).trim().split('\n')[0]!; }
+  catch (e) {
+    const x = e as { status?: number; stdout?: unknown };
+    if (x?.status === 1 && /^[0-9a-f]{40,64}$/.test(String(x.stdout ?? '').trim().split('\n')[0]!)) return null;
+    throw new Error(firstLine(e));
+  }
+}
+// sha brought every change of reviewed onto its line: merging reviewed into sha changes nothing, and into sha's first
+// parent it would. So a squash of exactly it, a merge commit or a fast-forward to it; never a later commit or a revert.
+export function introduces(git: Git, path: string, sha: string, reviewed: string) {
+  if (mergeTree(git, path, sha, reviewed) !== treeOf(git, path, sha)) return false;
+  const parent = tryGit(git, '-C', path, 'rev-parse', '--verify', '-q', `${sha}^1`);
+  return !parent || mergeTree(git, path, parent, reviewed) !== treeOf(git, path, parent);
+}
 
 // Pushes the branch (a plain push) when the project has a remote; with none it stays local. The id pins the sha.
 export function openChangeRequest({ git }: Ctx, { path, branch }: { repo: string; path: string; branch: string; base: string; title: string; body: string }) {
@@ -47,33 +78,44 @@ export function openChangeRequest({ git }: Ctx, { path, branch }: { repo: string
   return { id: `${branch}@${sha.slice(0, 7)}` };
 }
 
-// The branch's head now, and merged once the base contains it (a human's merge or fast-forward). A squash merged elsewhere
-// isn't visible to git: F close RUN --merged <sha> records it. approval: F approve RUN --merge (local-first PR 7).
-export function changeRequest({ git }: Ctx, { path, id, base }: { repo: string; path: string; id: string; base?: string }) {
-  const branch = branchOf(id), origin = hasOrigin(git, path);
+// The branch's head now, and merged once the reviewed commit (sha) is on the base, or the base has the factory's own squash
+// of it. Being on the base proves nothing without sha: a branch just cut from the base is on it too. The squash is
+// confirmed by its tree, never by its message alone. A squash merged elsewhere: F close RUN --merged <sha>.
+// approval: F approve RUN --merge (local-first PR 7).
+export function changeRequest(ctx: Ctx, { repo, path, id, base, sha }: { repo: string; path: string; id: string; base?: string; sha?: string }) {
+  const { git } = ctx, branch = branchOf(id), origin = hasOrigin(git, path);
   if (origin) tryGit(git, '-C', path, 'fetch', '-q', 'origin');
   const headSha = tryGit(git, '-C', path, 'rev-parse', '--verify', '-q', `refs/heads/${branch}^{commit}`) ?? tryGit(git, '-C', path, 'rev-parse', '--verify', '-q', `refs/remotes/origin/${branch}^{commit}`);
-  const at = base && (origin ? `refs/remotes/origin/${base}` : `refs/heads/${base}`);
-  // the factory's own squash names the head it merged; a human's merge or fast-forward puts the head itself on the base
-  const mergeSha = headSha && at ? tryGit(git, '-C', path, 'log', '-1', '--format=%H', '--fixed-strings', `--grep=Squash of ${headSha}, merged by the software factory.`, at) || undefined : undefined;
-  const merged = !!mergeSha || !!(headSha && at && tryGit(git, '-C', path, 'merge-base', '--is-ancestor', headSha, at) !== null);
+  const b = base ?? baseBranch(ctx, { repo, path }), at = origin ? `refs/remotes/origin/${b}` : `refs/heads/${b}`;
+  const target = sha ?? headSha;
+  let mergeSha: string | undefined;
+  if (target) {
+    const [c, parent, ...more] = (tryGit(git, '-C', path, 'log', '-1', '--format=%H %P', '--fixed-strings', `--grep=Squash of ${target}, merged by the software factory.`, at) ?? '').split(' ');
+    if (c && parent && !more.length) { const t = treeOf(git, path, c); if (t !== treeOf(git, path, parent) && mergeTree(git, path, parent, target) === t) mergeSha = c; }
+  }
+  const merged = !!mergeSha || !!(sha && tryGit(git, '-C', path, 'merge-base', '--is-ancestor', sha, at) !== null);
   return { state: merged ? 'merged' as const : headSha ? 'open' as const : 'unknown' as const, headSha, approval: null, branch, ...(mergeSha && { mergeSha }) };
 }
 
 // Squashes exactly sha onto the base as it is now, then moves the base only if nobody moved it since (see the rule above).
 // merged:false with a detail on every refusal (a moved base, a conflict, a protected base): never retried, never forced.
-export function merge({ git }: Ctx, { path, id, sha, base }: { repo: string; path: string; id: string; sha: string; base: string }) {
-  const branch = branchOf(id), no = (detail: string) => ({ merged: false, detail });
+export function merge(ctx: Ctx, { repo, path, id, sha, base }: { repo: string; path: string; id: string; sha: string; base?: string }) {
+  const { git } = ctx, branch = branchOf(id), no = (detail: string) => ({ merged: false, detail });
   if (tryGit(git, '-C', path, 'rev-parse', '--verify', '-q', `refs/heads/${branch}^{commit}`) !== sha) return no(`${branch} is not at the reviewed commit ${sha.slice(0, 7)}`);
+  const old = mergeTreeMissing(git);
+  if (old) return no(old);
+  try { base ??= baseBranch(ctx, { repo, path }); } catch (e) { return no(firstLine(e)); }
   const origin = hasOrigin(git, path), ref = origin ? `refs/remotes/origin/${base}` : `refs/heads/${base}`;
   if (origin) try { git('-C', path, 'fetch', '-q', 'origin', `refs/heads/${base}:${ref}`); } catch (e) { return no(`cannot fetch ${base} from origin: ${firstLine(e)}`); }
   const seen = tryGit(git, '-C', path, 'rev-parse', '--verify', '-q', `${ref}^{commit}`);
   if (!seen) return no(`no ${base} branch${origin ? ' on origin' : ''}`);
-  let tree: string; // a merge with no checkout: the index and files of the user's clone are never touched
-  try { tree = git('-C', path, 'merge-tree', '--write-tree', '--no-messages', seen, sha).trim().split('\n')[0]!; } catch (e) { // exit 1 is a conflict; anything else (an old git, a bad object) is not
-    // merge base into the branch, never rebase: a rebased branch's plain push would be refused as a non-fast-forward
-    return no((e as { status?: number })?.status === 1 ? `${branch} conflicts with ${base}: merge ${base} into it, then review it again` : `cannot merge ${branch}: ${firstLine(e)}`);
-  }
+  // already there (a retry after a fast-forward, or a human's): nothing to squash, nothing pushed
+  if (tryGit(git, '-C', path, 'merge-base', '--is-ancestor', sha, seen) !== null) return { merged: true, detail: `${sha.slice(0, 7)} is already on ${base}` };
+  let tree: string | null; // a merge with no checkout: the index and files of the user's clone are never touched
+  try { tree = mergeTree(git, path, seen, sha); } catch (e) { return no(`cannot merge ${branch}: ${(e as Error).message}`); }
+  // merge base into the branch, never rebase: a rebased branch's plain push would be refused as a non-fast-forward
+  if (tree === null) return no(`${branch} conflicts with ${base}: merge ${base} into it, then review it again`);
+  if (tree === treeOf(git, path, seen)) return no(`${branch} changes nothing on ${base}: it is merged already, or empty`);
   let mergeSha: string; // its parent is the base seen: a moved base makes it a non-fast-forward
   try {
     const msg = `${git('-C', path, 'log', '-1', '--format=%s', sha).trim()} (${branch})\n\nSquash of ${sha}, merged by the software factory.`;
@@ -86,12 +128,19 @@ export function merge({ git }: Ctx, { path, id, sha, base }: { repo: string; pat
     tryGit(git, '-C', path, 'update-ref', ref, mergeSha, seen); // the tracking ref, as a fetch would set it
     return { merged: true, sha: mergeSha };
   }
-  // no remote: where base is checked out, a clean worktree fast-forwards (so its files follow); otherwise compare-and-swap the ref
-  const wts = git('-C', path, 'worktree', 'list', '--porcelain').split('\n\n').map((b) => ({ dir: /^worktree (.+)$/m.exec(b)?.[1], on: /^branch (.+)$/m.exec(b)?.[1] }));
-  const out = wts.find((w) => w.on === `refs/heads/${base}`)?.dir;
-  if (out) {
-    if (tryGit(git, '-C', out, 'status', '--porcelain', '--untracked-files=no')) return no(`${base} is checked out with uncommitted changes in ${out}: commit or stash them, then merge again`);
-    try { git('-C', out, 'merge', '-q', '--ff-only', mergeSha); } catch (e) { return no(`${base} moved while merging (${firstLine(e)}): review again`); }
-  } else try { git('-C', path, 'update-ref', `refs/heads/${base}`, mergeSha, seen); } catch (e) { return no(`${base} moved while merging (${firstLine(e)}): review again`); }
+  // no remote: compare-and-swap the base; where it is checked out, its clean files then follow (checked first, by a dry run)
+  const wt = git('-C', path, 'worktree', 'list', '--porcelain').split('\n\n').map((b) => ({ dir: /^worktree (.+)$/m.exec(b)?.[1], on: /^branch (.+)$/m.exec(b)?.[1], gone: /^prunable/m.test(b) })).find((w) => w.on === ref);
+  if (wt) {
+    if (wt.gone) return no(`${base} is checked out in ${wt.dir}, which is missing: git worktree prune, then merge again`);
+    let dirty: string;
+    try { dirty = git('-C', wt.dir!, 'status', '--porcelain', '--untracked-files=no').trim(); } catch (e) { return no(`cannot read ${base}'s checkout in ${wt.dir} (${firstLine(e)}): merge again once it is back`); }
+    if (dirty) return no(`${base} is checked out with uncommitted changes in ${wt.dir}: commit or stash them, then merge again`);
+    try { git('-C', wt.dir!, 'read-tree', '-m', '-u', '-n', seen, mergeSha); } catch (e) { return no(`cannot update ${base}'s files in ${wt.dir}: ${firstLine(e)}`); }
+  }
+  try { git('-C', path, 'update-ref', ref, mergeSha, seen); } catch (e) { return no(`${base} moved while merging (${firstLine(e)}): review again`); }
+  if (wt) try { git('-C', wt.dir!, 'read-tree', '-m', '-u', seen, mergeSha); } catch (e) {
+    const back = tryGit(git, '-C', path, 'update-ref', ref, seen, mergeSha); // undone only if the ref still holds the squash
+    return no(`cannot update ${base}'s files in ${wt.dir} (${firstLine(e)})${back === null ? `; ${base} is at the squash, so check that checkout` : ''}: merge again`);
+  }
   return { merged: true, sha: mergeSha };
 }

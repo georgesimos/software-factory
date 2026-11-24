@@ -47,13 +47,20 @@ Its change request is the branch itself, with id `<branch>@<sha7>`. `openChangeR
 there is one, with a plain push. `merge` squashes exactly the reviewed sha onto the base it just fetched (`merge-tree
 --write-tree` and `commit-tree -p <seen>`, with no checkout). It then moves the base only by:
 - a plain push of that commit, which the remote refuses as a non-fast-forward if anyone moved the base meanwhile;
-- with no remote, `update-ref refs/heads/<base> <new> <seen>`, a compare-and-swap;
-- when the base is checked out, `merge --ff-only` in that worktree, and only if the worktree is clean.
+- with no remote, `update-ref refs/heads/<base> <new> <seen>`, a compare-and-swap, forwards or backwards.
+  - When the base is checked out, the worktree must be clean and exist, and a dry run (`read-tree -m -u -n`) must show
+    that its files can follow, with no untracked file in the way. The swap happens first; then `read-tree -m -u` updates
+    the files.
 
-A refusal (a moved or protected base, a conflict, a dirty checkout) returns `merged: false` with what to do next. It is
+A sha already on the base (a retry, or a human's fast-forward) is `merged: true` with nothing pushed. A squash that would
+change nothing is refused. Without the reviewed sha, `changeRequest` counts only the factory's own squash, confirmed by
+its tree rather than its message: a branch just cut from the base is on the base too. A conflict is `merge-tree`'s exit 1
+with a tree on stdout. An unknown commit, or a git older than 2.38, says so instead.
+
+A refusal (a moved or protected base, a conflict, a dirty or missing checkout) returns `merged: false` with what to do next. It is
 never retried or forced, and `test/githost.test.mjs` greps this file for force flags. When the push is refused, merge at
 the host's own UI, then run `F close RUN --merged <sha>` from your own terminal. That records the human merge once the sha
-is on the base and contains the reviewed commit.
+is on the base and is the commit that brought the reviewed change onto it.
 
 ## Test
 

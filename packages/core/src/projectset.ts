@@ -3,6 +3,7 @@
 // that relaxes what the factory checks (github to git, CI to less) needs a reason, and on a GitHub project a verified login.
 import { harnesses } from '../../adapters/harnesses/index.ts';
 import { builtin as hosts } from '../../adapters/hosts/index.ts';
+import { introduces } from '../../adapters/hosts/git.ts';
 import { audit, whoami } from './rules.ts';
 import { CI_ORDER, ciOf } from './ci.ts';
 import { cloneId, isGithubRemote, remoteParts, withoutUserinfo } from './remote.ts';
@@ -77,7 +78,7 @@ export function setProject(repo: string, key: string, value: string | null, { re
 
 // F close RUN --merged <sha> (local-first §1.2, git host): a change request merged outside the factory, say a squash at the
 // remote's own review UI, which git can't see. Yours only, like F project set: it records a merge. The sha must be on the
-// base (fetched from origin when there is one) and contain the reviewed commit; the run must be escalated, as sync's GitHub human-merge record requires.
+// base (fetched from origin when there is one) and be the commit that merged the reviewed commit; the run must be escalated, as sync's GitHub human-merge record requires.
 export function closeMerged(run: string, sha: string) {
   humanOnly('recording a merge');
   const { repo } = parseRun(run), p = projects()[repo];
@@ -90,19 +91,16 @@ export function closeMerged(run: string, sha: string) {
   try { full = git('-C', p.path, 'rev-parse', '--verify', '-q', `${sha}^{commit}`).trim(); } catch { /* below */ }
   try { if (!full) throw 0; git('-C', p.path, 'merge-base', '--is-ancestor', full, origin ? `refs/remotes/origin/${base}` : `refs/heads/${base}`); }
   catch { throw new Error(`${sha} is not on ${base}${origin ? ' at origin' : ''} in ${p.path}: give the merge commit on ${base}`); }
-  // shortcut: any commit on the base passes, even one older than the escalation (GitHub's sync checks mergedAt); git has no
-  // trustworthy merge time. Upgrade when the git host records its change requests' history (5a's sync for git projects).
+  // shortcut: the merging commit may predate the escalation (GitHub's sync checks mergedAt); git has no trustworthy merge
+  // time. Upgrade when the git host records its change requests' history (5a's sync for git projects).
   const r = getRun(run);
   if (r.outcome !== 'escalated') throw new Error(`${run} is not escalated: only an escalated run is merged by hand`);
   if (!r.reviewedSha) throw new Error(`${run} has no reviewed commit: nothing to check the merge against`);
-  // The merge must contain the reviewed commit: merging it into the merge commit changes nothing. That holds for a
-  // fast-forward, a merge commit and a squash of exactly what was reviewed; a commit missing any reviewed change fails.
-  let contains = false;
-  try {
-    const t = git('-C', p.path, 'merge-tree', '--write-tree', '--no-messages', full, r.reviewedSha).trim().split('\n')[0];
-    contains = t === git('-C', p.path, 'rev-parse', `${full}^{tree}`).trim();
-  } catch { /* a conflict or an unknown reviewed commit: not contained */ }
-  if (!contains) throw new Error(`${sha} does not contain the reviewed commit ${r.reviewedSha.slice(0, 7)}: give the commit that merged it`);
+  // The sha must be the commit that brought the reviewed change onto the base: a squash of exactly it, a merge commit or a
+  // fast-forward. A later commit, a revert or one missing any reviewed change is refused; an old git or a bad object throws.
+  let ok: boolean;
+  try { ok = introduces(git, p.path, full, r.reviewedSha); } catch (e) { throw new Error(`cannot check ${sha} against the reviewed commit ${r.reviewedSha.slice(0, 7)}: ${(e as Error).message}`); }
+  if (!ok) throw new Error(`${sha} is not the commit that merged the reviewed commit ${r.reviewedSha.slice(0, 7)}: give the squash or merge commit that brought it onto ${base}`);
   record(run, 'approve', 'merged', { by: 'human', mergedBy: whoami('recording a merge').by, sha: full });
   return { run, merged: true, sha: full };
 }

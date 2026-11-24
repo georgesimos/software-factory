@@ -405,8 +405,8 @@ it is the user's, refused inside an agent session. If a change is needed, show t
 
 `F close owner/repo#N --merged <sha>` records that the user merged an escalated run of a `git` project outside the factory,
 for example when the base is protected and the factory's push was refused. It is human-only too: show the user the command
-and never run it yourself. It is refused unless the sha is on the base and contains the reviewed commit (a squash of exactly it, a merge or a
-fast-forward), and the run is escalated. On GitHub, `F sync`
+and never run it yourself. It is refused unless the sha is on the base and is the commit that brought the reviewed change onto it (a squash of
+exactly it, a merge commit or a fast-forward; never a later commit or a revert), and the run is escalated. On GitHub, `F sync`
 records a human merge itself.
 
 Run `F archive` now and then. It moves finished runs older than 14 days into compact summaries, which stay on the dashboard.
