@@ -12,6 +12,7 @@ import { rules, setRule } from './rules.ts';
 import { adapterCtx } from './github.ts';
 import { allRuns, budget } from './derive.ts';
 import { isSensitive, PROJECT_BUDGET_USD, MAX_ISSUES_PER_SESSION } from './constants.ts';
+import { claimedElsewhere, unclaimCmd } from './claim.ts';
 import { dashboard } from './log.ts';
 import * as hosts from '../../adapters/hosts/index.mjs';
 import * as trackers from '../../adapters/trackers/index.mjs';
@@ -294,12 +295,15 @@ async function scan(repo) {
   const fresh = (i) => !runs[`${repo}#${i.id}`];
   const item = (i) => ({ run: `${repo}#${i.id}`, title: i.title, ...(i.key && { key: i.key }) });
   const waits = (i) => t.dependencies(i).filter((d) => !done(d));
-  const ready = open.filter((i) => i.labels.includes('factory:ready') && fresh(i));
+  // A run another launcher holds (an F start before its first event) is never picked, and is listed with its way out.
+  const held = new Map(open.filter(fresh).map((i) => [i.id, claimedElsewhere(`${repo}#${i.id}`)] as const).filter(([, c]) => c !== undefined));
+  const ready = open.filter((i) => i.labels.includes('factory:ready') && fresh(i) && !held.has(i.id));
   return {
     open: [...ids],
     ready: ready.filter((i) => !waits(i).length).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true })).map(item),
     blocked: ready.filter((i) => waits(i).length).map((i) => ({ ...item(i), waitingOn: waits(i).map((d) => `${repo}#${d}`) })),
-    untriaged: open.filter((i) => fresh(i) && !i.labels.some((l) => l.startsWith('factory:'))).map(item),
+    untriaged: open.filter((i) => fresh(i) && !held.has(i.id) && !i.labels.some((l) => l.startsWith('factory:'))).map(item),
+    claimed: [...held].map(([id, c]) => ({ run: `${repo}#${id}`, ...(c ? { launcher: c.launcher, pid: c.pid } : { unreadable: true }), unclaim: unclaimCmd(`${repo}#${id}`, c) })),
   };
 }
 export const queue = async (repo) => { const { open: _o, ...q } = await scan(repo); return q; };
@@ -361,7 +365,11 @@ export async function loop(repo) {
   const runs = allRuns(), lim = limits(repo), last = p.loop.last;
   const status = () => projectStatus(repo);
   const stop = (reason) => { emit(repo, 'loop', 'stopped', { reason }); return { state: 'stopped', reason, project: status() }; };
-  if (p.loop.state === 'running' && last && (!runs[last] || runs[last].outcome === 'in-progress')) return { state: 'running', next: last, resume: true, goal: status().goal };
+  if (p.loop.state === 'running' && last && (!runs[last] || runs[last].outcome === 'in-progress')) {
+    const c = claimedElsewhere(last);
+    if (c !== undefined) return stop(`${last} is held by another launcher${c ? ` (${c.launcher}, pid ${c.pid})` : ''}; if that is stuck: ${unclaimCmd(last, c)}`);
+    return { state: 'running', next: last, resume: true, goal: status().goal };
+  }
   const q = await scan(repo), open = new Set(q.open);
   const idOf = (run) => run.slice(repo.length + 1);
   if (last && runs[last] && runs[last].outcome !== 'merged' && open.has(idOf(last))) return stop(`${last} is ${runs[last].outcome}: a human needs to resolve it (merge or close the issue), then continue`);
@@ -372,6 +380,8 @@ export async function loop(repo) {
   const order = issueRuns(p), ready = new Set(q.ready.map((x) => x.run));
   const next = order.find((r) => ready.has(r));
   if (!next) {
+    const held = q.claimed.filter((c) => order.includes(c.run));
+    if (held.length) return stop(`nothing ready: ${held.map((c) => `${c.run} is held by another launcher (if that is stuck: ${c.unclaim})`).join('; ')}`);
     const left = order.filter((r) => open.has(idOf(r)) && runs[r]?.outcome !== 'merged');
     return stop(left.length ? `nothing ready: ${left.length} open issue(s) wait on dependencies or a human` : `all ${order.length} issues done`);
   }
