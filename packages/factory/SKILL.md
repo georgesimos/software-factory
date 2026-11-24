@@ -75,7 +75,7 @@ In the commands below:
 | A PR exists and `gh pr checks` is red, and `policy.ci` is unset or `required` | Go to Build with the failing log. Use `gh run view <id> --log-failed \| tail -n 80`. Under `advisory` or `skip`, red CI is not a reason to rebuild. |
 | Otherwise | Continue from the recorded stage, using the last gate's `next`. |
 
-A start refused with `already has a running session (…, pid N)` means another process holds the run's claim. Leave it while that pid runs. Once it is gone (crashed, rebooted) and the claim still blocks, tell the user to run `F unclaim RUN`; it refuses while the pid looks alive, and `--force` is the user's call, never yours.
+A start refused with `already has a running session (…)` means another launcher (`F start`, the app, a terminal) holds the run's claim. `F intake`, `F approval` and `F worktree` refuse the same way, and `F queue` leaves such runs out of `ready` and `untriaged`. The harness a launcher started passes its own claim. On that refusal, report it to the user and stop: never work the run alongside the holder. Leave it while that pid runs. Once it is gone (crashed, rebooted) and the claim still blocks, tell the user to run `F unclaim RUN`; it refuses while the pid looks alive, and `--force` is the user's call, never yours.
 
 ## 1. Intake: is it worth building?
 

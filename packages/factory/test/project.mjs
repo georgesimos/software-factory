@@ -52,7 +52,7 @@ export async function projectTest({ uiHandle, read, project: { validateIssues, v
   const dir = path.join(root, 'state'), stub = path.join(root, 'gh'), home = path.join(root, 'home');
   for (const d of [dir, stub, home]) fs.mkdirSync(d);
   const env = { ...process.env, ...GIT_ENV, HOME: home, USERPROFILE: home, FACTORY_DIR: dir, FACTORY_GH: STUB, STUB_STATE: stub };
-  for (const k of ['CLAUDE_CODE_SESSION_ID', 'FACTORY_GIT', 'FACTORY_HOSTS', 'FACTORY_TRACKERS', 'FACTORY_TEMPLATES']) delete env[k];
+  for (const k of ['CLAUDE_CODE_SESSION_ID', 'FACTORY_CLAIM', 'FACTORY_GIT', 'FACTORY_HOSTS', 'FACTORY_TRACKERS', 'FACTORY_TEMPLATES']) delete env[k];
   const put = (p, text) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
   const run = (args, extra = {}) => execFileSync(process.execPath, [F, ...args], { encoding: 'utf8', env: { ...env, ...extra }, stdio: ['ignore', 'pipe', 'pipe'] });
   const cli = (args, extra) => JSON.parse(run(args, extra));
@@ -186,6 +186,11 @@ export async function projectTest({ uiHandle, read, project: { validateIssues, v
   assert.deepEqual(q.ready.map((x) => x.run), ['acme/budget#1', 'acme/budget#2']);
   assert.deepEqual(q.blocked.find((x) => x.key === 'categories').waitingOn, ['acme/budget#2']);
   assert.deepEqual(q.untriaged, []);
+  const claim = path.join(run(['dir', 'acme/budget#2']).trim(), 'claim.json'); // an F start on #2, before its first event
+  put(claim, JSON.stringify({ pid: 0, launcher: 'start', at: new Date().toISOString(), token: 'tok-2' }));
+  assert.deepEqual(cli(['queue', 'acme/budget']).ready.map((x) => x.run), ['acme/budget#1'], 'next never picks a run another launcher holds');
+  assert.deepEqual(cli(['queue', 'acme/budget'], { FACTORY_CLAIM: 'tok-2' }).ready.map((x) => x.run), ['acme/budget#1', 'acme/budget#2'], "the holder's own harness sees it");
+  fs.rmSync(claim);
   assert.equal(cli(['loop', 'acme/budget']).next, 'acme/budget#1');
   assert.deepEqual(cli(['loop', 'acme/budget']), { state: 'running', next: 'acme/budget#1', resume: true, goal: '`node -e 0` exit 0, only files listed in the spec changed, or stop after 20 turns' });
   assert.equal(events('acme/budget').filter((e) => e.status === 'running').length, 1);

@@ -81,6 +81,21 @@ export function takeClaim(id: string, launcher: string, fields: Partial<Claim> =
 }
 export const running = (id: string, c = readClaim(id)) => new Error(`${id} already has a running session (${c ? `${c.launcher}${c.pid ? `, pid ${c.pid}` : ', not started yet'}` : 'unreadable claim'}). `
   + (c?.pid ? `If that process is gone: F unclaim ${id}` : `If nothing is starting it (check for a running claude on ${id} first): F unclaim ${id} --force`) + ` (it deletes ${file(id)})`);
+// The factory's own steps on a run (#105: F intake, approval, worktree; F queue's picks) yield to another live launcher's
+// claim. The holder's harness passes: its launcher hands it the claim's token in FACTORY_CLAIM (env only: never argv or the
+// log). Returns the blocking claim (null: unreadable, so live), or undefined when the run is free or the claim is ours.
+export function claimedElsewhere(id: string, env: NodeJS.ProcessEnv = process.env): Claim | null | undefined {
+  try { fs.lstatSync(file(id)); } catch { return undefined; }
+  const c = readClaim(id);
+  if (c?.token && c.token === env.FACTORY_CLAIM) return undefined;
+  return !c ? null : claimLive(c) ? c : undefined;
+}
+export function refuseClaimed(id: string, env: NodeJS.ProcessEnv = process.env) {
+  const c = claimedElsewhere(id, env);
+  if (c !== undefined) throw running(id, c ?? undefined);
+}
+// The env for a harness on a run: its claim's token, and never one inherited from whoever started this process.
+export const withClaim = (env: NodeJS.ProcessEnv, token?: string) => { const { FACTORY_CLAIM: _, ...rest } = env; return token ? { ...rest, FACTORY_CLAIM: token } : rest; };
 // F unclaim <run>: a person clears a claim that blocks the run. Refused while it may be live (unreadable included), unless forced.
 export function unclaim(id: string, force = false) {
   try { fs.lstatSync(file(id)); } catch { return { unclaimed: false, why: 'no claim' }; } // lstat: a dangling symlink is a claim too

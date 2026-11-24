@@ -14,7 +14,7 @@ import { projects, saveProject, wtFile } from '../../core/src/workspace.ts';
 import { command, opener } from '../../core/src/platform.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { MAX_BYTES, killTree, listSessions, resolveSpec, startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
-import { budgetLeft, harnessReady, launchSession, resumable, resumeFor, serve, startRun, terminalSession, uiHandle } from '../../server/src/server.ts';
+import { artifact, budgetLeft, harnessReady, launchSession, page, resumable, resumeFor, serve, startRun, terminalSession, uiHandle } from '../../server/src/server.ts';
 import { procStart, readClaim, statTicks, takeClaim, unclaim } from '../../server/src/claim.ts';
 
 setup();
@@ -241,6 +241,7 @@ test('startRun() (F start, POST /api/runs): launchSession\'s checks, then a deta
   assert.equal(path.basename(file), 'claude');
   assert.deepEqual([args[0], args.includes('stream-json'), opts.detached, opts.windowsHide, fs.realpathSync(opts.cwd)], ['-p', true, true, true, fs.realpathSync(projects()['acme/app'].path)]);
   assert.ok(opts.stdio.every((fd) => typeof fd === 'number'), 'files, not pipes: nothing waits on F');
+  assert.deepEqual([opts.env.FACTORY_CLAIM, args.some((a) => a.includes(opts.env.FACTORY_CLAIM))], [readClaim('acme/app#41').token, false], 'its harness holds the claim: the token in env, never argv');
   assert.deepEqual([r.pid, path.dirname(r.log), fs.readFileSync(r.log.replace(/\.log$/, '.prompt'), 'utf8')], [process.pid, runDir('acme/app#41'), '/software-factory acme/app#41']);
   assert.throws(() => startRun('acme/app#41', stubEnv, fake), /already has a running session \(start, pid \d+\)/, 'not twice before its first event');
   assert.throws(() => launchSession({ repo: 'acme/app', issue: 41 }, stubEnv), /already has a running session/);
@@ -257,6 +258,27 @@ test('startRun() (F start, POST /api/runs): launchSession\'s checks, then a deta
   assert.ok(pid > 0);
   for (let i = 0; i < 100 && !/prompt: \/software-factory acme\/app#42/.test(fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : ''); i++) await new Promise((res) => setTimeout(res, 100));
   assert.match(fs.readFileSync(log, 'utf8'), /prompt: \/software-factory acme\/app#42/);
+});
+
+test('#105: F intake, approval and worktree refuse a run another live launcher holds; its own harness passes; the token stays out of the log and the page', () => {
+  const id = 'eval/golden#4';
+  const f = (args, extra = {}) => spawnSync(process.execPath, [path.join(HERE, 'factory.mjs'), ...args], { env: { ...stubEnv, FACTORY_DIR: io.dir, FACTORY_FIXTURES: path.join(HERE, 'evals', 'golden'), ...extra }, encoding: 'utf8' });
+  const cl = takeClaim(id, 'start'); // an F start between its claim and its harness's first event
+  for (const [cmd, tok] of [['intake'], ['approval'], ['worktree'], ['intake', 'another-token']]) {
+    const r = f([cmd, id], tok ? { FACTORY_CLAIM: tok } : {});
+    assert.match(r.stderr, /eval\/golden#4 already has a running session \(start, not started yet\)\. If nothing is starting it .*F unclaim eval\/golden#4 --force/, `${cmd} ${tok ?? ''}`);
+    assert.notEqual(r.status, 0);
+  }
+  const ok = f(['intake', id], { FACTORY_CLAIM: cl.claim.token });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(JSON.parse(ok.stdout).association, 'NONE', 'the holder\'s own harness');
+  const events = fs.readFileSync(path.join(io.dir, 'events.jsonl'), 'utf8');
+  assert.ok(events.includes(`"run":"${id}"`) && !events.includes(cl.claim.token), 'the token never reaches the log');
+  assert.ok(!artifact(page()).includes(cl.claim.token), 'nor the published page');
+  cl.release();
+  claimAt(id, { pid: 999_999_9, launcher: 'start', token: 'gone' });
+  assert.equal(f(['intake', id]).status, 0, 'a dead launcher\'s claim blocks nothing');
+  fs.rmSync(path.join(runDir(id), 'claim.json'));
 });
 
 // An lstart string ms later than another, as ps prints it (UTC).
