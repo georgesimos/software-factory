@@ -58,11 +58,11 @@ software-factory/
 │   ├── cli/                  @software-factory/cli: main(argv), the F command switch and usage text
 │   ├── server/               @software-factory/server: `F ui` (uiHandle, UI_ROUTES, ui) and the dashboard renderer (page, render, runsData)
 │   ├── adapters/             @software-factory/adapters: one file per provider, loaded by name
-│   │   ├── registry.mjs      loads one-file-per-provider folders (hosts/, trackers/)
+│   │   ├── registry.ts       loads one-file-per-provider folders (hosts/, trackers/)
 │   │   ├── harnesses/        AI harness registry (index.mjs) auto-loads every *.mjs except _*: claude-code.mjs, codex.mjs, _template.mjs
 │   │   ├── HARNESSES.md      add a harness in 4 steps
-│   │   ├── hosts/            repo hosts: github.mjs, _template.mjs, index.mjs (contract), README.md (recipe)
-│   │   └── trackers/         issue trackers: github-issues.mjs, _template.mjs, index.mjs (contract), README.md
+│   │   ├── hosts/            repo hosts: github.ts, _template.ts, index.ts (contract, types), README.md (recipe)
+│   │   └── trackers/         issue trackers: github-issues.ts, _template.ts, index.ts (contract, types), README.md
 │   ├── ship/                 @software-factory/ship: the ship harness (phase 0, read only). See docs/plans/ship-harness.md
 │   │   ├── ship.mjs          CLI (`F ship` is an alias): connectors | detect <repo> | status <repo> [sha]; track() records through F's record()
 │   │   ├── contract.mjs      connector contract: id, kind, detect, auth, status, tagged actions; normalized states per kind; validation

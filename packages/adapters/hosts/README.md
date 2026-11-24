@@ -1,10 +1,11 @@
 # Repo hosts
 
-A host is where `F new` creates a new project's repo and pushes its first commit. One file per host, loaded automatically: `github.mjs` ships. `index.mjs`, `index.ts`, files starting with `_` and declaration files are skipped.
+A host is where `F new` creates a new project's repo and pushes its first commit. One file per host, loaded automatically: `github.ts` ships. `index.mjs`, `index.ts`, files starting with `_` and declaration files are skipped.
 
 ## Add one
 
-1. Copy `_template.mjs` to `<id>.mjs`. The file name, without its extension, must equal `export const id`.
+1. Copy `_template.ts` to `<id>.ts` (its types come from `index.ts`). For one kept outside this repo, copy it to `<id>.mjs`
+   and delete the type annotations and `import type` lines. The file name, without its extension, must equal `export const id`.
 2. Implement the three functions. Each gets `ctx = {gh, git}` (both respect the `FACTORY_GH` / `FACTORY_GIT` stubs):
 
 | Function | Returns | Must |
@@ -17,7 +18,7 @@ A host is where `F new` creates a new project's repo and pushes its first commit
 
 ## Test
 
-`node factory.mjs test` runs the shared `contract()` in `index.mjs` against every host in this folder, using the stateful fake `gh` in `test/gh-project-stub.mjs`, and against a fake host written as one file in a temp dir. A host that shells out to a CLI other than `gh` needs its own stub before it can pass; never run the contract against a real account.
+`node factory.mjs test` runs the shared `contract()` in `index.ts` against every host in this folder, using the stateful fake `gh` in `test/gh-project-stub.mjs`, and against a fake host written as one file in a temp dir. A host that shells out to a CLI other than `gh` needs its own stub before it can pass; never run the contract against a real account.
 
 Point `FACTORY_HOSTS` at another folder to load hosts from there instead.
 

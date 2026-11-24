@@ -1,10 +1,11 @@
 # Trackers
 
-A tracker is where `F issues create` files a project's issue batch, and where `F queue` / `F loop` read open issues and their dependencies. One file per tracker, loaded automatically: `github-issues.mjs` ships. `index.mjs`, `index.ts`, files starting with `_` and declaration files are skipped.
+A tracker is where `F issues create` files a project's issue batch, and where `F queue` / `F loop` read open issues and their dependencies. One file per tracker, loaded automatically: `github-issues.ts` ships. `index.mjs`, `index.ts`, files starting with `_` and declaration files are skipped.
 
 ## Add one
 
-1. Copy `_template.mjs` to `<id>.mjs`. The file name, without its extension, must equal `export const id`.
+1. Copy `_template.ts` to `<id>.ts` (its types come from `index.ts`). For one kept outside this repo, copy it to `<id>.mjs`
+   and delete the type annotations and `import type` lines. The file name, without its extension, must equal `export const id`.
 2. Implement the three functions. Each gets `ctx = {gh, git}`:
 
 | Function | Returns | Must |
@@ -17,7 +18,7 @@ A tracker is where `F issues create` files a project's issue batch, and where `F
 
 ## Test
 
-`node factory.mjs test` runs the shared `contract()` in `index.mjs` against every tracker in this folder (with the fake `gh`), and against a fake tracker written as one file in a temp dir. The contract creates a, b (depends on a) and an epic, re-runs with `existing` and expects zero creates, then checks `listOpen` labels and `dependencies`.
+`node factory.mjs test` runs the shared `contract()` in `index.ts` against every tracker in this folder (with the fake `gh`), and against a fake tracker written as one file in a temp dir. The contract creates a, b (depends on a) and an epic, re-runs with `existing` and expects zero creates, then checks `listOpen` labels and `dependencies`.
 
 Point `FACTORY_TRACKERS` at another folder to load trackers from there instead.
 

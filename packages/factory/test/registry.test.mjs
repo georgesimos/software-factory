@@ -6,9 +6,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { importPlugin, loadDir, pluginFiles } from '../../adapters/registry.mjs';
+import { stripTypeScriptTypes } from 'node:module';
+import { pathToFileURL } from 'node:url';
+import { importPlugin, loadDir, pluginFiles } from '../../adapters/registry.ts';
 import { load as loadHarnesses } from '../../adapters/harnesses/index.mjs';
-import { REQUIRED as HOST_FNS } from '../../adapters/hosts/index.mjs';
+import { REQUIRED as HOST_FNS } from '../../adapters/hosts/index.ts';
 
 const ADAPTERS = path.join(import.meta.dirname, '..', '..', 'adapters');
 const tmp = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'factory-registry-')));
@@ -66,9 +68,11 @@ test('where Node strips no types, a .ts provider is refused up front, naming the
   await assert.rejects(importPlugin(d, 'mine.ts', 'mine.ts', false), /^Error: mine\.ts: this Node doesn't strip TypeScript types .*: use mine\.mjs$/);
   const m = put(tmp(), { 'mine.mjs': HOST('mine').replaceAll(': string', '').replace(': { ok: boolean }', '') });
   assert.equal((await importPlugin(m, 'mine.mjs', 'mine.mjs', false)).id, 'mine');
-  // a real runtime with stripping off: the registry is plain JS, so it loads and refuses the .ts with its own message
+  // a real runtime with stripping off, running the registry as the desktop build ships it (registry.ts compiled to plain
+  // .mjs; here Node's own stripper stands in for the build): it loads and refuses the .ts with its own message
+  const js = put(tmp(), { 'registry.mjs': stripTypeScriptTypes(fs.readFileSync(path.join(ADAPTERS, 'registry.ts'), 'utf8')) });
   const out = execFileSync(process.execPath, ['--no-experimental-strip-types', '--input-type=module', '-e',
-    `import { loadDir } from ${JSON.stringify(new URL('../../adapters/registry.mjs', import.meta.url).href)};
+    `import { loadDir } from ${JSON.stringify(pathToFileURL(path.join(js, 'registry.mjs')).href)};
      console.log(process.features.typescript); await loadDir(${JSON.stringify(d)}, []).catch((e) => console.log(e.message));`], { encoding: 'utf8' });
   assert.match(out, /^false\nmine\.ts: this Node doesn't strip TypeScript types .*: use mine\.mjs\n$/);
 });

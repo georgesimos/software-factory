@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { defineConfig } from 'vite';
-import { pluginFiles } from '../../packages/adapters/registry.mjs';
+import { pluginFiles } from '../../packages/adapters/registry.ts';
 
 // The Electron main, the server and core as plain JS (#56). A packaged app's code sits under node_modules, where Node
 // won't strip types. preserveModules keeps the repo layout under dist/, so every import.meta.dirname path still lands

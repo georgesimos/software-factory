@@ -1,12 +1,15 @@
 // GitHub Issues tracker, through the logged-in `gh`. Each issue body ends with a hidden key marker, so a re-run
 // (even without the local key map) finds what an interrupted run already created instead of creating it twice.
+import type { Ctx } from '../hosts/index.ts';
+import type { Created, Item, OpenIssue } from './index.ts';
+
 export const id = 'github-issues';
 
 const MARK = /<!-- factory-key: ([a-z0-9][a-z0-9-]*) -->/;
-const LABELS = [['factory:ready', 'BFD4F2'], ['factory:epic', 'D4C5F9']];
+const LABELS: [string, string][] = [['factory:ready', 'BFD4F2'], ['factory:epic', 'D4C5F9']];
 
-export function render(it, ids, titles) {
-  const ref = (k) => { if (!ids[k]) throw new Error(`"${it.key}" refers to "${k}", which has no issue yet`); return `#${ids[k]}`; };
+export function render(it: Item, ids: Record<string, string>, titles: Record<string, string>) {
+  const ref = (k: string) => { if (!ids[k]) throw new Error(`"${it.key}" refers to "${k}", which has no issue yet`); return `#${ids[k]}`; };
   const parts = [String(it.body || '').trim()];
   if (it.kind === 'epic') parts.push('## Issues\n' + (it.children || []).map((k) => `- [ ] ${ref(k)} ${titles[k]}`).join('\n'));
   else {
@@ -17,14 +20,14 @@ export function render(it, ids, titles) {
   return [...parts.filter(Boolean), `<!-- factory-key: ${it.key} -->`].join('\n\n');
 }
 
-export function createIssues({ gh }, { repo, items, existing = {}, onCreated = () => {} }) {
+export function createIssues({ gh }: Ctx, { repo, items, existing = {}, onCreated = () => {} }: { repo: string; items: Item[]; existing?: Record<string, { id: string; url?: string | undefined }>; onCreated?: (r: Created) => void }): Created[] {
   for (const [name, color] of LABELS) gh('label', 'create', name, '-R', repo, '--force', '--color', color);
-  const found = {};
-  for (const i of JSON.parse(gh('issue', 'list', '-R', repo, '--state', 'all', '--limit', '500', '--json', 'number,body,url'))) {
+  const found: Record<string, { id: string; url: string }> = {};
+  for (const i of JSON.parse(gh('issue', 'list', '-R', repo, '--state', 'all', '--limit', '500', '--json', 'number,body,url')) as { number: number; body?: string; url: string }[]) {
     const k = MARK.exec(i.body || '')?.[1];
     if (k && !found[k]) found[k] = { id: String(i.number), url: i.url };
   }
-  const ids = {}, titles = Object.fromEntries(items.map((it) => [it.key, it.title]));
+  const ids: Record<string, string> = {}, titles = Object.fromEntries(items.map((it) => [it.key, it.title]));
   return items.map((it) => {
     const have = existing[it.key] || found[it.key];
     if (have) { ids[it.key] = have.id; return { key: it.key, id: have.id, url: have.url, created: false }; }
@@ -38,10 +41,10 @@ export function createIssues({ gh }, { repo, items, existing = {}, onCreated = (
   });
 }
 
-export function listOpen({ gh }, { repo }) {
-  return JSON.parse(gh('issue', 'list', '-R', repo, '--state', 'open', '--limit', '200', '--json', 'number,title,labels,body'))
+export function listOpen({ gh }: Ctx, { repo }: { repo: string }): OpenIssue[] {
+  return (JSON.parse(gh('issue', 'list', '-R', repo, '--state', 'open', '--limit', '200', '--json', 'number,title,labels,body')) as { number: number; title: string; labels?: { name: string }[]; body?: string }[])
     .map((i) => ({ id: String(i.number), title: i.title, labels: (i.labels || []).map((l) => l.name), key: MARK.exec(i.body || '')?.[1] || null, body: i.body || '' }));
 }
 
 // "Depends on #3, #5" lines in the body. Ordering only: trust still comes from the issue's author.
-export const dependencies = (item) => [...new Set([...String(item.body || '').matchAll(/^depends on\b(.*)$/gim)].flatMap((m) => [...m[1].matchAll(/#(\d+)/g)].map((x) => x[1])))];
+export const dependencies = (item: OpenIssue) => [...new Set([...String(item.body || '').matchAll(/^depends on\b(.*)$/gim)].flatMap((m) => [...m[1]!.matchAll(/#(\d+)/g)].map((x) => x[1])))];

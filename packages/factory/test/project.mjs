@@ -7,8 +7,8 @@ import path from 'node:path';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import * as hosts from '../../adapters/hosts/index.mjs';
-import * as trackers from '../../adapters/trackers/index.mjs';
+import * as hosts from '../../adapters/hosts/index.ts';
+import * as trackers from '../../adapters/trackers/index.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const F = path.join(HERE, '..', 'factory.mjs'), STUB = path.join(HERE, 'gh-project-stub.mjs'), EX = path.join(HERE, '..', 'examples', 'budget-app');
@@ -105,7 +105,7 @@ export async function projectTest({ uiHandle, read, project: { validateIssues, v
   fs.writeFileSync(path.join(clone, 'a.txt'), 'a');
   git(clone, 'add', '.'); git(clone, 'commit', '-qm', 'init');
   const H = await hosts.load(), T = await trackers.load();
-  assert.deepEqual([Object.keys(H), Object.keys(T)], [['github'], ['github-issues']]); // _template.mjs and index.mjs are not providers
+  assert.deepEqual([Object.keys(H), Object.keys(T)], [['github'], ['github-issues']]); // _template.ts and index.ts are not providers
   for (const p of Object.values(H)) hosts.contract(p, { ctx: ctxFor(cstub), repo: 'acme/contract', clone });
   for (const p of Object.values(T)) trackers.contract(p, { ctx: ctxFor(cstub), repo: 'acme/contract' });
   assert.equal(git(root, '--git-dir', stubStateOf(cstub).repos['acme/contract'].bare, 'log', '--format=%s', 'main').trim(), 'init'); // a real push

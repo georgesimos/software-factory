@@ -1,10 +1,10 @@
 // AI harness registry: every <id>.mjs (or <id>.ts) file in this folder is one harness, loaded in file-name order.
-// Files starting with "_" (the template), this file and declaration files are skipped (../registry.mjs pluginFiles()).
+// Files starting with "_" (the template), this file and declaration files are skipped (../registry.ts pluginFiles()).
 // HARNESSES.md is the recipe for adding one.
 // The core reaches harnesses only through `harnesses`; it never names one.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { importPlugin, pluginFiles, stem } from '../registry.mjs';
+import { importPlugin, pluginFiles, stem } from '../registry.ts';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ID = /^[a-z][a-z0-9-]{0,30}$/;
