@@ -95,6 +95,7 @@ export interface Slot { t: number; run: string; stage: string; status: string; i
 
 /** projects.json, per owner/repo. */
 /** One projects.json entry. host is set at attach and never changes (absent: github); remote (git hosts only) has no user:password@. */
-export interface Project { path?: string; synced?: string; autoMerge?: boolean; host?: 'github' | 'git'; remote?: string }
+export interface Project { path?: string; synced?: string; autoMerge?: boolean; host?: 'github' | 'git'; remote?: string;
+  base?: string; ci?: string } // F project set (base: git hosts only; ci: recorded for the CI providers to come)
 /** A run's worktree.json. */
 export interface WorktreeInfo { path: string; repoPath: string; branch: string; [k: string]: unknown }

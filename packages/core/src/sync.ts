@@ -6,7 +6,7 @@ import { shipTrack } from './ship.ts';
 import { read, record, sessionsFile, stateDir } from './log.ts';
 import { derive } from './derive.ts';
 import { gh, openPRs, relabelMerged } from './github.ts';
-import { git, gitBase, hostOf, ls, originUrl, projects, projectsFile } from './workspace.ts';
+import { baseBranch, baseRef, git, hostOf, ls, originUrl, projects, projectsFile } from './workspace.ts';
 import { cloneId, hostFor, isGithubRemote, normRemote, remoteParts, withoutUserinfo } from './remote.ts';
 import { harnesses } from '../../adapters/harnesses/index.ts';
 import type { FactoryEvent, Project, Session } from './types.ts';
@@ -104,10 +104,10 @@ export function attach(repo: string, repoPath: string, extra: Project = {}) {
   if (why) throw new Error(`${repo} is already attached to ${why}, and ${repoPath} is a different repository: attach it under another id (F sync ${remoteParts(url) ? '<owner/name>' : 'local/<name>'} ${repoPath})`);
   const first = !(prior?.path || prior?.host), fresh: Project = first && hostFor(url, repo) === 'git' ? { host: 'git', ...(remoteParts(url) && { remote: withoutUserinfo(url) }) } : {};
   const onGithub = hostOf(repo, fresh.host ?? prior?.host) === 'github';
-  const baseRef = onGithub ? null : gitBase(repoPath).ref; // before anything is written: a clone with no base branch is not attached
+  const ref = onGithub ? null : baseRef(repoPath, baseBranch(repo, repoPath, 'git')); // before anything is written: a clone with no base branch is not attached
   fs.mkdirSync(stateDir(), { recursive: true });
   fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...prior, ...fresh, path: repoPath, ...extra } }, null, 2));
-  return { onGithub, baseRef };
+  return { onGithub, baseRef: ref };
 }
 // Registers the repo and imports work already in flight: open PRs, plus recent agent sessions on unmerged branches.
 // Imported runs are tracked, never driven: decide() always escalates them.

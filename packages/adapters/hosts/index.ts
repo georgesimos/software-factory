@@ -11,10 +11,18 @@ export interface Host {
   authStatus(ctx: Ctx): { ok: boolean; login?: string; detail?: string };
   createRepo(ctx: Ctx, opts: { repo: string; visibility: string; description?: string }): { created: boolean; url: string };
   pushInitial(ctx: Ctx, opts: { repo: string; path: string; branch?: string }): { pushed: boolean; remote?: string; branch?: string };
+  /** Who is acting on this host: a verified login, or null when the host has none here (gh missing or logged out). */
+  whoami?(ctx: Ctx, opts: { user: () => string }): { login: string; verified: boolean } | null;
+  /** The branch a project's runs start from and merge into. base: the project's own setting, when it has one. */
+  baseBranch?(ctx: Ctx, opts: { repo: string; path: string; base?: string }): string;
 }
 
 export const REQUIRED = ['authStatus', 'createRepo', 'pushInitial'];
-export const load = (dir = process.env.FACTORY_HOSTS || path.dirname(fileURLToPath(import.meta.url))) => loadDir<Host>(dir, REQUIRED);
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+export const load = (dir = process.env.FACTORY_HOSTS || HERE) => loadDir<Host>(dir, REQUIRED);
+// The hosts an attached project can have (projects.json host), loaded once, as harnesses are: core reaches them synchronously.
+// FACTORY_HOSTS only changes which hosts F new offers (load()), never these.
+export const builtin = await loadDir<Host>(HERE, REQUIRED);
 
 // The shared contract every host must pass. ctx = {gh, git}; repo is a name not yet created; clone is a local repo with one commit.
 export function contract(p: Host, { ctx, repo, clone }: { ctx: Ctx; repo: string; clone: string }) {

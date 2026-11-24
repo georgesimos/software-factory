@@ -4,7 +4,7 @@ import { TRUSTED } from './constants.ts';
 import { decide } from './gate.ts';
 import { derive, getRun } from './derive.ts';
 import { exec } from './platform.ts';
-import { git, projects, requireGithub } from './workspace.ts';
+import { baseBranch, git, projects, requireGithub } from './workspace.ts';
 import { io, read, readArchive, record, runDir } from './log.ts';
 import { shipTrack } from './ship.ts';
 import { rules } from './rules.ts';
@@ -174,7 +174,7 @@ export function revert(run: string, reason: string) {
   if (!pm.sha) throw new Error(pm.reason || 'run has no merge commit');
   const repoPath = projects()[repo]?.path;
   if (!repoPath) throw new Error(`no local clone registered for ${repo}`);
-  const base = gh('repo', 'view', repo, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name').trim();
+  const base = baseBranch(repo, repoPath);
   const branch = `factory/revert-${n}`, wt = path.join(runDir(run), 'revert');
   git('-C', repoPath, 'fetch', '-q', 'origin', base);
   git('-C', repoPath, 'worktree', 'add', '-q', '-B', branch, wt, `origin/${base}`);

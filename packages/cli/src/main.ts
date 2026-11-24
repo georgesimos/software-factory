@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { COST_CAP } from '../../core/src/constants.ts';
 import { approval, facts, intake, merge, postmerge, revert } from '../../core/src/github.ts';
+import { setProject } from '../../core/src/projectset.ts';
 import { archive, io, read, record, runDir } from '../../core/src/log.ts';
 import { budget, budgetWhy, derive, getRun } from '../../core/src/derive.ts';
 import { DEFAULT_PRESET, PRESETS, applyPreset, availablePlan, catalog, setSkill, skills } from '../../core/src/skills.ts';
@@ -147,7 +148,14 @@ export async function main(argv: string[]) {
         if (run !== 'create' || !rest[0] || !rest[1]) throw new Error('usage: issues create <owner/repo> <issues.json> [--yes]');
         out(await issuesCreate(rest[0], rest[1], { yes: rest.includes('--yes') })); break;
       }
-      case 'project': { const s = projectStatus(run || ''); if (!s) throw new Error(`no project ${run}; start one with "new"`); out(s); break; }
+      case 'project': {
+        if (run === 'set') { // project set <owner/repo> host|ci|base <value> [--reason "…"]: only from your own terminal
+          const i = rest.indexOf('--reason'), reason = i < 0 ? undefined : rest.splice(i, 2)[1] ?? '';
+          if (rest.length !== 3) throw new Error('usage: project set <owner/repo> host|ci|base <value> [--reason "…"]');
+          out(setProject(rest[0]!, rest[1]!, rest[2]!, { reason })); break;
+        }
+        const s = projectStatus(run || ''); if (!s) throw new Error(`no project ${run}; start one with "new"`); out(s); break;
+      }
       case 'loop': out(await loop(run)); break;
       case 'retire': { const ri = rest.indexOf('--reason'); out(retireIdea(run, ri < 0 ? '' : rest[ri + 1])); break; }
       case 'archive': out(archive(run ? Number(run) : 14)); break;
@@ -244,6 +252,7 @@ export async function main(argv: string[]) {
                                           idea-to-app: record the idea, validate PLAN.md + issues.json, then (with --yes) create the private repo + scaffold
   issues create <owner/repo> <file.json> [--yes]  validate and preview an issue batch; with --yes create it (idempotent by key)
   project <owner/repo>                    idea-to-app status: plan, milestones, next issue, dependency order, burn, loop
+  project set <owner/repo> host|ci|base <value> [--reason "…"]  a project's host (github|git), CI provider (github-actions|local|none) or base branch (git hosts); yours only, never an agent's; a relaxing change needs --reason, and a verified login on a GitHub project
   retire <owner/repo> --reason "<why>"     hide an idea that never got a repo (a leaked fixture) with a recorded event; the log is never rewritten
   loop   <owner/repo>                     next issue to build, or stop (first escalation, project budget, session cap, empty queue)
   automerge <owner/repo> on|off           allow or forbid auto-merge for a project

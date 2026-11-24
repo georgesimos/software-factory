@@ -4,7 +4,7 @@ import { MAX_DIFF, MAX_ISSUES_PER_SESSION, PROJECT_BUDGET_USD, isLocal } from '.
 import { STEP_KEYS, isObj, isStepKey, readSkills, writeSkills, type ScopeConfig, type SkillsConfig } from './skills.ts';
 import { dashboard } from './log.ts';
 import { gh } from './github.ts';
-import { projects, projectsFile } from './workspace.ts';
+import { git, hostFn, hostOf, projects, projectsFile } from './workspace.ts';
 import { log, stateDir } from './log.ts';
 import type { Rule } from './types.ts';
 
@@ -85,22 +85,19 @@ export function rules(repo: string, cfg: SkillsConfig = readSkills(), now = Date
   }
   return { repo, policy, guide, expired, warnings };
 }
-// The person changing a rule (or writing a note), never typed in: whoever gh is logged in as, or, with no gh login, the OS user
-// (via 'local'), so rules and notes still save on a machine without GitHub. at: for tests.
-// Only a missing gh or one with no login falls back: an offline or rate-limited gh must not record a logged-in user as local.
-export function whoami(doing = 'changing the rule', at = { user: () => os.userInfo().username }): { by: string; via: Via } {
-  let login = '';
-  try { login = gh('api', 'user', '--jq', '.login').trim(); } catch (e) {
-    const out = (x: unknown) => String((x as { stderr?: unknown })?.stderr ?? '') + String((x as { stdout?: unknown })?.stdout ?? '');
-    let noLogin = (e as { code?: string })?.code === 'ENOENT'; // gh not installed
-    if (!noLogin) try { gh('auth', 'status'); } catch (s) { noLogin = /not logged in/i.test(out(s)); } // exits 1 with no login, and on a failed check
-    if (!noLogin) throw new Error(`cannot tell who is ${doing}: gh is logged in but "gh api user" failed (${out(e).trim().split('\n')[0] || (e as Error)?.message}); try again`);
-  }
-  if (LOGIN.test(login)) return { by: login, via: 'github' };
-  let user = '';
-  try { user = String(at.user()).trim(); } catch { /* no OS user (uid without a passwd entry): below */ }
-  if (!LOCAL_BY.test(user)) throw new Error(`cannot tell who is ${doing}: "gh api user" failed and there is no OS user name`);
-  return { by: user, via: 'local' };
+// The person changing a rule (or writing a note), never typed in, asked of the project's host (scope: a project, or default,
+// which has none and asks GitHub's). GitHub: whoever gh is logged in as, verified; with gh missing or logged out (and on a git
+// project, always) the OS user, unverified (via 'local'), so rules and notes still save on a machine without GitHub. Any other
+// gh failure throws: a logged-in user is never recorded as local. at: for tests.
+export function whoami(doing = 'changing the rule', at = { user: () => os.userInfo().username }, scope = 'default'): { by: string; via: Via } {
+  const host = scope === 'default' ? 'github' : hostOf(scope);
+  let w: { login: string; verified: boolean } | null;
+  const ask = (id: string) => { try { return hostFn(id, 'whoami', 'tell who you are')({ gh, git }, { user: at.user }); } catch (e) { throw new Error(`cannot tell who is ${doing}: ${(e as Error).message}`); } };
+  w = ask(host);
+  if (w?.verified && LOGIN.test(w.login)) return { by: w.login, via: 'github' };
+  if (!w) w = ask('git'); // no login on this host: the OS user, unverified
+  if (!w || w.verified || !LOCAL_BY.test(w.login)) throw new Error(`cannot tell who is ${doing}: ${host === 'git' ? '' : '"gh api user" failed and '}there is no OS user name`);
+  return { by: w.login, via: 'local' };
 }
 const stamp = (who: { by: string; via: Via }) => ({ setBy: who.by, ...(who.via === 'local' && { via: who.via }) }); // a GitHub login is stored as before: no via
 // A local (unverified) user can't replace or remove a rule a verified login set: that could only ever loosen it. An expired
@@ -141,7 +138,7 @@ export function setRule(scope: string, key: string, raw: unknown, { reason, unti
     if (key === 'checks.commands') { try { value = JSON.parse(String(raw)); } catch { value = [raw]; } } // JSON.parse makes a string of raw anyway
     if (until !== undefined && !(isDay(until) && until >= dayOf())) throw new Error('--until must be YYYY-MM-DD, today or later');
   }
-  const who = whoami();
+  const who = whoami('changing the rule', undefined, scope);
   if (step === null) { guard(who, s.rules?.[key], key); guardShadow(who, scope, cfg.default?.rules?.[key], key, value); s.rules = { ...s.rules, [key]: { value, reason, ...stamp(who), setAt: new Date().toISOString(), ...(until && { until }) } }; }
   cfg[scope] = s;
   writeSkills(cfg); // validates the whole config first
@@ -153,7 +150,7 @@ export function unsetRule(scope: string, key: string, { reason }: { reason?: str
   const cfg = readSkills(), s: ScopeConfig = { ...cfg[scope] }, step = key.startsWith('guide.') ? key.slice(6) : null;
   const bag = step !== null ? 'guide' : 'rules', k = step ?? key, cur = s[bag];
   if (!cur || !Object.hasOwn(cur, k)) throw new Error(`no ${bag === 'guide' ? 'guidance' : 'rule'} "${key}" set for ${scope}`);
-  const who = whoami();
+  const who = whoami('changing the rule', undefined, scope);
   if (bag === 'rules') guard(who, cur[k] as Rule, k);
   const without = <T,>(m: Record<string, T> = {}) => { const { [k]: _gone, ...left } = m; return left; }; // a copy without k
   if (bag === 'guide') s.guide = without(s.guide); else s.rules = without(s.rules);

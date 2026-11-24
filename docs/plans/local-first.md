@@ -138,8 +138,8 @@ optional. When the core needs one a host doesn't have, the run escalates with th
 `host "<id>" cannot <verb>`, and the factory never falls back to another host.
 
 ```ts
-whoami(ctx): { login: string; verified: boolean }            // github: gh api user (verified). git: OS user (unverified)
-baseBranch(ctx, { repo, path }): string                      // git: refs/remotes/origin/HEAD → init.defaultBranch → projects.json base
+whoami(ctx, { user }): { login: string; verified: boolean } | null  // github: gh api user (verified), null with no login. git: OS user (unverified)
+baseBranch(ctx, { repo, path, base? }): string               // git: projects.json base → origin/HEAD → main|master (origin, then local)
 openChangeRequest(ctx, { repo, path, branch, base, sha, title, body, closes? }): { id: string; url?: string }
 changeRequest(ctx, { repo, path, id }): {
   state: 'open'|'merged'|'closed'|'unknown'; headSha: string|null;
@@ -448,9 +448,22 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
      - Copy: "git clones" (Setup, ProjectPicker).
      - Acceptance: the privacy test (§2.3) for remote hostnames, `local/<folder>` ids and clone paths.
    - **2b** (after PR 1):
-     - `F project set` (human-only and audited, §2.2 step 4).
-     - `Host.whoami` (github, git): core's `whoami()` asks the project's host.
-     - `host.baseBranch` behind the adapter, for `worktree()` and `revert()`.
+     - `F project set <repo> host|ci|base <value> [--reason]` (human-only and audited, §2.2 step 4).
+       - Refused inside an agent session (`FACTORY_CLAIM`, `CLAUDECODE`, any harness's `current()`), and there is no page
+         or HTTP route for it.
+       - Audited as a `rules` event with key `project.<key>`, `from`, `value`, `reason` and `setBy`/`via`.
+       - Relaxing changes (github → git, CI down the order github-actions → local → none) need `--reason`. On a GitHub
+         project they need a verified login: a local login is refused and told to `gh auth login`, or to attach the
+         clone under a `local/<name>` id.
+       - `host github` needs the clone's GitHub origin to be the id, and a `local/` id is never GitHub. `base` is for
+         `git` hosts and must exist in the clone.
+       - `ci` is recorded only, until PR 3 gives it a registry and a reader. `tracker` waits for a second tracker.
+       - `merge` waits for PR 7 (D1), together with guarding `F automerge`, which today turns auto-merge on unguarded.
+     - `Host.whoami` (github, git): core's `whoami()` asks the project's host. A `git` project's author is always the OS
+       user, unverified; default and GitHub projects keep #131's rule.
+     - `host.baseBranch` behind the adapter, for `worktree()`, `revert()` and sync. The `git` host's order is the
+       project's `base`, then `origin/HEAD`, then main or master on origin, then locally.
+     - The `git` host file. It has no server, so its `authStatus` fails and `F new` never uses it.
 3. **CI family, a move plus `none`/`local`.** (~500 lines)
    - `adapters/ci/` registry, template, README, `contract()`, `github-actions`, `local`, `none`.
    - `facts()` and `postmerge()` call the provider.
