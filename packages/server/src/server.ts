@@ -12,6 +12,7 @@ import { ideas, startIdea } from '../../core/src/project.ts';
 import { metrics } from '../../core/src/gate.ts';
 import { fCmd, onboardConfig, onboardState, readOnboard, setShip } from '../../core/src/onboard.ts';
 import { projects, wtInfo } from '../../core/src/workspace.ts';
+import { remoteParts } from '../../core/src/remote.ts';
 import { HOST_ID, dashboard, read, readArchive, runDir, sessionsFile, stateDir } from '../../core/src/log.ts';
 import { applyPreset, readSkills, setSkill, skillsData } from '../../core/src/skills.ts';
 import { sync } from '../../core/src/sync.ts';
@@ -566,6 +567,8 @@ export function residue(json: string, raw: RawPage, me = machine()) {
   const ids = new Set([...Object.keys(me.projects), ...runs.map((r) => String(r.id).split(/[#:]/)[0]!)]);
   // checked on json itself: a private id stripped below to spare the login check must still refuse the page
   if ([...privateIds(me.projects, runs.map((r) => r.id))].some((id) => new RegExp(String.raw`(?<![\w.\/\\-])${esc(id)}(?![\w.-])`).test(json))) left.push('a project that is not on GitHub');
+  const remotes = Object.values(me.projects).flatMap((p) => { const r = remoteParts(p?.remote); return r ? [`${r.host}/${r.path}`, `${r.host}:${r.path}`] : []; }); // git projects' origins
+  if (remotes.some((x) => json.toLowerCase().includes(x.toLowerCase()))) left.push('a remote that is not on GitHub');
   let text = json.replace(/(?:https?:\/\/)?(?:www\.)?github\.com[/:][^\s"\\,]*/gi, ''); // JSON text: \n is two characters, so stop at '\' too
   for (const id of ids) text = text.replace(new RegExp(String.raw`(?<![\w.\/\\-])${esc(id)}(?![\w.-])`, 'g'), '');
   if (me.user.length >= 3 && new RegExp(String.raw`(?:\\\\|\/)${esc(me.user)}(?![\w.-])`, 'i').test(text)) left.push('the login name in a path');
@@ -580,7 +583,7 @@ export function residue(json: string, raw: RawPage, me = machine()) {
 export const privateIds = (ps: Record<string, Project>, runIds: unknown[] = []) => new Set([
   ...Object.entries(ps).filter(([id, p]) => p?.host === 'git' || id.startsWith('local/')).map(([id]) => id),
   ...runIds.map((r) => String(r).split(/[#:]/)[0]!).filter((id) => id.startsWith('local/')), // a run whose project was detached
-]);
+]); // shortcut: a detached git-host project with an owner/name id is published like a GitHub one; record the host on its events when detaching exists
 const ofIds = (priv: Set<string>) => (s: string) => priv.size > 0 && priv.has(s.split(/[#:]/)[0]!); // "id", "id#3", "id:branch"
 // Drops every key, string and list item that belongs to a private project: a list item by its id, run, repo or scope.
 export function dropPrivate(v: unknown, mine: (s: string) => boolean): unknown {

@@ -34,7 +34,7 @@ export function gitBase(repoPath: string): { base: string; ref: string } {
     if (ref.startsWith('origin/') && has(ref)) return { base: ref.slice('origin/'.length), ref };
   } catch { /* no origin/HEAD */ }
   for (const ref of ['origin/main', 'origin/master', 'main', 'master']) if (has(ref)) return { base: ref.replace(/^origin\//, ''), ref };
-  throw new Error(`cannot tell the base branch of ${repoPath}: no origin/HEAD, main or master (git remote set-head origin -a sets origin/HEAD)`);
+  throw new Error(`cannot tell the base branch of ${repoPath}: it has no main or master branch${originUrl(repoPath) ? ', locally or on origin, and no origin/HEAD (git remote set-head origin -a sets it)' : ''}`);
 }
 export const wtFile = (run: string) => path.join(runDir(run), 'worktree.json');
 export const wtInfo = (run: string): WorktreeInfo | null => { try { return JSON.parse(fs.readFileSync(wtFile(run), 'utf8')); } catch { return null; } };

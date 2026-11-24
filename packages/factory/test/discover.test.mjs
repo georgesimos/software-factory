@@ -29,14 +29,14 @@ export function discoverTest() {
   fs.mkdirSync(path.join(root, 'work/shop/.claude/worktrees/x'), { recursive: true });
   fs.writeFileSync(path.join(root, 'work/shop/.claude/worktrees/x/.git'), 'gitdir: ../../.git/worktrees/w0');
   const found = discover([root]);
-  assert.deepEqual(found.map((f) => f.repo).sort(), ['acme/nested', 'acme/shop', 'acme/site', 'acme/thing', 'acme/umbrella', 'local/notes', 'local/notes', 'team-sub/private']);
+  assert.deepEqual(found.map((f) => f.repo).sort(), ['acme/nested', 'acme/shop', 'acme/site', 'acme/thing', 'acme/umbrella', 'local/notes', 'local/notes-2', 'team-sub/private']); // ids are unique: pickers key rows by them
   // GitHub clones keep exactly the shape they had (no host or remote key); any other origin is a git project
   assert.deepEqual(Object.keys(found.find((f) => f.repo === 'acme/site')).sort(), ['attached', 'lastCommit', 'otherClones', 'path', 'repo', 'worktrees']);
   assert.deepEqual([found.find((f) => f.repo === 'acme/thing').host, found.find((f) => f.repo === 'acme/thing').remote], ['git', 'git@gitlab.com:acme/thing.git']);
   const priv = found.find((f) => f.repo === 'team-sub/private');
   assert.equal(priv.remote, 'https://git.example.com/team/sub/private.git'); // the credential is never stored or shown
   assert.ok(!JSON.stringify(found).includes('s3cret'));
-  const notes = found.filter((f) => f.repo === 'local/notes');
+  const notes = found.filter((f) => f.repo.startsWith('local/notes'));
   assert.deepEqual(notes.map((f) => [f.host, f.remote, f.otherClones.length]), [['git', undefined, 0], ['git', undefined, 0]]); // two folders, two repos
   const shop = found.find((f) => f.repo === 'acme/shop');
   assert.equal(shop.otherClones.length, 1);

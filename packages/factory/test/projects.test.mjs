@@ -10,7 +10,7 @@ import { test } from 'node:test';
 import { setup } from './setup.mjs';
 import { io, record } from '../../core/src/log.ts';
 import { cloneId, hostFor, normRemote, withoutUserinfo } from '../../core/src/remote.ts';
-import { clash, sync } from '../../core/src/sync.ts';
+import { clash, discover, sync } from '../../core/src/sync.ts';
 import { projects, projectsFile, worktree } from '../../core/src/workspace.ts';
 import { approval, facts, intake, merge, openPRs, postmerge, relabelMerged, revert } from '../../core/src/github.ts';
 import { artifact, page, residue } from '../../server/src/server.ts';
@@ -18,10 +18,10 @@ import { artifact, page, residue } from '../../server/src/server.ts';
 setup();
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-projects-'));
 const git = (cwd, ...a) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-const clone = (rel, origin) => { // a real repo with one commit on main
+const clone = (rel, origin, branch = 'main') => { // a real repo with one commit
   const d = path.join(root, rel);
   fs.mkdirSync(d, { recursive: true });
-  git(d, 'init', '-q', '-b', 'main');
+  git(d, 'init', '-q', '-b', branch);
   git(d, '-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '--allow-empty', '-m', 'init');
   if (origin) git(d, 'remote', 'add', 'origin', origin);
   return d;
@@ -53,8 +53,18 @@ test('attach refuses an id that is already another repository; a second clone of
     sync('local/notes', a);
     assert.deepEqual([projects()['local/notes'].host, projects()['local/notes'].remote], ['git', undefined]);
     sync('local/notes', a); sync('local/notes'); // re-syncs: same folder
-    assert.throws(() => sync('local/notes', b), /local\/notes is already attached to another folder.*attach it under another id/);
+    assert.throws(() => sync('local/notes', b), /local\/notes is already attached to another folder.*attach it under another id \(F sync local\/<name> /);
     assert.equal(projects()['local/notes'].path, a, 'the refused attach changed nothing');
+    sync('local/notes-b', b); // what the refusal says: still a git project
+    assert.equal(projects()['local/notes-b'].host, 'git');
+    const seen = discover([root]).filter((f) => f.path === a || f.path === b).map((f) => [f.repo, f.attached]).sort();
+    assert.deepEqual(seen, [['local/notes', true], ['local/notes-b', true]], 'discover shows each folder under the id it was attached as');
+    git(a, 'remote', 'add', 'origin', 'git@gitlab.com:me/notes.git'); // its own folder, now with an origin: not a clash
+    sync('local/notes', a);
+    assert.deepEqual([projects()['local/notes'].host, projects()['local/notes'].remote], ['git', undefined], 'host and remote stay as first attached');
+    git(a, 'remote', 'remove', 'origin');
+    assert.throws(() => sync('local/trunk', clone('t/trunk', '', 'trunk')), /cannot tell the base branch .*no main or master branch$/);
+    assert.equal(projects()['local/trunk'], undefined, 'a clone with no base branch is not attached');
     const g = clone('g/thing', 'https://pat:s3cret@gitlab.com/acme/thing.git');
     sync('acme/thing', g);
     assert.deepEqual([projects()['acme/thing'].host, projects()['acme/thing'].remote], ['git', 'https://gitlab.com/acme/thing.git']);
@@ -107,6 +117,7 @@ test('the published page leaves out every project not on GitHub; the backstop re
   assert.ok(!artifact(full).includes('local/notes'));
   // the backstop alone: an id left in prose refuses the page
   assert.throws(() => artifact(page({ note: 'see local/notes#1' })), /still carries a project that is not on GitHub/);
+  for (const note of ['mirrored at https://gitlab.com/acme/thing', 'git@GitLab.com:acme/thing.git']) assert.throws(() => artifact(page({ note })), /a remote that is not on GitHub/, note);
   assert.deepEqual(residue(JSON.stringify({ runs: [{ id: 'acme/thing#2' }] }), { runs: [] }, { user: 'nobody-x', host: 'h', home: '/nowhere', projects: projects() }), ['a project that is not on GitHub']);
   assert.deepEqual(residue(JSON.stringify({ x: 'local/notesy and acme/things' }), { runs: [] }, { user: 'nobody-x', host: 'h', home: '/nowhere', projects: projects() }), []); // whole ids only
 });

@@ -6,7 +6,7 @@ import { shipTrack } from './ship.ts';
 import { read, record, sessionsFile, stateDir } from './log.ts';
 import { derive } from './derive.ts';
 import { gh, openPRs, relabelMerged } from './github.ts';
-import { git, gitBase, hostOf, ls, originUrl, projects, projectsFile } from './workspace.ts';
+import { git, gitBase, ls, originUrl, projects, projectsFile } from './workspace.ts';
 import { cloneId, hostFor, normRemote, remoteParts, withoutUserinfo } from './remote.ts';
 import { harnesses } from '../../adapters/harnesses/index.ts';
 import type { FactoryEvent, Project, Session } from './types.ts';
@@ -59,13 +59,24 @@ export function discover(roots?: string[], maxDepth = 5) {
     (byRepo[key] ??= []).push({ repo: id, host: m ? 'github' : 'git', ...(!m && net && { remote: withoutUserinfo(url) }), path: dir, lastCommit, worktrees });
   }
   const attached = projects();
-  return Object.values(byRepo).map((cs) => {
+  const found = Object.values(byRepo).map((cs) => {
     cs.sort((a, b) => (b.lastCommit || '').localeCompare(a.lastCommit || ''));
-    const { repo, host, remote } = cs[0]!, a = attached[repo];
+    const { host, remote } = cs[0]!;
+    // a git clone already attached keeps the id it was attached under, whatever its folder or origin would give now
+    const known = host === 'git' ? Object.entries(attached).find(([, p]) => cs.some((c) => c.path === p?.path))?.[0] : undefined;
+    const repo = known ?? cs[0]!.repo, a = attached[repo];
     const main = (cs.find((c) => c.path === a?.path) || cs[0]) as (typeof cs)[number]; // prefer the clone already attached, else the freshest (cs is never empty)
     const mine = !!a && clash(repo, a, remote ?? (host === 'github' ? `https://github.com/${repo}` : ''), main.path) === null; // local/app attached from another folder is not this one
     return { repo, path: main.path, otherClones: cs.filter((c) => c !== main).map((c) => c.path), attached: mine, lastCommit: main.lastCommit, worktrees: main.worktrees, ...(host === 'git' && { host, ...(remote && { remote }) }) };
-  }).sort((a, b) => (b.lastCommit || '').localeCompare(a.lastCommit || ''));
+  });
+  // Pickers key rows by id, so ids are unique: two local/app folders, or acme/app on GitHub and on another host. A GitHub id
+  // never changes (it names the repo for gh); the attached clone keeps its id; any other gets "-2", "-3", ... until free.
+  const used = new Set<string>(), rank = (e: (typeof found)[number]) => (!e.host ? 0 : e.attached ? 1 : 2);
+  for (const e of [...found].sort((a, b) => rank(a) - rank(b))) {
+    if (e.host) for (let i = 2, id = e.repo; ; id = `${e.repo}-${i++}`) if (!used.has(id) && !(attached[id] && !e.attached)) { e.repo = id; break; }
+    used.add(e.repo);
+  }
+  return found.sort((a, b) => (b.lastCommit || '').localeCompare(a.lastCommit || ''));
 }
 // Why attaching repoPath (origin url) as `repo` would clash with its existing entry, or null when it is the same repository:
 // ssh, scp and https forms of one origin are equal, a second clone of it is fine. A legacy GitHub entry is github.com/<id>,
@@ -73,12 +84,12 @@ export function discover(roots?: string[], maxDepth = 5) {
 // clone folder is the identity (case-folded on Windows).
 export function clash(repo: string, prior: Project, url: string, repoPath: string): string | null {
   if (!prior.path) return null; // never attached (an auto-merge or rule set first)
+  const real = (p: string) => { let r: string; try { r = fs.realpathSync(p); } catch { r = path.resolve(p); } return process.platform === 'win32' ? r.toLowerCase() : r; };
+  if (real(prior.path) === real(repoPath)) return null; // its own folder, even after its origin was added or moved (host and remote stay)
   const was = prior.remote ? normRemote(prior.remote) : (prior.host ?? 'github') === 'github' ? `github.com/${repo.toLowerCase()}` : null, now = normRemote(url);
   if (was && now) return was === now ? null : was;
   if (was) return prior.remote ? was : null;
-  if (now) return 'a clone with no remote';
-  const real = (p: string) => { let r: string; try { r = fs.realpathSync(p); } catch { r = path.resolve(p); } return process.platform === 'win32' ? r.toLowerCase() : r; };
-  return real(prior.path) === real(repoPath) ? null : 'another folder';
+  return now ? 'a clone with no remote' : 'another folder';
 }
 // Registers the repo and imports work already in flight: open PRs, plus recent agent sessions on unmerged branches.
 // Imported runs are tracked, never driven: decide() always escalates them.
@@ -87,18 +98,19 @@ export function sync(repo: string, repoPath?: string) {
   repoPath = path.resolve(repoPath || projects()[repo]?.path || '.');
   const prior = projects()[repo], url = originUrl(repoPath);
   const why = prior && clash(repo, prior, url, repoPath);
-  if (why) throw new Error(`${repo} is already attached to ${why}, and ${repoPath} is a different repository: attach it under another id (F sync <owner/name> ${repoPath})`);
+  // a clone with no network origin keeps a local/ id: owner/name with no origin would be taken for GitHub
+  if (why) throw new Error(`${repo} is already attached to ${why}, and ${repoPath} is a different repository: attach it under another id (F sync ${remoteParts(url) ? '<owner/name>' : 'local/<name>'} ${repoPath})`);
   // host and remote are decided once, on the first attach; a legacy entry (a path, no host) stays GitHub
-  const fresh: Project = prior?.path || prior?.host ? {} : hostFor(url, repo) === 'git' ? { host: 'git', ...(remoteParts(url) && { remote: withoutUserinfo(url) }) } : {};
+  const first = !(prior?.path || prior?.host), fresh: Project = first && hostFor(url, repo) === 'git' ? { host: 'git', ...(remoteParts(url) && { remote: withoutUserinfo(url) }) } : {};
+  const onGithub = (fresh.host ?? prior?.host ?? 'github') === 'github';
+  const baseRef = onGithub ? null : gitBase(repoPath).ref; // before anything is written: a clone with no base branch is not attached
   fs.mkdirSync(stateDir(), { recursive: true });
   fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...prior, ...fresh, path: repoPath, synced: new Date().toISOString() } }, null, 2));
-  const onGithub = hostOf(repo) === 'github';
   const runs = Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') || r.id.startsWith(repo + ':'));
   const byPr = new Map(runs.filter((r) => r.pr).map((r) => [r.pr, r]));
   const byBranch = new Map(runs.filter((r) => r.branch).map((r) => [r.branch, r]));
   // a git project: no GitHub calls; nothing is open on a host, and the base comes from the clone (a local ref without a remote)
   const { base, prs, doneBranches } = onGithub ? openPRs(repo) : { base: '', prs: [], doneBranches: [] };
-  const baseRef = onGithub ? `origin/${base}` : gitBase(repoPath).ref;
   const sessions = sessionsByBranch(repo, repoPath);
   const ours = (b: string) => b.startsWith('factory/'); // the factory's own branches are never imported
   const added: string[] = [], attached: string[] = [], closed: string[] = [];
@@ -123,7 +135,7 @@ export function sync(repo: string, repoPath?: string) {
     added.push(id);
   }
   // shortcut: only local branches count as session work; a session on a remote-only branch is skipped until it has a PR.
-  const unmerged = new Set(git('-C', repoPath, 'branch', '--no-merged', baseRef, '--format=%(refname:short)').split('\n').map((b) => b.trim()).filter(Boolean));
+  const unmerged = new Set(git('-C', repoPath, 'branch', '--no-merged', baseRef ?? `origin/${base}`, '--format=%(refname:short)').split('\n').map((b) => b.trim()).filter(Boolean));
   const openHeads = new Set(prs.map((p) => p.headRefName));
   const done = new Set(doneBranches); // squash-merged branches still look unmerged to git
   const recent = new Date(Date.now() - 14 * 864e5).toISOString();
