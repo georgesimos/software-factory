@@ -34,6 +34,8 @@ const run = (args) => {
 };
 const SESSION_ID = /^\w[\w-]{0,99}$/; // a thread id as a positional argument: plain, and never a flag (no leading '-')
 const ID = /^[\w-]{1,100}$/; // a session id read from its output: a malformed one is skipped, so a later valid one counts
+const found = (files, ok = fs.existsSync) => { const f = files.find((x) => x && ok(x)); return f ? { installed: true, path: f } : { installed: false }; };
+const codexBundle = (app) => { try { return fs.readFileSync(path.join(app, 'Contents', 'Info.plist'), 'latin1').includes('com.openai.codex'); } catch { return false; } }; // XML or binary plist: the id is plain text in both
 const slug = (url) => /[:/]([^/:]+\/[^/]+?)(?:\.git)?\/?$/.exec(url || '')?.[1].toLowerCase(); // owner/repo from any remote URL form
 
 const adapter = {
@@ -90,6 +92,15 @@ const adapter = {
     { name: 'codex review', tool: 'review', desc: 'Codex\'s own reviewer against the base branch. Replies in prose, so the adapter brief converts it.' },
   ] : []),
   // The first line of each session file is session_meta with the git branch and remote; nothing else is read.
+  // The Codex desktop app; at (platform, home, env, root) is for tests. macOS, checked on a Mac: the bundle id
+  // com.openai.codex, in an app named Codex.app or ChatGPT.app (the name it had there), in /Applications or ~/Applications.
+  // Windows, best effort and unchecked: %LOCALAPPDATA%\Programs\Codex\Codex.exe and %ProgramFiles%\Codex\Codex.exe.
+  // Linux, best effort: a codex .desktop entry.
+  desktop({ platform = process.platform, home = os.homedir(), env = process.env, root = path.parse(os.homedir()).root } = {}) {
+    if (platform === 'darwin') return found([path.join(root, 'Applications'), path.join(home, 'Applications')].flatMap((d) => ['Codex.app', 'ChatGPT.app'].map((a) => path.join(d, a))), codexBundle);
+    if (platform === 'win32') return found([env.LOCALAPPDATA && path.join(env.LOCALAPPDATA, 'Programs', 'Codex', 'Codex.exe'), env.ProgramFiles && path.join(env.ProgramFiles, 'Codex', 'Codex.exe')]);
+    return found([path.join(root, 'usr', 'share', 'applications'), path.join(home, '.local', 'share', 'applications')].map((d) => path.join(d, 'codex.desktop')));
+  },
   sessions(repoPath, remoteUrl) {
     const root = path.join(os.homedir(), '.codex', 'sessions'), want = slug(remoteUrl), out = [];
     let files = [];

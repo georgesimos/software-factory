@@ -226,6 +226,7 @@
 .web-ob-card[aria-disabled] { opacity: 0.7; }
 .web-ob-card h4 { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sf-space-1-5); margin: 0; color: var(--sf-color-ink); }
 .web-ob-note, .web-ob-path { font-size: var(--sf-text-xs); overflow-wrap: anywhere; }
+.web-ob-sub { margin: var(--sf-space-1-5) 0 0; font-size: var(--sf-text-xs); font-weight: 600; color: var(--sf-color-ink-2); }
 .web-ob-path { font-family: var(--sf-font-mono); color: var(--sf-color-ink-3); }
 .web-ob-cmd { display: flex; align-items: center; gap: var(--sf-space-2); min-width: 0; margin: var(--sf-space-1) 0; padding: var(--sf-space-1-5) var(--sf-space-2); border-radius: var(--sf-radius-md); background: var(--sf-color-sunken); }
 .web-ob-cmd code { flex: 1; min-width: 0; font: var(--sf-text-xs) var(--sf-font-mono); overflow-wrap: anywhere; }
