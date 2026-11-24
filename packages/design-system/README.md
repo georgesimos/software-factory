@@ -58,6 +58,9 @@ pass AA. `control` is new: a 3:1 border for inputs and checkboxes.
 - **Factory:** `StageTrack`, `RunCard`, `ReviewMatrix`, `MetricStat` / `MetricStrip`, `SourceChip`, `OutcomePill`, `Timeline`,
   `CommandMenu`, and `SessionLink` / `SessionList` / `SessionsChip`, which show local Claude Code and Codex sessions on a
   run's branch and copy the resume command. `resumeCommand()` quotes the paths and ids.
+- **Pipelines:** `PipelineGraph` draws one pipeline as F's `pipeline()` sends it (steps, locked steps, intake's outcomes, the
+  review fan-out and the gate's loop-backs), with its checks beside it. `PipelineList` is the list to pick one from. The
+  dashboard's Pipelines sheet and the playground's Pipelines tab both use them; `pipelineGraph()` is the layout model.
 - **Onboarding:** `ProjectPicker` (discover, then multi-select) and `IngestProgress` (per-project import with PR and session
   counts).
 

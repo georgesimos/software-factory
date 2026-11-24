@@ -1,0 +1,40 @@
+/* PipelineGraph and PipelineList: a pipeline as a node graph, with its checks beside it, and the list to pick one. */
+.sf-pl-cols { display: grid; grid-template-columns: 200px minmax(0, 1fr) 260px; gap: var(--sf-space-5); align-items: start; }
+.sf-pl-list { display: grid; gap: var(--sf-space-1); }
+.sf-pl-list button { display: grid; gap: 2px; text-align: left; padding: var(--sf-space-2) var(--sf-space-3); border: 1px solid transparent; border-radius: var(--sf-radius-md); background: none; color: var(--sf-color-ink); font: inherit; cursor: pointer; }
+.sf-pl-list button:hover { background: var(--sf-color-sunken); }
+.sf-pl-list button[aria-current] { border-color: var(--sf-color-line); background: var(--sf-color-sunken); }
+.sf-pl-list button:focus-visible { outline: 2px solid var(--sf-color-accent); outline-offset: 1px; }
+.sf-pl-name { font-weight: var(--sf-weight-medium); font-size: var(--sf-text-sm); overflow-wrap: anywhere; }
+.sf-pl-meta { color: var(--sf-color-ink-3); font-size: var(--sf-text-xs); }
+.sf-pl-strip { display: flex; gap: 3px; margin-top: 2px; }
+.sf-pl-strip i { width: 14px; height: 4px; border-radius: 2px; background: var(--sf-color-line); }
+.sf-pl-strip i[data-locked] { background: var(--sf-color-ink-3); }
+.sf-pl-main { position: relative; min-width: 0; border: 1px solid var(--sf-color-line); border-radius: var(--sf-radius-lg); background: var(--sf-color-sunken); }
+.sf-pl-canvas { position: relative; margin: var(--sf-space-4); transform-origin: 0 0; }
+.sf-pl-scroll { overflow: auto; height: calc(100dvh - 240px); min-height: 320px; } /* the sheet's height; a wide graph scrolls inside, at zoom 1 */
+.sf-pl-zoom { position: absolute; top: var(--sf-space-2); right: var(--sf-space-2); z-index: 1; display: flex; gap: 2px; background: var(--sf-color-surface); border: 1px solid var(--sf-color-line); border-radius: var(--sf-radius-md); }
+.sf-pl-canvas svg { position: absolute; inset: 0; overflow: visible; }
+.sf-pl-canvas path { fill: none; stroke: var(--sf-color-ink-3); stroke-width: 1.25; }
+.sf-pl-canvas path[data-loop] { stroke-dasharray: 4 4; stroke: var(--sf-color-accent); }
+.sf-pl-canvas text { fill: var(--sf-color-ink-3); font: var(--sf-text-2xs) var(--sf-font-mono); }
+.sf-pl-canvas ol { margin: 0; padding: 0; list-style: none; }
+.sf-pl-canvas li { position: absolute; box-sizing: border-box; display: grid; align-content: start; gap: 2px; padding: var(--sf-space-2) var(--sf-space-3);
+  border: 1px solid var(--sf-color-line); border-radius: var(--sf-radius-md); background: var(--sf-color-surface); overflow: hidden; }
+.sf-pl-canvas li[data-kind="outcome"], .sf-pl-canvas li[data-kind="start"] { border-style: dashed; background: none; }
+.sf-pl-canvas li[data-locked] { border-color: var(--sf-color-ink-3); }
+.sf-pl-t { display: flex; align-items: center; justify-content: space-between; gap: var(--sf-space-1); font-weight: var(--sf-weight-medium); font-size: var(--sf-text-sm); white-space: nowrap; }
+.sf-pl-sub, .sf-pl-who { font-size: var(--sf-text-xs); color: var(--sf-color-ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-pl-who { color: var(--sf-color-ink-3); font-family: var(--sf-font-mono); }
+.sf-pl-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--sf-space-2); margin: 0; padding: var(--sf-space-2) var(--sf-space-4); border-top: 1px solid var(--sf-color-line); color: var(--sf-color-ink-3); font: var(--sf-text-xs) var(--sf-font-mono); }
+.sf-pl-side { display: grid; gap: var(--sf-space-2); font-size: var(--sf-text-sm); color: var(--sf-color-ink-2); }
+.sf-pl-side h3 { margin: 0; color: var(--sf-color-ink); font-size: var(--sf-text-md); overflow-wrap: anywhere; }
+.sf-pl-side p { margin: 0; }
+.sf-pl-side .sf-label { margin-top: var(--sf-space-2); }
+.sf-pl-checks { margin: 0; padding-left: 1.1em; display: grid; gap: var(--sf-space-1); }
+.sf-pl-checks li[data-bad] { color: var(--sf-color-bad); }
+.sf-pl-note { color: var(--sf-color-ink-3); font-size: var(--sf-text-xs); }
+.sf-pl-side pre { margin: var(--sf-space-2) 0 0; padding: var(--sf-space-2); max-height: 320px; overflow: auto; border-radius: var(--sf-radius-md); background: var(--sf-color-sunken); font: var(--sf-text-2xs) / 1.5 var(--sf-font-mono); }
+.sf-pl-side summary { cursor: pointer; color: var(--sf-color-ink); }
+@media (max-width: 1000px) { .sf-pl-cols { grid-template-columns: minmax(0, 1fr); } .sf-pl-list { grid-auto-flow: column; grid-auto-columns: minmax(160px, 1fr); overflow-x: auto; } }
+@media (max-width: 600px) { .sf-pl-scroll { height: 55dvh; min-height: 280px; } } /* a phone: the graph scrolls in a window under the list, and the page still scrolls past it */
