@@ -1,6 +1,6 @@
 import { Badge, Tooltip, formatClock, shortId } from '@software-factory/design-system';
 import { useLayoutEffect, useRef, useState } from 'react';
-import type { FactoryData } from './data.ts';
+import { setByText, type FactoryData } from './data.ts';
 
 // Policy rules in force for the shown project(s), from `F rules set`. Quiet unless expired or ending within 3 days.
 const LABEL: Record<string, (v: unknown) => string> = {
@@ -31,9 +31,9 @@ export function RuleChips({ data, project, today = new Date().toISOString().slic
       const gone = !!until && until < today, ending = !!until && !gone && Date.parse(until) - Date.parse(today) <= 3 * 864e5;
       const reason = String(e.reason ?? ''), short = reason.length > 30 ? reason.slice(0, 30).replace(/\s+\S*$/, '') + '…' : reason;
       const history = (data.ruleHistory ?? []).filter((h) => h.run === e.scope && h.key === e.key)
-        .map((h) => `${String(h.ts).slice(0, 10)} ${h.status}${h.status === 'set' ? ' ' + JSON.stringify(h.value) : ''} by ${h.setBy}${h.reason ? ': ' + h.reason : ''}`);
+        .map((h) => `${String(h.ts).slice(0, 10)} ${h.status}${h.status === 'set' ? ' ' + JSON.stringify(h.value) : ''} by ${setByText(h)}${h.reason ? ': ' + h.reason : ''}`);
       const text = (project ? '' : (e.scope === 'default' ? 'all' : shortId(String(e.scope))) + ': ') + (gone ? 'Expired: ' : '') + label(e.value) + (short ? ` · ${short}` : '') + (ending ? ` · ends ${until!.slice(5)}` : '');
-      const title = `${e.key}=${JSON.stringify(e.value)} for ${e.scope === 'default' ? 'all projects' : e.scope}, set by ${e.setBy} on ${String(e.setAt).slice(0, 10)}: ${reason}` +
+      const title = `${e.key}=${JSON.stringify(e.value)} for ${e.scope === 'default' ? 'all projects' : e.scope}, set by ${setByText(e)} on ${String(e.setAt).slice(0, 10)}: ${reason}` +
         (until ? `. Until ${until}` : '') + (gone ? '. Expired: no longer applied.' : '') + (history.length ? '\nHistory:\n' + history.join('\n') : '');
       out[gone || ending ? 'unshift' : 'push']({ warn: gone || ending, text, title }); // warnings first: never the one clipped
     }
@@ -87,7 +87,7 @@ export function RuleLog({ data, project }: { data: FactoryData; project: string 
           <li key={i}>
             <time dateTime={e.ts}>{formatClock(e.ts)}</time>
             <b>{e.status} {e.key}</b>{e.status === 'set' ? ` = ${JSON.stringify(e.value)}` : ''}
-            {' · '}{e.run === 'default' ? 'all projects' : e.run}{' · by '}{e.setBy ?? '?'}{e.reason ? ` · ${e.reason}` : ''}{e.until ? ` · until ${e.until}` : ''}
+            {' · '}{e.run === 'default' ? 'all projects' : e.run}{' · by '}{setByText(e)}{e.reason ? ` · ${e.reason}` : ''}{e.until ? ` · until ${e.until}` : ''}
           </li>
         ))}
       </ul>

@@ -81,7 +81,7 @@ export function derive(events: FactoryEvent[]): Record<string, Run> {
     if (e.stage === 'note') { // the user's one-shot instruction for a step ("F note" / "F notes"): on the timeline, never moves the run's stage, clock or outcome
       const r = Object.hasOwn(runs, e.run) ? runs[e.run] : undefined; // a hand-edited "__proto__" note can't break derive()
       if (r) r.events.push(e);
-      if (r && e.status === 'pending') (r.notes ??= []).push({ id: e.id, step: e.step, text: e.text, by: e.by, ts: e.ts, state: 'pending' });
+      if (r && e.status === 'pending') (r.notes ??= []).push({ id: e.id, step: e.step, text: e.text, by: e.by, ...(e.via && { via: e.via }), ts: e.ts, state: 'pending' });
       if (r && e.status === 'applied') for (const n of r.notes || []) if (e.notes?.includes(n.id as string) && n.state === 'pending') Object.assign(n, { state: 'applied', appliedTo: n.step === 'next' ? e.steps : [n.step], appliedAt: e.ts, claim: e.claim }); // the first claim in the log wins
       continue;
     }
