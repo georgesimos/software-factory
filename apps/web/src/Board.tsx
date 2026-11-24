@@ -28,7 +28,7 @@ function Metrics({ data, project, runs }: { data: FactoryData; project: string; 
       <MetricStat label="Revert rate" value={rev?.[0] ?? null} unit={rev?.[1]} sub={M.reverts != null ? `${M.reverts} reverted` : 'of merged runs'} />
       {M.costUsd ? <MetricStat label="Spend" prefix="$" value={M.costUsd >= 1000 ? Math.round(M.costUsd).toLocaleString() : M.costUsd.toFixed(2)} sub={M.costPerMergeUsd != null ? `${formatMoney(M.costPerMergeUsd)} per merge` : costCap > 0 ? `cap ${formatMoney(costCap)} / run` : undefined} /> : null}
       {X.tokens ? <MetricStat label="Tokens / merge" value={t == null ? null : t >= 1e6 ? (t / 1e6).toFixed(1) : String(Math.round(t / 1e3))} unit={t == null ? undefined : t >= 1e6 ? 'M' : 'k'}
-        sub={[`${formatTokens(X.tokens)} total`, top ? `${top[0]} ${Math.round(top[1] * 100)}%` : null, `${X.measuredRuns ?? 0} measured`].filter(Boolean).join(' · ')} /> : null}
+        sub={[t == null ? 'no merges yet' : null, `${formatTokens(X.tokens)} total`, top ? `${top[0]} ${Math.round(top[1] * 100)}%` : null, `${X.measuredRuns ?? 0} measured`].filter(Boolean).join(' · ')} /> : null}
     </MetricStrip>
   );
 }
