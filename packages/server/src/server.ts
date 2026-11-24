@@ -22,7 +22,7 @@ import { logMetrics } from '../../core/src/metrics.ts';
 import { open } from '../../core/src/platform.ts';
 import { spawn } from 'node:child_process';
 import { childEnv, getSession, killTree, listSessions, resolveSpec, startSession, stopAll, subscribe } from '../../adapters/sessions.mjs';
-import { claimLive, procStart, readClaim, refuseClaimed, running, takeClaim, withClaim } from '../../core/src/claim.ts';
+import { claimedElsewhere, claimLive, procStart, readClaim, refuseClaimed, running, takeClaim, withClaim } from '../../core/src/claim.ts';
 
 // `F ui`: the dashboard on a loopback port, where the Skills sheet can save. Pure, so the self-test can drive it.
 export const same = (a, b) => typeof a === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
@@ -124,7 +124,7 @@ export const harnessReady = new Map(); // harness id -> when detect() and login(
 // run that has owned the issue since, is refused as an active run.
 const SESSION_ID = /^\w[\w-]{0,99}$/; // a harness session id as an argument: plain, and never a flag (no leading '-')
 export function resumeFor(r, last) {
-  if (!r || TERMINAL.includes(r.outcome) || !last || last.state === 'running' || last.exit === 0) return undefined;
+  if (!r || TERMINAL.includes(r.outcome) || !last || last.state === 'running' || last.exit === 0 || last.exit === 'unknown') return undefined; // unsure: no auto-resume
   const v = last.harnessSession;
   return covers(r, last) && SESSION_ID.test(v || '') ? v : undefined;
 }
@@ -134,11 +134,17 @@ const covers = (r, x) => { // the run's last event falls inside x's life; its la
 };
 // The factory's own sessions: a person's terminal on the same run label never stands in for the run's last session.
 const factorySessions = (label) => listSessions().filter((x) => x.mode !== 'terminal' && x.label === label);
-// Runs a POST /api/sessions would resume now: active, and last written by a session here that stopped or crashed.
+// Runs a POST /api/sessions would resume now (#105): active, not closed or over budget, last written by a session here or an F
+// start that stopped or crashed, and held by no live claim. GET /api/state polls it, so the cheap checks come first: a run
+// with no session here and no F start log costs one readdir, a log is read once per change, and the claim (ps) comes last.
 export function resumable() {
-  const runs = derive(read()), labels = [...new Set(listSessions().filter((x) => x.mode !== 'terminal').map((x) => x.label))];
-  return labels.filter((id) => resumeFor(runs[id], factorySessions(id).at(-1)));
+  const runs = derive(read()), archive = readArchive();
+  return Object.keys(runs).filter((id) => { const r = runs[id];
+    return !TERMINAL.includes(r.outcome) && !closedWhy(id, r, archive) && !budget(r).over && resumeOf(id, r) && !claimedElsewhere(id, {}); });
 }
+// A session of this app's is on that run (#107): the way out is to stop it here, not F unclaim.
+const inApp = (label: string, s: { id: string; mode: string; started: string }) => new Error(`${label} already has a running session in this app (${s.mode}, started ${s.started}): stop it in Sessions first (POST /api/sessions/stop {"id":"${s.id}"})`);
+const runningOn = (label: string) => listSessions().find((x) => x.state === 'running' && x.label === label);
 // What the run may still spend: COST_CAP less the dollars, and less the share of TOKEN_CAP used, for usage with no price.
 export const budgetLeft = (b) => b ? Math.min(COST_CAP - b.usd, COST_CAP * (1 - b.tokens / TOKEN_CAP)) : COST_CAP;
 // node-pty and the SDK for terminal and sdk sessions, keyed by package name. Empty until a host that ships them (apps/desktop,
@@ -177,12 +183,17 @@ export function terminalSession({ harness = 'claude-code', repo, issue, resume }
   if (wt && fs.existsSync(wt)) cwd = wt;
   // A new terminal on a run active with nothing to resume: a skill run in another claude (it holds no claim) may still be
   // working it, and this terminal's claim would refuse that harness's next step. Resuming this app's own session is fine.
-  if (issue && resume === undefined) activeRun(id, derive(read())[id], `open the terminal on ${repo} instead, or wait until that run is done`);
+  if (issue && resume === undefined) {
+    const on = runningOn(id); // a factory session or another terminal here: two harnesses on one run (#105, #107)
+    if (on) throw inApp(id, on);
+    activeRun(id, derive(read())[id], `open the terminal on ${repo} instead, or wait until that run is done`);
+  }
   let label = id;
   if (resume !== undefined) { // under the resumed session's own label, so launchSession's running check sees it
     const from = listSessions().filter((x) => x.harnessSession === resume && x.harness === h.id).at(-1);
     if (!from) throw new Error('resume a session this app started');
-    if (listSessions().some((x) => x.state === 'running' && (x.label === from.label || x.harnessSession === resume))) throw new Error(`${from.label} already has a running session`); // one claude per harness session
+    const on = listSessions().find((x) => x.state === 'running' && (x.label === from.label || x.harnessSession === resume)); // one claude per harness session
+    if (on) throw inApp(from.label, on);
     cwd = getSession(from.id).cwd ?? cwd; label = from.label;
   }
   const start = (onPid?: (pid: number) => void, claim?: string) => startSession(h, { mode: 'terminal', resume }, { cwd, env: withClaim(env, claim), label, modules, onPid });
@@ -190,13 +201,29 @@ export function terminalSession({ harness = 'claude-code', repo, issue, resume }
 }
 // A run left active by a session that was stopped or crashed (here, or an F start whose process is gone) resumes that
 // harness session instead of staying stuck; one active with nothing to resume refuses, saying what to do instead.
-// Here, the last session (one that exited 0 since refuses, as before); of F start's logs, the newest that wrote the run's
-// last event, so a later start that died before writing doesn't hide it. The newer of the two.
+// Here and among F start's logs alike, newest first, the first session that is running, exited 0, or wrote r's last event:
+// a later resume that died before its first event doesn't hide the one that wrote it (#105), and a clean exit since still
+// refuses. The newer of the two.
+function resumeOf(id: string, r) {
+  const mine = factorySessions(id);
+  const here = [...mine].reverse().find((x) => x.state === 'running' || x.exit === 0 || covers(r, x)) ?? mine.at(-1);
+  const there = detachedRun(id, r);
+  return resumeFor(r, there && !(Date.parse(here?.started) > Date.parse(there.started)) ? there : here);
+}
 function activeRun(id: string, r, instead: string) {
-  const here = factorySessions(id).at(-1), there = detachedRuns(id).find((x) => covers(r, x));
-  const resume = resumeFor(r, there && !(Date.parse(here?.started) > Date.parse(there.started)) ? there : here);
+  const resume = resumeOf(id, r);
   if (r && !TERMINAL.includes(r.outcome) && !resume) throw new Error(`${id} already has an active run (${r.outcome || r.stage}): its harness may still be working it (a skill run in another claude); ${instead}`);
   return resume;
+}
+// Why no start may take run r at all, for launchGate and resumable() alike.
+function closedWhy(id: string, r, archive = readArchive()) {
+  if (r?.imported) return `${id} is imported: never run claude -p in its checkout`;
+  if (['escalated', 'rejected'].includes(r?.outcome)) return `${id} is ${r.outcome}: it needs a human, not a new run`; // the factory handed it over
+  // F archive drops a run from the log, not from history: a stray later event (a sync, a step) doesn't reopen it. Only a new
+  // intake does, which a person starts (/software-factory <id>), so that is the explicit reopen.
+  const reopened = r?.events?.some((e) => e.stage === 'intake' && e.status === 'started');
+  const gone = !reopened && archive.find((a) => a.id === id);
+  return gone ? `${id} is ${gone.outcome} (archived): it needs a human, not a new run` : undefined;
 }
 // The checks every factory start passes (#25), for a live session here (launchSession) and a detached run (startRun).
 function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue }, modules = hostModules) {
@@ -210,15 +237,11 @@ function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue },
   if (!Number.isInteger(issue) || issue < 1 || issue > 1e9) throw new Error('issue must be a positive issue number');
   const id = `${repo}#${issue}`, r = derive(read())[id];
   const held = readClaim(id); // a stale one is taken over by the launcher's takeClaim(); a live one refuses, finished run or not
-  if (r?.imported) throw new Error(`${id} is imported: never run claude -p in its checkout`);
-  if (['escalated', 'rejected'].includes(r?.outcome)) throw new Error(`${id} is ${r.outcome}: it needs a human, not a new run`); // the factory handed it over
-  // F archive drops a run from the log, not from history: a stray later event (a sync, a step) doesn't reopen it. Only a new
-  // intake does, which a person starts (/software-factory <id>), so that is the explicit reopen.
-  const reopened = r?.events?.some((e) => e.stage === 'intake' && e.status === 'started');
-  const gone = !reopened && readArchive().find((a) => a.id === id);
-  if (gone) throw new Error(`${id} is ${gone.outcome} (archived): it needs a human, not a new run`);
+  const why = closedWhy(id, r);
+  if (why) throw new Error(why);
   // Any running session on the run, a person's terminal included: two harnesses would share one session or worktree.
-  if (listSessions().some((x) => x.label === id && x.state === 'running')) throw new Error(`${id} already has a running session`); // before its first event lands
+  const on = runningOn(id); // before its first event lands
+  if (on) throw inApp(id, on);
   if (held && claimLive(held)) throw running(id, held); // another process's, or a harness this app left running
   const resume = activeRun(id, r, 'wait until that run is done');
   const b = r ? budget(r) : null;
@@ -258,28 +281,42 @@ const startTime = (pid: number) => {
   return since;
 };
 type Session = { id: string; stop: () => void };
-// F start's runs, newest first, as resumeFor() reads a stopped session, from their logs in the run's folder (not the claim,
-// which a later launcher may have taken over): started at the time in the name, ended at the last write, the harness
-// session from the first init line, exit 0 when the last line is a successful result. Those with no session id are left out.
-// Only asked once no live claim holds the run.
+// The F start run a start on run r would look at, as resumeFor() reads a stopped session, from its log in the run's folder (not
+// the claim, which a later launcher may have taken over). Of the newest 20 logs that name a harness session, newest first, the
+// first that wrote r's last event (its life, from the time in its name to its last write, covers it) or that exited 0:
+// a later start that died before writing doesn't hide the one that wrote it, and a clean exit since refuses.
 const LOG = /^headless-(\d{4}-\d\d-\d\dT\d\d)-(\d\d)-(\d\d)-(\d{3}Z)\.log$/;
-function detachedRuns(id: string) {
+function detachedRun(id: string, r) {
   let names: string[] = [];
   try { names = fs.readdirSync(runDir(id)).filter((f) => LOG.test(f)).sort().reverse().slice(0, 20); } catch { /* no folder */ }
-  return names.map((n) => detachedRun(path.join(runDir(id), n))).filter((x) => x?.harnessSession);
+  for (const n of names) {
+    const [, d, mm, ss, ms] = LOG.exec(n)!;
+    let st: fs.Stats;
+    try { st = fs.statSync(path.join(runDir(id), n)); } catch { continue; } // gone meanwhile
+    const x = { state: 'exited', started: `${d}:${mm}:${ss}.${ms}`, ended: st.mtime.toISOString() }, seen = readLog(path.join(runDir(id), n), st);
+    if (seen?.harnessSession && (covers(r, x) || seen.exit === 0)) return { ...x, ...seen };
+  }
+  return undefined;
 }
-function detachedRun(file: string) {
-  const [, d, mm, ss, ms] = LOG.exec(path.basename(file))!, cap = 64 * 1024;
+// One F start log's harness session (its first init line) and exit: 0 when its last stream-json event is a successful
+// result, null when it is any other event (killed), 'unknown' when the tail holds none (unsure: never auto-resumed).
+// stderr shares the log, so a later line that isn't an event, JSON or not, doesn't count. Read once per size and mtime.
+const logs = new Map<string, { key: string; seen: { harnessSession?: string; exit: 0 | null | 'unknown' } }>();
+function readLog(file: string, st: fs.Stats) {
+  const key = `${st.size}:${st.mtimeMs}`, hit = logs.get(file);
+  if (hit?.key === key) return hit.seen;
+  let head = '', tail = '';
   try {
-    const size = fs.statSync(file).size, fd = fs.openSync(file, 'r'), buf = Buffer.alloc(Math.min(size, cap));
-    try {
-      const head = buf.subarray(0, fs.readSync(fd, buf, 0, buf.length, 0)).toString('utf8');
-      const tail = buf.subarray(0, fs.readSync(fd, buf, 0, buf.length, Math.max(0, size - cap))).toString('utf8').trimEnd().split('\n').at(-1);
-      let done = false;
-      try { const x = JSON.parse(tail); done = x?.type === 'result' && x.subtype === 'success' && !x.is_error; } catch { /* killed mid-line */ }
-      return { state: 'exited', exit: done ? 0 : null, started: `${d}:${mm}:${ss}.${ms}`, ended: fs.statSync(file).mtime.toISOString(), harnessSession: /"session_id":"([\w-]{1,100})"/.exec(head)?.[1] };
-    } finally { fs.closeSync(fd); }
+    const fd = fs.openSync(file, 'r'), at = (n: number, from: number) => { const b = Buffer.alloc(Math.min(st.size, n)); return b.subarray(0, fs.readSync(fd, b, 0, b.length, from)).toString('utf8'); };
+    try { head = at(64 * 1024, 0); tail = at(1024 * 1024, Math.max(0, st.size - 1024 * 1024)); } finally { fs.closeSync(fd); }
   } catch { return undefined; }
+  let last;
+  for (const l of tail.trimEnd().split('\n').reverse()) { // shortcut: a result line over 1 MB is cut, so reads as unknown; read back to its start if that matters
+    try { const e = JSON.parse(l); if (e && typeof e === 'object' && typeof e.type === 'string') { last = e; break; } } catch { /* stderr, or cut at the tail's start */ }
+  }
+  const seen = { harnessSession: /"session_id":"([\w-]{1,100})"/.exec(head)?.[1], exit: !last ? 'unknown' as const : last.type === 'result' && last.subtype === 'success' && !last.is_error ? 0 as const : null };
+  logs.set(file, { key, seen });
+  return seen;
 }
 // F start and POST /api/runs (#25): the factory on one issue as a detached headless harness that outlives F and F ui, with
 // launchSession's checks. Not a session here: GET /api/sessions doesn't list it and quitting doesn't stop it. The prompt
