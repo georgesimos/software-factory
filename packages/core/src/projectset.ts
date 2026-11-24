@@ -6,8 +6,10 @@ import { builtin as hosts } from '../../adapters/hosts/index.ts';
 import { audit, whoami } from './rules.ts';
 import { CI_ORDER, ciOf } from './ci.ts';
 import { cloneId, isGithubRemote, remoteParts, withoutUserinfo } from './remote.ts';
-import { git, hostFn, hostOf, originUrl, projects, projectsFile } from './workspace.ts';
-import { gh } from './github.ts';
+import { baseBranch, git, hostFn, hostOf, originUrl, projects, projectsFile } from './workspace.ts';
+import { getRun } from './derive.ts';
+import { record } from './log.ts';
+import { gh, parseRun } from './github.ts';
 import fs from 'node:fs';
 import type { Project } from './types.ts';
 
@@ -71,4 +73,24 @@ export function setProject(repo: string, key: string, value: string | null, { re
   const gone = Object.fromEntries((['base', 'ci'] as const).filter((k) => key === 'host' && k in next && p[k]).map((k) => [k, p[k]])); // what a host switch cleared
   audit(repo, value === null ? 'unset' : 'set', { key: `project.${key}`, from, ...(value !== null && { value }), ...(Object.keys(gone).length && { cleared: gone }), ...(reason && { reason }), setBy: who.by, ...(who.via === 'local' && { via: who.via }) });
   return { repo, key, from, to: value, by: who.by, via: who.via, ...(note && { note }) };
+}
+
+// F close RUN --merged <sha> (local-first §1.2, git host): a change request merged outside the factory, say a squash at the
+// remote's own review UI, which git can't see. Yours only, like F project set: it records a merge. The sha must be on the
+// base (fetched from origin when there is one); the run must be escalated, as sync's GitHub human-merge record requires.
+export function closeMerged(run: string, sha: string) {
+  humanOnly('recording a merge');
+  const { repo } = parseRun(run), p = projects()[repo];
+  if (hostOf(repo) === 'github') throw new Error(`${repo} is on GitHub: F sync records a human merge there itself`);
+  if (!p?.path) throw new Error(`${repo} is not attached; run sync first`);
+  if (!/^[0-9a-f]{7,40}$/i.test(sha)) throw new Error(`"${sha}" is not a commit sha`);
+  const base = baseBranch(repo, p.path), origin = !!originUrl(p.path);
+  if (origin) git('-C', p.path, 'fetch', '-q', 'origin', base);
+  let full = '';
+  try { full = git('-C', p.path, 'rev-parse', '--verify', '-q', `${sha}^{commit}`).trim(); } catch { /* below */ }
+  try { if (!full) throw 0; git('-C', p.path, 'merge-base', '--is-ancestor', full, origin ? `refs/remotes/origin/${base}` : `refs/heads/${base}`); }
+  catch { throw new Error(`${sha} is not on ${base}${origin ? ' at origin' : ''} in ${p.path}: give the merge commit on ${base}`); }
+  if (getRun(run).outcome !== 'escalated') throw new Error(`${run} is not escalated: only an escalated run is merged by hand`);
+  record(run, 'approve', 'merged', { by: 'human', mergedBy: whoami('recording a merge').by, sha: full });
+  return { run, merged: true, sha: full };
 }

@@ -20,7 +20,7 @@ export interface Host {
   /** The base, the open change requests, and the branches of recently merged or closed ones (sync and intake read these). */
   listChangeRequests?(ctx: Ctx, opts: { repo: string; path?: string }): { base: string; open: ChangeRequest[]; doneBranches: string[] };
   /** One change request by id. approval: a merge approval on its head (null where the host's own gates decide). */
-  changeRequest?(ctx: Ctx, opts: { repo: string; path?: string; id: string }): { state: 'open' | 'merged' | 'closed' | 'unknown'; headSha?: string | null;
+  changeRequest?(ctx: Ctx, opts: { repo: string; path?: string; id: string; base?: string }): { state: 'open' | 'merged' | 'closed' | 'unknown'; headSha?: string | null;
     approval: { by: string; via: string; sha: string } | null; branch?: string; fork?: boolean; mergedAt?: string | null; mergedBy?: string; mergeSha?: string };
   /** Merges exactly sha into the base; merged:false (or a throw) when the host refuses. */
   merge?(ctx: Ctx, opts: { repo: string; path?: string; id: string; sha: string; base?: string }): { merged: boolean; sha?: string; detail?: string };
