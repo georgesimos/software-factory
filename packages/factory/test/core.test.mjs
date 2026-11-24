@@ -162,7 +162,7 @@ export function artifactTest() {
     const before = fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), out = path.join(io.dir, 'artifact.html');
     const line = execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), 'render', '--artifact', out], { env: { ...process.env, FACTORY_DIR: io.dir }, encoding: 'utf8' });
     assert.equal(fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), before); // the local dashboard is left alone
-    const art = fs.readFileSync(out, 'utf8'), a = dataOf(art), full = dataOf(page());
+    const art = fs.readFileSync(out, 'utf8'), a = dataOf(art), full = dataOf(page({}, { sheet: true })); // the Artifact adds the Metrics sheet (#82)
     assert.match(line, new RegExp(`artifact\\.html: ${Buffer.byteLength(art)} bytes, ${full.runs.length} runs`));
     assert.ok(!/<!doctype|<html|<head>|<\/head>|<body|<meta charset|<meta name="viewport"/i.test(art.slice(0, art.indexOf('<script type="module">'))), 'no skeleton before the script');
     assert.ok(!/<\/body>|<\/html>/i.test(art.slice(art.lastIndexOf('</script>'))), 'nor after it');

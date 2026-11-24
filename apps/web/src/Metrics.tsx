@@ -1,11 +1,12 @@
 import {
   Button, Dialog, EmptyState, MetricStat, MetricStrip, STAGES, Select, Skeleton, Table, costText, formatDuration, formatPercent, formatTokens,
 } from '@software-factory/design-system';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import './Metrics.css';
 
-// The Metrics sheet (#82): GET /api/metrics, which derives burn, outcomes and timing from the event log. Only F ui has the
-// API, so the sheet is offered only with its token; F render's file and the Artifact keep the board's own metric strip.
+// The Metrics sheet (#82): GET /api/metrics, which derives burn, outcomes and timing from the event log, under F ui (its token).
+// The Artifact has no API: its page embeds the same numbers per project and range (metricsLog), as of when it was published.
+// F render's file has neither and keeps the board's own metric strip.
 
 /** A logMetrics() cell (packages/core/src/metrics.ts). costUsd is null when no model was priced; unpriced tokens add a "+". */
 export interface MCell { tokens: number; input: number; output: number; cacheRead: number; cacheWrite: number; costUsd: number | null; unpriced: number; reported: number; source: string | null }
@@ -74,6 +75,21 @@ export async function fetchMetrics(token: string, project: string, since: string
   return normMetrics(x);
 }
 
+/**
+ * The Artifact's loader: the embedded entry for the project and the range whose `since` (from `at`, the page's generated time)
+ * is asked for. Only the all-time entry carries byDay; a range takes its days from `since` on. No entry: nothing in range.
+ */
+export function embedded(log: unknown, at: number): typeof fetchMetrics {
+  const own = (o: unknown, k: string) => (Object.prototype.hasOwnProperty.call(obj(o), k) ? obj(o)[k] : undefined); // never __proto__ and the like
+  return async (_token, project, since) => {
+    const scope = own(log, project), range = RANGES.find(([v]) => sinceFor(v, at) === since)?.[0];
+    const m = range == null ? undefined : own(scope, range);
+    if (!m) return normMetrics({});
+    const days = Object.entries(obj(obj(own(scope, '')).byDay)).filter(([d]) => !since || d >= since);
+    return normMetrics({ ...obj(m), byDay: Object.fromEntries(days) });
+  };
+}
+
 const tok = (n: number) => formatTokens(n) ?? '0';
 const pct = (x: number | null) => formatPercent(x);
 
@@ -127,10 +143,10 @@ function Breakdown({ title, by, order, base }: { title: string; by: Record<strin
   );
 }
 
-function Body({ token, projects, initial, load }: { token: string; projects: string[]; initial: string; load: typeof fetchMetrics }) {
+function Body({ token, projects, initial, load, at }: { token: string; projects: string[]; initial: string; load: typeof fetchMetrics; at?: number }) {
   const [project, setProject] = useState(initial), [range, setRange] = useState('30');
   const [st, setSt] = useState<{ m?: LogMetrics; error?: string; busy?: boolean; of?: { project: string; range: string } }>({}); // of: the filter m was loaded for
-  const now = Date.now(), since = sinceFor(range, now), to = range ? dayOf(now) : ''; // a range runs to today, quiet days included
+  const now = at ?? Date.now(), since = sinceFor(range, now), to = range ? dayOf(now) : ''; // a range runs to today, quiet days included
   useEffect(() => {
     let ignore = false;
     setSt((s) => ({ m: s.m, of: s.of, busy: true })); // the last numbers stay, dimmed and marked busy, until the new filter's arrive
@@ -184,12 +200,16 @@ function Body({ token, projects, initial, load }: { token: string; projects: str
   );
 }
 
-export function MetricsSheet({ open, onClose, token, projects, project, load = fetchMetrics }: {
-  open: boolean; onClose: () => void; token: string; projects: string[]; project: string; load?: typeof fetchMetrics;
+/** With a token, GET /api/metrics; without one, the page's embedded metricsLog, as of `generated` (the Artifact). */
+export function MetricsSheet({ open, onClose, token, projects, project, load = fetchMetrics, metricsLog, generated }: {
+  open: boolean; onClose: () => void; token?: string; projects: string[]; project: string; load?: typeof fetchMetrics; metricsLog?: unknown; generated?: string;
 }) {
+  const at = token ? undefined : Date.parse(generated ?? '') || Date.now(); // the published ranges end on the day it was published
+  const fromPage = useMemo(() => embedded(metricsLog, at ?? 0), [metricsLog, at]);
   return (
-    <Dialog open={open} onClose={onClose} variant="sheet" title="Metrics" className="web-mx-sheet" description="Token burn, cost and outcomes, derived from the event log.">
-      <Body token={token} projects={projects} initial={project} load={load} />
+    <Dialog open={open} onClose={onClose} variant="sheet" title="Metrics" className="web-mx-sheet"
+      description={token ? 'Token burn, cost and outcomes, derived from the event log.' : `Token burn, cost and outcomes, derived from the event log as of ${dayOf(at ?? 0)}.`}>
+      <Body token={token ?? ''} projects={projects} initial={project} load={token ? load : fromPage} at={at} />
     </Dialog>
   );
 }

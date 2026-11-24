@@ -1,11 +1,12 @@
 // @ts-nocheck
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import { io, log } from '../../core/src/log.ts';
 import { logMetrics } from '../../core/src/metrics.ts';
-import { uiHandle } from '../../server/src/server.ts';
+import { artifact, page, sheetMetrics, uiHandle } from '../../server/src/server.ts';
 import { setup } from './setup.mjs';
 
 setup();
@@ -124,4 +125,35 @@ test('GET /api/metrics: token-gated, filtered, no paths or session ids', (t) => 
   fs.appendFileSync(log(), '{"run": broken\n'); // an internal failure: a 500 that echoes nothing from it
   const bad = get('/api/metrics');
   assert.deepEqual([bad.status, /broken|JSON/.test(bad.body)], [500, false]);
+});
+
+// #82 PR C: the Artifact has no API, so its page embeds the sheet's numbers, for all projects and each, per range.
+test('the published Artifact embeds the Metrics sheet: aggregates only, no paths, hosts, logins or session ids', (t) => {
+  io.projects = path.join(io.dir, 'projects');
+  t.after(() => { io.projects = null; });
+  const me = os.userInfo().username, mine = `${me}/${me}#1`; // a profile repo: the owner is the login, which only a known id excuses
+  const all = [...events, ev('2026-11-22T09:00:00.000Z', mine, 'intake', 'started', { harness: 'claude-code', sessionId: SID, cwd: `${os.homedir()}/x` }),
+    ev('2026-11-22T09:10:00.000Z', mine, 'spec', 'passed', { harness: 'claude-code', tokens: 300, by: me, host: os.hostname(), sessionId: SID, cwd: CWD })];
+  fs.writeFileSync(log(), all.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  const pub = artifact(), data = JSON.parse(pub.match(/<script type="application\/json" id="data">([^<]*)<\/script>/)[1]), m = data.metricsLog;
+  assert.deepEqual(Object.keys(m).sort(), ['', 'acme/a', 'acme/b', `${me}/${me}`]);
+  for (const p of Object.keys(m)) assert.deepEqual(Object.keys(m[p]).sort(), ['', '30', '7', '90'], p);
+  assert.deepEqual([m[''][''].total.tokens, m['acme/b'][''].total.tokens, m[`${me}/${me}`][''].total.tokens, m[''][''].outcomes.merged], [11_800, 500, 300, 1]);
+  assert.deepEqual(Object.keys(m[''][''].byProject).sort(), ['acme/a', 'acme/b', `${me}/${me}`]);
+  assert.ok(m[''][''].byDay['2026-11-21'] && !('byDay' in m['']['30']) && !('byProject' in m['acme/a']['']), 'byDay on all-time entries only, byProject on all-projects only');
+  assert.ok(!('input' in m['acme/b'][''].total) && 'costUsd' in m['acme/b'][''].total, 'zero counts dropped, costUsd kept');
+  const keys = new Set(), walk = (x) => { if (x && typeof x === 'object') for (const [k, v] of Object.entries(x)) { keys.add(k); walk(v); } };
+  walk(Object.values(m).flatMap((p) => Object.values(p)).map(({ byDay, byProject, byStage, byAxis, byModel, byHarness, ...x }) => x));
+  for (const k of ['run', 'runs', 'id', 'sessionId', 'session', 'cwd', 'by', 'host', 'author']) assert.ok(!keys.has(k), `no ${k} in the sheet`);
+  const sheet = JSON.stringify(m);
+  for (const x of [SID, 'secret', CWD, os.homedir(), os.hostname()]) assert.ok(!sheet.includes(x), x);
+  assert.ok(!new RegExp(`"by":|[/\\\\]${me}(?![\\w/.-])`).test(sheet.replaceAll(`${me}/${me}`, '')), 'no login outside the project id');
+  assert.equal(JSON.parse(page().match(/id="data">([^<]*)</)[1]).metricsLog, undefined, 'F render\'s file, after every record(): no sheet');
+  const ctx = { token: 'tok-metrics', port: 4242 };
+  assert.equal(JSON.parse(uiHandle({ method: 'GET', url: '/api/state', headers: { host: '127.0.0.1:4242', 'x-factory-token': ctx.token } }, ctx).body).metricsLog, undefined, 'F ui asks GET /api/metrics');
+  // A range's days are the all-time byDay from its since on, cut at the same UTC midnight.
+  const at = Date.parse('2026-11-22T12:00:00Z'), x = sheetMetrics(all, ['acme/a'], at, []);
+  assert.deepEqual([x['']['7'].total.tokens, x['']['']['total'].tokens], [11_800, 11_800]);
+  assert.equal(x['acme/a']['7'].total.tokens, 11_000); // since 2026-11-16
+  assert.deepEqual(Object.keys(x[''][''].byDay), ['2026-11-20', '2026-11-21', '2026-11-22']);
 });
