@@ -63,8 +63,9 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(sig, () => { sto
 export const childEnv = (env) => { const e = { ...env }; delete e.CLAUDE_CODE_HOST_SESSION_ID; delete e.CLAUDE_CODE_SESSION_ID; return e; };
 
 // h: the harness adapter; opts go to h.launch(); cwd and env are the host's, never the request's. resolve is for tests:
-// command()'s platform and file lookup (core/src/platform.ts).
-export function startSession(h, opts, { cwd, env: parent = process.env, label = '', modules = {}, resolve }) {
+// command()'s platform and file lookup (core/src/platform.ts). onPid(pid) is told the harness's pid once it runs: the child's,
+// the pty's, or the CLI the SDK spawns (through its spawnClaudeCodeProcess hook).
+export function startSession(h, opts, { cwd, env: parent = process.env, label = '', modules = {}, resolve, onPid = () => {} }) {
   const env = childEnv(parent); // headless, terminal and sdk alike
   if (typeof h.launch !== 'function' || !(h.modes || []).includes(opts.mode)) throw new Error(`${h.id} cannot launch in ${opts.mode} mode`);
   if (opts.mode === 'terminal' && opts.budget != null) throw new Error('a terminal session has no budget cap: run headless or sdk for a budget');
@@ -81,14 +82,15 @@ export function startSession(h, opts, { cwd, env: parent = process.env, label = 
   };
   const fail = (e) => { emit(s, { type: 'error', message: e.message }); done(null); };
   if (cwd && !fs.existsSync(cwd)) { fail(new Error(`the folder ${cwd} does not exist`)); return s; } // else ENOENT reads as "not installed"
-  if (opts.mode === 'terminal') { terminal(s, spec, { cwd, env, modules, resolve, done }).catch(fail); return s; }
-  if (opts.mode === 'sdk') { sdk(s, spec, { cwd, env, modules, done }).catch(fail); return s; }
+  if (opts.mode === 'terminal') { terminal(s, spec, { cwd, env, modules, resolve, done, onPid }).catch(fail); return s; }
+  if (opts.mode === 'sdk') { sdk(s, spec, { cwd, env, modules, done, onPid }).catch(fail); return s; }
   let c;
   try { c = resolveSpec(spec, env, resolve); } catch (e) { fail(e); return s; }
   // spec.stdin carries the prompt: as an argument its space and # would need cmd.exe quoting, which a .cmd shim can't get
   const child = spawn(c.file, c.args, { cwd, env: { ...env, ...c.env }, stdio: [spec.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsVerbatimArguments: !!c.windowsVerbatimArguments });
   if (spec.stdin !== undefined) child.stdin.on('error', () => { /* exited before reading it: reported by close */ }).end(spec.stdin);
   s.stop = (wait) => killTree(child, process.platform, undefined, process.kill, wait);
+  if (child.pid) onPid(child.pid);
   readline.createInterface({ input: child.stdout }).on('line', (line) => {
     let data;
     try { data = JSON.parse(line); } catch { return emit(s, { type: 'text', data: line }); }
@@ -117,7 +119,7 @@ const onPath = (file, env) => /[\\/]/.test(file) ? fs.existsSync(file)
 
 // An interactive harness in a pseudo-terminal (ConPTY on Windows). Output is raw terminal data for xterm.js; input and
 // resize come back through write() and resize(). Exit: 'stopped' after stop(), else the signal, else the exit code.
-async function terminal(s, spec, { cwd, env, modules, resolve, done }) {
+async function terminal(s, spec, { cwd, env, modules, resolve, done, onPid }) {
   let stopped = false;
   s.stop = () => { stopped = true; }; // a stop while node-pty loads
   const pty = await load(modules, 'node-pty', 'terminal mode');
@@ -131,20 +133,30 @@ async function terminal(s, spec, { cwd, env, modules, resolve, done }) {
   s.write = (data) => { if (!stopped) p.write(data); }; // a stopped pty may already be gone
   s.resize = (cols, rows) => { if (!stopped) p.resize(cols, rows); };
   s.stop = () => { stopped = true; killTree({ pid: p.pid, kill() {} }, process.platform, undefined, process.kill, true); try { p.kill(); } catch { /* gone */ } }; // the tree first, waited (taskkill /T on Windows walks it from the live root), then the pty
+  if (p.pid > 0) onPid(p.pid); // a stand-in pty may have none: the claim stays pending (pid 0)
   p.onData((data) => emit(s, { type: 'output', data }));
   p.onExit(({ exitCode, signal }) => done(stopped ? 'stopped' : signal || exitCode));
 }
 
 // The harness's SDK in this process (it runs its own CLI binary as a child, with the host's env). Each SDK message is one
 // event. Exit: 'stopped' after stop(); else 0 for a success result, 1 for an error subtype, is_error, or no result.
-async function sdk(s, spec, { cwd, env, modules, done }) {
+async function sdk(s, spec, { cwd, env, modules, done, onPid }) {
   const abortController = new AbortController(), aborted = () => abortController.signal.aborted;
   s.stop = () => abortController.abort(); // before the await, so a stop while the SDK loads is kept
   const mod = await load(modules, spec.module, 'sdk mode');
   if (aborted()) return done('stopped');
   let result;
   try {
-    for await (const m of mod.query({ prompt: spec.prompt, options: { ...spec.options, cwd, env, abortController } })) {
+    // The SDK's own spawn, made here so the CLI's pid reaches the claim (0.3.330 has no pid callback). stderr is read (else a
+    // full pipe stalls the CLI) and passed on to the options' stderr callback, as the SDK's default spawn does. With a custom
+    // spawn the SDK would put MCP servers' env and headers on the CLI's argv: 'initialize' sends them over stdin instead.
+    const spawnClaudeCodeProcess = (o) => {
+      const child = spawn(o.command, o.args, { cwd: o.cwd, env: o.env, signal: o.signal, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      child.stderr.on('data', (d) => spec.options?.stderr?.(String(d)));
+      if (child.pid) onPid(child.pid);
+      return child;
+    };
+    for await (const m of mod.query({ prompt: spec.prompt, options: { ...spec.options, cwd, env, abortController, spawnClaudeCodeProcess, mcpServersDelivery: 'initialize' } })) {
       if (m?.type === 'result') result = m;
       emit(s, { type: 'event', data: m });
     }
