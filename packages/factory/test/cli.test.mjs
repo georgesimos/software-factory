@@ -823,9 +823,9 @@ export function worktreeTest(cli) {
   fs.writeFileSync(path.join(w.path, 'wip.txt'), 'x');
   assert.throws(() => cli(['checks', R], '', env2), /uncommitted changes/);
   fs.rmSync(path.join(w.path, 'wip.txt'));
-  cli(['rules', 'set', 'acme/wt', 'checks.commands', '["test -f missing.txt","true"]', '--reason', 'Actions billing'], '', env2);
+  cli(['rules', 'set', 'acme/wt', 'checks.commands', '["test -f missing.txt","true","kill -KILL $$"]', '--reason', 'Actions billing'], '', env2);
   const c2 = JSON.parse(cli(['checks', R], '', env2));
-  assert.deepEqual([c2.state, c2.commands.map((c) => c.exit)], ['fail', [1, 0]]);
+  assert.deepEqual([c2.state, c2.commands.map((c) => c.exit)], ['fail', [1, 0, 'SIGKILL']]); // a kill is not a timeout
   assert.equal(derive(read())[R].localChecks.state, 'fail');
   cli(['rules', 'unset', 'acme/wt', 'checks.commands'], '', env2);
   cli(['event', R, 'build', 'started'], '', env2);

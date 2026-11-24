@@ -123,16 +123,16 @@ export function demo() {
   // A billing rule: GitHub Actions can't run for acme/shop, so CI is skipped and F's own local checks stand in for it.
   // Only acme/shop's entry in skills.json is touched, in case FACTORY_DIR points at a real config.
   const cfg = readSkills(), rule = (value: unknown, reason: string, until?: string): Rule => ({ value, reason, setBy: 'acme', setAt: new Date(t).toISOString(), ...(until && { until }) });
-  cfg['acme/shop'] = { ...cfg['acme/shop'], rules: {
+  const shopRules: Record<string, Rule> = {
     ci: rule('skip', 'GitHub Actions billing is failing', dayOf(Date.now() + 30 * 864e5)),
-    'checks.commands': rule(['pnpm test', 'pnpm lint'], 'stands in for CI while Actions is off'),
+    'checks.commands': rule(['pnpm test', 'pnpm lint'], 'stands in for CI while Actions is off', dayOf(Date.now() + 2 * 864e5)), // ending soon: shows the warning
     diffCap: rule(150, 'release freeze', dayOf(Date.now() - 864e5)), // expired: shows the warning
-  } };
-  cfg['acme/shop'].rules['checks.commands'].until = dayOf(Date.now() + 2 * 864e5); // ending soon: shows the warning
+  };
+  cfg['acme/shop'] = { ...cfg['acme/shop'], rules: shopRules };
   cfg['acme/shop'].guide = { build: 'use pnpm, never npm' };
   writeSkills(cfg);
   ev('acme/shop', 'rules', 'set', { key: 'ci', value: 'advisory', reason: 'Actions runners are flaky', setBy: 'acme' });
-  for (const [key, { setAt: _s, ...x }] of Object.entries(cfg['acme/shop'].rules as Record<string, Rule>)) ev('acme/shop', 'rules', 'set', { key, ...x });
+  for (const [key, { setAt: _s, ...x }] of Object.entries(shopRules)) ev('acme/shop', 'rules', 'set', { key, ...x });
   ev('acme/shop', 'rules', 'set', { key: 'guide.build', value: 'use pnpm, never npm', setBy: 'acme' });
   R = 'acme/shop#51';
   const sha = '5e1f0c2a9d3b', files51 = ['components/CartTotal.tsx', 'components/CartTotal.test.tsx'], axes51 = axesFor(files51);
