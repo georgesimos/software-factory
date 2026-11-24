@@ -6,5 +6,12 @@
   "description": "The F command switch and usage text. packages/factory/factory.mjs is its entry. Run by Node directly (type stripping).",
   "type": "module",
   "engines": { "node": ">=24.12" },
-  "exports": { ".": "./src/main.ts" }
+  "exports": { ".": "./src/main.ts" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "~5.9.3"
+  }
 }
