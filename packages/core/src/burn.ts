@@ -1,4 +1,3 @@
-// @ts-nocheck
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,19 +5,25 @@ import { addBurn, burnOf, finishBurn } from './derive.ts';
 import { costOf } from './constants.ts';
 import { io, readArchive, stateDir } from './log.ts';
 import { ls } from './workspace.ts';
-import type { FactoryEvent, Measured, Run, Slot, Transcript, TranscriptRow } from './types.ts';
+import type { Burn, FactoryEvent, Measured, Run, Slot, Transcript, TranscriptRow } from './types.ts';
 
 // ---------- measured burn: Claude Code transcripts of the sessions that recorded events ----------
 export const projectsRoot = () => io.projects || path.join(os.homedir(), '.claude', 'projects');
 export const usageFile = () => path.join(stateDir(), 'usage.json');
 export const SUB_AXIS = /^\s*(code|security|ux|ui|seo|docs|[a-z][a-z0-9-]{0,30}(?=\s+review\b))\b/i; // built-ins, or any extra axis in "<axis> review RUN"
+// usage.json: per transcript file what was scanned, per session its transcripts.
+type Scan = { size: number; offset: number; rows: TranscriptRow[]; axis?: string };
+type UsageCache = { files?: Record<string, Scan | undefined>; sessions?: Record<string, { main?: string; files: string[] }> };
+// A message's usage in a transcript line (untrusted JSON: every field may be missing).
+type UsageJson = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number;
+  cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number } };
 // Only token counts, message ids, times and model ids are kept, never message text. Re-reads only bytes appended since last time.
-export function scanFile(file, prev) {
+export function scanFile(file: string, prev: Scan | undefined): Scan | undefined {
   let st;
   try { st = fs.statSync(file); } catch { return prev; } // transcript gone: keep what was measured
   if (prev && st.size === prev.size) return prev;
   const from = prev && st.size > prev.offset ? prev.offset : 0;
-  const rows = from ? prev.rows : [];
+  const rows: TranscriptRow[] = prev && from ? prev.rows : []; // from > 0 only with prev
   const fd = fs.openSync(file, 'r');
   const buf = Buffer.alloc(st.size - from);
   fs.readSync(fd, buf, 0, buf.length, from);
@@ -30,34 +35,34 @@ export function scanFile(file, prev) {
     try { d = JSON.parse(line); } catch { continue; }
     const m = d.type === 'assistant' ? d.message : null, u = m?.usage;
     if (!u || typeof m.id !== 'string') continue;
-    const row = (id, model, x) => {
+    const row = (id: string, model: unknown, x: UsageJson) => {
       const w = x.cache_creation || {};
       const w5 = w.ephemeral_5m_input_tokens ?? (x.cache_creation_input_tokens || 0), w1 = w.ephemeral_1h_input_tokens || 0;
-      const t = [x.input_tokens || 0, x.output_tokens || 0, x.cache_read_input_tokens || 0, w5, w1];
+      const t: [number, number, number, number, number] = [x.input_tokens || 0, x.output_tokens || 0, x.cache_read_input_tokens || 0, w5, w1];
       if (t.some((n) => n > 0)) rows.push([d.timestamp, id, String(model || '?').slice(0, 64), ...t, u.speed === 'fast' ? 1 : 0]);
     };
     row(m.id, m.model, u);
     // Advisor-style calls bill another model inside the same message; top-level usage covers only the main model.
-    (Array.isArray(u.iterations) ? u.iterations : []).forEach((x, i) => { if (x?.type !== 'message' && x?.model) row(`${m.id}:${i}`, x.model, x); });
+    (Array.isArray(u.iterations) ? u.iterations : []).forEach((x: (UsageJson & { type?: string; model?: string }) | null, i: number) => { if (x?.type !== 'message' && x?.model) row(`${m.id}:${i}`, x.model, x); });
   }
   let axis = prev?.axis;
   if (axis === undefined && /[\\/]subagents[\\/]/.test(file)) { // the Agent description names the axis (SKILL.md fixes the wording); only the label is kept
     try {
       const desc = String(JSON.parse(fs.readFileSync(file.replace(/\.jsonl$/, '.meta.json'), 'utf8')).description || '');
-      axis = /^\s*verif/i.test(desc) ? 'verifier' : SUB_AXIS.exec(desc)?.[1].toLowerCase() || 'other';
+      axis = /^\s*verif/i.test(desc) ? 'verifier' : SUB_AXIS.exec(desc)?.[1]!.toLowerCase() || 'other';
     } catch { axis = 'other'; }
   }
   return { size: st.size, offset: from + end, rows, ...(axis ? { axis } : {}) };
 }
 // sessionId -> [{rows, axis, sub}] for every main and subagent transcript of the sessions that wrote events.
 export function measure(events: FactoryEvent[]): Measured {
-  const ids = [...new Set(events.map((e) => e.sessionId).filter((s) => /^[\w-]+$/.test(s || '')))];
+  const ids = [...new Set(events.map((e) => e.sessionId).filter((s): s is string => /^[\w-]+$/.test(s || '')))];
   if (!ids.length) return {};
-  let cache = {};
+  let cache: UsageCache = {};
   try { cache = JSON.parse(fs.readFileSync(usageFile(), 'utf8')); } catch { /* first measure */ }
   const files = (cache.files ||= {}), sessions = (cache.sessions ||= {});
   const before = JSON.stringify(cache);
-  const root = projectsRoot(), out = {};
+  const root = projectsRoot(), out: Measured = {};
   for (const sid of ids) {
     const s = (sessions[sid] ||= { files: [] });
     if (!s.main || !fs.existsSync(s.main)) { // transcripts sit under the folder of the session's start cwd, which can differ from the event's cwd
@@ -68,7 +73,7 @@ export function measure(events: FactoryEvent[]): Measured {
       const subs = path.join(path.dirname(s.main), sid, 'subagents');
       s.files = [...new Set([s.main, ...s.files, ...ls(subs).filter((f) => f.endsWith('.jsonl')).map((f) => path.join(subs, f))])];
     }
-    out[sid] = s.files.map((f) => [f, (files[f] = scanFile(f, files[f]))]).filter(([, x]) => x).map(([f, x]) => ({ rows: x.rows, axis: x.axis, sub: f !== s.main }));
+    out[sid] = s.files.map((f) => [f, (files[f] = scanFile(f, files[f]))] as const).filter((p): p is readonly [string, Scan] => !!p[1]).map(([f, x]) => ({ rows: x.rows, axis: x.axis, sub: f !== s.main }));
   }
   const text = JSON.stringify(cache);
   if (text !== before) { fs.mkdirSync(stateDir(), { recursive: true }); fs.writeFileSync(usageFile(), text); }
@@ -81,16 +86,16 @@ export function measure(events: FactoryEvent[]): Measured {
 // Calls onRow(slot, row, file) for each transcript message that falls to a run the factory drove; slot: {run, stage, iteration, harness}.
 // archived: the archive summaries, whose session-event stubs still close windows.
 export function attribute(runs: Record<string, Run>, events: FactoryEvent[], by: Measured, onRow: (at: Slot, row: TranscriptRow, f: Transcript) => void, archived: Run[] = readArchive()): void {
-  const iter = {}, slots = {};
+  const iter: Record<string, number> = {}, slots: Record<string, Slot[]> = {};
   // Archived runs keep stubs of their session events so their windows still close; their messages are then dropped (not in runs).
-  const stubs = archived.flatMap((a) => (a.sessionEvents || []).map((e) => ({ ...e, run: a.id })));
+  const stubs: FactoryEvent[] = archived.flatMap((a) => (a.sessionEvents || []).map((e) => ({ ...e, run: a.id })));
   for (const e of [...events, ...stubs]) {
     if (e.stage === 'build' && e.status === 'started') iter[e.run] = (iter[e.run] || 0) + 1;
     if (e.sessionId && by[e.sessionId]) (slots[e.sessionId] ||= []).push({ t: Date.parse(e.ts), run: e.run, stage: e.stage, status: e.status, iteration: iter[e.run] || 0, harness: e.harness });
   }
-  const slot = (list, t) => {
+  const slot = (list: Slot[], t: number): Slot | null => {
     let lo = 0, hi = list.length;
-    while (lo < hi) { const mid = (lo + hi) >> 1; if (list[mid].t <= t) lo = mid + 1; else hi = mid; }
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (list[mid]!.t <= t) lo = mid + 1; else hi = mid; }
     const prev = list[lo - 1], next = list[lo];
     return !prev || !next ? null : prev.status === 'started' ? prev : next;
   };
@@ -102,7 +107,7 @@ export function attribute(runs: Record<string, Run>, events: FactoryEvent[], by:
         if (seen.has(row[1])) continue; // streaming writes one line per content block, all with the same usage
         seen.add(row[1]);
         const at = f.sub ? first : slot(list, Date.parse(row[0]));
-        if (!at || !runs[at.run] || runs[at.run].imported) continue; // the factory did not drive an imported run: sync's events only close windows
+        if (!at || !runs[at.run] || runs[at.run]!.imported) continue; // the factory did not drive an imported run: sync's events only close windows
         onRow(at, row, f);
       }
     }
@@ -110,15 +115,15 @@ export function attribute(runs: Record<string, Run>, events: FactoryEvent[], by:
 }
 export function withMeasured(runs: Record<string, Run>, events: FactoryEvent[], by: Measured = measure(events), archived?: Run[]): Record<string, Run> { // archived: undefined reads the archive, only once there is something to attribute
   if (!Object.keys(by).length) return runs;
-  const got = {};
+  const got: Record<string, Burn> = {};
   attribute(runs, events, by, (at, [, , model, ...rest], f) => {
     const t = rest.slice(0, 5);
     addBurn((got[at.run] ||= burnOf()), { stage: at.stage, iteration: at.iteration, axis: f.sub ? f.axis : null }, t.reduce((s, n) => s + n, 0), costOf(model, t, rest[5]), t[2], model, f.sub);
   }, archived);
   for (const [id, b] of Object.entries(got)) {
-    const reported = runs[id].burn;
+    const reported = runs[id]!.burn; // got holds only runs' ids: attribute() skips the rest
     finishBurn(b);
-    runs[id].burn = { ...b, measured: true, byAxis: Object.keys(b.byAxis).length ? b.byAxis : reported?.byAxis || {}, reported: reported?.total || null };
+    runs[id]!.burn = { ...b, measured: true, byAxis: Object.keys(b.byAxis).length ? b.byAxis : reported?.byAxis || {}, reported: reported?.total || null };
   }
   return runs;
 }

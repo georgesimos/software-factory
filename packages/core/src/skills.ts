@@ -259,7 +259,7 @@ export function catalog(repos = []) {
   return { global: globalCatalog, projects: Object.fromEntries(repos.map((r) => [r, scanProject(r)])) };
 }
 // Everything the Skills sheet needs: raw config (to tell "set here" from "inherited"), resolved plans and the catalog.
-export function skillsData(repos = []) {
+export function skillsData(repos: string[] = []) {
   try {
     const cfg = readSkills();
     const scopes = [...new Set([...Object.keys(projects()), ...repos, ...Object.keys(cfg)])].filter((s) => s !== 'default').sort();
