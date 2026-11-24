@@ -32,7 +32,7 @@ export const RULES: Record<string, [check: (v: unknown) => boolean, want: string
 };
 export const RULE_FIELDS = ['value', 'reason', 'setBy', 'setAt', 'until'];
 export const LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
-export const isDay = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s)) && new Date(s).toISOString().startsWith(s); // a string: ["2026-11-01"] read as one
+export const isDay = (s: unknown): boolean => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s)) && new Date(s).toISOString().startsWith(s); // a string: ["2026-11-01"] read as one
 export const dayOf = (now = Date.now()) => new Date(now).toISOString().slice(0, 10); // UTC; a rule applies through its whole `until` day
 export const isGuideKey = (k: string) => k === '*' || isStepKey(k) || /^review\.[a-z][a-z0-9-]{0,30}$/.test(k); // review.<extra axis> too
 export function checkRules(v: unknown, at: string): void {
