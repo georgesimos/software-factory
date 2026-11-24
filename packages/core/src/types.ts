@@ -14,7 +14,7 @@ export interface Runner {
 export interface Usage { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }
 export interface LocalChecks { sha?: string; state?: string; commands?: { cmd: string; exit: number | string; ms?: number }[] } // exit: a code, 'timeout' (killed after 30 min), or the signal that killed the command
 export interface Deploy { connector?: string; kind?: string; env?: string; state?: string; status?: string; url?: string; sha?: string | null; at?: string; detail?: string; creator?: string; ts?: string }
-export interface Note { id?: string; step?: string; text?: string; by?: string; ts?: string; state: 'pending' | 'applied'; appliedTo?: string[]; appliedAt?: string; claim?: unknown }
+export interface Note { id?: string; step?: string; text?: string; by?: string; via?: string; ts?: string; state: 'pending' | 'applied'; appliedTo?: string[]; appliedAt?: string; claim?: unknown }
 export interface Session { agent?: string; id: string; cwd?: string; last?: string; hostId?: string } // hostId: the Claude desktop app's session (local_<uuid>)
 
 /** One line of events.jsonl. */
@@ -26,7 +26,7 @@ export interface FactoryEvent {
   costUsd?: number; tokens?: number; usage?: Usage; model?: string;
   axis?: string; axes?: string[]; role?: string; sha?: string | null; findings?: Finding[]; runner?: Runner; localChecks?: LocalChecks;
   summary?: string; questions?: string[]; // intake passed / needs-info
-  next?: string; reasons?: string[]; action?: string; by?: string; mergedBy?: string | null; reason?: string;
+  next?: string; reasons?: string[]; action?: string; by?: string; via?: string; mergedBy?: string | null; reason?: string; // via: as Rule.via, on rules and note events
   connector?: string; env?: string; kind?: string; state?: string; at?: string; detail?: string; creator?: string; // ship
   id?: string; step?: string; text?: string; notes?: string[]; steps?: string[]; claim?: unknown; // note
   [k: string]: unknown;
@@ -46,7 +46,8 @@ export interface Burn {
   reported?: BurnCell | null;
 }
 /** A rule in effect (rules.ts rules().policy); value is whatever `F rules set` stored. */
-export interface Rule { value?: unknown; reason?: string; setBy?: string; setAt?: string; until?: string; scope?: string; key?: string } // scope, key: in rules()' policy and expired lists
+/** via: where setBy came from. Absent (every rule before #52's local mode) or 'github': a verified GitHub login; 'local': the OS user, unverified. */
+export interface Rule { value?: unknown; reason?: string; setBy?: string; via?: string; setAt?: string; until?: string; scope?: string; key?: string } // scope, key: in rules()' policy and expired lists
 export interface Loopback { iteration: number; route?: string; reasons?: string[]; ts: string }
 
 export type Outcome = 'in-progress' | 'rejected' | 'needs-info' | 'merged' | 'escalated' | 'closed' | 'awaiting-approval' | 'split';

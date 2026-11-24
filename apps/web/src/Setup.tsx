@@ -1,6 +1,6 @@
 import { Badge, Button, Checkbox, Dialog, Dot, IngestProgress, Input, ProjectPicker, Select, shq, type DiscoveredRepo, type IngestItem } from '@software-factory/design-system';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { post, type FactoryData, type Rule, type SkillsData, type StepRunner } from './data.ts';
+import { post, setByText, type FactoryData, type Rule, type SkillsData, type StepRunner } from './data.ts';
 import { Picker, copy, type Pick } from './Skills.tsx';
 import { F_CMD, kindOf, runnerName, skillCommand, stepLabel } from './skillsModel.ts';
 import { store } from './store.ts';
@@ -309,7 +309,7 @@ function Rules({ data, ob, live, F, scope, scopePicker, write, fail, setStatus, 
         {cmds.map((c) => <Cmd key={c} cmd={c} />)}
       </div>
       {Object.keys(pol).length ? <><h4>Rules in force</h4><ul className="web-ob-list">{Object.entries(pol).map(([k, x]) =>
-        <li key={k}><span className="web-sk-name">{k} = {JSON.stringify(x.value)}</span><span className="web-sk-from" data-here={x.scope === scope || undefined}>{x.scope === 'default' ? 'global' : x.scope} · {x.setBy}: {x.reason}</span></li>)}</ul></> : null}
+        <li key={k}><span className="web-sk-name">{k} = {JSON.stringify(x.value)}</span><span className="web-sk-from" data-here={x.scope === scope || undefined}>{x.scope === 'default' ? 'global' : x.scope} · {setByText(x)}: {x.reason}</span></li>)}</ul></> : null}
     </>
   );
 }

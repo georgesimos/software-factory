@@ -1,7 +1,9 @@
 import { repoOf, type Burn, type BurnCell, type Deploy, type Metrics, type Run } from '@software-factory/design-system';
 
-export interface Rule { key?: string; value?: unknown; scope?: string; setBy?: string; setAt?: string; reason?: string; until?: string }
-export interface RuleChange { ts?: string; run?: string; status?: string; key?: string; value?: unknown; setBy?: string; reason?: string; until?: string }
+export interface Rule { key?: string; value?: unknown; scope?: string; setBy?: string; via?: string; setAt?: string; reason?: string; until?: string }
+export interface RuleChange { ts?: string; run?: string; status?: string; key?: string; value?: unknown; setBy?: string; via?: string; reason?: string; until?: string }
+/** Who set a rule: a GitHub login, or the OS user marked as unverified (core's byText). */
+export const setByText = (x: { setBy?: string; via?: string }) => `${x.setBy ?? '?'}${x.via === 'local' ? ' (local, unverified)' : ''}`;
 export interface IdeaIssue { key?: string; title?: string; state?: string; run?: string; url?: string; dependsOn?: string[] }
 export interface Idea {
   repo: string; phase?: string; stack?: string; visibility?: string; dryRun?: boolean; idea?: string; plan?: { vision?: string };
