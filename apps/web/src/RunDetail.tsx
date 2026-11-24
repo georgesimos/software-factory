@@ -1,8 +1,8 @@
 import {
-  ArrowUpRightIcon, Badge, Button, Dot, MetricStat, OutcomePill, ReviewMatrix, STAGES, SessionList, SourceChip, StageTrack, Timeline,
+  ArrowUpRightIcon, Badge, Button, Dot, MetricStat, OutcomePill, ReviewMatrix, STAGES, SessionList, SourceChip, type AgentSession, StageTrack, Timeline,
   burnText, costText, formatAgo, isDone, formatClock, formatDuration, formatMoney, formatTokens, outcomeOf, previewOf, repoOf, shortId, type Run,
 } from '@software-factory/design-system';
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { post } from './data.ts';
 import { Cmd } from './Setup.tsx';
 
@@ -196,10 +196,46 @@ function Notes({ run: r, token }: { run: Run; token?: string }) {
   );
 }
 
+/**
+ * Under F ui: opens a session in the Claude desktop app (POST /api/sessions/open, F open). With no desktop link the server
+ * answers with the terminal resume command, shown to copy: nothing here launches a terminal.
+ */
+function OpenSession({ s, token }: { s: AgentSession; token: string }) {
+  const [st, setSt] = useState<{ text: string; bad?: boolean; busy?: boolean; cmd?: string }>();
+  const go = async () => {
+    setSt({ text: '', busy: true });
+    try {
+      const x = await post<{ opened?: unknown; resume?: { command?: string; cwd?: string } }>('/sessions/open', { harness: s.agent, id: s.id }, token);
+      const cmd = x.resume?.command;
+      setSt(cmd ? { text: `No desktop link for this session. Resume it in a terminal${x.resume?.cwd ? ` in ${x.resume.cwd}` : ''}:`, cmd } : { text: 'Opened in the Claude app.' });
+    } catch (e) { setSt({ text: (e as Error).message, bad: true }); }
+  };
+  return (
+    <div className="web-start web-sopen">
+      <Button size="sm" variant="ghost" disabled={st?.busy} onClick={() => void go()}>{st?.busy ? 'Opening…' : 'Open in Claude'}</Button>
+      <p className="web-sk-status" role="status" data-bad={st?.bad || undefined}>{st?.busy ? '' : st?.text}</p>
+      {st?.cmd ? <Cmd cmd={st.cmd} /> : null}
+    </div>
+  );
+}
+// The harness session ids this app is running now (GET /api/sessions): like Live, no Open for those.
+function useRunning(token: string | undefined, key: string) {
+  const [ids, setIds] = useState<string[]>([]);
+  useEffect(() => {
+    if (!token) return;
+    let off = false;
+    fetch('/api/sessions', { headers: { 'x-factory-token': token } }).then((x) => (x.ok ? x.json() : null)).then((x: { sessions?: { state?: string; harnessSession?: string }[] } | null) => {
+      if (!off) setIds((x?.sessions ?? []).filter((y) => y.state === 'running' && y.harnessSession).map((y) => String(y.harnessSession)));
+    }, () => {}); // unknown: show the buttons; the server still refuses a resume while a claim is live
+    return () => { off = true; };
+  }, [token, key]);
+  return ids;
+}
+
 export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, href = (id) => '#' + encodeURIComponent(id), resume, token }:
   { run: Run; cap: number; costCap: number; now?: number; find?: (id: string) => Run | undefined; href?: (id: string) => string; resume?: Resume; token?: string }) {
   const d = formatDuration(r.durationMs ?? Date.parse(r.updated ?? '') - Date.parse(r.started ?? ''));
-  const { costUsd, tokens } = spent(r);
+  const { costUsd, tokens } = spent(r), running = useRunning(token, `${r.id} ${r.updated ?? ''}`);
   const src = r.burn ? (r.burn.measured ? 'measured' : 'reported') : '';
   const repo = repoOf(r.id), open = openInClaude(r);
   const closes = /^[\w.-]+\/[\w.-]+$/.test(repo) ? (r.issues ?? []).filter((n) => Number.isInteger(n) && n > 0) : [];
@@ -243,7 +279,7 @@ export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, h
         <Section title="Sessions">
           {startable(r) ? <Start run={r} resume={resume} live={!!token} /> : null}
           {open ? <p className="web-links"><a href={open} title={open.startsWith('claude://') ? 'Opens its session in the Claude desktop app' : 'Opens a new Claude Code terminal here (prompt pre-filled, not sent). Requires the claude-cli handler: send one message in any interactive claude session first.'}>Open in Claude</a></p> : null}
-          {r.sessions?.length ? <SessionList sessions={r.sessions} now={now} /> : null}
+          {r.sessions?.length ? <SessionList sessions={r.sessions} now={now} action={token ? (x) => (running.includes(x.id) ? null : <OpenSession key={x.id} s={x} token={token} />) : undefined} /> : null}
         </Section>
       ) : null}
       <Section title="Timeline"><Timeline events={r.events ?? []} archived={r.archived} now={now} /></Section>

@@ -43,7 +43,8 @@ describe('Note for next step (#17)', () => {
 
   it('under F ui: POST /api/note with the token, then the note is listed as pending', async () => {
     const calls: [string, RequestInit][] = [];
-    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => {
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method !== 'POST') return new Response(JSON.stringify({ sessions: [] })); // the session list's GET /api/sessions
       calls.push([url, init]);
       return new Response(JSON.stringify({ id: 'n-2', step: 'next', text: 'ship behind a flag', by: 'ana' }), { status: 200 });
     }));

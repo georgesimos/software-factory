@@ -40,7 +40,10 @@ describe('run actions (#27)', () => {
     wide();
     history.replaceState(null, '', '/?t=tok#' + encodeURIComponent(hash));
     const calls: [string, RequestInit][] = [];
-    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => { calls.push([url, init]); return reply(); }));
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => { // writes only: the run detail also reads GET /api/sessions
+      if (init?.method !== 'POST') return new Response(JSON.stringify({ sessions: [] }));
+      calls.push([url, init]); return reply();
+    }));
     render(<App load={async () => ({ ...data, token: 'tok', resumable: ['acme/shop#45'] })} />);
     return calls;
   };

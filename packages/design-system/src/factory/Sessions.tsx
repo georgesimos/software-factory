@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Badge } from '../components/Badge.tsx';
 import { IconButton } from '../components/Button.tsx';
 import { Tooltip } from '../components/Tooltip.tsx';
@@ -50,10 +50,10 @@ export function SessionLink({ session: s, now }: { session: AgentSession; now?: 
 }
 
 /** A run's sessions, most recent first. */
-export function SessionList({ sessions, now }: { sessions: AgentSession[]; now?: number }) {
+export function SessionList({ sessions, now, action }: { sessions: AgentSession[]; now?: number; /** Under the row, e.g. the app's "Open in Claude". */ action?: (s: AgentSession) => ReactNode }) {
   if (!sessions.length) return <p className="sf-muted">No local sessions on this branch.</p>;
   const sorted = sessions.slice().sort((a, b) => (b.last ?? '').localeCompare(a.last ?? ''));
-  return <ul className="sf-sessions">{sorted.map((s) => <li key={`${s.agent}:${s.id}`}><SessionLink session={s} now={now} /></li>)}</ul>;
+  return <ul className="sf-sessions">{sorted.map((s) => <li key={`${s.agent}:${s.id}`}><SessionLink session={s} now={now} />{action?.(s)}</li>)}</ul>;
 }
 
 /** Compact "N sessions" chip for list rows and cards. */
