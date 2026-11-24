@@ -56,8 +56,15 @@ function pluginEntryOrThrow(home: string, env: NodeJS.ProcessEnv) {
 }
 export const shq = (x: unknown) => (/^[\w@%+=:,./~-]+$/.test(String(x)) ? String(x) : "'" + String(x).replace(/'/g, "'\\''") + "'");
 export const onboardFile = () => path.join(stateDir(), 'onboard.json');
-export const SHIP_KINDS = ['web', 'mobile', 'database'];
-export const readOnboard = () => { try { return JSON.parse(fs.readFileSync(onboardFile(), 'utf8')); } catch { return {}; } };
+export const SHIP_KINDS = ['web', 'mobile', 'desktop'];
+// A stored kind no longer offered ('database', which moves to a Connectors → Storage screen) is dropped on read: an old
+// onboard.json still loads, and the next write leaves it out.
+export function readOnboard() {
+  let o;
+  try { o = JSON.parse(fs.readFileSync(onboardFile(), 'utf8')); } catch { return {}; }
+  for (const v of Object.values(o ?? {})) if (Array.isArray((v as { ship?: unknown })?.ship)) (v as { ship: string[] }).ship = (v as { ship: string[] }).ship.filter((k) => SHIP_KINDS.includes(k));
+  return o;
+}
 // "What you ship" is only stored for now; packages/ship reads it once it exists.
 export function setShip(scope: string, kinds: unknown) {
   checkScope(scope);
@@ -101,7 +108,7 @@ export function onboardText(s: ReturnType<typeof onboardState>, platform = proce
   if (!s.repos.length && !Object.keys(s.projects).length) L.push(`   no GitHub clones found: ${F_CMD} discover <folder>`);
   L.push(`   ${s.hooks.create ? '·' : '-'} Create from an idea: ${s.hooks.create ? `/software-factory new: <idea>  (or ${F_CMD} new "<idea>" --dry-run)` : 'coming soon'}`);
   L.push('', '3. What you ship');
-  for (const sc of scopes) L.push(`   ${sc}: ${(s.ship[sc]?.ship || []).join(', ') || 'not chosen'}   ${F_CMD} onboard ship ${sc} web,mobile,database`);
+  for (const sc of scopes) L.push(`   ${sc}: ${(s.ship[sc]?.ship || []).join(', ') || 'not chosen'}   ${F_CMD} onboard ship ${sc} web,mobile,desktop`);
   const c = s.hooks.connectors as { label: string; kind: string }[] | { error?: string } | null; // the page also takes an { error } here
   L.push(`   connectors: ${Array.isArray(c) ? c.map((x) => `${x.label} (${x.kind})`).join(', ') || 'none yet' : c?.error ? 'error: ' + c.error : 'coming soon'}`);
   L.push('', '4. Workflow');

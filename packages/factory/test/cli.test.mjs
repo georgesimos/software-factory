@@ -223,7 +223,7 @@ export function onboardTest(cli) {
     assert.match(err('/onboard/sync', { repo: 'acme/app', path: 'Development/app' }), /absolute path of a local clone/);
     assert.match(err('/onboard/sync', { repo: 'acme/app', path: home }), /local clone/);
     assert.match(err('/onboard/sync', { repo: 'acme', path: clone }), /owner\/repo/);
-    assert.match(err('/onboard/ship', { scope: 'acme/app', ship: ['web', 'desktop'] }), /web\|mobile\|database/);
+    assert.match(err('/onboard/ship', { scope: 'acme/app', ship: ['web', 'database'] }), /web\|mobile\|desktop/); // database is no longer offered
     assert.match(err('/onboard/ship', { scope: '__proto__', ship: [] }), /scope/);
     assert.match(err('/onboard/rule', { scope: 'acme/app', key: 'ci', value: 'skip' }), /needs a reason/);
     assert.match(err('/onboard/rule', { scope: '__proto__', key: 'ci', value: 'skip', reason: 'x' }), /scope "__proto__"/);
@@ -233,13 +233,13 @@ export function onboardTest(cli) {
     // The wizard's happy path, then the same again.
     const run = () => {
       ok('/onboard/sync', { repo: 'acme/app', path: clone });
-      ok('/onboard/ship', { scope: 'acme/app', ship: ['database', 'web', 'web'] });
+      ok('/onboard/ship', { scope: 'acme/app', ship: ['desktop', 'web', 'web'] });
       ok('/onboard/rule', { scope: 'acme/app', key: 'ci', value: 'skip', reason: 'Actions billing is failing' });
       ok('/onboard/rule', { scope: 'acme/app', key: 'checks.commands', value: ['pnpm test'], reason: 'the CI stand-in' });
       return ok('/onboard/automerge', { repo: 'acme/app', on: false });
     };
     const first = run(), ship1 = fs.readFileSync(path.join(io.dir, 'onboard.json'), 'utf8'), runs1 = Object.keys(derive(read())).sort();
-    assert.deepEqual(first.ship['acme/app'].ship, ['web', 'database']);
+    assert.deepEqual(first.ship['acme/app'].ship, ['web', 'desktop']);
     assert.deepEqual([first.rules['acme/app'].policy.ci.value, first.rules['acme/app'].policy.ci.setBy, first.rules['acme/app'].policy['checks.commands'].value], ['skip', 'stub-user', ['pnpm test']]);
     assert.equal(first.projects['acme/app'].autoMerge, false);
     const again = run();
@@ -248,9 +248,15 @@ export function onboardTest(cli) {
     assert.equal(again.projects['acme/app'].autoMerge, false); // ...and keeps the project's settings
     assert.equal(again.rules['acme/app'].policy.ci.value, 'skip');
     const txt = cli(['onboard'], '', { FACTORY_DIR: io.dir, HOME: home, USERPROFILE: home, PATH: process.env.PATH });
-    for (const re of [/✓ acme\/app {2}/, /acme\/app: web, database/, /acme\/app: ci="skip", checks\.commands=\["pnpm test"\] {3}auto-merge off/, hooks().create ? /Create from an idea: .*factory\.mjs new/ : /Create from an idea: coming soon/]) assert.match(txt, re);
+    for (const re of [/✓ acme\/app {2}/, /acme\/app: web, desktop/, /acme\/app: ci="skip", checks\.commands=\["pnpm test"\] {3}auto-merge off/, hooks().create ? /Create from an idea: .*factory\.mjs new/ : /Create from an idea: coming soon/]) assert.match(txt, re);
     assert.deepEqual(JSON.parse(cli(['onboard', 'ship', 'default', 'mobile'], '', { FACTORY_DIR: io.dir })), { ship: ['mobile'] });
-    assert.throws(() => cli(['onboard', 'ship', 'default', 'tv'], '', { FACTORY_DIR: io.dir }), /web\|mobile\|database/);
+    assert.throws(() => cli(['onboard', 'ship', 'default', 'tv'], '', { FACTORY_DIR: io.dir }), /web\|mobile\|desktop/);
+    // An onboard.json from before desktop replaced database still loads: the stored database is dropped on read and on the next write.
+    fs.writeFileSync(path.join(io.dir, 'onboard.json'), JSON.stringify({ 'acme/app': { ship: ['web', 'database'] }, default: { ship: ['database'] } }));
+    assert.deepEqual(ok('/onboard', {}).ship, { 'acme/app': { ship: ['web'] }, default: { ship: [] } });
+    assert.match(cli(['onboard'], '', { FACTORY_DIR: io.dir, HOME: home, USERPROFILE: home, PATH: process.env.PATH }), /acme\/app: web {3}/);
+    ok('/onboard/ship', { scope: 'acme/app', ship: ['web', 'mobile'] });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(io.dir, 'onboard.json'), 'utf8')), { 'acme/app': { ship: ['web', 'mobile'] }, default: { ship: [] } });
     // The static page carries the wizard's cheap data, never the slow or private parts.
     const pg = page();
     assert.match(pg, /"harnesses":\[\{"id":"claude-code","label":"Claude Code","install":/);
