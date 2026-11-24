@@ -70,9 +70,15 @@ export function merge({ git }: Ctx, { path, id, sha, base }: { repo: string; pat
   const seen = tryGit(git, '-C', path, 'rev-parse', '--verify', '-q', `${ref}^{commit}`);
   if (!seen) return no(`no ${base} branch${origin ? ' on origin' : ''}`);
   let tree: string; // a merge with no checkout: the index and files of the user's clone are never touched
-  try { tree = git('-C', path, 'merge-tree', '--write-tree', '--no-messages', seen, sha).trim().split('\n')[0]!; } catch { return no(`${branch} conflicts with ${base}: rebase it on ${base}, then review it again`); }
-  const msg = `${git('-C', path, 'log', '-1', '--format=%s', sha).trim()} (${branch})\n\nSquash of ${sha}, merged by the software factory.`;
-  const mergeSha = git('-C', path, 'commit-tree', tree, '-p', seen, '-m', msg).trim(); // its parent is the base seen: a moved base makes it a non-fast-forward
+  try { tree = git('-C', path, 'merge-tree', '--write-tree', '--no-messages', seen, sha).trim().split('\n')[0]!; } catch (e) { // exit 1 is a conflict; anything else (an old git, a bad object) is not
+    // merge base into the branch, never rebase: a rebased branch's plain push would be refused as a non-fast-forward
+    return no((e as { status?: number })?.status === 1 ? `${branch} conflicts with ${base}: merge ${base} into it, then review it again` : `cannot merge ${branch}: ${firstLine(e)}`);
+  }
+  let mergeSha: string; // its parent is the base seen: a moved base makes it a non-fast-forward
+  try {
+    const msg = `${git('-C', path, 'log', '-1', '--format=%s', sha).trim()} (${branch})\n\nSquash of ${sha}, merged by the software factory.`;
+    mergeSha = git('-C', path, 'commit-tree', tree, '-p', seen, '-m', msg).trim();
+  } catch (e) { return no(`cannot commit the squash of ${branch}: ${firstLine(e)}`); }
   if (origin) {
     try { git('-C', path, 'push', '-q', 'origin', `${mergeSha}:refs/heads/${base}`); } catch (e) {
       return no(`push to ${base} refused (${firstLine(e)}): merge ${branch} at your host, then F close RUN --merged <sha>`);

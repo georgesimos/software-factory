@@ -442,7 +442,7 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
        legacy entry is GitHub. The PR also adds owner sanitising and the collision refusal.
      - Every `gh` path refuses a `git` project by name.
      - `discover()` accepts any remote or none. `sync` attaches a `git`-host project without calling `gh`; for those
-       projects it skips the change-request import until 4b.
+       projects it skips the change-request import until 5a (see 4b).
      - `sync.ts`'s session match uses the real origin URL.
      - The base branch comes from the clone for `git` projects (local refs when there is no remote), used by
        `worktree()`.

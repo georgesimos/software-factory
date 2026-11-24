@@ -90,6 +90,8 @@ export function closeMerged(run: string, sha: string) {
   try { full = git('-C', p.path, 'rev-parse', '--verify', '-q', `${sha}^{commit}`).trim(); } catch { /* below */ }
   try { if (!full) throw 0; git('-C', p.path, 'merge-base', '--is-ancestor', full, origin ? `refs/remotes/origin/${base}` : `refs/heads/${base}`); }
   catch { throw new Error(`${sha} is not on ${base}${origin ? ' at origin' : ''} in ${p.path}: give the merge commit on ${base}`); }
+  // shortcut: any commit on the base passes, even one older than the escalation (GitHub's sync checks mergedAt); git has no
+  // trustworthy merge time. Upgrade when the git host records its change requests' history (5a's sync for git projects).
   if (getRun(run).outcome !== 'escalated') throw new Error(`${run} is not escalated: only an escalated run is merged by hand`);
   record(run, 'approve', 'merged', { by: 'human', mergedBy: whoami('recording a merge').by, sha: full });
   return { run, merged: true, sha: full };

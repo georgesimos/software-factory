@@ -47,7 +47,11 @@ test('with a remote: the branch is pushed, the squash goes up by a plain push, a
   assert.deepEqual(host.changeRequest(ctx(), { repo: 'acme/r1', path: d, id: 'factory/issue-1@x', base: 'main' }), { state: 'merged', headSha: head, approval: null, branch: 'factory/issue-1', mergeSha: m.sha });
   // someone pushes to main between the factory's fetch and its push: the remote refuses the non-fast-forward
   const other = path.join(root, 'r1-other'); run('clone', '-q', bare, other);
-  const head2 = work(d, 2);
+  work(d, 2);
+  host.openChangeRequest(ctx(), { repo: 'acme/r1', path: d, branch: 'factory/issue-2', base: 'main', title: 't', body: 'b' });
+  g(d, 'checkout', '-q', 'factory/issue-2'); const head2 = commit(d, 'g2.txt', 'more\n'); g(d, 'checkout', '-q', 'main');
+  assert.deepEqual(host.openChangeRequest(ctx(), { repo: 'acme/r1', path: d, branch: 'factory/issue-2', base: 'main', title: 't', body: 'b' }), { id: `factory/issue-2@${head2.slice(0, 7)}` });
+  assert.equal(g(bare, 'rev-parse', 'refs/heads/factory/issue-2'), head2, 'opened again after more commits: a plain fast-forward push');
   let moved = '';
   const racing = ctx((a) => { if (a.includes('push') && a.some((x) => String(x).endsWith(':refs/heads/main')) && !moved) { g(other, 'pull', '-q'); moved = commit(other, 'z.txt', 'z\n'); g(other, 'push', '-q', 'origin', 'main'); } });
   const r = host.merge(racing, { repo: 'acme/r1', path: d, id: 'factory/issue-2', sha: head2, base: 'main' });
@@ -60,7 +64,7 @@ test('no remote: a clean checked-out base fast-forwards with its files; a dirty 
   const d = repo('l1'), head = work(d, 1), seen = g(d, 'rev-parse', 'main');
   const m = host.merge(ctx(), { repo: 'local/l1', path: d, id: 'factory/issue-1', sha: head, base: 'main' });
   assert.equal(m.merged, true);
-  assert.deepEqual([g(d, 'rev-parse', 'main'), g(d, 'rev-parse', 'main^'), fs.readFileSync(path.join(d, 'f1.txt'), 'utf8'), g(d, 'status', '--porcelain')], [m.sha, seen, '1\n', ''], 'the checked-out main and its files moved together');
+  assert.deepEqual([g(d, 'rev-parse', 'main'), g(d, 'rev-parse', 'main^'), fs.readFileSync(path.join(d, 'f1.txt'), 'utf8').trim(), g(d, 'status', '--porcelain')], [m.sha, seen, '1', ''], 'the checked-out main and its files moved together');
   // dirty: refused, nothing moves
   const head2 = work(d, 2); fs.writeFileSync(path.join(d, 'a.txt'), 'edited\n');
   const at = g(d, 'rev-parse', 'main'), dirty = host.merge(ctx(), { repo: 'local/l1', path: d, id: 'factory/issue-2', sha: head2, base: 'main' });
@@ -78,7 +82,15 @@ test('no remote: a clean checked-out base fast-forwards with its files; a dirty 
   g(d, 'checkout', '-q', 'main');
   const head3 = work(d, 3, 'a.txt'); commit(d, 'a.txt', 'main side\n');
   const c = host.merge(ctx(), { repo: 'local/l1', path: d, id: 'factory/issue-3', sha: head3, base: 'main' });
-  assert.deepEqual(c, { merged: false, detail: 'factory/issue-3 conflicts with main: rebase it on main, then review it again' });
+  assert.deepEqual(c, { merged: false, detail: 'factory/issue-3 conflicts with main: merge main into it, then review it again' });
+  const head4 = work(d, 4);
+  const broken = host.merge(ctx((a) => { if (a.includes('merge-tree')) throw Object.assign(new Error('fatal: bad object'), { status: 128 }); }), { repo: 'local/l1', path: d, id: 'factory/issue-4', sha: head4, base: 'main' });
+  assert.deepEqual(broken, { merged: false, detail: 'cannot merge factory/issue-4: fatal: bad object' }, 'only exit 1 is a conflict');
+  // the checked-out main moves between the squash and the fast-forward: --ff-only refuses, no merge commit is made
+  let moved2 = '';
+  const racingWt = ctx((a) => { if (a.includes('merge') && !moved2) moved2 = commit(d, 'w.txt', 'w\n'); });
+  const ff = host.merge(racingWt, { repo: 'local/l1', path: d, id: 'factory/issue-4', sha: head4, base: 'main' });
+  assert.deepEqual([ff.merged, /^main moved while merging/.test(ff.detail), g(d, 'rev-parse', 'main'), g(d, 'status', '--porcelain')], [false, true, moved2, '']);
 });
 
 test('F close RUN --merged <sha>: yours only, git projects only, the sha must be on the base, the run escalated', () => {
@@ -99,5 +111,10 @@ test('F close RUN --merged <sha>: yours only, git projects only, the sha must be
   assert.deepEqual(closeMerged(R, merged.slice(0, 10)), { run: R, merged: true, sha: merged });
   const r = derive(read())[R];
   assert.deepEqual([r.outcome, r.humanMerge.sha], ['merged', merged]);
-  assert.throws(() => execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), 'close', R], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FACTORY_DIR: io.dir } }), /usage: close <owner\/repo#N> --merged <sha>/);
+  const F = (...a) => execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FACTORY_DIR: io.dir } });
+  assert.throws(() => F('close', R), /usage: close <owner\/repo#N> --merged <sha>/);
+  const R2 = 'local/c1#5';
+  record(R2, 'intake', 'started', { title: 't' }); record(R2, 'approve', 'escalated', { reasons: ['x'] });
+  assert.deepEqual(JSON.parse(F('close', R2, '--merged', merged)), { run: R2, merged: true, sha: merged });
+  assert.equal(derive(read())[R2].humanMerge.sha, merged);
 });
