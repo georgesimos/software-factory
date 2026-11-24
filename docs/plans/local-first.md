@@ -498,6 +498,10 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
    - The one-line `F sync` notice.
    - The explicit head ≠ `reviewedSha` escalation.
    - No provider-approval wait on GitHub (D2).
+   - Required: one guard for every way auto-merge is turned on: `F automerge on`, `POST /onboard/automerge` with
+     `on: true`, and `F project set merge auto`. It refuses inside a harness session, and it refuses an unverified
+     local login on a verified-host project. The Setup toggle may still turn auto-merge off freely. (2b left `merge`
+     out because a missing key already means auto, so guarding the "on" direction then would close no gap.)
 8. **Docs only.** A plugin guide for hosts, trackers and CI: how to write Bitbucket, GitLab, Jenkins or Jira as one file
    each against the contract tests, and why the factory doesn't ship them (nobody can test them).
 
