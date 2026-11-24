@@ -66,6 +66,14 @@ describe('Sessions sheet (#58)', () => {
     expect(await screen.findByText('No desktop session for it: run codex resume cx-1 in a terminal in /w.')).toBeTruthy();
   });
 
+  it('in the desktop app (a terminal) a Codex row has Resume only: Resume… would just point to it', async () => {
+    serve(undefined, [{ ...exited, harness: 'codex', harnessSession: 'cx-1' }]);
+    sheet(true);
+    const [row] = await screen.findAllByRole('listitem');
+    expect(within(row!).getByRole('button', { name: 'Resume' })).toBeTruthy();
+    expect(within(row!).queryByRole('button', { name: 'Resume…' })).toBeNull();
+  });
+
   it('no Open in Claude while the session runs here: the server refuses a second harness on its run', async () => {
     serve(undefined, [{ ...running, harnessSession: 'run-1' }]);
     sheet();

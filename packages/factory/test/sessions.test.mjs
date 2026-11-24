@@ -14,7 +14,7 @@ import { derive } from '../../core/src/derive.ts';
 import { projects, saveProject, wtFile } from '../../core/src/workspace.ts';
 import { command, opener } from '../../core/src/platform.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
-import { MAX_BYTES, killTree, listSessions, resolveSpec, startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
+import { MAX_BYTES, codexBinary, killTree, listSessions, resolveSpec, startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
 import { artifact, budgetLeft, harnessReady, launchSession, openSession, page, resumable, resumeFor, serve, startRun, terminalSession, uiHandle } from '../../server/src/server.ts';
 import { procStart, readClaim, statTicks, takeClaim, unclaim } from '../../core/src/claim.ts';
 
@@ -828,7 +828,7 @@ test('codex launch(): exec --json with the prompt on stdin, the sandbox always r
   for (const budget of [0, -1, 0.004, NaN]) assert.throws(() => codex.launch({ mode: 'headless', prompt: 'x', budget }), /no run budget left/, String(budget));
   assert.throws(() => codex.launch({ mode: 'nope', prompt: 'x' }), /no nope mode/);
   assert.deepEqual(codex.launch({ mode: 'app-server', prompt: 'p', resume: 'th-1' }), { cmd: 'codex', args: ['app-server', '-c', 'sandbox_mode=read-only'], rpc: { prompt: 'p', thread: { threadId: 'th-1', sandbox: 'read-only', approvalPolicy: 'never' } } });
-  assert.deepEqual(Object.keys(codex.launch({ mode: 'sdk', prompt: 'p', write: true })).sort(), ['module', 'offRun', 'prompt', 'resume', 'thread']);
+  assert.deepEqual(Object.keys(codex.launch({ mode: 'sdk', prompt: 'p' })).sort(), ['module', 'offRun', 'prompt', 'resume', 'thread']);
   for (const mode of ['app-server', 'sdk']) {
     assert.throws(() => codex.launch({ mode }), /needs a prompt/);
     assert.throws(() => codex.launch({ mode, prompt: 'x', budget: 0 }), /no run budget left/);
@@ -836,6 +836,7 @@ test('codex launch(): exec --json with the prompt on stdin, the sandbox always r
   }
   assert.deepEqual(codex.modes, ['headless', 'terminal', 'app-server', 'sdk']);
   for (const mode of codex.modes) for (const write of [false, true]) for (const resume of [undefined, 'abc-1']) {
+    if (mode === 'sdk' && write) { assert.throws(() => codex.launch({ mode, prompt: 'x', resume, write }), /codex sdk mode is read-only: .*write as app-server or headless/); continue; }
     const spec = codex.launch({ mode, prompt: mode === 'terminal' ? undefined : 'x', resume, write });
     assert.doesNotMatch(JSON.stringify(spec), BYPASS, `${mode} write=${write} resume=${resume}`);
     if (mode !== 'terminal') assert.equal(policyOf(spec), write ? 'workspace-write' : 'read-only', mode);
@@ -911,6 +912,7 @@ test('codex app-server session: JSON-RPC to the stub (initialize, initialized, t
   const p = data.find((m) => m.method === 'stub/params').params;
   assert.deepEqual([p.argv, p.initialized, p.method, p.params, p.parentIds], [['app-server', '-c', 'sandbox_mode=read-only'], true, 'thread/start', { cwd: home, sandbox: 'read-only', approvalPolicy: 'never' }, []]);
   assert.equal(data.find((m) => m.method === 'item/completed').params.item.text, 'prompt: hello there');
+  assert.ok(!data.some((m) => /delta$/i.test(m.method ?? '')), 'streamed deltas are not kept as events');
   assert.ok(ev.some((e) => e.type === 'stderr' && /ERROR a log line/.test(e.data)));
   assert.deepEqual([s.harnessSession, ev.at(-1).code, pids.length], ['stub-thread', 0, 1]);
   for (let i = 0; i < 100; i++) { try { process.kill(pids[0], 0); } catch { break; } await new Promise((r) => setTimeout(r, 20)); }
@@ -921,7 +923,10 @@ test('codex app-server session: JSON-RPC to the stub (initialize, initialized, t
   assert.deepEqual([rp.argv, rp.method, rp.params], [['app-server', '-c', 'sandbox_mode=workspace-write'], 'thread/resume', { cwd: home, threadId: 'th-9', sandbox: 'workspace-write', approvalPolicy: 'never' }]);
   const ask = await finished(run({}, { ...stubEnv, STUB_ASK: '1' }));
   const reply = ask.map((e) => e.data).find((m) => m?.method === 'stub/reply').params;
-  assert.deepEqual([reply.id, 'result' in reply, typeof reply.error?.message], [99, false, 'string'], 'an approval request gets an error, never a result');
+  assert.deepEqual([reply.id, 'result' in reply, typeof reply.error?.message, ask.at(-1).code], [99, false, 'string', 1], 'an approval request gets an error, never a result, and the session is no success');
+  const linger = [], l = run({}, { ...stubEnv, STUB_LINGER: '1' }, (p) => linger.push(p)), t0 = Date.now(); // a server that ignores the EOF
+  assert.equal((await finished(l)).at(-1).code, 0, 'killed after its turn completed: still that turn\'s exit');
+  assert.ok(Date.now() - t0 >= 4_500, 'the EOF first, the kill only after 5 s');
   assert.equal((await finished(run({}, { ...stubEnv, STUB_FAIL: '1' }))).at(-1).code, 1);
   const hang = run({}, { ...stubEnv, STUB_HANG: '1' });
   await new Promise((r) => { const off = subscribe(hang, (e) => { if (e.data?.method === 'item/completed') { off(); r(); } }); });
@@ -941,13 +946,26 @@ test('codex sdk mode: never on a run (no pid for its claim); off a run, a thread
   assert.equal(sdk.rec.opts, undefined, 'nothing loaded or spawned');
   const s = go({});
   const ev = await finished(s);
-  assert.deepEqual([sdk.rec.how, sdk.rec.thread, sdk.rec.prompt, sdk.rec.opts.env.CLAUDE_CODE_SESSION_ID, path.basename(sdk.rec.opts.codexPathOverride)], ['start', { sandboxMode: 'read-only', approvalPolicy: 'never', workingDirectory: home }, 'hi', undefined, 'codex']);
+  assert.deepEqual([sdk.rec.how, sdk.rec.thread, sdk.rec.prompt, sdk.rec.opts.env.CLAUDE_CODE_SESSION_ID, sdk.rec.opts.codexPathOverride], ['start', { sandboxMode: 'read-only', approvalPolicy: 'never', workingDirectory: home }, 'hi', undefined, path.join(HERE, 'test', 'bin', 'codex')], 'the codex on the session\'s PATH, as an absolute path');
   assert.deepEqual([s.harnessSession, ev.filter((e) => e.type === 'event').length, ev.at(-1).code], ['th-1', 3, 0]);
-  await finished(go({ resume: 'th-1', write: true }));
-  assert.deepEqual([sdk.rec.how, sdk.rec.id, sdk.rec.thread.sandboxMode], ['resume', 'th-1', 'workspace-write']);
+  await finished(go({ resume: 'th-1' }));
+  assert.deepEqual([sdk.rec.how, sdk.rec.id, sdk.rec.thread.sandboxMode], ['resume', 'th-1', 'read-only']);
+  assert.throws(() => go({ write: true }), /read-only/, 'a stop could not end what a write session started');
+  const bare = fakeCodexSdk([]), nobin = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-nobin-'));
+  await finished(startSession(codex, { mode: 'sdk', prompt: 'hi' }, { cwd: home, env: { ...stubEnv, PATH: nobin }, label: 'x', modules: { '@openai/codex-sdk': bare } }));
+  assert.ok(!('codexPathOverride' in bare.rec.opts), 'no codex on PATH: the SDK runs its bundled one, never a bare name');
   assert.equal((await finished(go({}, fakeCodexSdk([{ type: 'thread.started', thread_id: 'th-2' }, { type: 'turn.failed', error: { message: 'x' } }])))).at(-1).code, 1);
   const slow = go({}, fakeCodexSdk(Array.from({ length: 50 }, () => ({ type: 'item.updated' }))));
   const end = finished(slow); setTimeout(() => slow.stop(), 20); assert.equal((await end).at(-1).code, 'stopped');
   const none = startSession(codex, { mode: 'sdk', prompt: 'hi' }, { cwd: home, env: stubEnv, label: 'x' });
   assert.match((await finished(none)).find((e) => e.type === 'error').message, /sdk mode needs @openai\/codex-sdk, which is not installed here/);
+});
+
+test('codexBinary(): an absolute codex from the session\'s PATH, else none (the SDK\'s own); on Windows a native .exe only, never a .cmd shim', () => {
+  assert.equal(codexBinary({ PATH: ['relative/bin', path.join(HERE, 'test', 'bin')].join(path.delimiter) }, { platform: 'darwin' }), path.join(HERE, 'test', 'bin', 'codex'));
+  assert.equal(codexBinary({ PATH: 'test/bin' }, { platform: 'linux' }), undefined, 'a relative PATH entry never counts');
+  const win = (files) => codexBinary({ PATH: 'C:\\bin', PATHEXT: '.EXE;.CMD' }, { platform: 'win32', isFile: (f) => files.includes(f) });
+  assert.equal(win(['C:\\bin\\codex.exe']), 'C:\\bin\\codex.exe');
+  assert.equal(win(['C:\\bin\\codex.cmd']), undefined, 'an npm shim: the SDK finds its own binary');
+  assert.equal(win([]), undefined, 'not installed: no throw, the SDK finds its own');
 });

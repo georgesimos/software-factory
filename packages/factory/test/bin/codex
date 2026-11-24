@@ -24,7 +24,9 @@ else if (/^exec --json -s (read-only|workspace-write) (resume -c sandbox_mode=\1
 else if (/^app-server -c sandbox_mode=(read-only|workspace-write)$/.test(a)) { // JSON-RPC over stdio: STUB_ASK sends an approval request first
   const say = (m) => process.stdout.write(JSON.stringify(m) + '\n');
   let initialized = false, finish;
+  if (process.env.STUB_LINGER) setInterval(() => {}, 1000); // ignores stdin's EOF: only a kill ends it
   const turn = (threadId, text) => {
+    say({ method: 'item/agentMessage/delta', params: { threadId, delta: 'prom' } });
     say({ method: 'item/completed', params: { threadId, item: { type: 'agentMessage', id: 'item_0', text: 'prompt: ' + text } } });
     process.stderr.write('2026-11-24T00:00:00Z ERROR a log line\n');
     if (!process.env.STUB_HANG) say({ method: 'turn/completed', params: { threadId, turn: { id: 'turn-1', status: process.env.STUB_FAIL ? 'failed' : 'completed', items: [], error: null } } });

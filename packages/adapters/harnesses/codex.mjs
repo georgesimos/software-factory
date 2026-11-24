@@ -61,7 +61,8 @@ const adapter = {
   // app-server: a long-lived `codex app-server` (experimental in 0.141.0; protocol from `codex app-server generate-ts`),
   // JSON-RPC over stdio: the sandbox as config on its argv and again on thread/start (or thread/resume), approvals never
   // asked (approvalPolicy never), the prompt in turn/start. sdk: the Codex TS SDK's thread, with the same sandbox and policy.
-  // It spawns its own `codex exec` with no spawn hook (0.141.0), so no pid can reach a claim: never on a run (offRun).
+  // It spawns its own `codex exec` with no spawn hook (0.141.0), so no pid can reach a claim: never on a run (offRun); and a
+  // stop aborts only its signal, leaving the commands codex started running, so it is read-only: build runs app-server or headless.
   modes: ['headless', 'terminal', 'app-server', 'sdk'],
   launch({ mode, prompt, resume, budget, write = false }) {
     if (resume !== undefined && !SESSION_ID.test(String(resume))) throw new Error('resume must be a codex session id');
@@ -71,6 +72,7 @@ const adapter = {
     }
     if (!['headless', 'app-server', 'sdk'].includes(mode)) throw new Error(`codex has no ${mode} mode`);
     if (!prompt) throw new Error(`a ${mode} launch needs a prompt`);
+    if (mode === 'sdk' && write) throw new Error('codex sdk mode is read-only: a stop can\'t end the commands codex starts (no pid or process group); write as app-server or headless');
     if (budget != null && !(Number(budget) >= 0.01)) throw new Error(`no run budget left (${budget}); escalate instead of running`); // claude-code's whole-cent rule
     // Never widened: one sandbox, read-only or (build) workspace-write; no other config, network or writable roots.
     const sandbox = write ? 'workspace-write' : 'read-only';

@@ -166,17 +166,19 @@ async function sdk(s, spec, { cwd, env, modules, done, onPid }) {
   done(aborted() ? 'stopped' : result?.subtype === 'success' && !result.is_error ? 0 : 1);
 }
 
-const THREAD = /^[\w-]{1,100}$/; // a thread id as harnessSession: what a resume can pass back as an argument
+const THREAD = /^\w[\w-]{0,99}$/; // a thread id as harnessSession: what a resume passes back as an argument, never a flag
 // A long-lived app-server (Codex): JSON-RPC over stdio, one message per line. initialize, then thread/start or thread/resume
-// with the spec's sandbox and approval policy, then one turn/start with the prompt; every message is an event, and the
-// server goes once the turn ends. A request from the server (an approval, user input, a tool call) is never granted: it
-// gets an error. Exit: 'stopped' after stop(); 0 when the turn completed; 1 when it failed, was interrupted, a request was
-// refused, or the server ended first.
+// with the spec's sandbox and approval policy, then one turn/start with the prompt; every message but a streamed delta is an
+// event (a long turn's deltas would push its start past MAX_EVENTS; item/completed carries the text). Once the turn ends,
+// stdin closes and the server exits on that EOF, writing its rollout out (what a later resume reads); killTree only if it
+// hasn't in 5 s. A request from the server (an approval, user input, a tool call) is never granted: it gets an error.
+// Exit: 'stopped' after stop(); 0 when the turn completed; 1 when it failed, was interrupted, a request was refused, or the
+// server ended first.
 function appServer(s, spec, { cwd, env, resolve, done, onPid }) {
   const c = resolveSpec(spec, env, resolve), { prompt, thread } = spec.rpc;
   const child = spawn(c.file, c.args, { cwd, env: { ...env, ...c.env }, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsVerbatimArguments: !!c.windowsVerbatimArguments });
   let exit, stopped = false;
-  const end = (code) => { exit ??= code; killTree(child); };
+  const end = (code) => { exit ??= code; child.stdin.end(); setTimeout(() => { if (child.exitCode === null && child.signalCode === null) killTree(child); }, 5_000).unref(); };
   s.stop = (wait) => { stopped = true; killTree(child, process.platform, undefined, process.kill, wait); };
   if (child.pid) onPid(child.pid);
   const send = (m) => { if (child.stdin.writable) child.stdin.write(JSON.stringify(m) + '\n'); };
@@ -184,8 +186,9 @@ function appServer(s, spec, { cwd, env, resolve, done, onPid }) {
   readline.createInterface({ input: child.stdout }).on('line', (line) => {
     let m;
     try { m = JSON.parse(line); } catch { return emit(s, { type: 'text', data: line }); }
+    if (m?.id === undefined && /delta$/i.test(m?.method ?? '')) return;
     emit(s, { type: 'event', data: m });
-    if (m?.method && m.id !== undefined) return send({ id: m.id, error: { code: -32601, message: 'not granted: this session never approves' } });
+    if (m?.method && m.id !== undefined) { exit ??= 1; return send({ id: m.id, error: { code: -32601, message: 'not granted: this session never approves' } }); } // refused: never a success
     if (m?.error && [1, 2, 3].includes(m.id)) return end(1);
     if (m?.id === 1) {
       send({ method: 'initialized' });
@@ -203,16 +206,27 @@ function appServer(s, spec, { cwd, env, resolve, done, onPid }) {
   send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'software-factory', title: 'Software Factory', version: '1' }, capabilities: null } });
 }
 
+// The codex the Codex SDK runs: one found on the session's PATH, as an absolute path (on Windows a native .exe, not an npm
+// .cmd shim), else none, so the SDK runs its own bundled binary. Never the bare name: that would override the bundled one
+// and fail with ENOENT wherever no codex is installed globally.
+export function codexBinary(env, resolve = {}) {
+  if ((resolve.platform ?? process.platform) !== 'win32') {
+    const isFile = resolve.isFile ?? ((f) => { try { return fs.statSync(f).isFile(); } catch { return false; } });
+    return String(env.PATH || '').split(path.delimiter).filter((d) => path.isAbsolute(d)).map((d) => path.join(d, 'codex')).find(isFile);
+  }
+  try { const c = resolveSpec({ cmd: 'codex', args: [] }, env, resolve); return c.windowsVerbatimArguments ? undefined : c.file; } catch { return undefined; }
+}
 // The Codex SDK in this process: a thread (started, or resumed by id) run once with the prompt, each event one event. It
-// spawns its own codex (the one on the PATH the session gets) with no spawn hook, so no pid reaches onPid: startSession
-// keeps it off runs (spec.offRun). Exit: 'stopped' after stop(); 0 when the turn completed, else 1.
+// spawns its own codex with no spawn hook, so no pid reaches onPid: startSession keeps it off runs (spec.offRun), and a stop
+// aborts the SDK's signal only, which is why codex.mjs keeps it read-only. Exit: 'stopped' after stop(); 0 when the turn
+// completed, else 1.
 async function codexSdk(s, spec, { cwd, env, modules, resolve, done }) {
   const abort = new AbortController(), aborted = () => abort.signal.aborted;
   s.stop = () => abort.abort(); // before the await, so a stop while the SDK loads is kept
   const mod = await load(modules, spec.module, 'sdk mode');
   if (aborted()) return done('stopped');
-  const c = resolveSpec({ cmd: 'codex', args: [] }, env, resolve); // a .cmd shim can't be the SDK's binary: it finds its own then
-  const codex = new mod.Codex({ ...(!c.windowsVerbatimArguments && { codexPathOverride: c.file }), env });
+  const bin = codexBinary(env, resolve);
+  const codex = new mod.Codex({ ...(bin && { codexPathOverride: bin }), env });
   const opts = { ...spec.thread, workingDirectory: cwd };
   let ok = false;
   try {
