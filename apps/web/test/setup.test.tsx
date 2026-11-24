@@ -172,4 +172,48 @@ describe('Setup auto-open', () => {
     await screen.findByRole('tab', { name: /All/ });
     expect(screen.queryByRole('dialog', { name: 'Set up the factory' })).toBeNull();
   });
+
+  // #22: under F ui, Review and start starts an issue through POST /api/runs; the read-only page keeps the prompt to copy.
+  it('Review and start: an issue number starts a headless run, and a refusal shows inline', async () => {
+    const calls: [string, unknown][] = [];
+    let open = () => {}; const gate = new Promise<void>((y) => { open = y; });
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      calls.push([url, body]);
+      if (url === '/api/runs') return body.issue === 'acme/app#7'
+        ? new Response(JSON.stringify({ error: 'acme/app#7 is already running: its claim is held by pid 4242' }), { status: 400 })
+        : gate.then(() => new Response(JSON.stringify({ pid: 99, log: '/x/run.log' }), { status: 200 }));
+      return new Response(JSON.stringify({ harnesses: [], repos: [], projects: { 'acme/app': { path: '/x', autoMerge: true } }, rules: {} }), { status: 200 });
+    }));
+    wizard({ token: 'tok' });
+    await screen.findByRole('button', { name: /^Review and start/ });
+    await step(/^Review and start/);
+    await userEvent.click(screen.getByRole('button', { name: 'All projects' }));
+    expect(screen.queryByRole('textbox', { name: /Issue number/ })).toBeNull(); // All projects: pick one first
+    expect(screen.getByText(/pick a project above to start one here/)).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'acme/app' }));
+    const n = screen.getByRole('textbox', { name: 'Issue number in acme/app' }), start = screen.getByRole('button', { name: 'Start' });
+    await userEvent.type(n, '0');
+    expect(start).toBeDisabled();
+    await userEvent.clear(n); await userEvent.type(n, '7');
+    await userEvent.click(start);
+    const form = n.closest('form') as HTMLElement;
+    expect(await within(form).findByText(/already running: its claim is held by pid 4242/)).toHaveAttribute('data-bad');
+    await userEvent.clear(n); await userEvent.type(n, '8');
+    await userEvent.click(start);
+    await userEvent.clear(n); await userEvent.type(n, '9'); // edited while the request is out: the reply still names #8
+    open();
+    expect(await within(form).findByText(/Started acme\/app#8 headless \(pid 99\)/)).toBeTruthy();
+    expect(calls.filter(([u]) => u === '/api/runs')).toEqual([['/api/runs', { issue: 'acme/app#7' }], ['/api/runs', { issue: 'acme/app#8' }]]);
+  });
+
+  it('Review and start without a token: the prompt to copy, no Start', async () => {
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    wizard();
+    await step(/^Review and start/);
+    await userEvent.click(screen.getByRole('button', { name: 'acme/budget' }));
+    expect(screen.getByText('/software-factory acme/budget#<issue>')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Start' })).toBeNull();
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });

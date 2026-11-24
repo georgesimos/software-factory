@@ -1,8 +1,8 @@
 import {
-  ArrowUpRightIcon, Badge, Button, Dot, MetricStat, OutcomePill, ReviewMatrix, STAGES, SessionList, SourceChip, StageTrack, Timeline,
+  ArrowUpRightIcon, Badge, Button, Dot, MetricStat, OutcomePill, ReviewMatrix, STAGES, SessionList, SourceChip, type AgentSession, StageTrack, Timeline,
   burnText, costText, formatAgo, isDone, formatClock, formatDuration, formatMoney, formatTokens, outcomeOf, previewOf, repoOf, shortId, type Run,
 } from '@software-factory/design-system';
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { post } from './data.ts';
 import { Cmd } from './Setup.tsx';
 
@@ -138,13 +138,24 @@ const startable = (r: Run) => !r.imported && !r.archived && /^[\w.-]+\/[\w.-]+#\
 export type StartState = { text: string; bad?: boolean; busy?: boolean };
 /** Under F ui, for a run whose session here stopped or crashed: POST /api/sessions resumes it headless. */
 export type Resume = { go: () => void; state?: StartState };
-function Start({ run: r, resume }: { run: Run; resume?: Resume }) {
-  if (!resume) return <Cmd cmd={`/software-factory ${r.id}`} />; // the Claude Code prompt to paste
-  const st = resume.state;
+function Start({ run: r, resume, token }: { run: Run; resume?: Resume; token?: string }) {
+  const [own, setOwn] = useState<StartState>();
+  if (!resume && !token) return <Cmd cmd={`/software-factory ${r.id}`} />; // the static page: the Claude Code prompt to paste
+  // Under F ui, an active run that isn't listed as resumable: F start (POST /api/runs). Whether a session or claim still
+  // holds it is the server's call, and its refusal says why ("active run…", "already has a running session…", "F unclaim…").
+  const go = resume?.go ?? (async () => {
+    if (!token) return;
+    setOwn({ text: '', busy: true });
+    try {
+      const x = await post<{ pid?: number }>('/runs', { issue: r.id }, token);
+      setOwn({ text: `Started headless (pid ${x.pid ?? '?'}). It shows here as it records its steps.` });
+    } catch (e) { setOwn({ text: (e as Error).message, bad: true }); }
+  });
+  const st = resume ? resume.state : own, label = resume ? ['Resume factory', 'Resuming…'] : ['Start factory', 'Starting…'];
   return (
     <div className="web-start">
-      {st && !st.busy && !st.bad ? null : /* resumed: the run is live again, so no second button */
-        <Button size="sm" disabled={st?.busy} title="Its session here stopped: resume it headless in the attached clone" onClick={resume.go}>{st?.busy ? 'Resuming…' : 'Resume factory'}</Button>}
+      {st && !st.busy && !st.bad ? null : /* started: the run is live again, so no second button */
+        <Button size="sm" disabled={st?.busy} title={resume ? 'Its session here stopped: resume it headless in the attached clone' : 'Start it headless in the attached clone (F start)'} onClick={() => void go()}>{st?.busy ? label[1] : label[0]}</Button>}
       <p className="web-sk-status" role="status" data-bad={st?.bad || undefined}>{st?.busy ? '' : st?.text}</p>
     </div>
   );
@@ -196,10 +207,48 @@ function Notes({ run: r, token }: { run: Run; token?: string }) {
   );
 }
 
+/**
+ * Under F ui: opens a session in the Claude desktop app (POST /api/sessions/open, F open). With no desktop link the server
+ * answers with the terminal resume command, shown to copy: nothing here launches a terminal. Only a Claude Code session can
+ * have a desktop link, so other harnesses' rows say Resume.
+ */
+function OpenSession({ s, token }: { s: AgentSession; token: string }) {
+  const [st, setSt] = useState<{ text: string; bad?: boolean; busy?: boolean; cmd?: string }>();
+  const go = async () => {
+    setSt({ text: '', busy: true });
+    try {
+      const x = await post<{ opened?: unknown; resume?: { command?: string; cwd?: string } }>('/sessions/open', { harness: s.agent, id: s.id }, token);
+      const cmd = x.resume?.command;
+      setSt(cmd ? { text: `No desktop link for this session. Resume it in a terminal${x.resume?.cwd ? ` in ${x.resume.cwd}` : ''}:`, cmd } : { text: 'Opened in the Claude app.' });
+    } catch (e) { setSt({ text: (e as Error).message, bad: true }); }
+  };
+  return (
+    <div className="web-start web-sopen">
+      <Button size="sm" variant="ghost" disabled={st?.busy} onClick={() => void go()}>{st?.busy ? 'Opening…' : s.agent === 'claude-code' ? 'Open in Claude' : 'Resume…'}</Button>
+      <p className="web-sk-status" role="status" data-bad={st?.bad || undefined}>{st?.busy ? '' : st?.text}</p>
+      {st?.cmd ? <Cmd cmd={st.cmd} /> : null}
+    </div>
+  );
+}
+// The harness session ids this app is running now (GET /api/sessions), re-read on every poll (each one hands RunDetail a new
+// run object): no Open for those. A detached F start isn't listed there; for it the server refuses on the run's live claim.
+function useRunning(token: string | undefined, key: Run) {
+  const [ids, setIds] = useState<string[]>([]);
+  useEffect(() => {
+    if (!token) return;
+    let off = false;
+    fetch('/api/sessions', { headers: { 'x-factory-token': token } }).then((x) => (x.ok ? x.json() : null)).then((x: { sessions?: { state?: string; harnessSession?: string }[] } | null) => {
+      if (!off) setIds((x?.sessions ?? []).filter((y) => y.state === 'running' && y.harnessSession).map((y) => String(y.harnessSession)));
+    }, () => {}); // unknown: show the buttons; the server still refuses a resume while a claim is live
+    return () => { off = true; };
+  }, [token, key]);
+  return ids;
+}
+
 export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, href = (id) => '#' + encodeURIComponent(id), resume, token }:
   { run: Run; cap: number; costCap: number; now?: number; find?: (id: string) => Run | undefined; href?: (id: string) => string; resume?: Resume; token?: string }) {
   const d = formatDuration(r.durationMs ?? Date.parse(r.updated ?? '') - Date.parse(r.started ?? ''));
-  const { costUsd, tokens } = spent(r);
+  const { costUsd, tokens } = spent(r), running = useRunning(token, r);
   const src = r.burn ? (r.burn.measured ? 'measured' : 'reported') : '';
   const repo = repoOf(r.id), open = openInClaude(r);
   const closes = /^[\w.-]+\/[\w.-]+$/.test(repo) ? (r.issues ?? []).filter((n) => Number.isInteger(n) && n > 0) : [];
@@ -241,9 +290,9 @@ export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, h
       <Epic run={r} find={find} href={href} />
       {r.sessions?.length || open || startable(r) ? (
         <Section title="Sessions">
-          {startable(r) ? <Start run={r} resume={resume} /> : null}
+          {startable(r) ? <Start run={r} resume={resume} token={token} /> : null}
           {open ? <p className="web-links"><a href={open} title={open.startsWith('claude://') ? 'Opens its session in the Claude desktop app' : 'Opens a new Claude Code terminal here (prompt pre-filled, not sent). Requires the claude-cli handler: send one message in any interactive claude session first.'}>Open in Claude</a></p> : null}
-          {r.sessions?.length ? <SessionList sessions={r.sessions} now={now} /> : null}
+          {r.sessions?.length ? <SessionList sessions={r.sessions} now={now} action={token ? (x) => (running.includes(x.id) ? null : <OpenSession key={x.id} s={x} token={token} />) : undefined} /> : null}
         </Section>
       ) : null}
       <Section title="Timeline"><Timeline events={r.events ?? []} archived={r.archived} now={now} /></Section>
