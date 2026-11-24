@@ -66,7 +66,7 @@ so sync never closes a factory run from this list. A reviewed sha the clone does
 A sha already on the base is "no changes", never merged: an empty branch and a human's fast-forward look the same to git,
 and `F close` records the human's. A squash that would change nothing is refused. `changeRequest` reads `merged` only from
 the factory's own squash, confirmed by its tree rather than its message. A conflict is `merge-tree`'s exit 1 with a tree
-on stdout. An unknown commit, or a git older than 2.38, says so instead.
+on stdout. An unknown commit, or a git older than the factory's minimum (`GIT_MIN`, 2.40), says so instead.
 
 A refusal (a moved or protected base, a conflict, a dirty or missing checkout) returns `merged: false` with what to do next. It is
 never retried or forced, and `test/githost.test.mjs` greps this file for force flags. When the push is refused, merge at

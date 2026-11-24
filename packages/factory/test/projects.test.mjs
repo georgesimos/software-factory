@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { setup } from './setup.mjs';
+import { passSpec, setup } from './setup.mjs';
 import { io, record } from '../../core/src/log.ts';
 import { cloneId, hostFor, normRemote, withoutUserinfo } from '../../core/src/remote.ts';
 import { clash, discover, sync } from '../../core/src/sync.ts';
@@ -79,6 +79,7 @@ test('attach refuses an id that is already another repository; a second clone of
     const e = clone('e/empty', 'git@gitlab.com:acme/empty.git');
     git(e, 'update-ref', '-d', 'refs/remotes/origin/main');
     assert.equal(sync('acme/empty', e).note, 'nothing is fetched from origin yet, so acme/empty is attached on its local main; run git fetch origin before its first run');
+    passSpec('acme/empty#1'); // a git project's run builds only after its spec passed (5b)
     assert.throws(() => worktree('acme/empty#1'), /no main or master branch on origin, and no origin\/HEAD \(git fetch origin/);
     const o = clone('e/fetched', 'git@gitlab.com:acme/fetched.git'); // fetched, but no main or master on origin: refused, not guessed
     git(o, 'update-ref', '-d', 'refs/remotes/origin/main'); git(o, 'update-ref', 'refs/remotes/origin/dev', 'HEAD');
@@ -108,11 +109,14 @@ test('a git project never calls gh: every GitHub path refuses by name, and its w
   try {
     const run = 'local/notes#1';
     record(run, 'intake', 'started', { title: 'a local item' });
-    // local-first 5a: the change requests and facts come from git; trust waits for the local tracker (5b), so it escalates
+    // local-first 5a: the change requests and facts come from git; the local tracker (5b) has no trust() to read, so it escalates
     assert.deepEqual(openPRs('local/notes'), { base: 'main', open: [], doneBranches: ['main'] });
     assert.deepEqual([facts({ id: run, events: [] }).host, facts({ id: run, events: [] }).trustBroken], ['git', 'tracker "local" cannot tell who wrote an item, so local/notes#1\'s author is unknown and not trusted']);
-    for (const [name, f] of [['intake', () => intake(run)], ['merge', () => merge(run)], ['relabelMerged', () => relabelMerged(run)], ['approval', () => approval(run)], ['postmerge', () => postmerge(run)], ['revert', () => revert(run, 'red')]])
+    assert.throws(() => intake(run), /no item 1 in \.factory\/issues: write one with F item new/, 'intake reads the local tracker (5b), never gh');
+    assert.throws(() => approval(run), /local\/notes#1 is not awaiting approval/, 'approval reads F approve\'s record, never gh');
+    for (const [name, f] of [['merge', () => merge(run)], ['relabelMerged', () => relabelMerged(run)], ['postmerge', () => postmerge(run)], ['revert', () => revert(run, 'red')]])
       assert.throws(f, /local\/notes is a git project, not on GitHub: .* works only for GitHub projects/, name);
+    passSpec(run);
     const w = worktree(run);
     assert.deepEqual([w.base, w.branch], ['main', 'factory/issue-1']);
     assert.equal(git(w.path, 'rev-parse', 'HEAD'), git(projects()['local/notes'].path, 'rev-parse', 'main'));
@@ -133,6 +137,7 @@ test('review: a resume keeps a git project\'s commits; discover never renames an
     const c = clone('rt/app', bare);
     git(c, 'push', '-q', 'origin', 'main');
     sync('local/rt', c);
+    passSpec('local/rt#5');
     const w = worktree('local/rt#5');
     git(w.path, '-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '--allow-empty', '-m', 'run work');
     const work = git(w.path, 'rev-parse', 'HEAD');
@@ -156,6 +161,7 @@ test('review: a resume keeps a git project\'s commits; discover never renames an
     assert.ok(runsData().some((r) => r.id === 'local/moved#1'));
     // worktree with a path: an unattached local/ project is attached as git, with no gh call; another folder is a clash
     const x = clone('x/wt');
+    passSpec('local/wt#1'); passSpec('local/wt#2');
     worktree('local/wt#1', x);
     assert.equal(projects()['local/wt'].host, 'git');
     assert.equal(hostOf('local/never-attached'), 'git');

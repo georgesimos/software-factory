@@ -63,7 +63,7 @@ never reach the remote.
 **D4. Trust for local items, and who may approve.** A file has no verifiable author, so every local item is
 `trust: 'untrusted'`. That means:
 - every spec needs approval through `F approve RUN`, at a terminal or in the desktop app's dialog (§2.2). Approval never
-  comes from the page (#21), and never from an agent session;
+  comes from the page (#21), and `F approve` refuses inside an agent session; that is a speed bump, not a boundary (§2.2);
 - on the `git` host, every merge asks (`merge: 'ask'` is forced, whatever the project's setting).
 
 No trusted-authors list gets built. That idea was in the inventory, not in the owner's decisions.
@@ -275,8 +275,9 @@ The `ci` rule stays (`required|advisory|skip`), and its meaning is kept:
 
 ### 2.2 Who may approve, and who may change a project's providers
 
-On the `git` host, `F approve` takes GitHub's place as the trust anchor, so the run's own agent must never be able to use it.
-Telling the agent not to (in the skill text) isn't enough.
+On the `git` host, `F approve` takes GitHub's place as the approval channel, and the run's own agent shouldn't use it.
+Telling the agent not to (in the skill text) isn't enough. Even so, it is a speed bump, not a security boundary (5b's
+"Landed as" says how an agent gets past it), so no merge rests on it: a local item is always trustBroken.
 
 1. **Refused inside a harness session.** `F approve` and `F approve --merge` refuse when any of these is set:
    - `FACTORY_CLAIM`;
@@ -287,8 +288,9 @@ Telling the agent not to (in the skill text) isn't enough.
 2. **The terminal path also needs a TTY.** It prints the run, sha and diff stats, and makes the user type the first 7
    characters of the sha on `/dev/tty` (`CONIN$` on Windows). Agent tool calls run with no controlling terminal, so the
    prompt can't be answered there.
-   - Limit: an agent can unset the environment variables in a subprocess, so step 1 is a speed bump, not a boundary.
-     The TTY prompt and the desktop dialog are what it rests on.
+   - Limit: an agent can unset the environment variables in a subprocess, and get a pty (`script -q /dev/null`), so
+     steps 1 and 2 together are a speed bump, not a boundary, and so is the dialog. Merges don't rest on them: a local
+     item is always trustBroken.
    - `shortcut:` whether each harness's shell tool really has no TTY gets checked per harness (claude-code, codex)
      in PR 5b, before that PR relies on it.
 3. **The desktop app path** (the owner works in the app). This is the main approval path; the terminal is the second.
@@ -575,6 +577,36 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
    - `trackers/local.ts` (D3, D4).
    - `.factory/` added to `SENSITIVE`.
    - `F item new` (writes the file and the `.git/info/exclude` entry, D3), and `F approve RUN` for specs: refused inside a harness session, behind the TTY prompt, and refused for a verified host's items (§2.2). Tests for each refusal.
+   - Landed as:
+     - `trackers/local.ts`: `<N>.md` with `title`, `state` and `labels` in the front matter. The body is rendered as
+       GitHub Issues renders it, so dependencies are its `Depends on #N` line (not a `depends-on` key) and the key marker is
+       the same. Ids come from an exclusive create of the next N, not a lock file. No `trust`: `facts()` escalates.
+     - Items are plain files only: a symlinked `.factory` or `.factory/issues`, an item that is a symlink or a folder, and
+       items git tracks (they came with the repo) are refused, never followed. Only `/.factory/issues/` is excluded.
+     - Intake reads the item from the clone and writes what it read to the run's `item.md`, with its sha-256 as `itemSha`.
+       Both are informational: nothing reads them back, and a re-intake overwrites them.
+     - At `spec awaiting-approval`, F hashes the whole `DIR/spec.md` (refused when missing or empty). `F approve` shows
+       that file and asks for the first 7 characters of its sha-256. `record()` refuses `spec passed` on any tracker but
+       GitHub Issues unless an `F approve` record (`spec decided`) follows the latest ask, for that hash, unused, with
+       `spec.md` unchanged; it refuses `build started`, and `F worktree` refuses, until a `spec passed` follows the latest
+       intake or ask. A loop-back to spec asks again. `F approval` reads the record. A run waiting for approval stays
+       waiting until `spec passed`. Nothing pins `spec.md` once building started.
+     - The prompt goes to `/dev/tty` (`CONIN$` and `CONOUT$` on Windows), never stdin, with control characters stripped.
+       Checked: Claude Code's shell in the desktop app has no terminal (ENXIO). Not checked: the `claude` CLI started from
+       a terminal, and Codex.
+     - **A speed bump, not a security boundary.** It stops the run's agent approving its own spec by mistake or because
+       an item told it to. An agent set on it can get past it: `script -q /dev/null` gives it a pty, unsetting the
+       session variables gets past `humanOnly`, and it can append a `spec decided` line to `events.jsonl` itself. The 5c
+       dialog stops neither. Merges stay safe because a local item is always trustBroken, so its run escalates.
+     - Known limits of 5b, accepted:
+       - A re-ask round can still use the run's old worktree. `decide()` escalates on trustBroken, and nothing pins
+         `spec.md` once building started.
+       - A hard link or a FIFO as an item, or `.factory/issues` swapped for a link after the check, are not refused. Each
+         needs a local process running as the user.
+       - On Windows only the `lstat` check protects a read: there is no `O_NOFOLLOW`.
+     - One git minimum, `GIT_MIN` (2.40, for `diff --attr-source`) in `hosts/git.ts`, for merging and for a git project's
+       line count; `F onboard` shows it. Merging needed 2.38 before.
+     - Not here: `F queue` and `F loop` still read GitHub Issues only (they take the tracker from `F new`'s project state).
 5c. **Desktop approval.** (~300 lines)
    - The Electron main-process menu item and native dialog (§2.2 step 3). It writes the same approve event, and the page and HTTP can't reach it.
 6. **SKILL.md stops naming gh.** (~300 lines)
