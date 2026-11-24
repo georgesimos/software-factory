@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { setup } from './setup.mjs';
+import { passSpec, setup } from './setup.mjs';
 import { HERE } from '../factory.mjs';
 import * as host from '../../adapters/hosts/git.ts';
 import { derive } from '../../core/src/derive.ts';
@@ -351,6 +351,7 @@ test('#138 r1 finding 1: a tag or branch named like the base never hides the dif
   assert.deepEqual(seen('local/sh2', s2), want);
   // F axes in the run's worktree, which shares the clone's refs
   record('local/sh2#6', 'intake', 'started', { title: 't' });
+  passSpec('local/sh2#6');
   const wt = JSON.parse(F('worktree', 'local/sh2#6')).path;
   commit(wt, 'src/page.tsx', 'p\n');
   g(d2, 'branch', '-f', 'origin/main', g(wt, 'rev-parse', 'HEAD'));

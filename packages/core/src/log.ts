@@ -7,7 +7,7 @@ import { runnerStamp } from './review.ts';
 import { withMeasured } from './burn.ts';
 import { derive, validateReview, validateUsage } from './derive.ts';
 import { harnesses } from '../../adapters/harnesses/index.ts';
-import { specApproved } from './approve.ts';
+import { specApproved, specAsked, specCleared } from './approve.ts';
 import type { FactoryEvent, Run } from './types.ts';
 
 // The dashboard renderer, registered by packages/server when it loads. Core alone (no server) skips the render.
@@ -43,6 +43,8 @@ export function record(run: string, stage: string, status: string, payload: Part
   if (status === 'merged' && prior?.decision?.action !== 'merge' && !(stage === 'approve' && payload.by === 'human' && prior?.outcome === 'escalated')) throw new Error('refusing "merged": the recorded decision is not merge');
   if (stage === 'review' && payload.axis !== undefined) validateReview(run, payload, status);
   if (stage === 'spec' && status === 'passed') specApproved(run, payload); // a local item's spec: only after F approve
+  if (stage === 'spec' && status === 'awaiting-approval') payload = specAsked(run, payload); // and F hashes what is asked
+  if (stage === 'build' && status === 'started') specCleared(run, 'start building'); // and nothing builds before it passed
   if (stage === 'review' && payload.role !== undefined) {
     if (payload.role !== 'verifier' || payload.axis !== undefined) throw new Error('role must be "verifier", without an axis');
     const extra = Object.keys(payload).filter((k) => !VERIFIER_KEYS.includes(k));

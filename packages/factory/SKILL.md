@@ -113,7 +113,7 @@ Then run `F risk RUN <files to touch…>`.
 - **Risky** (untrusted author or sensitive paths):
   1. Post the spec as an issue comment that ends: "A maintainer can reply `/factory approve` or `/factory reject`."
   2. Add `factory:needs-approval`.
-  3. Record `F event RUN spec awaiting-approval -` with `{"spec":"one line","reasons":[…]}`.
+  3. Record `F event RUN spec awaiting-approval -` with `{"spec":"one line","reasons":[…]}`. On a local item, F hashes `DIR/spec.md` here and `F approve` shows that file, so write it first and don't change it until the spec passes; it can't build before then.
   4. [Publish](#publish-to-the-artifact), then stop.
 - **Not risky:** record `F event RUN spec passed -` with `{"spec":"one-line summary"}`.
 

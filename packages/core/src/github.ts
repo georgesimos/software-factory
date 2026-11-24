@@ -48,7 +48,7 @@ export function intake(run: string) {
   const mentions = prs.filter((p) => p.branch !== `factory/issue-${n}` && new RegExp(`(^|[^\\w])#${n}(?!\\d)`).test(p.title)).map((p) => ({ url: p.url, title: p.title }));
   const comments = trackerFn(t, 'comments', 'read comments')(ctx, where);
   const meta: { title: string; url?: string | undefined; author: string; association: string; origin?: string; originAssociation?: string | undefined; itemSha?: string } = { title: i.title, url: i.url, author: i.author, association: i.association };
-  if (t !== 'github-issues') { // D3: what intake read, kept in the run's state dir; the run never re-reads the item, so a later edit changes nothing
+  if (t !== 'github-issues') { // D3: a record of what intake read, for the user; informational only: nothing reads item.md or itemSha back, and a re-intake overwrites them
     const snap = `# ${i.title}\n\n${i.body ?? ''}\n`;
     fs.mkdirSync(runDir(run), { recursive: true });
     fs.writeFileSync(path.join(runDir(run), 'item.md'), snap);

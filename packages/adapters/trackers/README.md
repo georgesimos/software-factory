@@ -47,10 +47,13 @@ would compile those, but F under Node fails on them, naming the file.
 
 A git project's default tracker (local-first D3, D4). Each item is `<clone>/.factory/issues/<N>.md`: front matter with
 `title`, `state` and `labels`, then the body as GitHub Issues writes it, so `Depends on #3` and the key marker read the
-same. `.factory/` is untracked: `F item new` (or `createIssues`) adds it to the clone's `info/exclude`, never the tracked
-`.gitignore`, and never commits. A new item takes the next free N with an exclusive create, so two `F` processes never
-share one. An item has no verifiable author: `getItem` gives association `NONE` and no comments, and there is no `trust`,
-so every spec waits for `F approve RUN` at the user's own terminal and `facts()` escalates.
+same. `.factory/issues/` is untracked: `F item new` (or `createIssues`) adds `/.factory/issues/` to the clone's
+`info/exclude` once, never the tracked `.gitignore`, and never commits. Only plain files are read or written: a symlinked
+`.factory` or `.factory/issues`, an item that is a symlink or a folder, and items git tracks are refused. A new item takes
+the next free N with an exclusive create, so two `F` processes never share one. An item has no verifiable author:
+`getItem` gives association `NONE` and no comments, and there is no `trust`, so every spec waits for `F approve RUN` at
+the user's own terminal and `facts()` escalates. That approval is a speed bump, not a security boundary (local-first
+5b); merges don't rest on it.
 
 ## Not yet on the adapter
 
