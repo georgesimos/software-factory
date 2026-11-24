@@ -4,6 +4,7 @@
 import { harnesses } from '../../adapters/harnesses/index.ts';
 import { builtin as hosts } from '../../adapters/hosts/index.ts';
 import { audit, whoami } from './rules.ts';
+import { CI_ORDER, ciOf } from './ci.ts';
 import { cloneId, isGithubRemote, remoteParts, withoutUserinfo } from './remote.ts';
 import { git, hostFn, hostOf, originUrl, projects, projectsFile } from './workspace.ts';
 import { gh } from './github.ts';
@@ -18,12 +19,9 @@ export function humanOnly(doing: string) {
   if (set) throw new Error(`${doing} must come from you, not from an agent session (${set} is set): run it in your own terminal`);
 }
 
-// shortcut: the plan's CI ids, least to most checked, until adapters/ci/ (local-first PR 3) brings a registry and a reader;
-// until then ci is recorded and audited, and nothing reads it.
-const CI = ['none', 'local', 'github-actions'];
 export const PROJECT_KEYS = ['host', 'ci', 'base'];
 
-const rank = (ci: unknown) => { const i = CI.indexOf(String(ci)); return i < 0 ? CI.length : i; }; // an unknown stored ci counts as the strictest
+const rank = (ci: unknown) => { const i = CI_ORDER.indexOf(String(ci)); return i < 0 ? CI_ORDER.length : i; }; // an unknown stored ci counts as the strictest
 
 /** value null clears the setting (base only): back to what the host says. */
 export function setProject(repo: string, key: string, value: string | null, { reason }: { reason?: string } = {}) {
@@ -31,7 +29,7 @@ export function setProject(repo: string, key: string, value: string | null, { re
   const p = projects()[repo];
   if (!p?.path) throw new Error(`${repo} is not attached; run sync first`);
   if (!PROJECT_KEYS.includes(key)) throw new Error(`project setting must be ${PROJECT_KEYS.join('|')}, got "${key}"`);
-  const host = hostOf(repo), from = key === 'host' ? host : key === 'ci' ? p.ci ?? (host === 'github' ? 'github-actions' : 'none') : p.base ?? null;
+  const host = hostOf(repo), from = key === 'host' ? host : key === 'ci' ? ciOf(repo) : p.base ?? null;
   if (value === null && key !== 'base') throw new Error(`only base can be unset; set ${key} to one of its values instead`);
   if (value === null && from === null) throw new Error(`${repo} has no base set`);
   if (value === from) throw new Error(`${repo} already has ${key} ${value}`);
@@ -47,13 +45,14 @@ export function setProject(repo: string, key: string, value: string | null, { re
       next = { host: 'github', remote: undefined, base: undefined };
     } else {
       relaxing = true; // GitHub's checks (its login, CI, merge) stop applying
-      next = { host: 'git', remote: remoteParts(url) ? withoutUserinfo(url) : undefined };
+      next = { host: 'git', remote: remoteParts(url) ? withoutUserinfo(url) : undefined, ...(p.ci === 'github-actions' && { ci: undefined }) }; // GitHub's checks can't run off GitHub
     }
-    const ci = p.ci ?? (value === 'github' ? 'github-actions' : 'none');
+    const ci = 'ci' in next ? next.ci : p.ci, now = ci ?? (value === 'github' ? 'github-actions' : 'local');
     note = [value === 'github' && p.base && `base ${p.base} cleared: GitHub's base is the repo's default branch`,
-      `ci is ${ci}${p.ci ? '' : ` (the ${value} default)`}`].filter(Boolean).join('; ');
+      p.ci && !ci && `ci ${p.ci} cleared: it needs a project on GitHub`, `ci is ${now}${ci ? '' : ` (the ${value} default)`}`].filter(Boolean).join('; ');
   } else if (key === 'ci') {
-    if (!CI.includes(value)) throw new Error(`ci must be ${CI.join('|')}`);
+    if (!CI_ORDER.includes(value)) throw new Error(`ci must be ${CI_ORDER.join('|')}`);
+    if (value === 'github-actions' && host !== 'github') throw new Error(`ci github-actions needs a project on GitHub, and ${repo} is on ${host}`);
     relaxing = rank(value) < rank(from);
     next = { ci: value };
   } else {
@@ -69,8 +68,7 @@ export function setProject(repo: string, key: string, value: string | null, { re
   if (relaxing && host === 'github' && who.via === 'local')
     throw new Error(`${key} ${from} -> ${value} relaxes a GitHub project, which needs a verified login (gh auth login), not a local user; or attach the clone under a local/<name> id`);
   fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...p, ...next } }, null, 2)); // undefined drops a key
-  const cleared = key === 'host' && value === 'github' && p.base ? { cleared: { base: p.base } } : {};
-  audit(repo, value === null ? 'unset' : 'set', { key: `project.${key}`, from, ...(value !== null && { value }), ...cleared, ...(reason && { reason }), setBy: who.by, ...(who.via === 'local' && { via: who.via }) });
-  if (key === 'ci') note = 'recorded: F reads the CI provider once CI providers exist';
+  const gone = Object.fromEntries((['base', 'ci'] as const).filter((k) => key === 'host' && k in next && p[k]).map((k) => [k, p[k]])); // what a host switch cleared
+  audit(repo, value === null ? 'unset' : 'set', { key: `project.${key}`, from, ...(value !== null && { value }), ...(Object.keys(gone).length && { cleared: gone }), ...(reason && { reason }), setBy: who.by, ...(who.via === 'local' && { via: who.via }) });
   return { repo, key, from, to: value, by: who.by, via: who.via, ...(note && { note }) };
 }

@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { TRUSTED } from './constants.ts';
-import { decide } from './gate.ts';
+import { decide, localResult } from './gate.ts';
+import { ciBroken, ciChecks, ciOf } from './ci.ts';
 import { derive, getRun } from './derive.ts';
 import { exec } from './platform.ts';
 import { baseBranch, git, projects, requireGithub } from './workspace.ts';
@@ -26,7 +27,9 @@ interface GhRepository {
   done?: { nodes: { headRefName: string }[] } | null;
 }
 /** postmerge(): CI on the merge commit, and its production deploys. */
-export interface PostMerge { sha?: string; state: string; reason?: string; failed?: string[]; advisory?: boolean; deploys?: Deploy[] }
+// SKILL.md §7 says what to do on each (test/ci.test.mjs checks it names them all).
+export const POSTMERGE_STATES = ['no-pr', 'not-merged', 'skipped', 'unknown', 'pending', 'none', 'pass', 'fail'] as const;
+export interface PostMerge { sha?: string; state: typeof POSTMERGE_STATES[number]; reason?: string; failed?: string[]; advisory?: boolean; deploys?: Deploy[] }
 
 export const gh = (...args: string[]): string => exec(io.gh, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 export const parseRun = (run: string) => {
@@ -94,15 +97,11 @@ export function facts(r: Run): Facts {
   }
   if (!r.pr) return { association, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy, ...dep };
   const diff: { additions: number; deletions: number; files: { path: string }[] } = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'additions,deletions,files'));
-  let checks = 'skipped'; // ci=skip: GitHub CI isn't even read
-  if (policy.ci?.value !== 'skip') try {
-    const b: string[] = JSON.parse(gh('pr', 'checks', r.pr, '-R', repo, '--json', 'bucket')).map((c: { bucket: string }) => c.bucket);
-    checks = !b.length ? 'none' : b.some((x) => x === 'fail' || x === 'cancel') ? 'fail' : b.includes('pending') ? 'pending' : 'pass';
-  } catch (e) {
-    if (!/no checks reported/i.test(String((e as { stderr?: unknown }).stderr))) throw e;
-    checks = 'none';
-  }
-  return { association, autoMerge, checks, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), rules: policy, ...dep };
+  // the project's CI provider on the reviewed commit; ci=skip doesn't read it, but a provider that can't answer still escalates
+  const local = (sha?: string) => localResult(r.localChecks, policy['checks.commands']?.value, sha);
+  const c = policy.ci?.value === 'skip' ? { ci: undefined, state: 'skipped', broken: ciBroken(repo) } : ciChecks(repo, { path: projects()[repo]?.path, sha: r.reviewedSha, changeRequest: r.pr }, local);
+  const ci = { ...(c.ci && c.ci !== 'github-actions' && { ci: c.ci }), ...('detail' in c && c.detail && { ciDetail: c.detail }), ...(c.broken && { ciBroken: c.broken }) }; // GitHub's, as before: no extra keys
+  return { association, autoMerge, checks: c.state, ...ci, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), rules: policy, ...dep };
 }
 // The only merge path: re-decides from live GitHub facts and merges exactly the reviewed commit.
 export function merge(run: string) {
@@ -158,12 +157,19 @@ export function postmerge(run: string): PostMerge {
   const sha: string | undefined = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'mergeCommit')).mergeCommit?.oid;
   if (!sha) return { state: 'not-merged' };
   const ship = shipTrack([{ run, repo, sha, path: projects()[repo]?.path }]), deploys = ship?.recorded.length ? { deploys: ship.recorded } : {}; // production deploy of the merge commit, when a connector reports one
-  const ci = rules(repo).policy.ci?.value;
+  const policy = rules(repo).policy, ci = policy.ci?.value, broken = ciBroken(repo);
+  if (broken) return { sha, state: 'unknown', reason: broken, ...deploys }; // fail closed: never "skipped" or "pass"
   if (ci === 'skip') return { sha, state: 'skipped', reason: 'rule ci=skip: CI on the base branch is not watched, so it never triggers a revert', ...deploys };
-  const runs: { status: string; conclusion: string; name: string; url: string }[] = JSON.parse(gh('run', 'list', '-R', repo, '--commit', sha, '--json', 'status,conclusion,name,url'));
-  const failed = runs.filter((x) => ['failure', 'cancelled', 'timed_out'].includes(x.conclusion)).map((x) => x.url);
-  const state = !runs.length ? 'none' : failed.length ? 'fail' : runs.some((x) => x.status !== 'completed') ? 'pending' : 'pass';
-  return { sha, state, failed, ...(ci === 'advisory' && { advisory: true }), ...deploys }; // advisory: report red, don't revert on it
+  // shortcut: F checks runs only in a run's worktree, never on the merge commit, so local CI can't watch the base after a merge;
+  // run checks.commands in a fresh worktree of the merge commit here once that is wanted. Until then a definite skipped, never a state that can't change.
+  if (ciOf(repo) === 'local') {
+    let base = 'the base branch';
+    try { base = baseBranch(repo, projects()[repo]?.path ?? ''); } catch { /* the reason still says what to do */ }
+    return { sha, state: 'skipped', reason: `CI provider local: ${base} after the merge is not checked, so it never triggers a revert; run the checks.commands on ${base} yourself`, ...deploys };
+  }
+  const c = ciChecks(repo, { path: projects()[repo]?.path, sha }, (s) => localResult(r.localChecks, policy['checks.commands']?.value, s));
+  const why = c.broken ?? (c.state !== 'pass' && c.ci !== 'github-actions' ? c.detail : undefined);
+  return { sha, state: c.state, failed: c.failed ?? [], ...(why && { reason: why }), ...(ci === 'advisory' && { advisory: true }), ...deploys }; // advisory: report red, don't revert on it
 }
 // Opens (never merges) a revert PR for a merged run whose main CI went red.
 export function revert(run: string, reason: string) {

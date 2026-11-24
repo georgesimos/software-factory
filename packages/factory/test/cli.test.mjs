@@ -321,7 +321,7 @@ export function rulesTest(cli) {
   assert.equal(m.action, 'merge');
   assert.match(m.reasons.join(' | '), /CI not required by rule ci=skip, set by acme on 2026-11-20: billing\. Local checks: pass \(pnpm test\)/);
   const none = D(green, { rules: pol('skip') }); // (b): nothing stands in, so escalate
-  assert.deepEqual([none.action, /no checks.commands rule replaces CI/.test(none.reasons.join())], ['escalate', true]);
+  assert.deepEqual([none.action, /no checks.commands rule, so nothing was checked/.test(none.reasons.join())], ['escalate', true]);
   assert.match(D(ok, { rules: skip }).reasons.join(), /Local checks: not run/);
   assert.match(D({ ...ok, localChecks: lc('fail') }, { rules: skip }).reasons.join(), /Local checks: fail \(pnpm test\)/);
   assert.match(D({ ...ok, localChecks: lc('pass', 's0') }, { rules: skip }).reasons.join(), /not the reviewed commit/); // a pass from an older iteration

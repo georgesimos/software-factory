@@ -66,7 +66,7 @@ test('a GitHub project: relaxing needs a reason and a verified login; github -> 
     // a verified login may, with a reason; audited like a rule
     io.gh = STUB;
     assert.throws(() => setProject('acme/gp', 'ci', 'local'), /ci github-actions -> local relaxes/);
-    assert.deepEqual(setProject('acme/gp', 'host', 'git', { reason: 'moving off GitHub' }), { repo: 'acme/gp', key: 'host', from: 'github', to: 'git', by: 'stub-user', via: 'github', note: 'ci is none (the git default)' });
+    assert.deepEqual(setProject('acme/gp', 'host', 'git', { reason: 'moving off GitHub' }), { repo: 'acme/gp', key: 'host', from: 'github', to: 'git', by: 'stub-user', via: 'github', note: 'ci is local (the git default)' });
     assert.deepEqual([projects()['acme/gp'].host, projects()['acme/gp'].remote], ['git', 'https://github.com/acme/gp.git']);
     const e = lastRule();
     assert.deepEqual([e.run, e.status, e.key, e.from, e.value, e.reason, e.setBy, e.via], ['acme/gp', 'set', 'project.host', 'github', 'git', 'moving off GitHub', 'stub-user', undefined]);
@@ -98,7 +98,8 @@ test('a git project: a local login may change it, a relaxing change still needs 
     const c = clone('lx');
     sync('local/lx', c);
     assert.throws(() => setProject('local/lx', 'host', 'github'), /local\/lx is a local\/ id, which is never on GitHub/);
-    assert.equal(setProject('local/lx', 'ci', 'local').via, 'local'); // stricter than none
+    assert.throws(() => setProject('local/lx', 'ci', 'local'), /local\/lx already has ci local/); // a git project's default
+    assert.throws(() => setProject('local/lx', 'ci', 'github-actions'), /ci github-actions needs a project on GitHub, and local\/lx is on git/);
     assert.throws(() => setProject('local/lx', 'ci', 'none'), /ci local -> none relaxes/);
     setProject('local/lx', 'ci', 'none', { reason: 'no checks yet' });
     assert.deepEqual([lastRule().setBy, lastRule().via], [me, 'local']); // shown as "(local, unverified)", scrubbed on publish
@@ -121,7 +122,7 @@ test('a git project: a local login may change it, a relaxing change still needs 
     assert.throws(() => setProject('local/lx', 'ci', null), /only base can be unset/);
     // an unknown stored ci counts as the strictest: any change from it relaxes
     fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), 'local/lx': { ...projects()['local/lx'], ci: 'jenkins' } }));
-    assert.throws(() => setProject('local/lx', 'ci', 'github-actions'), /ci jenkins -> github-actions relaxes/);
+    assert.throws(() => setProject('local/lx', 'ci', 'local'), /ci jenkins -> local relaxes/);
   } finally { io.gh = gh; }
 });
 
@@ -147,4 +148,19 @@ test('core\'s hosts are imported by name: a bad host file fails only the host pi
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-badhost-'));
   fs.writeFileSync(path.join(dir, 'broken.mjs'), 'export const id = "broken"; this is not javascript\n');
   await assert.rejects(load(dir), /broken\.mjs/);
+});
+
+test('the git host\'s default base comes from origin when the clone has one (runs fetch it there), else from local branches', () => {
+  const ctx = { gh: () => { throw new Error('no gh here'); }, git: (...a) => execFileSync('git', a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) };
+  const base = (c) => builtin.git.baseBranch(ctx, { repo: 'acme/ob', path: c });
+  const c = clone('ob', 'git@gitlab.com:acme/ob.git');
+  git(c, 'update-ref', '-d', 'refs/remotes/origin/main'); // a local main only, nothing fetched
+  assert.throws(() => base(c), /no main or master branch on origin, and no origin\/HEAD/);
+  git(c, 'update-ref', 'refs/remotes/origin/master', 'HEAD');
+  assert.equal(base(c), 'master', 'origin\'s branch, never the local-only main');
+  git(c, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk');
+  assert.equal(base(c), 'master', 'an origin/HEAD pointing nowhere is skipped');
+  git(c, 'update-ref', 'refs/remotes/origin/trunk', 'HEAD');
+  assert.equal(base(c), 'trunk');
+  assert.equal(base(clone('nb')), 'main', 'no origin: the local branch');
 });

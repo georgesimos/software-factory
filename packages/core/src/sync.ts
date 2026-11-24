@@ -104,17 +104,24 @@ export function attach(repo: string, repoPath: string, extra: Project = {}) {
   if (why) throw new Error(`${repo} is already attached to ${why}, and ${repoPath} is a different repository: attach it under another id (F sync ${remoteParts(url) ? '<owner/name>' : 'local/<name>'} ${repoPath})`);
   const first = !(prior?.path || prior?.host), fresh: Project = first && hostFor(url, repo) === 'git' ? { host: 'git', ...(remoteParts(url) && { remote: withoutUserinfo(url) }) } : {};
   const onGithub = hostOf(repo, fresh.host ?? prior?.host) === 'github';
-  const ref = onGithub ? null : baseRef(repoPath, baseBranch(repo, repoPath, 'git')); // before anything is written: a clone with no base branch is not attached
+  let ref: string | null = null, note: string | undefined; // before anything is written: a clone with no base branch is not attached
+  if (!onGithub) try { ref = baseRef(repoPath, baseBranch(repo, repoPath, 'git')); } catch (e) {
+    // an origin with nothing fetched (a fresh git remote add, an empty remote): attach on the local base; runs still need origin's
+    const fetched = !!git('-C', repoPath, 'for-each-ref', '--count=1', '--format=x', 'refs/remotes/origin').trim();
+    const local = url && !fetched ? ['main', 'master'].find((b) => { try { git('-C', repoPath, 'rev-parse', '--verify', '-q', `refs/heads/${b}`); return true; } catch { return false; } }) : undefined;
+    if (!local) throw e;
+    ref = local; note = `nothing is fetched from origin yet, so ${repo} is attached on its local ${local}; run git fetch origin before its first run`;
+  }
   fs.mkdirSync(stateDir(), { recursive: true });
   fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...prior, ...fresh, path: repoPath, ...extra } }, null, 2));
-  return { onGithub, baseRef: ref };
+  return { onGithub, baseRef: ref, ...(note && { note }) };
 }
 // Registers the repo and imports work already in flight: open PRs, plus recent agent sessions on unmerged branches.
 // Imported runs are tracked, never driven: decide() always escalates them.
 export function sync(repo: string, repoPath?: string) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo || '')) throw new Error(`repo must look like owner/repo, got "${repo}"`);
   repoPath = path.resolve(repoPath || projects()[repo]?.path || '.');
-  const { onGithub, baseRef } = attach(repo, repoPath, { synced: new Date().toISOString() });
+  const { onGithub, baseRef, note } = attach(repo, repoPath, { synced: new Date().toISOString() });
   const runs = Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') || r.id.startsWith(repo + ':'));
   const byPr = new Map(runs.filter((r) => r.pr).map((r) => [r.pr, r]));
   const byBranch = new Map(runs.filter((r) => r.branch).map((r) => [r.branch, r]));
@@ -198,5 +205,5 @@ export function sync(repo: string, repoPath?: string) {
   const head = new Map(prs.map((p) => [p.url, p.headRefOid])); // deploy state of each in-progress run's PR head (finished runs aren't polled)
   const ship = shipTrack(Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') && r.outcome === 'in-progress' && head.get(r.pr as string)).map((r) => ({ run: r.id, repo, sha: head.get(r.pr as string), path: repoPath })));
   dashboard.render();
-  return { repo, path: repoPath, added, attached, closed, humanMerged, ...(humanMergeErrors.length && { humanMergeErrors }), ...(ship && { ship }) };
+  return { repo, path: repoPath, added, attached, closed, humanMerged, ...(humanMergeErrors.length && { humanMergeErrors }), ...(ship && { ship }), ...(note && { note }) };
 }

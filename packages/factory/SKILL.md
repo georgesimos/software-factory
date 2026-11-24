@@ -204,7 +204,13 @@ Run `F gate RUN`. Its `next` decides where the run goes:
 
 ## 7. Watch main after a merge
 
-1. Under `ci=skip`, `F postmerge RUN` returns `"state":"skipped"` at once: don't poll, and tell the user main's CI wasn't watched. Otherwise poll `F postmerge RUN` about every 2 minutes, for at most 20 minutes. If `plan.postmerge` isn't default, also run it once CI passes, on the base branch at the merge commit. It can only add a failure, never clear one.
+1. Run `F postmerge RUN` and act on its `state`:
+   - `skipped`: main's CI isn't watched (rule `ci=skip`, or CI provider `local`, which doesn't check main after a merge). Don't poll. Tell the user, with its `reason`.
+   - `unknown`: the CI provider can't answer (`reason` says why: an unknown provider, gh failing, …). Stop polling. Tell the user, add `factory:needs-human` to the PR and `gh pr comment <pr>` with the reason, as in step 6.
+   - `no-pr` or `not-merged`: there is nothing to watch. Tell the user.
+   - `pending` or `none` (no CI on the merge commit yet): poll about every 2 minutes, for at most 20 minutes, then tell the user it never finished.
+   - `pass`: done. If `plan.postmerge` isn't default, run it now, on the base branch at the merge commit. It can only add a failure, never clear one.
+   - `fail`: step 2.
 2. If `state` is `fail` and `advisory` isn't `true`, or the postmerge runner reports a failure, run `F revert RUN "<one line: which check failed>"`. It opens a revert PR labelled `factory:needs-human` and **never merges it**. [Publish](#publish-to-the-artifact), then tell the user.
 
 Finally, report the outcome with its links, and give the dashboard path, `~/.claude/factory/dashboard.html`. On the first run, open the dashboard with `F open dashboard`.
