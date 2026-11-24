@@ -28,7 +28,8 @@ describe('Open in Claude on run-detail sessions (#22)', () => {
     const [cc, cx] = rows();
     await userEvent.click(within(cc).getByRole('button', { name: 'Open in Claude' }));
     expect(await within(cc).findByText('Opened in the Claude app.')).toBeTruthy();
-    await userEvent.click(within(cx).getByRole('button', { name: 'Open in Claude' }));
+    expect(within(cx).queryByRole('button', { name: 'Open in Claude' })).toBeNull(); // a Codex session can only resume in a terminal
+    await userEvent.click(within(cx).getByRole('button', { name: 'Resume…' }));
     expect(await within(cx).findByText(/No desktop link for this session\. Resume it in a terminal in \/home\/dev\/shop:/)).toBeTruthy();
     expect(within(cx).getByText(`codex resume ${CX}`, { selector: '.web-ob-cmd code' })).toBeTruthy(); // the row's own tooltip has it too
     expect(within(cx).getByRole('button', { name: 'Copy command' })).toBeTruthy();
@@ -38,16 +39,26 @@ describe('Open in Claude on run-detail sessions (#22)', () => {
   it('shows the refusal, and hides the button for a session this app is running', async () => {
     serve(() => new Response(JSON.stringify({ error: 'acme/shop#45 is claimed by pid 4242' }), { status: 400 }), [CX]);
     render(<RunDetail run={run} cap={3} costCap={5} token="tok" />);
-    await waitFor(() => expect(within(rows()[1]).queryByRole('button', { name: 'Open in Claude' })).toBeNull());
+    await waitFor(() => expect(within(rows()[1]).queryByRole('button', { name: 'Resume…' })).toBeNull());
     await userEvent.click(within(rows()[0]).getByRole('button', { name: 'Open in Claude' }));
     expect(await within(rows()[0]).findByText(/claimed by pid 4242/)).toHaveAttribute('data-bad');
+  });
+
+  it('re-reads the running sessions on every poll, so a session that crashed without an event gets its button back', async () => {
+    const running = [CC];
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ sessions: running.map((id) => ({ state: 'running', harnessSession: id })) }))));
+    const { rerender } = render(<RunDetail run={run} cap={3} costCap={5} token="tok" />);
+    await waitFor(() => expect(within(rows()[0]).queryByRole('button', { name: 'Open in Claude' })).toBeNull());
+    running.length = 0; // it died; the run's events are unchanged
+    rerender(<RunDetail run={{ ...run }} cap={3} costCap={5} token="tok" />); // the next poll's copy of the same run
+    expect(await within(rows()[0]).findByRole('button', { name: 'Open in Claude' })).toBeTruthy();
   });
 
   it('no token: no Open button on any session row, and no request', () => {
     const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
     render(<RunDetail run={run} cap={3} costCap={5} />);
     expect(rows()).toHaveLength(2);
-    for (const r of rows()) expect(within(r).queryByRole('button', { name: 'Open in Claude' })).toBeNull();
+    for (const r of rows()) expect(within(r).queryByRole('button', { name: /Open in Claude|Resume…/ })).toBeNull();
     expect(fetch).not.toHaveBeenCalled();
   });
 });

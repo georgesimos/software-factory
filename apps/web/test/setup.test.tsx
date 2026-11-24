@@ -176,12 +176,13 @@ describe('Setup auto-open', () => {
   // #22: under F ui, Review and start starts an issue through POST /api/runs; the read-only page keeps the prompt to copy.
   it('Review and start: an issue number starts a headless run, and a refusal shows inline', async () => {
     const calls: [string, unknown][] = [];
+    let open = () => {}; const gate = new Promise<void>((y) => { open = y; });
     vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
       const body = init?.body ? JSON.parse(String(init.body)) : undefined;
       calls.push([url, body]);
       if (url === '/api/runs') return body.issue === 'acme/app#7'
         ? new Response(JSON.stringify({ error: 'acme/app#7 is already running: its claim is held by pid 4242' }), { status: 400 })
-        : new Response(JSON.stringify({ pid: 99, log: '/x/run.log' }), { status: 200 });
+        : gate.then(() => new Response(JSON.stringify({ pid: 99, log: '/x/run.log' }), { status: 200 }));
       return new Response(JSON.stringify({ harnesses: [], repos: [], projects: { 'acme/app': { path: '/x', autoMerge: true } }, rules: {} }), { status: 200 });
     }));
     wizard({ token: 'tok' });
@@ -200,6 +201,8 @@ describe('Setup auto-open', () => {
     expect(await within(form).findByText(/already running: its claim is held by pid 4242/)).toHaveAttribute('data-bad');
     await userEvent.clear(n); await userEvent.type(n, '8');
     await userEvent.click(start);
+    await userEvent.clear(n); await userEvent.type(n, '9'); // edited while the request is out: the reply still names #8
+    open();
     expect(await within(form).findByText(/Started acme\/app#8 headless \(pid 99\)/)).toBeTruthy();
     expect(calls.filter(([u]) => u === '/api/runs')).toEqual([['/api/runs', { issue: 'acme/app#7' }], ['/api/runs', { issue: 'acme/app#8' }]]);
   });

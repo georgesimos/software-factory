@@ -315,10 +315,11 @@ function Rules({ data, ob, live, F, scope, scopePicker, write, fail, setStatus, 
 function StartIssue({ repo, token }: { repo: string; token: string }) {
   const [n, setN] = useState(''), [st, setSt] = useState<{ text: string; bad?: boolean; busy?: boolean }>(), ok = /^[1-9]\d{0,9}$/.test(n.trim());
   const go = async () => {
+    const id = `${repo}#${n.trim()}`; // before the await: the field may change meanwhile
     setSt({ text: '', busy: true });
     try {
-      const x = await post<{ pid?: number; log?: string }>('/runs', { issue: `${repo}#${n.trim()}` }, token);
-      setSt({ text: `Started ${repo}#${n.trim()} headless (pid ${x.pid ?? '?'}). It shows on the board once it records its first step.` });
+      const x = await post<{ pid?: number; log?: string }>('/runs', { issue: id }, token);
+      setSt({ text: `Started ${id} headless (pid ${x.pid ?? '?'}). It shows on the board once it records its first step.` });
     } catch (e) { setSt({ text: (e as Error).message, bad: true }); }
   };
   return (
