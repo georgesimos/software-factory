@@ -106,7 +106,7 @@ export function closeMerged(run: string, sha: string) {
   if (r.outcome !== 'escalated') throw new Error(`${run} is not escalated: only an escalated run is merged by hand`);
   if (!r.reviewedSha) throw new Error(`${run} has no reviewed commit: nothing to check the merge against`);
   // The sha must be the commit that brought exactly the reviewed change onto the base: a squash of it, a merge commit or a
-  // fast-forward. Extra files, a partial squash or its completion, a later commit and a revert are refused; an old git or a
+  // fast-forward. Extra files, a partial squash, a later commit and a revert are refused; an old git or a
   // bad object throws. shortcut: a fast-forward is indistinguishable from an empty branch's base commit (known limits).
   let ok: boolean;
   try { ok = introduces(git, p.path, full, r.reviewedSha); } catch (e) { throw new Error(`cannot check ${sha} against the reviewed commit ${r.reviewedSha.slice(0, 7)}: ${(e as Error).message}`); }

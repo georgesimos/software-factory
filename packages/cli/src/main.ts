@@ -10,7 +10,7 @@ import { budget, budgetWhy, derive, getRun } from '../../core/src/derive.ts';
 import { DEFAULT_PRESET, PRESETS, applyPreset, availablePlan, catalog, setSkill, skills } from '../../core/src/skills.ts';
 import { decide, gate, reviewAxes, risk } from '../../core/src/gate.ts';
 import { demo } from '../../core/src/demo.ts';
-import { deps, gc, git, localChecks, projects, worktree, wtInfo } from '../../core/src/workspace.ts';
+import { baseRef, deps, gc, git, localChecks, projects, worktree, wtInfo } from '../../core/src/workspace.ts';
 import { discover, sync } from '../../core/src/sync.ts';
 import { evals } from '../../core/src/eval.ts';
 import { headlessArgs, reviewFromText, stepModel } from '../../core/src/review.ts';
@@ -101,7 +101,7 @@ export async function main(argv: string[]) {
         let files = rest, range = null;
         if (!files.length) {
           if (!w) throw new Error(`no worktree for ${run}; pass changed files or run "worktree" first`);
-          range = `${r.reviewedSha || `origin/${w.base}`}...HEAD`;
+          range = `${r.reviewedSha || baseRef(w.repoPath, w.base as string)}...HEAD`; // a full ref: a planted tag or branch can't empty the diff
           files = git('-C', w.path, 'diff', '--name-only', range).split('\n').filter(Boolean);
         }
         const sha = w && fs.existsSync(w.path) ? git('-C', w.path, 'rev-parse', 'HEAD').trim() : undefined;

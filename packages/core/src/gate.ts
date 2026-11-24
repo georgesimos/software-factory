@@ -11,7 +11,7 @@ export interface Facts {
   rules?: Record<string, Rule>; deploys?: Deploy[];
   /** The CI provider that gave checks (absent: github-actions, as before providers); ciDetail: its one-line why; ciBroken: it
    *  couldn't answer (unknown, wrong host, threw), which escalates under every ci rule; host: the project's (absent: github). */
-  ci?: string; ciDetail?: string; ciBroken?: string; host?: string;
+  ci?: string; ciDetail?: string; ciBroken?: string; host?: string; trustBroken?: string;
 }
 
 /** F's own checks (F checks) on sha against the checks.commands rule: pass only on that commit, with that command list, every
@@ -62,8 +62,9 @@ export function gate(r: Run) {
 export function decide(r: Run, f: Facts) {
   if (r.imported) return { action: 'escalate', reasons: [`imported ${r.source || ''} run: the factory did not spec or build it`] };
   const why = [];
-  const assoc = f.association ?? r.association; // facts() reads it live from GitHub
-  if (!TRUSTED.includes(assoc)) why.push(`author association "${assoc || 'unknown'}" is not trusted`);
+  const assoc = Object.hasOwn(f, 'association') ? f.association : r.association; // facts() reads it live from the tracker; its null is never intake's
+  if (f.trustBroken) why.push(f.trustBroken); // the tracker can't say: never intake's recorded association instead
+  else if (!TRUSTED.includes(assoc)) why.push(`author association "${assoc || 'unknown'}" is not trusted`);
   if (r.originAssociation && !TRUSTED.includes(r.originAssociation)) why.push(`split from ${r.origin}, whose author "${r.originAssociation}" is not trusted`);
   if (f.autoMerge === false) why.push('auto-merge is turned off for this project');
   const expected = r.axes?.[r.iteration] || [];

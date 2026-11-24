@@ -30,8 +30,8 @@ Change requests (PRs on GitHub), all optional too:
 
 | Function | Returns | Must |
 |---|---|---|
-| `listChangeRequests(ctx, {repo, path})` | `{base, open: [{id, url, title, branch, headSha, closes, author, association}], doneBranches}` | The default branch, the open change requests, and the branches of recently merged or closed ones. |
-| `changeRequest(ctx, {repo, path, id, base?})` | `{state: open\|merged\|closed\|unknown, approval, branch, fork, mergedAt, mergedBy, mergeSha}` | One change request. Throw when the host can't be read: the caller reports it. |
+| `listChangeRequests(ctx, {repo, path, base?})` | `{base, open: [{id, url, title, branch, headSha, closes, author, association}], doneBranches}` | The default branch, the open change requests, and the branches of recently merged or closed ones. |
+| `changeRequest(ctx, {repo, path, id, base?, sha?})` | `{state: open\|merged\|closed\|unknown, detail?, approval, branch, fork, mergedAt, mergedBy, mergeSha}` | One change request. Throw when the host can't be read: the caller reports it. |
 | `merge(ctx, {repo, path, id, sha, base})` | `{merged, sha?, detail?}` | Merge exactly `sha`. Never force anything. |
 | `openChangeRequest(ctx, {repo, path, branch, base, title, body, labels})` | `{id, url?}` | Open one from a branch already pushed. |
 | `publicUrl`, `secretPatterns` | regexes | The host's public URLs (scrubbed from the published page) and token shapes (refused in it). |
@@ -57,6 +57,11 @@ moves the base only by:
 
   After the swap, the base's checkouts are listed again and that one's HEAD is re-read. Any change undoes the swap;
   otherwise `read-tree -m -u` updates the files.
+
+`listChangeRequests` reads the clone as it is, with no fetch: the open ones are the `factory/*` branches, local and
+origin's, not on the base; `doneBranches` are the local branches on it. A branch just cut from the base is among those,
+so sync never closes a factory run from this list. A reviewed sha the clone doesn't have reads `unknown` with a detail.
+`openChangeRequest` refuses with what to run when origin's base was rewound since the last fetch.
 
 A sha already on the base is "no changes", never merged: an empty branch and a human's fast-forward look the same to git,
 and `F close` records the human's. A squash that would change nothing is refused. `changeRequest` reads `merged` only from

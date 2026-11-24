@@ -126,8 +126,9 @@ export function sync(repo: string, repoPath?: string) {
   const runs = Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') || r.id.startsWith(repo + ':'));
   const byPr = new Map(runs.filter((r) => r.pr).map((r) => [r.pr, r]));
   const byBranch = new Map(runs.filter((r) => r.branch).map((r) => [r.branch, r]));
-  // a git project: no GitHub calls; nothing is open on a host, and the base comes from the clone (a local ref without a remote)
-  const { base, open: prs, doneBranches } = onGithub ? openPRs(repo) : { base: '', open: [], doneBranches: [] };
+  // from the project's host: a git project's open change requests are its factory branches, never imported (local-first 5a).
+  // An origin with nothing fetched (attach's note) has no base there to list against: nothing is open yet.
+  const { base, open: prs, doneBranches } = note ? { base: '', open: [], doneBranches: [] } : openPRs(repo, repoPath);
   const sessions = sessionsByBranch(repo, repoPath);
   const ours = (b: string) => b.startsWith('factory/'); // the factory's own branches are never imported
   const added: string[] = [], attached: string[] = [], closed: string[] = [];
@@ -152,7 +153,7 @@ export function sync(repo: string, repoPath?: string) {
     added.push(id);
   }
   // shortcut: only local branches count as session work; a session on a remote-only branch is skipped until it has a PR.
-  const unmerged = new Set(git('-C', repoPath, 'branch', '--no-merged', baseRef ?? `origin/${base}`, '--format=%(refname:short)').split('\n').map((b) => b.trim()).filter(Boolean));
+  const unmerged = new Set(git('-C', repoPath, 'branch', '--no-merged', baseRef ?? `refs/remotes/origin/${base}`, '--format=%(refname:short)').split('\n').map((b) => b.trim()).filter(Boolean));
   const openHeads = new Set(prs.map((p) => p.branch));
   const done = new Set(doneBranches); // squash-merged branches still look unmerged to git
   const recent = new Date(Date.now() - 14 * 864e5).toISOString();
@@ -203,7 +204,7 @@ export function sync(repo: string, repoPath?: string) {
     if (r.branch && sessions[r.branch]) prev[r.id] = (sessions[r.branch] as BranchSessions).sessions.sort((a, b) => b.last.localeCompare(a.last)).slice(0, 5);
   }
   fs.writeFileSync(links, JSON.stringify(prev, null, 2));
-  const head = new Map(prs.map((p) => [p.url, p.headSha])); // deploy state of each in-progress run's PR head (finished runs aren't polled)
+  const head = new Map(prs.filter((p) => p.url).map((p) => [p.url, p.headSha])); // a git change request has no url // deploy state of each in-progress run's PR head (finished runs aren't polled)
   const ship = shipTrack(Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') && r.outcome === 'in-progress' && head.get(r.pr as string)).map((r) => ({ run: r.id, repo, sha: head.get(r.pr as string), path: repoPath })));
   dashboard.render();
   return { repo, path: repoPath, added, attached, closed, humanMerged, ...(humanMergeErrors.length && { humanMergeErrors }), ...(ship && { ship }), ...(note && { note }) };

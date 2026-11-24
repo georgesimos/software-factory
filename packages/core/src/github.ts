@@ -5,17 +5,14 @@ import { decide, localResult } from './gate.ts';
 import { ciBroken, ciChecks, ciOf } from './ci.ts';
 import { derive, getRun } from './derive.ts';
 import { exec } from './platform.ts';
-import { baseBranch, git, hostFn, hostOf, projects, requireGithub } from './workspace.ts';
+import { baseBranch, baseRef, git, hostFn, hostOf, projects, requireGithub, trackerFn, trackerOf } from './workspace.ts';
 import { io, read, readArchive, record, runDir } from './log.ts';
 import { shipTrack } from './ship.ts';
 import { rules } from './rules.ts';
 import type { Facts } from './gate.ts';
+import type { Comment } from '../../adapters/trackers/index.ts';
 import type { Deploy, Run } from './types.ts';
 
-// GitHub's JSON, as far as F reads it: gh output is parsed, never validated beyond what the code checks.
-interface GhUser { login: string }
-interface GhIssue { pull_request?: unknown; state: string; title: string; html_url: string; user: GhUser; author_association: string; body?: string | null }
-export interface GhComment { user: GhUser; author_association: string; created_at: string; body?: string | null }
 /** postmerge(): CI on the merge commit, and its production deploys. */
 // SKILL.md §7 says what to do on each (test/ci.test.mjs checks it names them all).
 export const POSTMERGE_STATES = ['no-pr', 'not-merged', 'skipped', 'unknown', 'pending', 'none', 'pass', 'fail'] as const;
@@ -27,7 +24,7 @@ export const parseRun = (run: string) => {
   if (!m) throw new Error(`run must look like owner/repo#N, got "${run}"`);
   return { repo: `${m[1]}/${m[2]}`, n: m[3] as string }; // matched: every group is set
 };
-// Fetches the issue itself so title/author/association are never model-typed. Prints what intake should read.
+// Reads the item from the project's tracker so title/author/association are never model-typed. Prints what intake should read.
 export function intake(run: string) {
   const { repo, n } = parseRun(run);
   if (process.env.FACTORY_FIXTURES && repo === 'eval/golden') return intakeFixture(run, n); // offline eval: no GitHub
@@ -40,22 +37,23 @@ export function intake(run: string) {
     .filter((p) => p.branch !== `factory/issue-${n}` && p.closes.includes(n))
     .map((p) => p.url);
   if (inProgress.length) return { inProgress }; // nothing recorded: someone is already on it
-  const i: GhIssue = JSON.parse(gh('api', `repos/${repo}/issues/${n}`));
-  if (i.pull_request) return { notAnIssue: `#${n} is a pull request` };
+  const t = trackerOf(repo), ctx = adapterCtx();
+  const i = trackerFn(t, 'getItem', 'read an item')(ctx, { repo, id: n });
+  if (i.isChangeRequest) return { notAnIssue: `#${n} is a pull request` };
   if (i.state !== 'open') return { notAnIssue: `#${n} is ${i.state}` };
   // Advisory only: PRs naming the issue in their title without a formal closing link.
   const mentions = prs.filter((p) => p.branch !== `factory/issue-${n}` && new RegExp(`(^|[^\\w])#${n}(?!\\d)`).test(p.title)).map((p) => ({ url: p.url, title: p.title }));
-  const comments: GhComment[] = gh('api', '--paginate', `repos/${repo}/issues/${n}/comments`, '--jq', '.[]').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-  const meta: { title: string; url: string; author: string; association: string; origin?: string; originAssociation?: string | undefined } = { title: i.title, url: i.html_url, author: i.user.login, association: i.author_association };
+  const comments = trackerFn(t, 'comments', 'read comments')(ctx, { repo, id: n });
+  const meta: { title: string; url?: string | undefined; author: string; association: string; origin?: string; originAssociation?: string | undefined } = { title: i.title, url: i.url, author: i.author, association: i.association };
   // A split child is authored by whoever ran the split; it inherits its parent's (possibly untrusted) author.
   const parent = [...Object.values(derive(read())), ...readArchive()].find((r) => (r.children || []).includes(run));
   if (parent) Object.assign(meta, { origin: parent.id, originAssociation: parent.originAssociation || parent.association });
   record(run, 'intake', 'started', meta);
   // Only the reporter and repo insiders may shape requirements; others could steer a trusted issue into auto-merge.
-  const counts = (c: GhComment) => c.user.login === meta.author || TRUSTED.includes(c.author_association);
+  const counts = (c: Comment) => (!!c.author && c.author === meta.author) || TRUSTED.includes(c.association); // a deleted account ('') is nobody's
   return {
     ...meta, state: i.state, body: i.body, mentions,
-    comments: comments.filter(counts).map((c) => ({ author: c.user.login, association: c.author_association, created_at: c.created_at, body: c.body })),
+    comments: comments.filter(counts).map((c) => ({ author: c.author, association: c.association, created_at: c.created_at, body: c.body })),
     ignoredComments: comments.filter((c) => !counts(c)).length,
   };
 }
@@ -66,16 +64,21 @@ export function intakeFixture(run: string, n: string) {
   return { ...meta, state: 'open', body: fx.issue.body, mentions: [], comments: fx.comments || [], ignoredComments: 0, dryRun: true };
 }
 export const adapterCtx = () => ({ gh, git }); // what host and tracker adapters get: the same stubbable gh and git
-/** The project's open change requests, from its host. */
-export function openPRs(repo: string) {
-  requireGithub(repo, 'listing open pull requests');
-  return hostFn(hostOf(repo), 'listChangeRequests', 'list change requests')(adapterCtx(), { repo });
+/** The project's open change requests, from its host (a git host reads the clone at path). */
+export function openPRs(repo: string, path = projects()[repo]?.path) {
+  const base = projects()[repo]?.base;
+  return hostFn(hostOf(repo), 'listChangeRequests', 'list change requests')(adapterCtx(), { repo, ...(path && { path }), ...(base && { base }) });
 }
-// Reads CI + diff facts from GitHub so the merge decision never depends on typed-in numbers.
+// Reads trust, CI and diff facts live (tracker, CI provider, host) so the merge decision never depends on typed-in numbers.
 export function facts(r: Run): Facts {
   const { repo, n } = parseRun(r.id);
-  requireGithub(repo, 'reading CI and the diff');
-  const association = gh('api', `repos/${repo}/issues/${n}`, '--jq', '.author_association').trim();
+  const host = hostOf(repo), onGit = host !== 'github', on = onGit ? { host } : {}; // GitHub's facts keep their keys
+  const t = (() => { try { return trackerOf(repo); } catch (e) { return { why: (e as Error).message }; } })();
+  const ask = typeof t !== 'string' ? t.why : (() => { try { return trackerFn(t, 'trust', 'tell who wrote an item'); } catch (e) { return (e as Error).message; } })();
+  const said = typeof ask === 'string' ? undefined : ask(adapterCtx(), { repo, id: n }) as unknown;
+  const who = typeof ask === 'string' ? { trustBroken: `${ask}, so ${r.id}'s author is unknown and not trusted` }
+    : typeof said === 'string' && said && said !== 'null' ? { association: said } // no answer is never trusted, and never intake's recorded association instead
+    : { trustBroken: `tracker "${t as string}" gave no author association for ${r.id}, so its author is unknown and not trusted` };
   const autoMerge = projects()[repo]?.autoMerge !== false;
   const policy = rules(repo).policy; // a broken config throws here, so decide/merge fail and the run escalates
   const pv = policy['deploy.preview']?.value, dep: { deploys?: Deploy[] } = {};
@@ -83,13 +86,27 @@ export function facts(r: Run): Facts {
     shipTrack([{ run: r.id, repo, sha: r.reviewedSha, path: projects()[repo]?.path }]);
     dep.deploys = derive(read())[r.id]?.deploys || [];
   }
-  if (!r.pr) return { association, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy, ...dep };
-  const diff: { additions: number; deletions: number; files: { path: string }[] } = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'additions,deletions,files'));
+  if (!(onGit ? r.reviewedSha : r.pr)) return { ...who, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy, ...dep, ...on };
+  const diff = onGit ? gitDiff(repo, r.reviewedSha as string) : JSON.parse(gh('pr', 'view', r.pr as string, '-R', repo, '--json', 'additions,deletions,files')) as ReturnType<typeof gitDiff>;
   // the project's CI provider on the reviewed commit; ci=skip doesn't read it, but a provider that can't answer still escalates
   const local = (sha?: string) => localResult(r.localChecks, policy['checks.commands']?.value, sha);
   const c = policy.ci?.value === 'skip' ? { ci: undefined, state: 'skipped', broken: ciBroken(repo) } : ciChecks(repo, { path: projects()[repo]?.path, sha: r.reviewedSha, changeRequest: r.pr }, local);
   const ci = { ...(c.ci && c.ci !== 'github-actions' && { ci: c.ci }), ...('detail' in c && c.detail && { ciDetail: c.detail }), ...(c.broken && { ciBroken: c.broken }) }; // GitHub's, as before: no extra keys
-  return { association, autoMerge, checks: c.state, ...ci, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), rules: policy, ...dep };
+  return { ...who, autoMerge, checks: c.state, ...ci, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), rules: policy, ...dep, ...on };
+}
+// A git project's diff: the reviewed commit against its fork point from the base (three dots), as GitHub counts a PR's.
+// numstat -z: "added<TAB>deleted<TAB>path<NUL>"; a binary file's "-" counts 0 lines, as on GitHub.
+// --attr-source=<empty tree>: the branch's own .gitattributes can't mark files -diff to count as binary (git 2.40+, else refused).
+const EMPTY_TREE = { sha1: '4b825dc642cb6eb9a060e54bf8d69288fbee4904', sha256: '6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321' };
+function gitDiff(repo: string, sha: string) {
+  const at = projects()[repo]?.path;
+  if (!at) throw new Error(`no local clone registered for ${repo}`);
+  const [maj = 0, min = 0] = (/(\d+)\.(\d+)/.exec(git('--version')) ?? []).slice(1).map(Number);
+  if (maj < 2 || (maj === 2 && min < 40)) throw new Error('git 2.40 or later is needed to count a git project\'s diff');
+  const empty = git('-C', at, 'rev-parse', '--show-object-format').trim() === 'sha256' ? EMPTY_TREE.sha256 : EMPTY_TREE.sha1;
+  const rows = git('-C', at, `--attr-source=${empty}`, 'diff', '--numstat', '-z', '--no-renames', `${baseRef(at, baseBranch(repo, at))}...${sha}`).split('\0').filter(Boolean).map((l) => l.split('\t'));
+  const lines = (i: number) => rows.reduce((t, x) => t + (Number(x[i]) || 0), 0);
+  return { additions: lines(0), deletions: lines(1), files: rows.map((x) => ({ path: x.slice(2).join('\t') })) };
 }
 // The only merge path: re-decides from live GitHub facts and merges exactly the reviewed commit.
 export function merge(run: string) {
@@ -123,16 +140,15 @@ export function approval(run: string) {
   requireGithub(repo, 'reading spec approval');
   const since = [...r.events].reverse().find((e) => e.status === 'awaiting-approval')?.ts;
   if (!since) throw new Error(`${run} is not awaiting approval`);
-  const comments: GhComment[] = gh('api', '--paginate', `repos/${repo}/issues/${n}/comments`, '--jq', '.[]').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-  return approvalVote(comments, since);
+  return approvalVote(trackerFn(trackerOf(repo), 'comments', 'read comments')(adapterCtx(), { repo, id: n }), since);
 }
 // The latest trusted "/factory approve|reject" posted after `since`. GitHub stamps comments to the whole second and F to the
 // millisecond, so only a comment from a later second counts: one in the same second may predate the spec it would approve.
 // Compared as times, never strings ("…:00Z" sorts after "…:00.900Z"). An unparsable created_at never counts.
-export function approvalVote(comments: GhComment[], since: string) {
+export function approvalVote(comments: Comment[], since: string) {
   const from = Math.floor(Date.parse(since) / 1000) * 1000 + 1000;
-  const vote = comments.filter((c) => Date.parse(c.created_at) >= from && TRUSTED.includes(c.author_association))
-    .map((c) => ({ by: c.user.login, m: /^\s*\/factory\s+(approve|reject)\b/i.exec(c.body || '') })).filter((x) => x.m).pop();
+  const vote = comments.filter((c) => Date.parse(c.created_at) >= from && TRUSTED.includes(c.association))
+    .map((c) => ({ by: c.author, m: /^\s*\/factory\s+(approve|reject)\b/i.exec(c.body || '') })).filter((x) => x.m).pop();
   return vote ? { decision: ((vote.m as RegExpExecArray)[1] as string).toLowerCase(), by: vote.by } : { decision: 'waiting' }; // filtered on m; group 1 always matches
 }
 // After a merge: CI on the merge commit of the base branch.
@@ -170,7 +186,7 @@ export function revert(run: string, reason: string) {
   const base = baseBranch(repo, repoPath);
   const branch = `factory/revert-${n}`, wt = path.join(runDir(run), 'revert');
   git('-C', repoPath, 'fetch', '-q', 'origin', base);
-  git('-C', repoPath, 'worktree', 'add', '-q', '-B', branch, wt, `origin/${base}`);
+  git('-C', repoPath, 'worktree', 'add', '-q', '-B', branch, wt, `refs/remotes/origin/${base}`); // a full ref: see baseRef
   try {
     git('-C', wt, 'revert', '--no-edit', pm.sha);
     git('-C', wt, 'push', '-q', '-u', 'origin', branch);
