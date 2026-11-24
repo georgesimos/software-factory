@@ -15,7 +15,7 @@ export function pluginFiles(dir) {
   const files = fs.readdirSync(dir).filter(isPlugin).sort(), seen = new Map();
   for (const f of files) {
     const twin = seen.get(stem(f));
-    if (twin) throw new Error(`${path.join(dir, twin)} and ${f} are both provider "${stem(f)}": remove one (a .ts and its compiled .mjs can't sit side by side)`);
+    if (twin) throw new Error(`${dir}: ${twin} and ${f} are both provider "${stem(f)}": remove one (a .ts and its compiled .mjs can't sit side by side)`);
     seen.set(stem(f), f);
   }
   return files;
@@ -26,7 +26,7 @@ export function pluginFiles(dir) {
 export async function importPlugin(dir, f, label = f, typescript = process.features.typescript) {
   if (f.endsWith('.ts') && !typescript) throw new Error(`${label}: this Node doesn't strip TypeScript types (process.features.typescript is off): use ${stem(f)}.mjs`);
   try { return await import(pathToFileURL(path.join(dir, f)).href); }
-  catch (e) { throw new Error(`${label}: ${e.message}`, { cause: e }); }
+  catch (e) { throw Object.assign(new Error(`${label}: ${e.message}`, { cause: e }), { code: e.code }); } // e.code: ERR_MODULE_NOT_FOUND, ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX, …
 }
 
 export async function loadDir(dir, required) {

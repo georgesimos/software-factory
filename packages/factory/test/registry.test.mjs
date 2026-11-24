@@ -56,7 +56,8 @@ test('FACTORY_HARNESSES: claude-code.ts and codex.ts load exactly as the .mjs fi
 test('an import failure names its file, for .mjs and .ts alike; a .ts under node_modules says so', async () => {
   for (const ext of ['mjs', 'ts']) await assert.rejects(loadDir(put(tmp(), { [`broken.${ext}`]: 'export const = ;\n' }), HOST_FNS), new RegExp(`^Error: broken\\.${ext}: `));
   const nm = put(tmp(), { 'node_modules/p/x.ts': HOST('x') });
-  await assert.rejects(loadDir(path.join(nm, 'node_modules', 'p'), HOST_FNS), /^Error: x\.ts: .*node_modules/);
+  await assert.rejects(loadDir(path.join(nm, 'node_modules', 'p'), HOST_FNS), { message: /^x\.ts: .*node_modules/, code: 'ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING' }); // Node's code kept
+  await assert.rejects(loadDir(put(tmp(), { 'kind.ts': `enum K { A }\n${HOST('kind')}` }), HOST_FNS), { message: /^kind\.ts: .*enum/i, code: 'ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX' }); // strip-only: no enum
   await assert.rejects(loadHarnesses(put(tmp(), { 'x.ts': 'export default {;\n' })), /^Error: harnesses\/x\.ts: /);
 });
 

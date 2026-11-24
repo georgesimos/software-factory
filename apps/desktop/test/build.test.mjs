@@ -30,7 +30,8 @@ const expect = (r) => {
 test('the build is plain .mjs JS: no .ts left, every plugin an .mjs file', () => {
   const files = fs.readdirSync(DIST, { recursive: true }).map(String);
   assert.deepEqual(files.filter((f) => f.endsWith('.ts')), []);
-  for (const f of ['apps/desktop/src/main.mjs', 'packages/adapters/harnesses/claude-code.mjs', 'packages/adapters/hosts/github.mjs', 'packages/adapters/trackers/github-issues.mjs', 'packages/ship/connectors/github-deployments.mjs', 'packages/factory/app.html'])
+  for (const f of ['apps/desktop/src/main.mjs', 'packages/adapters/harnesses/claude-code.mjs', 'packages/adapters/hosts/github.mjs', 'packages/adapters/trackers/github-issues.mjs', 'packages/ship/connectors/github-deployments.mjs', 'packages/factory/app.html',
+    ...['harnesses', 'hosts', 'trackers'].map((d) => `packages/adapters/${d}/index.mjs`)]) // each adapter index, every export kept
     assert.ok(files.includes(path.normalize(f)), f);
 });
 

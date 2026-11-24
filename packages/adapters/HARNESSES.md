@@ -9,6 +9,9 @@ stamp, the sensitive paths, `F onboard` and the setup wizard all read it, so not
 on a Node without it and says to use `.mjs`). `.mjs` loads everywhere, so it is the safe format for a harness kept outside
 this repo. Never keep `<id>.ts` and `<id>.mjs` side by side (a compiled twin): the registry refuses the folder and says to
 remove one. `index.*`, `_*` and declaration files (`*.d.ts`, `*.d.mts`) are never loaded.
+Node only strips types, it compiles nothing: a `.ts` file must use erasable syntax only (no `enum`, `namespace`,
+parameter properties or other TypeScript that emits code; type-only imports as `import type`). The desktop build
+would compile those, but F under Node fails on them, naming the file.
 
 1. **Copy the template.** `cp harnesses/_template.mjs harnesses/<id>.mjs`. The `id` must equal the file name without its extension.
    Files starting with `_` are never loaded. Import only `node:` builtins, never `factory.mjs`.

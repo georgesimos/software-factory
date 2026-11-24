@@ -28,6 +28,9 @@ package, and on a Node with `process.features.typescript` on (a `.ts` file is re
 use `.mjs`). `.mjs` loads everywhere, so it is the safe format for a provider kept outside this repo. The id is the file
 name without its extension, so `<id>.ts` next to `<id>.mjs` (a compiled twin) is refused: remove one. `index.*`, `_*` and
 declaration files (`*.d.ts`, `*.d.mts`) are never loaded. A file that fails to import is reported with its name.
+Node only strips types, it compiles nothing: a `.ts` file must use erasable syntax only (no `enum`, `namespace`,
+parameter properties or other TypeScript that emits code; type-only imports as `import type`). The desktop build
+would compile those, but F under Node fails on them, naming the file.
 
 ## GitHub notes
 
