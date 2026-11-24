@@ -26,6 +26,16 @@ more things. Both are optional; a host without one is refused by name (`host "<i
 | `whoami(ctx, {user})` | `{login, verified}` or `null` | `verified: true` only for a login the host vouches for. `null` when there is no login here (F then uses the OS user, unverified); throw on any other failure. |
 | `baseBranch(ctx, {repo, path, base})` | a branch name | The branch runs start from. `base` is the project's own setting, a branch that must be where runs fetch it (on origin, when there is one); refuse rather than guess. |
 
+Change requests (PRs on GitHub), all optional too:
+
+| Function | Returns | Must |
+|---|---|---|
+| `listChangeRequests(ctx, {repo, path})` | `{base, open: [{id, url, title, branch, headSha, closes, author, association}], doneBranches}` | The default branch, the open change requests, and the branches of recently merged or closed ones. |
+| `changeRequest(ctx, {repo, path, id})` | `{state: open\|merged\|closed\|unknown, approval, branch, fork, mergedAt, mergedBy, mergeSha}` | One change request. Throw when the host can't be read: the caller reports it. |
+| `merge(ctx, {repo, path, id, sha, base})` | `{merged, sha?, detail?}` | Merge exactly `sha`. Never force anything. |
+| `openChangeRequest(ctx, {repo, path, branch, base, title, body, labels})` | `{id, url?}` | Open one from a branch already pushed. |
+| `publicUrl`, `secretPatterns` | regexes | The host's public URLs (scrubbed from the published page) and token shapes (refused in it). |
+
 An attached project's `host` can be `github` or `git` only: core imports those two by name, so this folder's other files
 (and `FACTORY_HOSTS`) only change what `F new` offers. Who acts is a verified login first on every project, whatever its
 host; `whoami` here says what a host vouches for.
