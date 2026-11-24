@@ -32,6 +32,7 @@ export function read(): FactoryEvent[] {
     throw e;
   }
 }
+export const HOST_ID = /^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/; // a Claude desktop session id
 export function record(run: string, stage: string, status: string, payload: Partial<FactoryEvent> = {}, cli?: { fallback?: unknown }): FactoryEvent { // cli: {fallback?} when the orchestrator reports a step; in-process records (sync, demo) get no runner
   if (!run) throw new Error('missing run id');
   if (String(run).endsWith(':project')) throw new Error('project runs are recorded by "new", "issues create", "loop" and "retire", not by hand');
@@ -46,8 +47,10 @@ export function record(run: string, stage: string, status: string, payload: Part
     if (extra.length) throw new Error(`verifier payload has unknown fields: ${extra.join(', ')}`);
   }
   payload = validateUsage(payload);
+  const { hostSessionId: _forged, ...own } = payload; payload = own; // the desktop session comes from the environment, never a payload
   const me = stage === 'ship' ? null : harnesses.find((h) => h.current?.()); // the harness F runs inside, if any; lets the UI link back to the driving session
-  const ev = { ts: new Date().toISOString(), ...payload, ...(me ? { harness: me.id, sessionId: (me.current as () => string)(), cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback, payload.role)), run, stage, status };
+  const host = me?.id === 'claude-code' ? process.env.CLAUDE_CODE_HOST_SESSION_ID : undefined; // the Claude desktop app's id for that session (#26); CLAUDE_CODE_SESSION_ID is the CLI transcript's
+  const ev = { ts: new Date().toISOString(), ...payload, ...(me ? { harness: me.id, sessionId: (me.current as () => string)(), ...(host && HOST_ID.test(host) && { hostSessionId: host }), cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback, payload.role)), run, stage, status };
   fs.mkdirSync(stateDir(), { recursive: true });
   fs.appendFileSync(log(), JSON.stringify(ev) + '\n');
   if (TERMINAL.includes(status) || status === 'needs-info') { // a finished (or parked) run gives back its worktree

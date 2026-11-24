@@ -120,7 +120,12 @@ function Epic({ run: r, find, href }: { run: Run; find: (id: string) => Run | un
 // claude-cli://open: a new Claude Code terminal in the run's worktree (else the latest session's cwd), prompt pre-filled, not sent.
 // The handler refuses relative paths, "..", network paths and control/bidi characters; refuse them here too.
 const deepCwd = (p: unknown): p is string => typeof p === 'string' && /^(\/(?!\/)|[A-Za-z]:\\)/.test(p) && !p.includes('..') && !/[\p{Cc}\p{Cf}]/u.test(p);
+// A run driven from the Claude desktop app opens that session there (#26): F recorded its local_<uuid> with the events.
+const HOST_ID = /^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export function openInClaude(r: Run) {
+  const last = (r.sessions ?? []).slice().sort((a, b) => (a.last ?? '').localeCompare(b.last ?? '')).at(-1); // the session that drove it most recently
+  const host = last?.agent === 'claude-code' && last.hostId && HOST_ID.test(last.hostId) ? last.hostId : undefined;
+  if (host) return `claude://claude.ai/epitaxy/${host}`;
   const cwd = [r.worktree, ...(r.sessions ?? []).map((s) => s.cwd)].find(deepCwd);
   if (!cwd || !/^[\w.-]+\/[\w.-]+(#\d+|:[\w./-]+)$/.test(r.id)) return null; // owner/repo#N or an import's owner/repo:branch; it goes into a prompt that runs F
   const q = `Continue factory run ${r.id}. Run F state '${r.id}' first.`;
@@ -237,7 +242,7 @@ export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, h
       {r.sessions?.length || open || startable(r) ? (
         <Section title="Sessions">
           {startable(r) ? <Start run={r} resume={resume} /> : null}
-          {open ? <p className="web-links"><a href={open} title="Opens a new Claude Code terminal here (prompt pre-filled, not sent). Requires the claude-cli handler: send one message in any interactive claude session first.">Open in Claude</a></p> : null}
+          {open ? <p className="web-links"><a href={open} title={open.startsWith('claude://') ? 'Opens its session in the Claude desktop app' : 'Opens a new Claude Code terminal here (prompt pre-filled, not sent). Requires the claude-cli handler: send one message in any interactive claude session first.'}>Open in Claude</a></p> : null}
           {r.sessions?.length ? <SessionList sessions={r.sessions} now={now} /> : null}
         </Section>
       ) : null}

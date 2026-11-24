@@ -56,6 +56,14 @@ describe('Sessions sheet (#58)', () => {
     expect(calls.find(([u]) => u === '/api/sessions/open')![1]).toEqual({ harness: 'claude-code', id: 'abc-1' });
   });
 
+  it('no Open in Claude while the session runs here: the server refuses a second harness on its run', async () => {
+    serve(undefined, [{ ...running, harnessSession: 'run-1' }]);
+    sheet();
+    const [row] = await screen.findAllByRole('listitem');
+    expect(within(row!).getByRole('button', { name: 'Stop' })).toBeTruthy();
+    expect(within(row!).queryByRole('button', { name: 'Open in Claude' })).toBeNull();
+  });
+
   it('New terminal starts one in the chosen repo and shows it: output in, keystrokes and size out', async () => {
     serve((url) => (url === '/api/sessions/terminal' ? new Response(JSON.stringify({ session: running.id })) : undefined));
     sheet();

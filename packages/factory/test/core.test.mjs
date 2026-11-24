@@ -155,6 +155,8 @@ export function artifactTest() {
       'cwd:/Users/al/x', 'PATH=/a:/home/al/bin', '/factory approve', 'https://github.com/evil/x/pull/2', `\\\\wsl.localhost\\Ubuntu\\home\\${user}\\app`,
       '\\\\fs01\\users\\bob', 'vscode-remote://ssh-remote+box/home/al/x', 'cwd:/data/proj/x', 'src:/code/acme/x', 'see /srv/a/b.md https://github.com/evil/x/pull/3 ok', 'GET /api/runs'];
     record('evil/x#1', 'intake', 'passed', { summary: planted.join('\n'), sessionId: 's1', cwd: path.join(home, 'src', 'x') });
+    Object.assign(process.env, { CLAUDE_CODE_SESSION_ID: 's2', CLAUDE_CODE_HOST_SESSION_ID: 'local_0123abcd-0123-4567-89ab-0123456789ab' }); // driven from the desktop app
+    try { record('evil/x#1', 'spec', 'started'); } finally { delete process.env.CLAUDE_CODE_SESSION_ID; delete process.env.CLAUDE_CODE_HOST_SESSION_ID; }
     fs.writeFileSync(path.join(io.dir, 'skills.json'), JSON.stringify({ 'evil/x': { spec: { use: 'brief', path: '/Volumes/Data/briefs/spec.md' } } }));
     fs.writeFileSync(path.join(io.dir, 'onboard.json'), JSON.stringify({ default: { ship: ['web'] }, 'evil/x': { ship: ['web'], path: '/Volumes/Data/clones/x' } }));
     const before = fs.readFileSync(path.join(io.dir, 'dashboard.html'), 'utf8'), out = path.join(io.dir, 'artifact.html');
@@ -179,7 +181,8 @@ export function artifactTest() {
     assert.equal(hit, null, hit && pub.slice(Math.max(0, hit.index - 80), hit.index + 80)); // ...the published page has none, not even a fragment after a space
     const x = a.runs.find((r) => r.id === 'evil/x#1');
     assert.equal(x.worktree, undefined);
-    assert.ok(x.sessions.every((s) => !('cwd' in s)));
+    assert.ok(x.sessions.every((s) => !('cwd' in s) && !('hostId' in s)), 'no local path or desktop session link');
+    assert.ok(loc.includes('local_0123abcd') && !pub.includes('local_0123abcd'));
     assert.match(pub, /\/factory approve/); // one segment, not a path
     assert.match(pub, /GET \/api\/runs/); // a route, not a path
     assert.match(pub, /\[local path\] https:\/\/github\.com\/evil\/x\/pull\/3 ok/); // a path stops at the URL after it

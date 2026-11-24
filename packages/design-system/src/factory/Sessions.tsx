@@ -7,7 +7,7 @@ import { formatAgo } from './model.ts';
 import { SOURCE_LABEL } from './SourceChip.tsx';
 
 /** A local agent session working on a run's branch. */
-export interface AgentSession { agent: 'claude-code' | 'codex' | (string & {}); id: string; cwd?: string; last?: string }
+export interface AgentSession { agent: 'claude-code' | 'codex' | (string & {}); id: string; cwd?: string; last?: string; hostId?: string } // hostId: its Claude desktop app session
 
 // Paths come from local logs: single-quote them for a POSIX shell, so $, `, \ and ! stay literal.
 export const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;

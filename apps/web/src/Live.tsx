@@ -74,9 +74,15 @@ export function LiveSessions({ open, onClose, token, repos, terminal }: { open: 
   const [repo, setRepo] = useState(repos[0] ?? '');
   const load = () => fetch('/api/sessions', { headers: { 'x-factory-token': token } }).then((r) => r.json()).then((x: { sessions?: LiveSession[] }) => setList([...(x.sessions ?? [])].reverse()), () => {});
   useEffect(() => { if (!open) return; void load(); const t = setInterval(load, 3_000); return () => clearInterval(t); }, [open, token]); // eslint-disable-line react-hooks/exhaustive-deps
-  const act = async (route: string, body: object, done: string) => {
+  const act = async (route: string, body: object, done: string, resumable = false) => {
     setMsg(null);
-    try { const x = await post<{ session?: string }>(route, body, token); setMsg({ text: done }); if (x.session) show(x.session); await load(); }
+    try {
+      const x = await post<{ session?: string; resume?: { command: string; cwd?: string } }>(route, body, token);
+      setMsg({ text: !x.resume ? done : resumable ? 'No desktop session for it: Resume continues it here.' // started outside the desktop app
+        : `No desktop session for it: run ${x.resume.command} in a terminal${x.resume.cwd ? ` in ${x.resume.cwd}` : ''}.` });
+      if (x.session) show(x.session);
+      await load();
+    }
     catch (e) { setMsg({ text: (e as Error).message, bad: true }); }
   };
   const cur = list.find((s) => s.id === shown), sel = repos.includes(repo) ? repo : repos[0] ?? ''; // repos may arrive after mount
@@ -99,7 +105,7 @@ export function LiveSessions({ open, onClose, token, repos, terminal }: { open: 
                 <Button size="sm" variant="ghost" onClick={() => show(s.id)}>Show</Button>
                 {s.state === 'running' ? <Button size="sm" variant="ghost" onClick={() => act('/sessions/stop', { id: s.id }, `Stopped ${s.label}.`)}>Stop</Button> : null}
                 {s.state !== 'running' && s.harnessSession && terminal ? <Button size="sm" variant="ghost" onClick={() => act('/sessions/terminal', { ...repoAndIssue(s.label), harness: s.harness, resume: s.harnessSession }, `Resumed ${s.label} in a terminal.`)}>Resume</Button> : null}
-                {s.harnessSession ? <Button size="sm" variant="ghost" onClick={() => act('/sessions/open', { harness: s.harness, id: s.harnessSession }, 'Opened in the Claude app.')}>Open in Claude</Button> : null}
+                {s.harnessSession && s.state !== 'running' ? <Button size="sm" variant="ghost" onClick={() => act('/sessions/open', { harness: s.harness, id: s.harnessSession }, 'Opened in the Claude app.', s.state !== 'running' && !!terminal)}>Open in Claude</Button> : null}
               </span>
             </li>
           ))}
