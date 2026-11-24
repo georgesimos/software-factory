@@ -12,7 +12,7 @@ export interface Runner {
   fallback?: string[] | { from?: Runner; reason?: string };
 }
 export interface Usage { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }
-export interface LocalChecks { sha?: string; state?: string; commands?: { cmd: string; exit: number }[] }
+export interface LocalChecks { sha?: string; state?: string; commands?: { cmd: string; exit: number | 'timeout'; ms?: number }[] } // timeout: killed after 30 min
 export interface Deploy { connector?: string; kind?: string; env?: string; state?: string; status?: string; url?: string; sha?: string | null; at?: string; detail?: string; creator?: string; ts?: string }
 export interface Note { id?: string; step?: string; text?: string; by?: string; ts?: string; state: 'pending' | 'applied'; appliedTo?: string[]; appliedAt?: string; claim?: unknown }
 export interface Session { agent?: string; id: string; cwd?: string; last?: string; hostId?: string } // hostId: the Claude desktop app's session (local_<uuid>)
