@@ -33,6 +33,7 @@ const run = (args) => {
   return { code: r.error ? -1 : r.status ?? -1, out: `${r.stdout || ''}${r.stderr || ''}` };
 };
 const SESSION_ID = /^\w[\w-]{0,99}$/; // a thread id as a positional argument: plain, and never a flag (no leading '-')
+const ID = /^[\w-]{1,100}$/; // a session id read from its output: a malformed one is skipped, so a later valid one counts
 const slug = (url) => /[:/]([^/:]+\/[^/]+?)(?:\.git)?\/?$/.exec(url || '')?.[1].toLowerCase(); // owner/repo from any remote URL form
 
 const adapter = {
@@ -55,16 +56,16 @@ const adapter = {
   // line, the prompt on stdin (`-`). The sandbox is always named, on a resume too: read-only unless `write` (build), which gets
   // workspace-write. Never danger-full-access or --dangerously-bypass-approvals-and-sandbox (or its --yolo alias).
   // Codex has no spend or turn cap of its own (no --max-budget-usd or --max-turns): a spent budget refuses, any other runs
-  // uncapped, as claude-code's does when its budget is unknown. terminal: an interactive codex for a pty, no prompt.
+  // uncapped, as claude-code's does when its budget is unknown, which is why launchGate never lets Codex drive a factory run
+  // (no host): it runs as a step runner or a person's terminal. terminal: an interactive codex for a pty, no prompt.
   modes: ['headless', 'terminal'],
   launch({ mode, prompt, resume, budget, write = false }) {
     if (resume !== undefined && !SESSION_ID.test(String(resume))) throw new Error('resume must be a codex session id');
     if (mode === 'headless') {
       if (!prompt) throw new Error('a headless launch needs a prompt');
       if (budget != null && !(Number(budget) >= 0.01)) throw new Error(`no run budget left (${budget}); escalate instead of running`); // claude-code's whole-cent rule
-      const sandbox = write ? 'workspace-write' : 'read-only';
-      // exec's -s is parsed before the subcommand; resume takes only -c, so it gets the same sandbox as config too
-      return { cmd: 'codex', args: ['exec', '--json', '-s', sandbox, ...(resume ? ['resume', '-c', `sandbox_mode=${sandbox}`, resume] : []), '-'], stdin: prompt };
+      // exec's own -s, before the resume subcommand (which has none). Never widened: no -c sandbox_*, network or writable roots.
+      return { cmd: 'codex', args: ['exec', '--json', '-s', write ? 'workspace-write' : 'read-only', ...(resume ? ['resume', resume] : []), '-'], stdin: prompt };
     }
     if (mode === 'terminal') { // a person types the prompt
       if (prompt) throw new Error('terminal mode takes no prompt: type it in the session');
@@ -74,7 +75,7 @@ const adapter = {
   },
   // A headless run's events (F start's log, a session's stdout): its thread id comes first (thread.started), and it ended
   // cleanly when its last event is turn.completed; turn.failed, error or any other last event means it was cut short.
-  sessionOf: (e) => (e?.type === 'thread.started' && typeof e.thread_id === 'string' ? e.thread_id : undefined),
+  sessionOf: (e) => (e?.type === 'thread.started' && typeof e.thread_id === 'string' && ID.test(e.thread_id) ? e.thread_id : undefined),
   exitOf: (e) => (e?.type === 'turn.completed' ? 0 : null),
   providerTools: () => (adapter.detect().installed ? [
     { name: 'codex exec', desc: 'Runs Codex headless in the run worktree with the step\'s brief; reviews return the JSON contract via --output-schema.' },

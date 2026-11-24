@@ -117,7 +117,7 @@ export default {
   },
   // A headless run's stream-json events (F start's log, a session's stdout): the session id is on its init line, and it
   // ended cleanly when its last event is a successful result.
-  sessionOf: (e) => (typeof e?.session_id === 'string' ? e.session_id : undefined),
+  sessionOf: (e) => (typeof e?.session_id === 'string' && /^[\w-]{1,100}$/.test(e.session_id) ? e.session_id : undefined), // malformed: skipped, so a later valid one counts
   exitOf: (e) => (e?.type === 'result' && e.subtype === 'success' && !e.is_error ? 0 : null),
   // The desktop app's own link for one of its sessions. Observed, not documented (ADR §5): best effort; callers fall back
   // to `claude --resume <id>` in a terminal when this returns null.

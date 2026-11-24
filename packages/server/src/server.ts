@@ -101,7 +101,7 @@ export const UI_ROUTES = {
   },
   '/onboard/automerge': ({ repo, on }) => { setAutoMerge(repo, on); return onboardConfig(); },
   '/sessions': (x) => ({ session: launchSession(x).id }),
-  '/runs': ({ issue, harness }) => startRun(issue, process.env, spawn, harness),
+  '/runs': ({ issue, harness }) => startRun(issue, process.env, spawn, harness), // a harness other than claude-code is refused
   '/sessions/terminal': (x) => ({ session: terminalSession(x).id }),
   '/sessions/input': ({ id, data, cols, rows }) => { // keystrokes and size for a terminal session
     const s = getSession(id);
@@ -140,7 +140,7 @@ const factorySessions = (label) => listSessions().filter((x) => x.mode !== 'term
 export function resumable() {
   const runs = derive(read()), archive = readArchive();
   return Object.keys(runs).filter((id) => { const r = runs[id];
-    return !TERMINAL.includes(r.outcome) && !closedWhy(id, r, archive) && !budget(r).over && resumeOf(id, r) && !claimedElsewhere(id, {}); });
+    return !TERMINAL.includes(r.outcome) && !closedWhy(id, r, archive) && !budget(r).over && resumeOf(id, r)?.harness === 'claude-code' && !claimedElsewhere(id, {}); }); // what a POST with no harness resumes
 }
 // A session of this app's is on that run (#107): the way out is to stop it here, not F unclaim.
 const inApp = (label: string, s: { id: string; mode: string; started: string }) => new Error(`${label} already has a running session in this app (${s.mode}, started ${s.started}): stop it in Sessions first (POST /api/sessions/stop {"id":"${s.id}"})`);
@@ -215,7 +215,7 @@ function resumeOf(id: string, r): { harness: string; harnessSession: string } | 
 function activeRun(id: string, r, instead: string, harness?: string) {
   const last = resumeOf(id, r);
   if (r && !TERMINAL.includes(r.outcome) && !last) throw new Error(`${id} already has an active run (${r.outcome || r.stage}): its harness may still be working it (a skill run in another claude); ${instead}`);
-  if (last && harness && last.harness !== harness) throw new Error(`${id} was left active by a ${last.harness} session: resume it on ${last.harness}, not ${harness}`);
+  if (last && harness && last.harness !== harness) throw new Error(`${id} was left active by a ${last.harness} session: ${harness} can't resume it`);
   return last?.harnessSession;
 }
 // Why no start may take run r at all, for launchGate and resumable() alike.
@@ -229,11 +229,12 @@ function closedWhy(id: string, r, archive = readArchive()) {
   return gone ? `${id} is ${gone.outcome} (archived): it needs a human, not a new run` : undefined;
 }
 // The checks every factory start passes (#25), for a live session here (launchSession) and a detached run (startRun).
-// No harness named: the one a resume would continue on (so the dashboard's Resume agrees with resumable()), else claude-code.
-function launchGate({ harness, mode = 'headless', repo, issue }: { harness?: string; mode?: string; repo?: unknown; issue?: unknown }, modules = hostModules) {
-  if (harness === undefined) { const id = `${repo}#${issue}`, r = derive(read())[id]; harness = (r && resumeOf(id, r)?.harness) || 'claude-code'; } // a run's own id only: derive's keys
+function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue }, modules = hostModules) {
   const h = harnesses.find((y) => y.id === harness);
   if (!h?.launch) throw new Error(`harness ${String(harness).slice(0, 40)} cannot launch sessions`);
+  // A factory run is the factory skill under a budget cap: only a harness that loads the skill itself (host) and caps spend.
+  // shortcut: claude-code is the only one; Codex driving a run needs a skill brief, spend tracking and a sandbox decision first.
+  if (!h.host) throw new Error(`${h.label} can't drive a factory run (it can't load the factory skill or be budget-capped): run it as a step runner (F skills set <owner/repo> <step> '{"use":"provider","harness":"${h.id}"}'), or open it in a terminal (POST /api/sessions/terminal {"harness":"${h.id}"})`);
   if (!(h.modes || []).includes(mode)) throw new Error(`${h.id} modes are ${(h.modes || []).join(', ')}`);
   if (mode === 'terminal') throw new Error('factory runs are headless or sdk: a terminal session has no budget cap or pinned policy'); // a person drives terminal mode
   const need = mode === 'sdk' && h.launch({ mode, prompt: 'x' }).module;
@@ -327,8 +328,7 @@ function readLog(file: string, st: fs.Stats, harness: string) {
 }
 // F start and POST /api/runs (#25): the factory on one issue as a detached headless harness that outlives F and F ui, with
 // launchSession's checks. Not a session here: GET /api/sessions doesn't list it and quitting doesn't stop it. The prompt
-// and output are files in the run's folder, so nothing waits on F. run is for tests (child_process.spawn's shape). harness:
-// as launchGate's (none: the one a resume continues on, else claude-code); the log's name says which, for readLog.
+// and output are files in the run's folder, so nothing waits on F. run is for tests (child_process.spawn's shape).
 export function startRun(issue, env = process.env, run = spawn, harness?: string) {
   const { h, cwd, id, resume, budget: left } = launchGate({ ...parseRun(issue), harness });
   const cl = takeClaim(id, 'start'); // before the spawn: a second launcher now waits on this claim, not on the run's first event
