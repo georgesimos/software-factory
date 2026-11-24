@@ -171,12 +171,12 @@ secretPatterns?: RegExp[]                                    // added to server.
   - `headSha` is the branch's current head.
   - `approval` is the latest `F approve RUN --merge` event in the log, valid only while `headSha` equals the approved
     sha, with `via: 'local'`.
-  - `state` is `merged` when the base branch has the factory's own squash of the reviewed sha (confirmed by its tree), or
-    contains the reviewed sha (a human's merge or fast-forward). Without the reviewed sha, only the squash counts: a
-    branch just cut from the base is on it too.
+  - `state` is `merged` only when the base branch has the factory's own squash of the reviewed sha, confirmed by its
+    tree. A reviewed sha already on the base is "no changes": git can't tell a branch just cut from the base from a
+    human's fast-forward, so `F close` records the human's merge.
   - A human squash merge elsewhere (at a remote with a review UI) isn't detectable from git. The run stays escalated
     until the user runs `F close RUN --merged <sha>` at a terminal, which records `humanMerge` like #21's sync does and
-    requires that `<sha>` is on the base and brought the reviewed change onto it.
+    requires that `<sha>` is on the base and brought exactly the reviewed change onto it.
 - `listChangeRequests`: the local and remote `factory/*` branches not yet on the base, and `doneBranches` from
   `git branch --merged`. Squash merges are missed there too, as `sync.ts` already notes for GitHub.
 - `merge`:
@@ -503,20 +503,48 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
      projects.
    - A temp-repo contract test: a moved base makes the plain push fail as non-fast-forward and leaves the remote unchanged; no-remote `update-ref` CAS; no force flag anywhere (§1.2).
    - Landed as: `openChangeRequest`, `changeRequest` and `merge` on `hosts/git.ts` (see its README section), and `F close
-     RUN --merged <sha>` (`closeMerged` in `projectset.ts`: human-only, git projects only, the sha must be on the base and
-     be the commit that brought the run's reviewed change onto it (merging the reviewed commit into the sha changes
-     nothing, and into its first parent it would), the run must be escalated; it records the same `approve merged` event as sync's GitHub human-merge). A protected base is
-     the refused push: its detail says to merge at the host and then run `F close`. `test/githost.test.mjs` covers:
-     - the no-force grep, and every `update-ref` comparing against the sha it saw;
-     - a moved base during the push, which leaves the remote untouched;
-     - a moved ref during the CAS, a checked-out base moved forwards or reset backwards just before the swap, a dirty or
-       missing checkout, an untracked file in the way, and a conflict;
-     - a retry or a human's fast-forward (merged, nothing pushed), a squash that changes nothing, a branch just cut from
-       the base, and a commit that only claims the factory's squash in its message;
-     - each `F close` refusal: a later commit, a revert, and an unknown reviewed commit (git's error, not "not merged").
+     RUN --merged <sha>`, which is `closeMerged` in `projectset.ts`.
+     - `F close` is human-only and for git projects only. It records the same `approve merged` event as sync's GitHub
+       human-merge. It needs:
+       - the run escalated and reviewed;
+       - the sha on origin's base, read exactly as `refs/heads/<base>` into `FETCH_HEAD`, never a tag of the same name;
+       - the sha to be the commit that brought exactly the reviewed change. Its own diff must touch exactly the paths
+         the reviewed change touches, and equal merging the reviewed commit into its parent.
+     - A protected base is the refused push: its detail says to merge at the host and then run `F close`.
+     - `test/githost.test.mjs` has one test per review finding, each failing on the code before its fix:
+       - the no-force grep, and an old value on every `update-ref`;
+       - origin's base moved on, reset backwards, or deleted after the fetch;
+       - the CAS, and a checked-out base moved, switched off or onto, or checked out twice;
+       - a dirty or missing checkout, and an untracked or ignored file in the way;
+       - a conflict, an old git, and an empty branch;
+       - a commit that only claims the factory's squash in its message;
+       - `F close`'s acceptance table: accepts a squash onto a moved base, merge commits, and fast-forwards; refuses
+         extra files, a partial squash or its completion, a later commit, a revert, and a changed-again commit.
      - Not here: `listChangeRequests` and sync for `git` projects, and core calling the git host's `merge`. `facts()` and
        `merge()` in core still `requireGithub`, so they come with 5a's `facts()` split. `approval` is `null` until PR 7.
        `comment` waits for PR 6.
+   - Known limits of 4b's git host:
+     - **The `ls-remote` race.** Origin's base reset backwards or deleted between the `ls-remote` check and the plain
+       push still lands, and a reset re-publishes the removed commit. Only a lease on the exact seen sha closes it, and
+       the no-force rule forbids that until the owner decides.
+     - **Checkout races.** A checkout switched between the post-swap re-check and `read-tree` still gets the squash
+       staged.
+     - **A crash between the ref move and the checkout update** leaves the base at the squash with stale files. They
+       show as staged reverse changes. In that checkout, `git read-tree -m -u HEAD~1 HEAD` (the squash's parent is the base
+       seen) finishes the update.
+     - **A file locked on Windows during the checkout update:** `read-tree` fails part-way, and the rollback restores the
+       ref but may leave stray unstaged files.
+     - **Shallow clones.** A merge sha whose parent wasn't fetched counts as a root commit, so `F close` refuses it.
+       Unshallow, or fetch deeper.
+     - **A fast-forward to the reviewed commit** is indistinguishable from an empty branch's base commit. So `merge`
+       says "no changes", and `F close` accepts the commit whose own diff matches the reviewed one.
+     - **A multi-commit fast-forward** is closed by its tip, whose own diff is the last commit.
+     - **A squash a human edited at the host** (conflicts resolved there) isn't the reviewed change: `F close` refuses
+       it, and the run stays escalated.
+     - **A later commit quoting the squash message** can hide the real squash from `changeRequest`. That reads `open`,
+       which is fail-safe.
+     - **`F close` doesn't check that the merge came after the escalation**, because git has no trustworthy merge
+       time.
 5a. **`facts()` split and the GitHub tracker, a move.** (~400 lines)
    - `github-issues.getItem` and `approval` take over intake's and approval's gh calls.
    - `intake()` and `facts()` read trust through the tracker.

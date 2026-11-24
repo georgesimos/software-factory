@@ -85,19 +85,29 @@ export function closeMerged(run: string, sha: string) {
   if (hostOf(repo) === 'github') throw new Error(`${repo} is on GitHub: F sync records a human merge there itself`);
   if (!p?.path) throw new Error(`${repo} is not attached; run sync first`);
   if (!/^[0-9a-f]{7,40}$/i.test(sha)) throw new Error(`"${sha}" is not a commit sha`);
-  const base = baseBranch(repo, p.path), origin = !!originUrl(p.path);
-  if (origin) git('-C', p.path, 'fetch', '-q', 'origin', base);
-  let full = '';
-  try { full = git('-C', p.path, 'rev-parse', '--verify', '-q', `${sha}^{commit}`).trim(); } catch { /* below */ }
-  try { if (!full) throw 0; git('-C', p.path, 'merge-base', '--is-ancestor', full, origin ? `refs/remotes/origin/${base}` : `refs/heads/${base}`); }
-  catch { throw new Error(`${sha} is not on ${base}${origin ? ' at origin' : ''} in ${p.path}: give the merge commit on ${base}`); }
+  const base = baseBranch(repo, p.path), origin = !!originUrl(p.path), line = (e: unknown) => String((e as { stderr?: unknown })?.stderr || (e as Error)?.message || e).trim().split('\n')[0];
+  // origin's branch exactly (refs/heads/, never a tag of the same name), read from FETCH_HEAD: a stale tracking ref or a
+  // rewound base can't vouch for a commit origin no longer has
+  let tip: string;
+  try {
+    if (origin) git('-C', p.path, 'fetch', '-q', 'origin', `refs/heads/${base}`);
+    tip = git('-C', p.path, 'rev-parse', '--verify', '-q', `${origin ? 'FETCH_HEAD' : `refs/heads/${base}`}^{commit}`).trim();
+  } catch (e) { throw new Error(`cannot read ${base}${origin ? ' from origin' : ''} in ${p.path}: ${line(e)}`); }
+  let full: string;
+  try { full = git('-C', p.path, 'rev-parse', '--verify', '-q', `${sha}^{commit}`).trim(); } catch { throw new Error(`${sha} is an unknown or ambiguous commit in ${p.path}: give the full sha of the merge commit on ${base}`); }
+  try { git('-C', p.path, 'merge-base', '--is-ancestor', full, tip); }
+  catch (e) {
+    if ((e as { status?: number })?.status === 1) throw new Error(`${sha} is not on ${base}${origin ? ' at origin' : ''} in ${p.path}: give the merge commit on ${base}`);
+    throw new Error(`cannot check whether ${sha} is on ${base}: ${line(e)}`);
+  }
   // shortcut: the merging commit may predate the escalation (GitHub's sync checks mergedAt); git has no trustworthy merge
   // time. Upgrade when the git host records its change requests' history (5a's sync for git projects).
   const r = getRun(run);
   if (r.outcome !== 'escalated') throw new Error(`${run} is not escalated: only an escalated run is merged by hand`);
   if (!r.reviewedSha) throw new Error(`${run} has no reviewed commit: nothing to check the merge against`);
-  // The sha must be the commit that brought the reviewed change onto the base: a squash of exactly it, a merge commit or a
-  // fast-forward. A later commit, a revert or one missing any reviewed change is refused; an old git or a bad object throws.
+  // The sha must be the commit that brought exactly the reviewed change onto the base: a squash of it, a merge commit or a
+  // fast-forward. Extra files, a partial squash or its completion, a later commit and a revert are refused; an old git or a
+  // bad object throws. shortcut: a fast-forward is indistinguishable from an empty branch's base commit (known limits).
   let ok: boolean;
   try { ok = introduces(git, p.path, full, r.reviewedSha); } catch (e) { throw new Error(`cannot check ${sha} against the reviewed commit ${r.reviewedSha.slice(0, 7)}: ${(e as Error).message}`); }
   if (!ok) throw new Error(`${sha} is not the commit that merged the reviewed commit ${r.reviewedSha.slice(0, 7)}: give the squash or merge commit that brought it onto ${base}`);

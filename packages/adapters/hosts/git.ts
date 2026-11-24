@@ -66,38 +66,71 @@ export function mergeTree(git: Git, path: string, ours: string, theirs: string):
     throw new Error(firstLine(e));
   }
 }
-// sha brought every change of reviewed onto its line: merging reviewed into sha changes nothing, and into sha's first
-// parent it would. So a squash of exactly it, a merge commit or a fast-forward to it; never a later commit or a revert.
+// Paths that differ between two commits (no rename pairing), sorted.
+const changed = (git: Git, path: string, a: string, b: string) => git('-C', path, 'diff', '--name-only', '-z', '--no-renames', a, b).split('\0').filter(Boolean).sort();
+const NUL = '\0';
+// sha is the commit that brought exactly the reviewed change onto its line: a squash of it (onto a moved base too), a merge
+// commit, or a fast-forward to it. Its own change (first parent to sha) touches exactly the paths the reviewed change
+// touches (fork point to reviewed) and equals merging reviewed into that parent. So never a squash with extra files, a
+// partial squash or the commit that completed one, a later commit, a revert, or one that changed it again.
+// A sha whose parent isn't here (a root commit, or a shallow clone) is refused.
 export function introduces(git: Git, path: string, sha: string, reviewed: string) {
-  if (mergeTree(git, path, sha, reviewed) !== treeOf(git, path, sha)) return false;
-  const parent = tryGit(git, '-C', path, 'rev-parse', '--verify', '-q', `${sha}^1`);
-  return !parent || mergeTree(git, path, parent, reviewed) !== treeOf(git, path, parent);
+  const parent = tryGit(git, '-C', path, 'rev-parse', '--verify', '-q', `${sha}^1^{commit}`);
+  if (!parent) return false;
+  let fork: string;
+  try { fork = git('-C', path, 'merge-base', parent, reviewed).trim(); }
+  catch (e) { if ((e as { status?: number })?.status === 1) return false; throw new Error(firstLine(e)); } // 1: no common history
+  const want = changed(git, path, fork, reviewed).join(NUL);
+  return !!want && changed(git, path, parent, sha).join(NUL) === want && mergeTree(git, path, parent, reviewed) === treeOf(git, path, sha);
 }
 
-// Pushes the branch (a plain push) when the project has a remote; with none it stays local. The id pins the sha.
-export function openChangeRequest({ git }: Ctx, { path, branch }: { repo: string; path: string; branch: string; base: string; title: string; body: string }) {
-  const sha = git('-C', path, 'rev-parse', '--verify', `refs/heads/${branch}^{commit}`).trim();
-  if (hasOrigin(git, path)) git('-C', path, 'push', '-q', 'origin', `refs/heads/${branch}:refs/heads/${branch}`);
+// The base as the clone sees it: origin's when there is one, else the local branch.
+const baseRef = (origin: boolean, base: string) => (origin ? `refs/remotes/origin/${base}` : `refs/heads/${base}`);
+// exit 0: a is on b. exit 1: it isn't. Anything else (an unknown commit) throws its first line.
+function isAncestor(git: Git, path: string, a: string, b: string) {
+  try { git('-C', path, 'merge-base', '--is-ancestor', a, b); return true; }
+  catch (e) { if ((e as { status?: number })?.status === 1) return false; throw new Error(firstLine(e)); }
+}
+const noChanges = (sha: string, base: string) => `${sha.slice(0, 7)} is already on ${base}: no changes to merge (if you merged it yourself: F close RUN --merged <sha>)`;
+
+// Pushes the branch (a plain push) when the project has a remote; with none it stays local. The id pins the sha. A branch
+// with nothing beyond the base is refused: there is nothing to review, and later it would look merged.
+export function openChangeRequest({ git }: Ctx, { path, branch, base }: { repo: string; path: string; branch: string; base: string; title: string; body: string }) {
+  const sha = git('-C', path, 'rev-parse', '--verify', `refs/heads/${branch}^{commit}`).trim(), origin = hasOrigin(git, path);
+  if (origin) git('-C', path, 'fetch', '-q', 'origin', `refs/heads/${base}:${baseRef(true, base)}`);
+  if (isAncestor(git, path, sha, baseRef(origin, base))) throw new Error(`${branch} has no commits beyond ${base}: nothing to review`);
+  if (origin) git('-C', path, 'push', '-q', 'origin', `refs/heads/${branch}:refs/heads/${branch}`);
   return { id: `${branch}@${sha.slice(0, 7)}` };
 }
 
-// The branch's head now, and merged once the reviewed commit (sha) is on the base, or the base has the factory's own squash
-// of it. Being on the base proves nothing without sha: a branch just cut from the base is on it too. The squash is
-// confirmed by its tree, never by its message alone. A squash merged elsewhere: F close RUN --merged <sha>.
+// The branch's head now, and merged only when the base has the factory's own squash of the reviewed commit (sha, else the
+// head), confirmed by its tree, never by its message alone. A commit already on the base is "no changes", not merged: an
+// empty branch and a human's fast-forward look the same to git. A human's merge: F close RUN --merged <sha>.
 // approval: F approve RUN --merge (local-first PR 7).
 export function changeRequest(ctx: Ctx, { repo, path, id, base, sha }: { repo: string; path: string; id: string; base?: string; sha?: string }) {
   const { git } = ctx, branch = branchOf(id), origin = hasOrigin(git, path);
   if (origin) tryGit(git, '-C', path, 'fetch', '-q', 'origin');
   const headSha = tryGit(git, '-C', path, 'rev-parse', '--verify', '-q', `refs/heads/${branch}^{commit}`) ?? tryGit(git, '-C', path, 'rev-parse', '--verify', '-q', `refs/remotes/origin/${branch}^{commit}`);
-  const b = base ?? baseBranch(ctx, { repo, path }), at = origin ? `refs/remotes/origin/${b}` : `refs/heads/${b}`;
+  const b = base ?? baseBranch(ctx, { repo, path }), at = baseRef(origin, b);
   const target = sha ?? headSha;
   let mergeSha: string | undefined;
   if (target) {
     const [c, parent, ...more] = (tryGit(git, '-C', path, 'log', '-1', '--format=%H %P', '--fixed-strings', `--grep=Squash of ${target}, merged by the software factory.`, at) ?? '').split(' ');
     if (c && parent && !more.length) { const t = treeOf(git, path, c); if (t !== treeOf(git, path, parent) && mergeTree(git, path, parent, target) === t) mergeSha = c; }
   }
-  const merged = !!mergeSha || !!(sha && tryGit(git, '-C', path, 'merge-base', '--is-ancestor', sha, at) !== null);
-  return { state: merged ? 'merged' as const : headSha ? 'open' as const : 'unknown' as const, headSha, approval: null, branch, ...(mergeSha && { mergeSha }) };
+  const empty = !mergeSha && !!target && isAncestor(git, path, target, at);
+  return { state: mergeSha ? 'merged' as const : headSha ? 'open' as const : 'unknown' as const, headSha, approval: null, branch, ...(mergeSha && { mergeSha }), ...(empty && { detail: noChanges(target!, b) }) };
+}
+
+// The base's checkouts: worktrees with it as HEAD (prunable: the directory is gone).
+const checkouts = (git: Git, path: string, ref: string) => git('-C', path, 'worktree', 'list', '--porcelain').split('\n\n')
+  .map((b) => ({ dir: /^worktree (.+)$/m.exec(b)?.[1] ?? '', on: /^branch (.+)$/m.exec(b)?.[1], gone: /^prunable/m.test(b) })).filter((w) => w.on === ref);
+// An ignored file the squash would overwrite or delete: at a changed path, under one (a directory that becomes a file),
+// or in the way of one (a file where a directory comes). read-tree treats ignored files as expendable; the user may not.
+function ignoredInTheWay(git: Git, dir: string, paths: string[]) {
+  // --directory lists a wholly ignored directory once (node_modules/), so the output stays small; no pathspecs, so no argv limit
+  const ignored = git('-C', dir, 'ls-files', '-z', '-o', '-i', '--exclude-standard', '--directory').split('\0').filter(Boolean).map((p) => p.replace(/\/$/, ''));
+  return ignored.find((i) => paths.some((p) => i === p || i.startsWith(`${p}/`) || p.startsWith(`${i}/`)));
 }
 
 // Squashes exactly sha onto the base as it is now, then moves the base only if nobody moved it since (see the rule above).
@@ -108,12 +141,11 @@ export function merge(ctx: Ctx, { repo, path, id, sha, base }: { repo: string; p
   const old = mergeTreeMissing(git);
   if (old) return no(old);
   try { base ??= baseBranch(ctx, { repo, path }); } catch (e) { return no(firstLine(e)); }
-  const origin = hasOrigin(git, path), ref = origin ? `refs/remotes/origin/${base}` : `refs/heads/${base}`;
+  const origin = hasOrigin(git, path), ref = baseRef(origin, base);
   if (origin) try { git('-C', path, 'fetch', '-q', 'origin', `refs/heads/${base}:${ref}`); } catch (e) { return no(`cannot fetch ${base} from origin: ${firstLine(e)}`); }
   const seen = tryGit(git, '-C', path, 'rev-parse', '--verify', '-q', `${ref}^{commit}`);
   if (!seen) return no(`no ${base} branch${origin ? ' on origin' : ''}`);
-  // already there (a retry after a fast-forward, or a human's): nothing to squash, nothing pushed
-  if (tryGit(git, '-C', path, 'merge-base', '--is-ancestor', sha, seen) !== null) return { merged: true, detail: `${sha.slice(0, 7)} is already on ${base}` };
+  try { if (isAncestor(git, path, sha, seen)) return no(noChanges(sha, base)); } catch (e) { return no(`cannot merge ${branch}: ${(e as Error).message}`); }
   let tree: string | null; // a merge with no checkout: the index and files of the user's clone are never touched
   try { tree = mergeTree(git, path, seen, sha); } catch (e) { return no(`cannot merge ${branch}: ${(e as Error).message}`); }
   // merge base into the branch, never rebase: a rebased branch's plain push would be refused as a non-fast-forward
@@ -125,25 +157,41 @@ export function merge(ctx: Ctx, { repo, path, id, sha, base }: { repo: string; p
     mergeSha = git('-C', path, 'commit-tree', tree, '-p', seen, '-m', msg).trim();
   } catch (e) { return no(`cannot commit the squash of ${branch}: ${firstLine(e)}`); }
   if (origin) {
+    // A plain push refuses only a non-fast-forward: origin's base reset to an ancestor of seen, or deleted, would take it.
+    // So origin's base must still be exactly seen. shortcut: a reset or delete between this check and the push still
+    // lands (docs/plans/local-first.md, 4b known limits); closing it needs a lease on the exact sha, which the no-force rule forbids for now.
+    const now = tryGit(git, '-C', path, 'ls-remote', 'origin', `refs/heads/${base}`);
+    if (now === null) return no(`cannot read ${base} on origin: merge again`);
+    const at = now.split('\n').find((l) => l.endsWith(`\trefs/heads/${base}`))?.split('\t')[0];
+    if (at !== seen) return no(`${base} on origin moved while merging (${at ? `now ${at.slice(0, 7)}` : 'deleted'}, was ${seen.slice(0, 7)}): review again`);
     try { git('-C', path, 'push', '-q', 'origin', `${mergeSha}:refs/heads/${base}`); } catch (e) {
       return no(`push to ${base} refused (${firstLine(e)}): merge ${branch} at your host, then F close RUN --merged <sha>`);
     }
     tryGit(git, '-C', path, 'update-ref', ref, mergeSha, seen); // the tracking ref, as a fetch would set it
     return { merged: true, sha: mergeSha };
   }
-  // no remote: compare-and-swap the base; where it is checked out, its clean files then follow (checked first, by a dry run)
-  const wt = git('-C', path, 'worktree', 'list', '--porcelain').split('\n\n').map((b) => ({ dir: /^worktree (.+)$/m.exec(b)?.[1], on: /^branch (.+)$/m.exec(b)?.[1], gone: /^prunable/m.test(b) })).find((w) => w.on === ref);
+  // No remote: compare-and-swap the base. Where it is checked out (once at most), the checkout must be there and clean, a dry
+  // run must show its files can follow, and no ignored file may be in the way; after the swap the checkouts are listed again
+  // and that one's HEAD re-read, and any change undoes the swap. shortcut: a checkout switched between that re-check and
+  // read-tree still gets the squash staged; git has no lock spanning both. Upgrade if it is ever seen in practice.
+  const before = checkouts(git, path, ref);
+  if (before.length > 1) return no(`${base} is checked out in ${before.length} worktrees (${before.map((w) => w.dir).join(', ')}): leave one, then merge again`);
+  const wt = before[0];
   if (wt) {
     if (wt.gone) return no(`${base} is checked out in ${wt.dir}, which is missing: git worktree prune, then merge again`);
     let dirty: string;
-    try { dirty = git('-C', wt.dir!, 'status', '--porcelain', '--untracked-files=no').trim(); } catch (e) { return no(`cannot read ${base}'s checkout in ${wt.dir} (${firstLine(e)}): merge again once it is back`); }
+    try { dirty = git('-C', wt.dir, 'status', '--porcelain', '--untracked-files=no').trim(); } catch (e) { return no(`cannot read ${base}'s checkout in ${wt.dir} (${firstLine(e)}): merge again once it is back`); }
     if (dirty) return no(`${base} is checked out with uncommitted changes in ${wt.dir}: commit or stash them, then merge again`);
-    try { git('-C', wt.dir!, 'read-tree', '-m', '-u', '-n', seen, mergeSha); } catch (e) { return no(`cannot update ${base}'s files in ${wt.dir}: ${firstLine(e)}`); }
+    try { git('-C', wt.dir, 'read-tree', '-m', '-u', '-n', seen, mergeSha); } catch (e) { return no(`cannot update ${base}'s files in ${wt.dir}: ${firstLine(e)}`); }
+    let inTheWay: string | undefined;
+    try { inTheWay = ignoredInTheWay(git, wt.dir, changed(git, path, seen, mergeSha)); } catch (e) { return no(`cannot check ${base}'s ignored files in ${wt.dir}: ${firstLine(e)}`); }
+    if (inTheWay) return no(`${base}'s checkout in ${wt.dir} has an ignored file the merge would overwrite or delete (${inTheWay}): move it, then merge again`);
   }
   try { git('-C', path, 'update-ref', ref, mergeSha, seen); } catch (e) { return no(`${base} moved while merging (${firstLine(e)}): review again`); }
-  if (wt) try { git('-C', wt.dir!, 'read-tree', '-m', '-u', seen, mergeSha); } catch (e) {
-    const back = tryGit(git, '-C', path, 'update-ref', ref, seen, mergeSha); // undone only if the ref still holds the squash
-    return no(`cannot update ${base}'s files in ${wt.dir} (${firstLine(e)})${back === null ? `; ${base} is at the squash, so check that checkout` : ''}: merge again`);
-  }
+  const undo = (why: string) => { const back = tryGit(git, '-C', path, 'update-ref', ref, seen, mergeSha); return no(`${why}${back === null ? `; ${base} is at the squash, so check that checkout` : ''}: merge again`); }; // undone only if the ref still holds the squash
+  let after: ReturnType<typeof checkouts>;
+  try { after = checkouts(git, path, ref); } catch (e) { return undo(`cannot list ${base}'s checkouts (${firstLine(e)})`); }
+  if (after.length !== (wt ? 1 : 0) || (wt && (after[0]!.dir !== wt.dir || tryGit(git, '-C', wt.dir, 'symbolic-ref', '-q', 'HEAD') !== ref))) return undo(`${base}'s checkouts changed while merging`);
+  if (wt) try { git('-C', wt.dir, 'read-tree', '-m', '-u', seen, mergeSha); } catch (e) { return undo(`cannot update ${base}'s files in ${wt.dir} (${firstLine(e)})`); }
   return { merged: true, sha: mergeSha };
 }

@@ -22,7 +22,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-githost-'));
 const run = (...a) => execFileSync('git', a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 const g = (cwd, ...a) => run('-C', cwd, ...a).trim();
 const ctx = (before = () => {}) => ({ gh: () => assert.fail('the git host never calls gh'), git: (...a) => { before(a); return run(...a); } });
-const commit = (d, file, text, msg = file) => { fs.writeFileSync(path.join(d, file), text); g(d, 'add', file); g(d, 'commit', '-q', '-m', msg); return g(d, 'rev-parse', 'HEAD'); };
+const commit = (d, file, text, msg = file) => { fs.mkdirSync(path.dirname(path.join(d, file)), { recursive: true }); fs.writeFileSync(path.join(d, file), text); g(d, 'add', '-f', file); g(d, 'commit', '-q', '-m', msg); return g(d, 'rev-parse', 'HEAD'); };
 const repo = (name) => { const d = path.join(root, name); fs.mkdirSync(d); g(d, 'init', '-q', '-b', 'main'); commit(d, 'a.txt', 'a\n', 'init'); return d; };
 const remote = (name) => { const bare = path.join(root, `${name}.git`), d = path.join(root, name); run('init', '-q', '--bare', '-b', 'main', bare); run('clone', '-q', bare, d); commit(d, 'a.txt', 'a\n', 'init'); g(d, 'push', '-q', 'origin', 'main'); return { bare, d }; };
 const work = (d, n, file = `f${n}.txt`) => { g(d, 'checkout', '-q', '-b', `factory/issue-${n}`, 'main'); const sha = commit(d, file, `${n}\n`, `issue ${n}`); g(d, 'checkout', '-q', 'main'); return sha; };
@@ -63,17 +63,18 @@ test('with a remote: the branch is pushed, the squash goes up by a plain push, a
   assert.equal(g(bare, 'rev-parse', 'main'), moved, 'the remote base is what the other push made, untouched by the factory');
   // a branch just cut from the base is on the base too: open, not merged
   g(d, 'fetch', '-q', 'origin'); g(d, 'branch', '-q', 'factory/issue-7', 'origin/main');
-  assert.deepEqual(host.changeRequest(ctx(), { repo: 'acme/r1', path: d, id: 'factory/issue-7', base: 'main' }), { state: 'open', headSha: moved, approval: null, branch: 'factory/issue-7' });
+  assert.deepEqual(host.changeRequest(ctx(), { repo: 'acme/r1', path: d, id: 'factory/issue-7', base: 'main' }), { state: 'open', headSha: moved, approval: null, branch: 'factory/issue-7', detail: `${moved.slice(0, 7)} is already on main: no changes to merge (if you merged it yourself: F close RUN --merged <sha>)` });
   // a commit whose message claims the factory's squash, but whose tree isn't one: not merged
   const head6 = work(d, 6); g(d, 'push', '-q', 'origin', 'factory/issue-6');
   g(other, 'pull', '-q'); commit(other, 'fake.txt', 'fake\n', `Squash of ${head6}, merged by the software factory.`); g(other, 'push', '-q', 'origin', 'main');
   for (const sha of [undefined, head6]) assert.equal(host.changeRequest(ctx(), { repo: 'acme/r1', path: d, id: 'factory/issue-6', base: 'main', sha }).state, 'open', 'the message alone proves nothing');
-  // a human fast-forwarded main to the reviewed commit: merged, and merging again pushes nothing
+  // a human fast-forwarded main to the reviewed commit: git can't tell that from an empty branch, so "no changes", and
+  // merging pushes nothing; F close records the human's merge
   g(d, 'fetch', '-q', 'origin'); g(d, 'checkout', '-q', '-b', 'factory/issue-8', 'origin/main'); const head8 = commit(d, 'f8.txt', '8\n'); g(d, 'checkout', '-q', 'main');
   g(d, 'push', '-q', 'origin', 'factory/issue-8:main');
   assert.equal(host.changeRequest(ctx(), { repo: 'acme/r1', path: d, id: 'factory/issue-8', base: 'main' }).state, 'open', 'without the reviewed sha, being on the base proves nothing');
-  assert.equal(host.changeRequest(ctx(), { repo: 'acme/r1', path: d, id: 'factory/issue-8', base: 'main', sha: head8 }).state, 'merged');
-  assert.deepEqual(host.merge(ctx(), { repo: 'acme/r1', path: d, id: 'factory/issue-8', sha: head8, base: 'main' }), { merged: true, detail: `${head8.slice(0, 7)} is already on main` });
+  assert.deepEqual(host.changeRequest(ctx(), { repo: 'acme/r1', path: d, id: 'factory/issue-8', base: 'main', sha: head8 }).state, 'open');
+  assert.deepEqual(host.merge(ctx(), { repo: 'acme/r1', path: d, id: 'factory/issue-8', sha: head8, base: 'main' }), { merged: false, detail: `${head8.slice(0, 7)} is already on main: no changes to merge (if you merged it yourself: F close RUN --merged <sha>)` });
   assert.equal(g(bare, 'rev-parse', 'main'), head8, 'no empty squash on top');
 });
 
@@ -154,7 +155,8 @@ test('F close RUN --merged <sha>: yours only, git projects only, the sha on the 
   assert.throws(() => closeMerged('acme/app#1', squash), /acme\/app is on GitHub: F sync records a human merge there itself/);
   assert.throws(() => closeMerged(R, 'nope'), /"nope" is not a commit sha/);
   const stray = commit(other, 'x.txt', 'x\n'); g(other, 'reset', '-q', '--hard', 'HEAD~1');
-  assert.throws(() => closeMerged(R, stray), /is not on main at origin in /, 'a commit that never reached the base');
+  assert.throws(() => closeMerged(R, stray), /is an unknown or ambiguous commit in .*c1: give the full sha/, 'a commit this clone never had');
+  assert.throws(() => closeMerged(R, reviewed), /is not on main at origin in /, 'the branch head, which never reached the base');
   assert.throws(() => closeMerged(R, squash), /local\/c1#4 is not escalated/);
   record(R, 'approve', 'escalated', { reasons: ['push to main refused'] });
   assert.throws(() => closeMerged(R, squash), /local\/c1#4 has no reviewed commit/);
@@ -180,4 +182,98 @@ test('F close RUN --merged <sha>: yours only, git projects only, the sha on the 
   // a reviewed commit this clone doesn't have: git's error, never "not contained"
   const R3 = 'local/c1#6'; record(R3, 'intake', 'started', { title: 't' }); record(R3, 'review', 'started', { axes: ['code'], sha: 'f'.repeat(40) }); record(R3, 'approve', 'escalated', { reasons: ['x'] });
   assert.throws(() => closeMerged(R3, squash), /cannot check [0-9a-f]+ against the reviewed commit fffffff: \S/);
+});
+
+const NO_CHANGES = (sha) => `${sha.slice(0, 7)} is already on main: no changes to merge (if you merged it yourself: F close RUN --merged <sha>)`;
+
+test('finding 1: origin\'s base reset backwards or deleted after the fetch is refused, and nothing is pushed', () => {
+  for (const how of ['reset', 'delete']) {
+    const { bare, d } = remote(`f1-${how}`), removed = commit(d, 'secret.txt', 'oops\n'); g(d, 'push', '-q', 'origin', 'main');
+    const head = work(d, 1);
+    let moved = false; // on the first call after the fetch that would see it: the ls-remote check, or (before the fix) the push
+    const racing = ctx((a) => { if (!moved && (a.includes('ls-remote') || a.includes('push'))) { moved = true; how === 'reset' ? run('-C', bare, 'update-ref', 'refs/heads/main', `${removed}~1`) : run('-C', bare, 'update-ref', '-d', 'refs/heads/main'); } });
+    const r = host.merge(racing, { repo: 'acme/f1', path: d, id: 'factory/issue-1', sha: head, base: 'main' });
+    assert.equal(r.merged, false, how);
+    assert.equal(r.detail, `main on origin moved while merging (${how === 'reset' ? `now ${g(d, 'rev-parse', `${removed}~1`).slice(0, 7)}` : 'deleted'}, was ${removed.slice(0, 7)}): review again`);
+    if (how === 'reset') assert.equal(g(bare, 'rev-parse', 'main'), g(d, 'rev-parse', `${removed}~1`), 'the removed commit is not re-published');
+    else assert.throws(() => g(bare, 'rev-parse', '--verify', '-q', 'refs/heads/main'), undefined, 'the deleted base is not re-created');
+  }
+});
+
+test('finding 2: an ignored file the squash would overwrite or delete is refused before anything moves', () => {
+  const d = repo('f2'); commit(d, '.gitignore', '*.log\n'); commit(d, 'dir/t.txt', 't\n');
+  const log = work(d, 1, 'x.log'); fs.writeFileSync(path.join(d, 'x.log'), 'MINE\n'); // the squash adds x.log; an ignored one is here
+  g(d, 'checkout', '-q', '-b', 'factory/issue-2', 'main'); g(d, 'rm', '-rq', 'dir'); const df = commit(d, 'dir', 'now a file\n'); g(d, 'checkout', '-q', 'main');
+  fs.writeFileSync(path.join(d, 'dir', 'keep.log'), 'MINE\n'); // the squash turns dir into a file; an ignored file is inside
+  const at = g(d, 'rev-parse', 'main');
+  for (const [n, sha, file] of [[1, log, 'x.log'], [2, df, 'dir/keep.log']]) {
+    const r = host.merge(ctx(), { repo: 'local/f2', path: d, id: `factory/issue-${n}`, sha, base: 'main' });
+    assert.deepEqual([r.merged, r.detail?.includes(`has an ignored file the merge would overwrite or delete (${file})`), g(d, 'rev-parse', 'main'), fs.readFileSync(path.join(d, file), 'utf8')], [false, true, at, 'MINE\n'], r.detail);
+  }
+});
+
+test('finding 3: the base checked out twice, or a checkout switching off or onto it during the merge, is refused and the swap undone', () => {
+  const d = repo('f3'); g(d, 'checkout', '-q', '-b', 'other'); commit(d, 'o.txt', 'o\n'); g(d, 'checkout', '-q', 'main');
+  const head = work(d, 1), seen = g(d, 'rev-parse', 'main');
+  // twice: refused before anything moves
+  const w2 = path.join(root, 'f3-two'); g(d, 'worktree', 'add', '-q', '--detach', w2); g(w2, 'checkout', '-q', '--ignore-other-worktrees', 'main');
+  const two = host.merge(ctx(), { repo: 'local/f3', path: d, id: 'factory/issue-1', sha: head, base: 'main' });
+  assert.deepEqual([two.merged, /^main is checked out in 2 worktrees/.test(two.detail), g(d, 'rev-parse', 'main'), g(d, 'status', '--porcelain'), g(w2, 'status', '--porcelain')], [false, true, seen, '', ''], two.detail);
+  g(d, 'worktree', 'remove', '--force', w2);
+  // the checkout leaves main (or another one takes it) just before the swap: the swap is undone, nothing is staged anywhere
+  for (const [name, start, switchTo] of [['off', 'main', 'other'], ['onto', '--detach', 'main']]) {
+    g(d, 'checkout', '-q', start);
+    let switched = false;
+    const r = host.merge(ctx((a) => { if (!switched && a.includes('update-ref')) { switched = true; run('-C', d, 'checkout', '-q', switchTo); } }), { repo: 'local/f3', path: d, id: 'factory/issue-1', sha: head, base: 'main' });
+    assert.deepEqual([r.merged, r.detail, g(d, 'rev-parse', 'main'), g(d, 'status', '--porcelain'), fs.existsSync(path.join(d, 'f1.txt'))], [false, "main's checkouts changed while merging: merge again", seen, '', false], name);
+    g(d, 'checkout', '-q', 'main');
+  }
+});
+
+test('finding 4: F close reads origin\'s branch exactly, reports git\'s errors as git\'s, and needs exactly the reviewed change', () => {
+  // (a) origin rewound main and has a tag named main: the commit it removed is not "on main"
+  const { bare, d } = remote('f4'); sync('local/f4', d);
+  const R = 'local/f4#4', reviewed = work(d, 4, 'm.txt'); g(d, 'push', '-q', 'origin', 'factory/issue-4');
+  const other = path.join(root, 'f4-other'); run('clone', '-q', bare, other);
+  const before = g(other, 'rev-parse', 'main'), squash = commit(other, 'm.txt', '4\n', 'squash'); g(other, 'push', '-q', 'origin', 'main');
+  record(R, 'intake', 'started', { title: 't' }); record(R, 'review', 'started', { axes: ['code'], sha: reviewed }); record(R, 'approve', 'escalated', { reasons: ['x'] });
+  g(d, 'fetch', '-q', 'origin'); // the clone saw the squash on main
+  run('-C', bare, 'update-ref', 'refs/heads/main', before); run('-C', bare, 'tag', 'main', squash); // then origin rewound it
+  assert.throws(() => closeMerged(R, squash), /is not on main at origin in /);
+  // (b) git's own failures are named, not read as "not on main"
+  assert.throws(() => closeMerged(R, 'deadbeef1'), /deadbeef1 is an unknown or ambiguous commit in /);
+  assert.equal(derive(read())[R].outcome, 'escalated');
+  // (c) the acceptance table for introduces(sha, reviewed)
+  const t = repo('f4-table'), I = (sha, rev) => host.introduces(run, t, sha, rev), at = (ref) => g(t, 'rev-parse', ref);
+  commit(t, 'a.txt', '1\n2\n3\n');
+  g(t, 'checkout', '-q', '-b', 'f'); commit(t, 'a.txt', '1\nX\n3\n'); const rev = commit(t, 'b.txt', 'b\n'); // two commits
+  g(t, 'checkout', '-q', 'main'); const moved = commit(t, 'u.txt', 'u\n'); // the base moved on meanwhile
+  const squashOf = (name, onto, extra) => { g(t, 'checkout', '-q', '-b', name, onto); g(t, 'merge', '-q', '--squash', 'f'); if (extra) { fs.writeFileSync(path.join(t, extra), 'x\n'); g(t, 'add', extra); } g(t, 'commit', '-q', '-m', name); const s = at('HEAD'); g(t, 'checkout', '-q', 'main'); return s; };
+  const sq = squashOf('sq', moved), extra = squashOf('extra', moved, 'evil.txt');
+  g(t, 'checkout', '-q', '-b', 'mc', moved); g(t, 'merge', '-q', '--no-ff', '--no-edit', 'f'); const mergeCommit = at('HEAD');
+  g(t, 'checkout', '-q', '-b', 'f2', `${moved}~1`); commit(t, 'c.txt', 'c\n'); g(t, 'merge', '-q', '--no-edit', moved); const rev2 = at('HEAD'); // the base merged into the branch
+  g(t, 'checkout', '-q', '-b', 'mc2', moved); g(t, 'merge', '-q', '--no-ff', '--no-edit', 'f2'); const mergeCommit2 = at('HEAD');
+  g(t, 'checkout', '-q', '-b', 'f3', moved); const ff1 = commit(t, 'd.txt', 'd\n'); // a one-commit branch, fast-forwarded
+  g(t, 'checkout', '-q', '-b', 'part', moved); g(t, 'checkout', '-q', rev, '--', 'b.txt'); g(t, 'commit', '-q', '-m', 'part'); const part = at('HEAD');
+  const rest = commit(t, 'a.txt', '1\nX\n3\n', 'rest');
+  g(t, 'checkout', '-q', 'sq'); const later = commit(t, 'z.txt', 'z\n'); g(t, 'revert', '--no-edit', sq); const revert = at('HEAD');
+  g(t, 'checkout', '-q', 'sq'); const again = commit(t, 'a.txt', '1\nY\n3\n');
+  g(t, 'checkout', '-q', 'mc'); g(t, 'commit', '-q', '--allow-empty', '-m', 'empty'); const empty = at('HEAD'); // after the merge commit
+  assert.deepEqual({ sq: I(sq, rev), mergeCommit: I(mergeCommit, rev), mergeCommit2: I(mergeCommit2, rev2), ff1: I(ff1, ff1), ffTip: I(rev, rev) },
+    { sq: true, mergeCommit: true, mergeCommit2: true, ff1: true, ffTip: true }, 'accepted: a squash onto a moved base, merge commits, fast-forwards (a multi-commit one by its tip)');
+  assert.deepEqual({ extra: I(extra, rev), part: I(part, rev), rest: I(rest, rev), later: I(later, rev), revert: I(revert, rev), again: I(again, rev), base: I(moved, rev), empty: I(empty, rev) },
+    { extra: false, part: false, rest: false, later: false, revert: false, again: false, base: false, empty: false }, 'refused');
+  assert.throws(() => I(sq, 'f'.repeat(40)), /f{40}|not a valid|bad object|unknown/i, 'an unknown reviewed commit is git\'s error');
+  assert.throws(() => host.mergeTree(run, t, sq, 'f'.repeat(40)), /not something we can merge/, 'git exits 1 for an unknown commit too: no tree on stdout, so not a conflict');
+});
+
+test('finding 5: a branch with nothing beyond the base is never opened, merged or read as merged', () => {
+  const d = repo('f5'); g(d, 'branch', 'factory/issue-1'); const base = g(d, 'rev-parse', 'main');
+  assert.throws(() => host.openChangeRequest(ctx(), { repo: 'local/f5', path: d, branch: 'factory/issue-1', base: 'main', title: 't', body: 'b' }), /^Error: factory\/issue-1 has no commits beyond main: nothing to review$/);
+  assert.deepEqual(host.changeRequest(ctx(), { repo: 'local/f5', path: d, id: 'factory/issue-1', base: 'main', sha: base }), { state: 'open', headSha: base, approval: null, branch: 'factory/issue-1', detail: NO_CHANGES(base) });
+  assert.deepEqual(host.merge(ctx(), { repo: 'local/f5', path: d, id: 'factory/issue-1', sha: base, base: 'main' }), { merged: false, detail: NO_CHANGES(base) });
+  assert.equal(g(d, 'rev-parse', 'main'), base);
+  const { bare, d: c } = remote('f5r'); g(c, 'branch', 'factory/issue-1', 'origin/main');
+  assert.throws(() => host.openChangeRequest(ctx(), { repo: 'acme/f5r', path: c, branch: 'factory/issue-1', base: 'main', title: 't', body: 'b' }), /has no commits beyond main/);
+  assert.throws(() => g(bare, 'rev-parse', '--verify', '-q', 'refs/heads/factory/issue-1'), undefined, 'nothing was pushed');
 });
