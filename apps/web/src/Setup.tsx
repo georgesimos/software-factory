@@ -9,7 +9,7 @@ import { store } from './store.ts';
 // open and "Check again", never from the poll) and writes through /onboard/*; otherwise every step shows the command to run.
 export const STEPS: [string, string][] = [['ai', 'Local AI'], ['repo', 'Repo'], ['ship', 'What you ship'], ['flow', 'Workflow'], ['rules', 'Rules'], ['start', 'Review and start']];
 const SHIP: [string, string, string][] = [['web', 'Web', 'A site or web app with preview and production deploys.'], ['mobile', 'Mobile', 'An iOS or Android app: builds, TestFlight and the stores.'], ['desktop', 'Desktop', 'A desktop app: builds, signing and releases.']];
-interface HarnessState { id: string; label: string; install?: string; installed?: boolean; version?: string | null; login?: { ok?: boolean; hint?: string } | null; notes?: { label?: string; hint?: string; ok?: boolean | null }[]; headless?: { cmd?: string; args?: string[]; note?: string } | null }
+interface HarnessState { id: string; label: string; install?: string; installed?: boolean; version?: string | null; login?: { ok?: boolean; hint?: string } | null; notes?: { label?: string; hint?: string; ok?: boolean | null }[]; headless?: { cmd?: string; args?: string[]; note?: string } | null; app?: { installed?: boolean; path?: string; sessions?: boolean; opens?: boolean } | null }
 type Policy = Record<string, Rule>;
 /** POST /onboard (onboardState) and the onboardConfig every /onboard/* write returns. */
 export interface Onboard {
@@ -131,17 +131,20 @@ interface StepCtx {
 }
 
 function Ai({ data, ob, live, F, check }: StepCtx & { check: () => void }) {
-  const lead = <p className="web-ob-lead">The AI harnesses on this machine. The factory can run any step on any of them once it is installed and signed in.</p>;
-  if (!live) return <>{lead}<div className="web-ob-grid">{(data.harnesses ?? []).map((h) => <div key={h.id} className="web-ob-card"><h4>{h.label}</h4><span>Install with</span><Cmd cmd={h.install ?? ''} /></div>)}</div>
-    <h4>Check install and login</h4><Cmd cmd={`${F} onboard`} /></>;
+  const lead = <p className="web-ob-lead">The AI apps on this machine. You work in their desktop apps; the factory runs steps in the background through each one's CLI, once it is installed and signed in.</p>;
+  if (!live) return <>{lead}<div className="web-ob-grid">{(data.harnesses ?? []).map((h) => <div key={h.id} className="web-ob-card"><h4>{h.label}</h4><span>Background runs: install its CLI with</span><Cmd cmd={h.install ?? ''} /></div>)}</div>
+    <h4>Check the desktop apps, install and login</h4><Cmd cmd={`${F} onboard`} /></>;
   const hs = ob?.harnesses ?? [];
   return (
     <>{lead}
       <div className="web-ob-grid">{hs.length ? hs.map((h) => {
-        const ok = h.installed && h.login?.ok;
+        const ok = h.installed && h.login?.ok, app = h.app;
         return (
           <div key={h.id} className="web-ob-card" data-harness={h.id}>
-            <h4><Dot tone={ok ? 'ok' : h.installed ? 'warn' : 'bad'} /> {h.label} {h.version ? <Badge quiet>{h.version}</Badge> : null}</h4>
+            <h4><Dot tone={ok && (!app || app.installed) ? 'ok' : ok || app?.installed ? 'warn' : 'bad'} /> {h.label}</h4>
+            {app ? <span data-app>{app.installed ? 'Desktop app installed' : 'Desktop app not found'}{app.path ? <span className="web-ob-path"> {app.path}</span> : null}</span> : null}
+            {app?.sessions ? <span className="web-ob-note">The factory reads its sessions{app.opens ? ' and can open a run in the app' : ''}.</span> : null}
+            <h5 className="web-ob-sub">Background runs {h.version ? <Badge quiet>{h.version}</Badge> : null}</h5>
             {h.installed ? <span>Installed</span> : <><span>Not installed</span><Cmd cmd={h.install ?? ''} /></>}
             {h.installed ? (h.login?.ok ? <span>Signed in{h.login.hint ? ` · ${h.login.hint}` : ''}</span> : <><span>Not signed in</span><Cmd cmd={h.login?.hint ?? ''} /></>) : null}
             {(h.notes ?? []).map((n, i) => <span key={i} className="web-ob-note"><Dot tone={n.ok ? 'ok' : n.ok === null ? 'idle' : 'warn'} /> {n.label}: {n.hint}</span>)}
