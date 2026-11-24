@@ -104,6 +104,8 @@ export interface Run {
   /** step → who ran it */
   runners?: Record<string, Runner>;
   burn?: Burn | null;
+  /** The user's one-shot notes (F note): pending until the next step starting takes them. */
+  notes?: { id?: string; step?: string; text?: string; by?: string; ts?: string; state?: 'pending' | 'applied' }[];
   /** The run's local worktree (F ui only; never in an Artifact). */
   worktree?: string;
 }
