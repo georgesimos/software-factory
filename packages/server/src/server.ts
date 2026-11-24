@@ -304,24 +304,24 @@ export function startRun(issue, env = process.env, run = spawn) {
 
 // F open <session> and POST /api/sessions/open (#26): a session in the Claude desktop app on this machine when it has a
 // desktop id, its own (local_<uuid>) or the one F recorded with a CLI session's events; else how to resume it, and where.
-// Nothing here runs a shell: the opener gets one validated claude:// link, and the resume command is only shown. Refused
-// while a launcher holds a live claim on a run that session worked on (its events, or this app's session label): opening
-// or resuming it then would put a second harness on the run. A session with no recorded run can't be checked.
+// Nothing here runs a shell: the opener gets one validated claude:// link, and the resume command is only shown. Opening a
+// desktop session adds no harness; a resume does, so it is refused while a launcher holds a live (or unreadable) claim on a
+// run that session worked on (its events, or this app's session label). A session with no recorded run can't be checked.
 export function openSession({ harness = 'claude-code', id }: { harness?: string; id?: unknown }, opener: (url: string) => string = open) {
   const h = harnesses.find((y) => y.id === harness);
   if (!h) throw new Error(`no harness ${String(harness).slice(0, 40)}`);
   const sid = typeof id === 'string' ? id : '';
   if (!HOST_ID.test(sid) && !SESSION_ID.test(sid)) throw new Error('id must be a session id');
   const runs = Object.entries(derive(read())), mine = listSessions().find((x) => x.harnessSession === sid)?.label;
-  for (const run of new Set([...runs.filter(([, r]) => r.sessions?.some((x) => x.id === sid || x.hostId === sid)).map(([k]) => k), ...(mine?.includes('#') ? [mine] : [])])) {
-    const held = readClaim(run);
-    if (held && claimLive(held)) throw running(run, held);
-  }
   const seen = runs.flatMap(([, r]) => r.sessions ?? []).filter((x) => x.id === sid && (!x.agent || x.agent === h.id))
     .sort((a, b) => (a.last ?? '').localeCompare(b.last ?? '')); // the latest last: one CLI session can drive several runs
   const url = h.openDesktop?.(HOST_ID.test(sid) ? sid : seen.map((x) => x.hostId).filter(Boolean).at(-1) ?? ''), cwd = seen.at(-1)?.cwd;
   if (url) return { opened: opener(url) };
   if (!h.modes?.includes('terminal')) throw new Error(`${h.id} has no desktop link or terminal resume for ${sid}`);
+  for (const run of new Set([...runs.filter(([, r]) => r.sessions?.some((x) => x.id === sid)).map(([k]) => k), ...(mine?.includes('#') ? [mine] : [])])) {
+    const held = readClaim(run), there = (() => { try { return !!fs.lstatSync(path.join(runDir(run), 'claim.json')); } catch { return false; } })();
+    if (held ? claimLive(held) : there) throw running(run, held); // unreadable: live, as takeClaim treats it (F unclaim --force)
+  }
   const spec = h.launch({ mode: 'terminal', resume: sid });
   return { resume: { command: [spec.cmd, ...spec.args].join(' '), ...(cwd && { cwd }) } }; // started outside the desktop app
 }

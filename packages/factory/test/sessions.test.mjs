@@ -101,13 +101,16 @@ test('openSession() (F open <id>, POST /api/sessions/open): the desktop app when
   assert.deepEqual(openSession({ id: 'term-9' }, launch), { resume: { command: 'claude --resume term-9', cwd: '/work/acme' } });
   assert.deepEqual(openSession({ id: 'never-seen' }, launch), { resume: { command: 'claude --resume never-seen' } });
   assert.deepEqual(opened, [`claude://claude.ai/epitaxy/${LOCAL}`, `claude://claude.ai/epitaxy/${LOCAL}`], 'the opener only ever gets the claude:// link');
-  const cl = takeClaim('acme/host#5', 'start'); // F start on that run: no second harness on it, by desktop link or resume
+  const cl = takeClaim('acme/host#5', 'start'); // F start on that run: a resume would put a second harness on it
   assert.throws(() => openSession({ id: 'term-9' }, launch), /acme\/host#5 already has a running session \(start, not started yet\)/);
   cl.release();
-  const c7 = takeClaim('acme/open#1', 'session');
-  assert.throws(() => openSession({ id: LOCAL }, launch), /acme\/open#1 already has a running session/, 'by its desktop id too');
+  fs.writeFileSync(path.join(runDir('acme/host#5'), 'claim.json'), '{'); // unreadable: live, as takeClaim treats it
+  assert.throws(() => openSession({ id: 'term-9' }, launch), /\(unreadable claim\)\. If nothing is starting it.*F unclaim acme\/host#5 --force/);
+  fs.rmSync(path.join(runDir('acme/host#5'), 'claim.json'));
+  const c7 = takeClaim('acme/open#1', 'session'); // opening the desktop chat that drove it adds no harness
+  assert.deepEqual([openSession({ id: LOCAL }, launch), openSession({ id: 'cli-7' }, launch)], [{ opened: `claude://claude.ai/epitaxy/${LOCAL}` }, { opened: `claude://claude.ai/epitaxy/${LOCAL}` }]);
   c7.release();
-  assert.equal(opened.length, 2, 'nothing opened while refused');
+  assert.equal(opened.length, 4, 'opened only the desktop links, never while a resume was refused');
 });
 
 test('a spawned harness never inherits the ids of the session F runs in: headless, terminal and sdk', async () => {
