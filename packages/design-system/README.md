@@ -62,7 +62,8 @@ pass AA. `control` is new: a 3:1 border for inputs and checkboxes.
   counts).
 
 The factory components take `factory.mjs` objects as they are: `Run` from `derive()`, `Metrics` from `metrics()`,
-`DiscoveredRepo` from `discover()`, and `SyncResult` from `sync()` (converted by `syncCounts()`). The types and the dashboard's
+`DiscoveredRepo` from `discover()`, and `SyncResult` from `sync()` (converted by `syncCounts()`). `Run` and `Metrics` are core's
+own types (`@software-factory/core/types`, a type-only import, so no runtime dependency), read with every field optional. The types and the dashboard's
 presentation rules (`stageState`, `runTone`, `reviewFailed`, the formatters) live in `src/factory/model.ts`. Components are
 presentational: they hold no fetching and no IPC.
 

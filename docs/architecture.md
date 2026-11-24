@@ -74,7 +74,7 @@ software-factory/
 │       ├── src/tokens.css    generated from tokens.ts (scripts/tokens-css.ts, checked in build)
 │       ├── src/components/   generic primitives: Button, Card, Dialog, Table, Tabs, Toast, Tooltip…
 │       ├── src/factory/      factory-specific views: RunCard, StageTrack, ReviewMatrix, Timeline, OutcomePill…
-│       │   └── model.ts      TypeScript types for the JSON that derive() / metrics() / sync() emit
+│       │   └── model.ts      core's Run/Metrics types (read loosely) + discover/sync shapes and presentation rules
 │       ├── src/onboarding/   ProjectPicker (discover results) and IngestProgress (sync progress)
 │       ├── src/index.ts      package entry; styles.css / base.css / fonts.css are the CSS entry points
 │       ├── src/fonts/        Geist + Geist Mono (OFL)
@@ -159,7 +159,7 @@ On screens 1100 px and wider, the run detail is a docked column beside the board
 The design system holds tokens in `tokens.ts`, from which CSS is generated, plus a WCAG AA contrast check and React components. The components come in two groups:
 
 - **generic primitives** in `src/components/`;
-- **factory views** in `src/factory/`, typed against `src/factory/model.ts`, which mirrors the JSON that `derive()`, `metrics()`, `discover()` and `sync()` emit.
+- **factory views** in `src/factory/`, typed against `src/factory/model.ts`. Its `Run` and `Metrics` are core's (`packages/core/src/types.ts`, imported as types only, so no runtime dependency) with every field optional; it adds the `discover()` and `sync()` shapes.
 
 The dashboard (`apps/web`) is built from it.
 

@@ -146,6 +146,9 @@ importers:
 
   packages/design-system:
     devDependencies:
+      '@software-factory/core':
+        specifier: workspace:*
+        version: link:../core
       '@testing-library/jest-dom':
         specifier: ^6.9.0
         version: 6.10.0(@testing-library/dom@10.4.2)
