@@ -33,71 +33,46 @@ Inputs:
 
 ---
 
-## 0. Open decisions (the owner should answer these before PR 7; PRs 1-6 don't depend on them)
+## 0. Decisions (answered by the owner)
 
-**D1. The auto-merge default.** Every reader treats a missing key as on:
-- `facts()` in `core/src/github.ts`: `projects()[repo]?.autoMerge !== false`;
-- `server.ts`'s `autoMerge` export;
-- `onboard.ts`;
-- `apps/web Setup.tsx`.
+**D1. Merge mode: `merge: 'auto' | 'ask'` per project. A missing value means `ask`, for every project.**
+- Today every reader treats a missing `autoMerge` as on: `facts()` in `core/src/github.ts`
+  (`projects()[repo]?.autoMerge !== false`), `server.ts`'s `autoMerge` export, `onboard.ts` and `apps/web Setup.tsx`.
+  The only writer is `F automerge` (`rules.ts setAutoMerge`).
+- The legacy keys keep their meaning: `autoMerge: true` is `merge: 'auto'`, and `autoMerge: false` is `ask`. A missing
+  key now means `ask`, and that is the behaviour change.
+- Nothing in `projects.json` is rewritten. `F sync` prints one line per affected project: "auto-merge is now off by
+  default; `F automerge on owner/repo` keeps it".
+- This fails closed: a run that would have merged before now waits for the user. Nothing goes the other way.
 
-The only writer is `F automerge` (`rules.ts setAutoMerge`). A project with no `autoMerge` key therefore auto-merges
-today, which conflicts with "off by default". "Old config must still load" doesn't
-settle it: the file still loads either way, and what changes is what a missing key means.
-- **Recommendation:** add a per-project `merge: 'auto' | 'ask'`. A missing `merge` means `ask` for every project,
-  including existing ones.
-  - A legacy `autoMerge: true` maps to `merge: 'auto'`, and `autoMerge: false` maps to `ask`.
-  - A missing `autoMerge` now means `ask`. That is the behaviour change.
-  - `F sync` and `F onboard` print one line per affected project: "auto-merge is now off by default; `F automerge on
-    owner/repo` keeps it".
-  - Nothing in `projects.json` is rewritten without the user doing it. Failing closed means a run escalates that would
-    have merged before, never the reverse.
-- The alternative is to keep a missing key as on for projects attached before the change. That would need an attach date
-  or migration marker that `projects.json` doesn't have, so I don't recommend it.
+**D2. GitHub merges on the gates alone, as today.** There is no extra provider approval and no `/factory approve` comment
+on the PR. `merge: 'ask'` is how the owner requires a confirmation before a merge.
 
-**D2. "Approved there" on GitHub.** The factory opens PRs as the user's own `gh` login, and GitHub won't let anyone approve
-their own PR. A solo owner could therefore never approve a PR at the provider.
-- **Recommendation:** a change request counts as approved when, after its head became `reviewedSha`, either of these
-  happened:
-  - a GitHub review in state `APPROVED` on that exact head commit, from a trusted association; or
-  - a trusted `/factory approve` comment on the PR, the same vote rule as spec approval (`approvalVote()`).
-- A stale approval, meaning one given on an earlier head, never counts.
-- This changes GitHub's flow. Today the factory merges on a passing gate with no approval at the provider; after this, it
-  waits for one. I read that as the owner's intent. If it isn't, GitHub's step 3 in §3 becomes optional per project.
+**D3. Local items live in an untracked, git-ignored `.factory/` folder in the project clone.** They are never committed and
+never reach the remote.
+- Intake reads the item from the clone's working folder (`<clone>/.factory/issues/<file>`), never from a run's worktree.
+- Intake snapshots it: the file is copied into the run's state dir and its sha-256 is recorded in the intake event.
+  Nothing re-reads the original during the run, so a later edit can't change what was approved.
+- `F item new` writes the file, and makes sure `.factory/` is ignored by adding it to `.git/info/exclude` if it isn't
+  ignored yet. It never touches the tracked `.gitignore`.
+- The factory never writes items after creating them. "Done" lives in the event log, so the local `markDone` is a no-op
+  and `listOpen` filters on the log.
+- `.factory/` stays a sensitive path, so a change request that touches it escalates. A run worktree has no `.factory/`
+  (it is untracked), so a run that creates one has written it itself.
 
-**D3. Where `.factory/issues/` is read from.** The files live in the clone and anyone, or any agent, with write access can
-edit them.
-- **Recommendation:** at intake, read items from the project clone's local base branch, `refs/heads/<base>`, using
-  `git show refs/heads/<base>:.factory/issues/<file>`. That is the user's own view.
-  - Not `origin/<base>`, which run worktrees start from: that would hide items until the user pushes them.
-  - Never a run's worktree.
-- Intake snapshots the item into the event log as its title, its body and the blob sha. Nothing re-reads it during the
-  run.
-- **The factory never writes the items afterwards.**
-  - "Done" lives in the event log, not the file: the local `markDone` is a no-op, and `listOpen` filters on the log.
-  - `F item new` commits the new item on the local base and never pushes it.
-- **The consequence the owner should accept:**
-  - With a remote, the local base can hold unpushed item commits while the factory's merges land on `origin/<base>`.
-  - After a merge, the `git` host fast-forwards the local base only when the local base is an ancestor of the result.
-    Otherwise it leaves the base alone and says "your local <base> has N unpushed commits (items?): pull or rebase it".
-  - The factory never rebases the user's branch.
-- **The question for the owner:** should uncommitted items be picked up too? It's more convenient, but the source is
-  weaker. If yes, intake reads the clone's working tree and marks the item "uncommitted", and a run from such an item
-  never merges without asking.
+**D4. Trust for local items, and who may approve.** A file has no verifiable author, so every local item is
+`trust: 'untrusted'`. That means:
+- every spec needs approval through `F approve RUN`, at a terminal or in the desktop app's dialog (§2.2). Approval never
+  comes from the page (#21), and never from an agent session;
+- on the `git` host, every merge asks (`merge: 'ask'` is forced, whatever the project's setting).
 
-**D4. Trust for local items.** A file has no verifiable author.
-- **Recommendation:** every local item is `trust: 'untrusted'`. That means:
-  - every spec needs approval through `F approve RUN` at a terminal or the desktop app's dialog (#21: approval never comes from the page; §2.2);
-  - merge always asks, through `merge: 'ask'`, whatever the project's setting.
-- With the git-only provider, nothing irreversible happens without the user's own terminal command. No trusted-authors
-  list gets built. That was in the inventory, not in the owner's decisions.
+No trusted-authors list gets built. That idea was in the inventory, not in the owner's decisions.
 
 **What a terminal approval can and can't override.** This is what makes §3 reachable for local items.
 - `decide()` gets a third outcome, `await-approval`. It returns it when every reason it would escalate for is one of
   these **approvable** reasons:
   - the author isn't trusted, on a host with no verified identities (the `git` host);
-  - merge is set to `ask`;
-  - no change-request approval on `reviewedSha` yet.
+  - merge is set to `ask` (D1, or forced on the `git` host by D4).
 - **Not approvable:** any other reason still escalates, and the user has to merge it by hand. These are: axes not passed;
   CI; the diff cap; sensitive paths; source changed without tests; the loop cap; the budget; no reviewed commit; the
   change-request head ≠ `reviewedSha`; `deploy.preview=required`; relaxing rules from an unverified login (§2.1).
@@ -160,7 +135,7 @@ baseBranch(ctx, { repo, path }): string                      // git: refs/remote
 openChangeRequest(ctx, { repo, path, branch, base, sha, title, body, closes? }): { id: string; url?: string }
 changeRequest(ctx, { repo, path, id }): {
   state: 'open'|'merged'|'closed'|'unknown'; headSha: string|null;
-  approval: { by: string; via: string; sha: string } | null;  // an approval on headSha only (D2)
+  approval: { by: string; via: string; sha: string } | null;  // git: F approve RUN --merge on headSha only. github: always null (D2)
   mergeSha?: string; mergedBy?: string }
 listChangeRequests(ctx, { repo, path }): { base: string; open: { id; branch; headSha; title; url?; closes: string[] }[]; doneBranches: string[] }
                                                              // what sync and intake's clash check read (today's openPRs())
@@ -173,8 +148,8 @@ secretPatterns?: RegExp[]                                    // added to server.
 **`github`.** This is today's code moved behind the interface:
 - `openChangeRequest`: `gh pr create`, which `SKILL.md` runs today.
 - `listChangeRequests`: `openPRs()`.
-- `changeRequest`: `gh pr view --json state,headRefOid,mergeCommit,mergedBy,reviews` plus the PR comments, judged by
-  D2's rule. That `gh pr view` call is also sync's human-merge detection today.
+- `changeRequest`: `gh pr view --json state,headRefOid,mergeCommit,mergedBy`, which is also sync's human-merge detection
+  today. `approval` is always null: GitHub merges on the gates alone (D2).
 - `merge`: `gh pr ready` then `gh pr merge --squash --delete-branch --match-head-commit <sha>`.
 - `whoami`: `rules.ts whoami`.
 - `baseBranch`: `gh repo view --json defaultBranchRef`.
@@ -229,7 +204,8 @@ markDone?(ctx, { repo, id }): void                       // github: relabelMerge
 - **`local`.** Each item is markdown with front matter: `title`, `state`, `depends-on: [3, 5]`, and the acceptance list.
   - It is read per D3. `trust` is always `'untrusted'` (D4), and `comments` is `[]`.
   - `approval` reads `F approve RUN` events from the log.
-  - `createIssues` writes and commits files. `listOpen` and `dependencies` read the front matter.
+  - `createIssues` writes files into `.factory/issues/` and makes sure `.factory/` is in `.git/info/exclude` (D3). It never
+    commits. `listOpen` and `dependencies` read the front matter.
   - Ids are allocated as the highest N + 1, under a lock file in the state dir so two `F` processes never take the same N.
 
 ### 1.4 CI interface (new: `adapters/ci/`)
@@ -282,9 +258,10 @@ The `ci` rule stays (`required|advisory|skip`), and its meaning is kept:
    there either.
 5. **What a local login never counts as.**
    - A trusted author.
-   - A provider approval of a change request on a host that has verified approvals (D2).
-   - A spec approval for an item from a tracker that has its own approval channel.
-   - On GitHub, `F approve RUN` by an unverified local user is refused with "approve on the issue or PR".
+   - A spec approval for an item from a tracker that has its own approval channel (GitHub issues: the trusted
+     `/factory approve` comment, as today).
+   - On a GitHub project, the `merge: ask` confirmation (`F approve RUN --merge`). It needs a verified gh login, and an
+     unverified local user is refused with "log in with gh auth login to confirm this merge".
 
 ### 2.2 Who may approve, and who may change a project's providers
 
@@ -355,12 +332,11 @@ fixes nor widens that hole.
 decide() → escalate: any non-approvable reason (§0, D4)   → the user merges by hand, or F close RUN --merged
          → await-approval / merge
   → host.openChangeRequest (GitHub: already a draft PR from build; mark it ready. git: the branch)
-  → approval on reviewedSha:
-      GitHub: a review or trusted /factory approve on the PR (D2)
-      git:    F approve RUN --merge at a terminal, which is also the merge step
-  → merge mode: auto → host.merge(sha = reviewedSha)
-                ask  → awaiting-approval "approved at <host>; merge is set to ask" until F approve RUN --merge
-                       (GitHub: by a verified login only)
+  → merge mode (D1; forced to ask on the git host, D4):
+      auto → host.merge(sha = reviewedSha)                    GitHub: the gates alone, as today (D2)
+      ask  → awaiting-approval "the gates passed; merge is set to ask"
+             until F approve RUN --merge (terminal or desktop dialog, §2.2) on reviewedSha, which is also the merge step
+             (GitHub: by a verified gh login only)
   → tracker.markDone, CI checks on the merge sha (postmerge)
 ```
 
@@ -395,7 +371,7 @@ with a named reason; for the earlier steps it refuses to start. Nothing gets ret
 | `getItem().state` not `open`, or `isChangeRequest` | `notAnIssue`, as today. |
 | `host.openChangeRequest` | Escalate: "could not open a change request at <host>". |
 | `host.changeRequest` `unknown`, or `headSha ≠ reviewedSha` | Escalate: "change request head is <x>, not the reviewed commit <y>" / "change request state unknown". |
-| No approval on `reviewedSha` | Wait. The run is `awaiting-approval`; it neither merges nor escalates as a failure. |
+| `merge: ask` and no `F approve RUN --merge` on `reviewedSha` yet | Wait. The run is `awaiting-approval`; it neither merges nor escalates as a failure. |
 | `ci.checks` `fail` / `pending` / `none` / `unknown` under `ci=required` | Escalate: `CI checks are "<state>" (<ci provider>)`. `none` from the `none` provider says "no CI provider: set ci=local with checks.commands, or approve the merge yourself". |
 | `ci.checks` throws | Escalate: "CI provider <id> failed: <detail>". This replaces today's uncaught throw in `facts()`. |
 | `host.merge` `merged: false` / lease rejected / push rejected (branch protection, required reviews) | Escalate with the host's detail. Never retried, force-pushed or merged around. |
@@ -411,7 +387,7 @@ These need a human whatever the configuration, because nothing local can verify 
 
 1. **Author trust for local items (D4).** Every local spec needs `F approve RUN`.
 2. **Every merge on the `git` host.** `merge: 'ask'` is forced.
-3. **Change-request approval** (D2) on any host.
+3. **Every merge on a project set to `merge: ask`**, which is the default for every project (D1).
 4. **Host-side merge rules** (branch protection, required reviewers). They're invisible locally, so a rejected push
    escalates.
 5. **"Someone else is already on it."** The `git` host can't know this. Before merging, the factory re-checks that the
@@ -437,11 +413,13 @@ in a separate PR. The sizes are guesses, not measurements.
 Only two PRs change GitHub behaviour, and both say so in their PR body:
 - **PR 5b:** `.factory/` becomes sensitive. No repo the factory runs on uses `.factory/` today, but a GitHub PR that
   touches it will now escalate.
-- **PR 7:** D1, D2, and an explicit "change-request head ≠ reviewedSha" escalation. Today `--match-head-commit` makes
-  the merge itself fail in that case.
+- **PR 7:** D1 (a project with no merge setting now asks before merging) and an explicit "change-request head ≠
+  reviewedSha" escalation. Today `--match-head-commit` makes the merge itself fail in that case. D2 keeps GitHub's
+  gates as they are.
 
-1. **Identity seam.** (~300 lines)
-   - `Host.whoami` (github, git).
+1. **Identity seam.** (~300 lines; #131)
+   - Core's `whoami()`: the gh login, else the OS user as `via: 'local'`. `Host.whoami` moves behind the host in PR 2,
+     once projects have a host.
    - `rules.ts`: the `via` field, the legacy load, the "(local, unverified)" display, and the §2.1 step 3 gate in
      `decide()`.
    - `F note` and `F rules` work without `gh`.
@@ -450,6 +428,7 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
 2. **Project config and repo identity.** (~500 lines)
    - The `projects.json` fields (§1.1) with legacy inference, owner sanitising, the collision refusal, and
      `F project set` (human-only and audited, §2.2 step 4).
+   - `Host.whoami` (github, git): core's `whoami()` asks the project's host.
    - Acceptance: the privacy test (§2.3) for remote hostnames, `local/<folder>` ids and clone paths.
    - `discover()` accepts any remote or none. `sync` attaches a `git`-host project without calling `gh`; for those
      projects it skips the change-request import until 4b.
@@ -477,18 +456,19 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
 5b. **Local tracker.** (~600 lines)
    - `trackers/local.ts` (D3, D4).
    - `.factory/` added to `SENSITIVE`.
-   - `F item new`, and `F approve RUN` for specs: refused inside a harness session, behind the TTY prompt, and refused for a verified host's items (§2.2). Tests for each refusal.
+   - `F item new` (writes the file and the `.git/info/exclude` entry, D3), and `F approve RUN` for specs: refused inside a harness session, behind the TTY prompt, and refused for a verified host's items (§2.2). Tests for each refusal.
 5c. **Desktop approval.** (~300 lines)
    - The Electron main-process menu item and native dialog (§2.2 step 3). It writes the same approve event, and the page and HTTP can't reach it.
 6. **SKILL.md stops naming gh.** (~300 lines)
    - New commands: `F label`, `F split` (→ `tracker.createIssues`), `F escalate RUN` (→ `host.comment`), `F pr RUN`
      (→ `openChangeRequest`).
    - The skill text uses only these commands.
-7. **Merge flow (§3) with D1 and D2.** (~500 lines)
-   - `decide()`'s `await-approval`, `merge: auto|ask`, `F approve RUN --merge` (CLI and desktop dialog), and the approval wait.
-   - The one-line notice.
+7. **Merge flow (§3) with D1.** (~400 lines)
+   - `decide()`'s `await-approval`, `merge: auto|ask` with the legacy `autoMerge` mapping, and `F approve RUN --merge`
+     (CLI and desktop dialog) as the ask confirmation.
+   - The one-line `F sync` notice.
    - The explicit head ≠ `reviewedSha` escalation.
-   - It lands last, and only once D1 and D2 are answered.
+   - No provider-approval wait on GitHub (D2).
 8. **Docs only.** A plugin guide for hosts, trackers and CI: how to write Bitbucket, GitLab, Jenkins or Jira as one file
    each against the contract tests, and why the factory doesn't ship them (nobody can test them).
 
