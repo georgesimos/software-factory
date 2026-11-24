@@ -4,7 +4,8 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { HERE } from '../factory.mjs';
 import { io, read } from '../../core/src/log.ts';
-import { RULES, checkRules, isDay, setRule, unsetRule } from '../../core/src/rules.ts';
+import { RULES, checkRules, checkScope, isDay, setRule, unsetRule } from '../../core/src/rules.ts';
+import { checkRunner, harnessIds, readSkills, setSkill } from '../../core/src/skills.ts';
 import { setup } from './setup.mjs';
 
 setup();
@@ -26,4 +27,22 @@ test('rule names are own keys only, and until is a YYYY-MM-DD string', () => {
   for (const d of [['2999-01-01'], { toString: () => '2999-01-01' }, 29990101, '', undefined]) assert.equal(isDay(d), false, JSON.stringify(d));
   assert.throws(() => checkRules({ ci: { ...ok, until: ['2999-01-01'] } }, 'rules'), /until must be YYYY-MM-DD/);
   assert.throws(() => setRule('acme/own', 'ci', 'skip', { reason: 'x', until: ['2999-01-01'] }), /--until must be YYYY-MM-DD/);
+});
+
+// #122 review: the same one-string-array hole in setBy, setAt, runner names and paths, and scopes (POST bodies pass scope through).
+test('setBy, setAt, runner names, brief paths and scopes must be strings', () => {
+  const ok = { value: 'skip', reason: 'x', setBy: 'me', setAt: '2026-01-01T00:00:00Z' };
+  checkRules({ ci: ok }, 'rules');
+  assert.throws(() => checkRules({ ci: { ...ok, setBy: ['me'] } }, 'rules'), /setBy must be a GitHub login/);
+  assert.throws(() => checkRules({ ci: { ...ok, setAt: ['2026-01-01T00:00:00Z'] } }, 'rules'), /setAt must be a timestamp/);
+  const h = harnessIds()[0];
+  for (const r of [{ use: 'skill', name: 'my-skill' }, { use: 'brief', path: '/b.md' }, { use: 'provider', harness: h, name: 'x' }]) checkRunner(r, 'r', [], 'darwin');
+  for (const r of [{ use: 'skill', name: ['my-skill'] }, { use: 'brief', path: ['/b.md'] }, { use: 'provider', harness: h, name: ['x'] }]) {
+    assert.throws(() => checkRunner(r, 'r', [], 'darwin'), /expected \{"use":"default"\}/, JSON.stringify(r));
+  }
+  checkScope('acme/shop');
+  assert.throws(() => checkScope(['acme/shop']), /must be "default" or owner\/repo/);
+  const before = JSON.stringify(readSkills());
+  assert.throws(() => setSkill(['acme/shop'], 'build', { use: 'default' }), /must be "default" or owner\/repo/);
+  assert.equal(JSON.stringify(readSkills()), before);
 });

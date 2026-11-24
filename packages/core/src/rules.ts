@@ -46,8 +46,8 @@ export function checkRules(v: unknown, at: string): void {
     if (!rule[0](x.value)) throw new Error(`${at}.${k}: must be ${rule[1]}, got ${JSON.stringify(x.value)}`);
     const reason = x.reason;
     if (typeof reason !== 'string' || !reason.trim() || reason.length > 200) throw new Error(`${at}.${k}: needs a reason (--reason "…", at most 200 characters)`);
-    if (!LOGIN.test(String(x.setBy || ''))) throw new Error(`${at}.${k}: setBy must be a GitHub login`);
-    if (isNaN(Date.parse(String(x.setAt)))) throw new Error(`${at}.${k}: setAt must be a timestamp`);
+    if (typeof x.setBy !== 'string' || !LOGIN.test(x.setBy)) throw new Error(`${at}.${k}: setBy must be a GitHub login`);
+    if (typeof x.setAt !== 'string' || isNaN(Date.parse(x.setAt))) throw new Error(`${at}.${k}: setAt must be a timestamp`);
     if (x.until !== undefined && !isDay(x.until)) throw new Error(`${at}.${k}: until must be YYYY-MM-DD`);
   }
 }
@@ -92,7 +92,7 @@ export function audit(scope: string, status: string, e: Record<string, unknown>,
   fs.appendFileSync(log(), JSON.stringify({ ts: new Date().toISOString(), ...e, run: scope, stage, status }) + '\n');
   dashboard.render();
 }
-export const checkScope = (scope: string) => { if (scope !== 'default' && !/^[\w.-]+\/[\w.-]+$/.test(scope || '')) throw new Error(`scope "${scope}" must be "default" or owner/repo`); };
+export const checkScope = (scope: string) => { if (scope !== 'default' && !(typeof scope === 'string' && /^[\w.-]+\/[\w.-]+$/.test(scope))) throw new Error(`scope "${scope}" must be "default" or owner/repo`); };
 export function setRule(scope: string, key: string, raw: unknown, { reason, until }: { reason?: string; until?: string } = {}) {
   checkScope(scope);
   const cfg = readSkills(), s: ScopeConfig = { ...cfg[scope] }, step = key.startsWith('guide.') ? key.slice(6) : null;

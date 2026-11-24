@@ -57,9 +57,9 @@ export function checkRunner(s: unknown, at: string, more: string[] = [], platfor
   const bad = Object.keys(s).filter((k) => !['use', 'name', 'path', 'harness', ...MODEL_KEYS, ...more].includes(k));
   if (bad.length) throw new Error(`${at}: unknown fields ${bad.join(', ')}`);
   const ok = s.use === 'default' && !s.name && !s.path && !s.harness
-    || s.use === 'skill' && NAME.test(String(s.name || '')) && !s.path && !s.harness
-    || s.use === 'brief' && BRIEF[platform === 'win32' ? 'win32' : 'posix'].test(String(s.path || '')) && !s.name && !s.harness
-    || s.use === 'provider' && harnessIds().some((id) => id === s.harness) && (s.name === undefined || NAME.test(String(s.name))) && !s.path;
+    || s.use === 'skill' && typeof s.name === 'string' && NAME.test(s.name) && !s.path && !s.harness
+    || s.use === 'brief' && typeof s.path === 'string' && BRIEF[platform === 'win32' ? 'win32' : 'posix'].test(s.path) && !s.name && !s.harness
+    || s.use === 'provider' && harnessIds().some((id) => id === s.harness) && (s.name === undefined || typeof s.name === 'string' && NAME.test(s.name)) && !s.path;
   if (!ok) throw new Error(`${at}: expected {"use":"default"}, {"use":"skill","name"}, {"use":"brief","path":"/abs/or/~/….md"} or {"use":"provider","harness":"${harnessIds().join('|')}","name"?}`);
   if (s.model === undefined && s.effort === undefined && s.fallback === undefined) return;
   const h = runsOn(s), ids = (h?.models?.() || []).map((m) => m.alias), has = (xs: string[], x: unknown) => xs.some((y) => y === x);
@@ -164,7 +164,7 @@ export function writeSkills(cfg: unknown): asserts cfg is SkillsConfig {
 // value === undefined removes the step from that scope, so a project inherits the global choice again.
 export function setSkill(scope: string, key: string, value: unknown): ScopeConfig {
   if (key === 'rules' || key === 'guide') throw new Error(`"${key}" is set with "rules set", which records who changed it and why`);
-  if (scope !== 'default' && !/^[\w.-]+\/[\w.-]+$/.test(scope || '')) throw new Error(`scope "${scope}" must be "default" or owner/repo`);
+  checkScope(scope); // a string: POST bodies pass scope through
   const cfg: Record<string, Record<string, unknown>> = readSkills(), next: Record<string, unknown> = { ...cfg[scope], [key]: value }; // unchecked until writeSkills
   cfg[scope] = next;
   if (value === undefined) { if (!isStepKey(key) && key !== 'axes.extra') throw new Error(`unknown step "${key}"`); delete next[key]; }

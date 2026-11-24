@@ -10,7 +10,7 @@ import { withClaim } from './claim.ts';
 import type { Project, WorktreeInfo } from './types.ts';
 
 /** What execFileSync throws: Node types it as a plain Error. */
-type ExecError = Error & { status?: number | null; signal?: NodeJS.Signals | null; stdout?: string | Buffer; stderr?: string | Buffer };
+type ExecError = Error & { code?: string; status?: number | null; signal?: NodeJS.Signals | null; stdout?: string | Buffer; stderr?: string | Buffer };
 
 export const git = (...args: string[]): string => exec(io.git, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 export const ls = (d: string): string[] => { try { return fs.readdirSync(d); } catch { return []; } };
@@ -105,14 +105,14 @@ export function localChecks(run: string) {
   if (git('-C', w.path, 'status', '--porcelain').trim()) throw new Error('the worktree has uncommitted changes; commit first, so the checks cover the commit that gets reviewed');
   const sha = git('-C', w.path, 'rev-parse', 'HEAD').trim();
   const shell = posixShell(); // before the log opens: no shell, no run
-  const file = path.join(runDir(run), 'local-checks.log'), fd = fs.openSync(file, 'w'), commands: { cmd: string; exit: number | 'timeout'; ms: number }[] = [];
+  const file = path.join(runDir(run), 'local-checks.log'), fd = fs.openSync(file, 'w'), commands: { cmd: string; exit: number | string; ms: number }[] = [], LIMIT = 30 * 60e3;
   try {
     for (const cmd of cmds) {
       fs.writeSync(fd, `$ ${cmd}\n`);
       const t = Date.now();
-      let exit: number | 'timeout' = 0;
-      try { execFileSync(shell, ['-c', cmd], { cwd: w.path, env: { ...withClaim(process.env), CI: '1' }, stdio: ['ignore', fd, fd], timeout: 30 * 60e3 }); } // to a file: no maxBuffer limit
-      catch (e) { const x = e as ExecError; exit = x.status ?? (x.signal ? 'timeout' : 1); }
+      let exit: number | string = 0; // a code, 'timeout', or the signal that killed it
+      try { execFileSync(shell, ['-c', cmd], { cwd: w.path, env: { ...withClaim(process.env), CI: '1' }, stdio: ['ignore', fd, fd], timeout: LIMIT }); } // to a file: no maxBuffer limit
+      catch (e) { const x = e as ExecError; exit = x.status ?? (x.code === 'ETIMEDOUT' || Date.now() - t >= LIMIT ? 'timeout' : x.signal ?? 1); }
       commands.push({ cmd, exit, ms: Date.now() - t });
     }
   } finally { fs.closeSync(fd); }
