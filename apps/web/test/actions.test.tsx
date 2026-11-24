@@ -77,6 +77,12 @@ describe('run actions (#27)', () => {
     expect(within(panel).getByRole('button', { name: 'Start factory' })).toBeTruthy();
     expect(within(panel).queryByText('/software-factory acme/shop#48')).toBeNull();
     expect(within(panel).queryByRole('button', { name: /Resume factory/ })).toBeNull();
+    await userEvent.click(within(panel).getByRole('button', { name: 'Start factory' }));
+    expect(await within(panel).findByText(/Started headless/)).toBeTruthy();
+    await userEvent.click(document.querySelector<HTMLAnchorElement>(`.web-board a[href="#${CSS.escape(encodeURIComponent('acme/shop#45'))}"]`)!);
+    const other = await screen.findByRole('complementary'); // #48's result stays with #48
+    expect(within(other).queryByText(/Started headless/)).toBeNull();
+    expect(within(other).getByRole('button', { name: 'Resume factory' })).toBeTruthy();
   });
 
   it('shows the server’s refusal, and keeps a run’s result when you switch away and back', async () => {
