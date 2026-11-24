@@ -5,7 +5,7 @@ import { cx } from '../components/cx.ts';
 import { OutcomePill } from './OutcomePill.tsx';
 import { SessionsChip } from './Sessions.tsx';
 import { SourceChip } from './SourceChip.tsx';
-import { burnText, formatAgo, formatClock, formatTokens, idTail, isDone, outcomeOf, previewOf, repoOf, reviewFailed, runTone, shortId, stageOf, type Run } from './model.ts';
+import { burnText, formatAgo, formatClock, formatTokens, isDone, outcomeOf, previewOf, repoOf, reviewFailed, runTone, shortId, stageOf, type Run } from './model.ts';
 import { breakable } from './breakable.tsx';
 
 export interface RunCardProps {
@@ -68,7 +68,7 @@ export function RunCard({ run: r, href, onSelect, selected, showRepo, cap = 3, n
         <Dot tone={tone} live={live} />
         <span className="sf-rc-id" title={r.id}>
           {showRepo ? <span className="sf-rc-repo">{shortId(repo)}</span> : null}
-          <span className="sf-rc-num">{breakable(idTail(r.id))}</span>
+          <span className="sf-rc-num">{breakable(r.id.slice(repo.length))}</span>
         </span>
         {r.updated ? <time dateTime={r.updated} title={formatClock(r.updated, now)}>{formatAgo(r.updated, now)}</time> : null}
       </span>

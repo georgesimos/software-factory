@@ -238,11 +238,6 @@ export const costText = (c: BurnCell) => (c.costUsd == null ? '—' : formatMone
 export const previewOf = (r: Run) => r.deploys?.find((d) => d.env === 'preview' && d.status === 'passed' && /^https:\/\//.test(d.url ?? ''));
 export const repoOf = (id: string) => id.split(/[#:]/)[0] ?? id;
 export const shortId = (id: string) => id.replace(/^[^/#:]*\//, '');
-/** A run id after its owner/repo: "#12", or a branch run's last path segment ("o/r:simos/fix-x" → ":fix-x"). */
-export const idTail = (id: string) => {
-  const i = id.search(/[#:]/);
-  return i < 0 ? '' : id[i] === '#' ? id.slice(i) : ':' + (id.slice(i + 1).split('/').filter(Boolean).pop() ?? '');
-};
 
 /** Counts for the onboarding progress row. Session-backed PRs attached to existing runs count as sessions. */
 export const syncCounts = (s: SyncResult) => ({

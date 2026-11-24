@@ -43,4 +43,19 @@ describe('rule chips on one row (#9)', () => {
     render(<RuleChips data={data} project="" today="2026-11-24" />);
     expect(within(screen.getByRole('group', { name: 'Active rules' })).queryByRole('button')).toBeNull();
   });
+
+  it('nothing fits beside the +N chip: the first chip still shows (ellipsized by CSS), and +N carries the hidden rules in full', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(120);
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      return { width: this.textContent?.startsWith('+') ? 30 : 100 } as DOMRect;
+    });
+    render(<RuleChips data={data} project="" today="2026-11-24" />);
+    const row = screen.getByRole('group', { name: 'Active rules' });
+    expect([...row.querySelectorAll('.sf-badge')].map((x) => x.textContent)).toEqual(['shop: Expired: Diff cap 800 · Large refactor week', '+2']); // the expired warning stays visible
+    expect(row.textContent).not.toMatch(/rules/);
+    const more = within(row).getByRole('button', { name: /^2 more rules: / });
+    const tip = document.getElementById(more.getAttribute('aria-describedby') ?? '');
+    expect(tip?.textContent).toMatch(/ci="advisory" for acme\/shop, set by dev on 2026-11-18: GitHub Actions billing is failing\. Until 2099-01-01/);
+    expect(tip?.textContent).toMatch(/checks\.commands=\["pnpm test","pnpm lint"\] for all projects, set by dev on 2026-11-10: Run checks locally/);
+  });
 });

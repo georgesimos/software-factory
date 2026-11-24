@@ -57,16 +57,16 @@ export function RuleChips({ data, project, today = new Date().toISOString().slic
     return () => ro.disconnect();
   }, [sig]);
   if (!out.length) return null;
-  const shown = out.slice(0, fit), rest = out.slice(fit), warn = rest.some((c) => c.warn);
+  const n = Math.max(fit, 1), shown = out.slice(0, n), rest = out.slice(n), warn = rest.some((c) => c.warn); // the first chip always shows, ellipsized if it must
   const tip = (t: string) => <span className="web-rule-tip">{t}</span>;
   return (
     <div className="web-rules">
       <div className="web-rules-row" ref={box} role="group" aria-label="Active rules">
         {shown.map((c, i) => <Tooltip key={i} content={tip(c.title)}><Badge tabIndex={0} tone={c.warn ? 'warn' : 'neutral'} quiet={!c.warn}>{c.text}</Badge></Tooltip>)}
         {rest.length ? (
-          <Tooltip content={tip(rest.map((c) => c.text).join('\n'))}>
+          <Tooltip content={tip(rest.map((c) => c.title).join('\n\n'))}>
             <button type="button" className="sf-badge web-rules-more" data-tone={warn ? 'warn' : 'neutral'} data-quiet={warn ? undefined : true}
-              aria-label={`${rest.length} more rule${rest.length > 1 ? 's' : ''}: ${rest.map((c) => c.text).join('; ')}`}>{shown.length ? `+${rest.length}` : `${rest.length} rules`}</button>
+              aria-label={`${rest.length} more rule${rest.length > 1 ? 's' : ''}: ${rest.map((c) => c.text).join('; ')}`}>+{rest.length}</button>
           </Tooltip>
         ) : null}
       </div>

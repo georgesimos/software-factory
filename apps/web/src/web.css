@@ -62,8 +62,9 @@
 .web-rules-row { justify-content: flex-end; }
 .web-rules-probe { position: absolute; top: 0; left: 0; width: max-content; visibility: hidden; pointer-events: none; }
 .web-rules .sf-badge { flex: none; white-space: nowrap; cursor: default; }
-.web-rules-row .sf-badge { display: block; line-height: 18px; } /* block: a chip wider than the header ellipsizes */
+.web-rules-row .sf-badge { display: block; line-height: 18px; flex: 0 1 auto; min-width: 0; } /* block: a chip wider than the header ellipsizes */
 .web-rules-row .sf-tooltip-anchor { min-width: 0; }
+.web-rules-row .sf-tooltip-anchor:has(> .web-rules-more) { flex: none; } /* the +N chip never shrinks */
 .web-rules-more { background: none; }
 .web-rule-tip { white-space: pre-line; }
 .web-rlog { margin-top: var(--sf-space-10); }

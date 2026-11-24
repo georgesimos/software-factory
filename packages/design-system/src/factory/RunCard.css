@@ -10,8 +10,8 @@
 .sf-rc-top, .sf-rc-title, .sf-rc-foot { display: block; }
 .sf-rc-top { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; padding-left: 13px; font: var(--sf-text-xs) / 1 var(--sf-font-mono); color: var(--sf-color-ink-3); }
 .sf-rc-top > .sf-dot { position: absolute; left: 0; top: calc(0.65em - 3px); } /* on the id's first line, however it wraps */
-/* A long id (a branch run's tail) takes the row, the time drops under it, and it wraps at - over two lines at most. */
-.sf-rc-id { flex: 1 1 auto; min-width: 0; line-height: 1.3; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* A long id (a branch run's whole branch) takes the row, the time drops under it, and it wraps at / and - over three lines at most. */
+.sf-rc-id { flex: 1 1 auto; min-width: 0; line-height: 1.3; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .sf-rc-top time { margin-left: auto; flex: none; }
 .sf-rc-title {
   margin: 7px 0 0; font: var(--sf-weight-medium) 13.5px / var(--sf-leading-snug) var(--sf-font-sans); letter-spacing: -0.005em; overflow-wrap: anywhere;

@@ -26,7 +26,7 @@ export function StageTrack({ run }: { run: Run }) {
               <span className="sf-st-n" aria-hidden="true" />
               <div className="sf-st-nm">{s}<span className="sf-sr-only">: {SR[state]}</span></div>
               <div className="sf-st-sb">{sub || ' '}</div>
-              {rn ? <Badge quiet className="sf-rn" title={rn.title}>{breakable(rn.text)}</Badge> : null}
+              {rn ? <Badge quiet className="sf-rn" title={rn.title}><span className="sf-rn-t">{breakable(rn.text)}</span></Badge> : null}
             </li>
           );
         })}
