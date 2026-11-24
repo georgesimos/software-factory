@@ -118,7 +118,7 @@ export async function main(argv: string[]) {
         out(list.map(([k, p]) => sync(k, p))); break;
       }
       case 'projects': out(projects()); break;
-      case 'onboard': { // onboard [--json] | onboard ship <owner/repo|default> web,mobile,database
+      case 'onboard': { // onboard [--json] | onboard ship <owner/repo|default> web,mobile,desktop
         if (run === 'ship') { out(setShip(rest[0]!, (rest[1] || '').split(',').map((k) => k.trim()).filter(Boolean))); break; }
         const st = onboardState();
         if (run === '--json') out(st); else console.log(onboardText(st));
@@ -209,7 +209,7 @@ export async function main(argv: string[]) {
   sync   [owner/repo] [local clone path]  attach a project and import open PRs + agent sessions (no args: all)
   projects                                list attached projects
   onboard [--json]                        setup state, step by step, with the command for each fix (the wizard: F ui)
-  onboard ship <owner/repo|default> <web,mobile,database>  store what the project ships
+  onboard ship <owner/repo|default> <web,mobile,desktop>  store what the project ships
   ship   connectors | detect <owner/repo> | status <owner/repo> [sha]   deploy state from packages/ship connectors (read only)
   intake <run>                            fetch issue, record intake start, print issue + trusted comments
   event  <run> <stage> <status> [json|-] [--fallback why]  record an event ("-" = JSON on stdin)

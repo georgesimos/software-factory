@@ -25,8 +25,8 @@ describe('Setup wizard', () => {
     await step(/^What you ship/);
     await userEvent.click(screen.getByRole('button', { name: 'acme/budget' }));
     await userEvent.click(screen.getByRole('checkbox', { name: /Web/ }));
-    await userEvent.click(screen.getByRole('checkbox', { name: /Database/ }));
-    expect(screen.getByText(`${F} onboard ship 'acme/budget' web,database`)).toBeTruthy();
+    await userEvent.click(screen.getByRole('checkbox', { name: /Desktop/ }));
+    expect(screen.getByText(`${F} onboard ship 'acme/budget' web,desktop`)).toBeTruthy();
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -104,12 +104,12 @@ describe('Setup wizard', () => {
     live(() => new Promise<Response>((r) => { pending.push(() => r(new Response(JSON.stringify({ error: 'refused' }), { status: 400 }))); }));
     wizard({ token: 'tok' });
     await userEvent.click(await screen.findByRole('checkbox', { name: /Web/ }));
-    await userEvent.click(screen.getByRole('checkbox', { name: /Database/ }));
-    expect(screen.getByRole('checkbox', { name: /Database/ })).toBeChecked();
+    await userEvent.click(screen.getByRole('checkbox', { name: /Desktop/ }));
+    expect(screen.getByRole('checkbox', { name: /Desktop/ })).toBeChecked();
     await act(async () => { pending.shift()!(); });
     await act(async () => { pending.shift()!(); });
     expect(screen.getByRole('checkbox', { name: /Web/ })).not.toBeChecked();
-    expect(screen.getByRole('checkbox', { name: /Database/ })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Desktop/ })).not.toBeChecked();
   });
 
   it('live: after Save rules, a later edit is guarded again', async () => {

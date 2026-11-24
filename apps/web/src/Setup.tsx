@@ -8,7 +8,7 @@ import { store } from './store.ts';
 // The setup wizard, ported from dashboard.html. Under `F ui` (a token) it reads POST /onboard (it runs local CLIs, so only on
 // open and "Check again", never from the poll) and writes through /onboard/*; otherwise every step shows the command to run.
 export const STEPS: [string, string][] = [['ai', 'Local AI'], ['repo', 'Repo'], ['ship', 'What you ship'], ['flow', 'Workflow'], ['rules', 'Rules'], ['start', 'Review and start']];
-const SHIP: [string, string, string][] = [['web', 'Web', 'A site or web app with preview and production deploys.'], ['mobile', 'Mobile', 'An iOS or Android app: builds, TestFlight and the stores.'], ['database', 'Database', 'A Postgres database with a branch per pull request.']];
+const SHIP: [string, string, string][] = [['web', 'Web', 'A site or web app with preview and production deploys.'], ['mobile', 'Mobile', 'An iOS or Android app: builds, TestFlight and the stores.'], ['desktop', 'Desktop', 'A desktop app: builds, signing and releases.']];
 interface HarnessState { id: string; label: string; install?: string; installed?: boolean; version?: string | null; login?: { ok?: boolean; hint?: string } | null; notes?: { label?: string; hint?: string; ok?: boolean | null }[]; headless?: { cmd?: string; args?: string[]; note?: string } | null; app?: { installed?: boolean; path?: string; sessions?: boolean; opens?: boolean } | null }
 type Policy = Record<string, Rule>;
 /** POST /onboard (onboardState) and the onboardConfig every /onboard/* write returns. */
@@ -219,7 +219,7 @@ function Ship({ data, ob, live, F, scope, scopePicker, write }: StepCtx) {
   };
   return (
     <>
-      <p className="web-ob-lead">What this project ships. Only the choice is stored for now; deploy, store and database connectors read it once they are installed.</p>
+      <p className="web-ob-lead">What this project ships. Only the choice is stored for now; deploy, build and store connectors read it once they are installed.</p>
       {scopePicker}
       <div className="web-ob-grid" role="group" aria-label="Targets">{SHIP.map(([k, t, d]) => {
         const mine = Array.isArray(conns) ? conns.filter((c) => String(c.kind).startsWith(k) || (k === 'mobile' && c.kind === 'store')) : null;
