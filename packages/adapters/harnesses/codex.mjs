@@ -58,22 +58,26 @@ const adapter = {
   // Codex has no spend or turn cap of its own (no --max-budget-usd or --max-turns): a spent budget refuses, any other runs
   // uncapped, as claude-code's does when its budget is unknown, which is why launchGate never lets Codex drive a factory run
   // (no host): it runs as a step runner or a person's terminal. terminal: an interactive codex for a pty, no prompt.
-  modes: ['headless', 'terminal'],
+  // app-server: a long-lived `codex app-server` (experimental in 0.141.0; protocol from `codex app-server generate-ts`),
+  // JSON-RPC over stdio: the sandbox as config on its argv and again on thread/start (or thread/resume), approvals never
+  // asked (approvalPolicy never), the prompt in turn/start. sdk: the Codex TS SDK's thread, with the same sandbox and policy.
+  // It spawns its own `codex exec` with no spawn hook (0.141.0), so no pid can reach a claim: never on a run (offRun).
+  modes: ['headless', 'terminal', 'app-server', 'sdk'],
   launch({ mode, prompt, resume, budget, write = false }) {
     if (resume !== undefined && !SESSION_ID.test(String(resume))) throw new Error('resume must be a codex session id');
-    if (mode === 'headless') {
-      if (!prompt) throw new Error('a headless launch needs a prompt');
-      if (budget != null && !(Number(budget) >= 0.01)) throw new Error(`no run budget left (${budget}); escalate instead of running`); // claude-code's whole-cent rule
-      // exec's own -s, before the resume subcommand; resume has no -s, so it restates the same mode as config. Never widened:
-      // no other -c, no network or writable roots.
-      const sandbox = write ? 'workspace-write' : 'read-only';
-      return { cmd: 'codex', args: ['exec', '--json', '-s', sandbox, ...(resume ? ['resume', '-c', `sandbox_mode=${sandbox}`, resume] : []), '-'], stdin: prompt };
-    }
     if (mode === 'terminal') { // a person types the prompt
       if (prompt) throw new Error('terminal mode takes no prompt: type it in the session');
       return { cmd: 'codex', args: resume ? ['resume', resume] : [] };
     }
-    throw new Error(`codex has no ${mode} mode`);
+    if (!['headless', 'app-server', 'sdk'].includes(mode)) throw new Error(`codex has no ${mode} mode`);
+    if (!prompt) throw new Error(`a ${mode} launch needs a prompt`);
+    if (budget != null && !(Number(budget) >= 0.01)) throw new Error(`no run budget left (${budget}); escalate instead of running`); // claude-code's whole-cent rule
+    // Never widened: one sandbox, read-only or (build) workspace-write; no other config, network or writable roots.
+    const sandbox = write ? 'workspace-write' : 'read-only';
+    if (mode === 'app-server') return { cmd: 'codex', args: ['app-server', '-c', `sandbox_mode=${sandbox}`], rpc: { prompt, thread: { ...(resume && { threadId: resume }), sandbox, approvalPolicy: 'never' } } };
+    if (mode === 'sdk') return { module: '@openai/codex-sdk', prompt, resume, thread: { sandboxMode: sandbox, approvalPolicy: 'never' }, offRun: 'the Codex SDK spawns codex itself and reports no pid, so it can\'t hold a run\'s claim: run headless or in a terminal on a run' };
+    // headless: exec's own -s, before the resume subcommand; resume has no -s, so it restates the same mode as config.
+    return { cmd: 'codex', args: ['exec', '--json', '-s', sandbox, ...(resume ? ['resume', '-c', `sandbox_mode=${sandbox}`, resume] : []), '-'], stdin: prompt };
   },
   // A headless run's events (F start's log, a session's stdout): its thread id comes first (thread.started), and it ended
   // cleanly when its last event is turn.completed; turn.failed, error or any other last event means it was cut short.

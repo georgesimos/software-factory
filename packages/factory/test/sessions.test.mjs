@@ -805,6 +805,17 @@ const sandboxOf = (args) => {
   args.forEach((a, i) => { if (a === '-c') assert.equal(args[i + 1], `sandbox_mode=${mode}`, args.join(' ')); });
   return mode;
 };
+// app-server and sdk: the same allow-list as config and thread options; approvals never asked, nothing else set.
+const policyOf = (spec) => {
+  const ok = (m) => { assert.ok(['read-only', 'workspace-write'].includes(m), JSON.stringify(spec)); return m; };
+  if (spec.rpc) {
+    const t = spec.rpc.thread;
+    assert.deepEqual([spec.args, t.approvalPolicy, Object.keys(t).filter((k) => !['threadId', 'sandbox', 'approvalPolicy'].includes(k))], [['app-server', '-c', `sandbox_mode=${t.sandbox}`], 'never', []], JSON.stringify(spec));
+    return ok(t.sandbox);
+  }
+  if (spec.thread) { assert.deepEqual([Object.keys(spec.thread).sort(), spec.thread.approvalPolicy], [['approvalPolicy', 'sandboxMode'], 'never'], JSON.stringify(spec)); return ok(spec.thread.sandboxMode); }
+  return sandboxOf(spec.args);
+};
 test('codex launch(): exec --json with the prompt on stdin, the sandbox always read-only or (build) workspace-write, never widened or bypassed', () => {
   assert.deepEqual(codex.launch({ mode: 'headless', prompt: '/x acme/app#3', budget: 4.5 }), { cmd: 'codex', args: ['exec', '--json', '-s', 'read-only', '-'], stdin: '/x acme/app#3' });
   assert.deepEqual(codex.launch({ mode: 'headless', prompt: 'x', resume: '01a2-b3', write: true }).args, ['exec', '--json', '-s', 'workspace-write', 'resume', '-c', 'sandbox_mode=workspace-write', '01a2-b3', '-']);
@@ -815,12 +826,25 @@ test('codex launch(): exec --json with the prompt on stdin, the sandbox always r
   assert.throws(() => codex.launch({ mode: 'terminal', prompt: 'fix #3' }), /takes no prompt/);
   assert.throws(() => codex.launch({ mode: 'headless' }), /needs a prompt/);
   for (const budget of [0, -1, 0.004, NaN]) assert.throws(() => codex.launch({ mode: 'headless', prompt: 'x', budget }), /no run budget left/, String(budget));
-  assert.throws(() => codex.launch({ mode: 'sdk', prompt: 'x' }), /no sdk mode/);
+  assert.throws(() => codex.launch({ mode: 'nope', prompt: 'x' }), /no nope mode/);
+  assert.deepEqual(codex.launch({ mode: 'app-server', prompt: 'p', resume: 'th-1' }), { cmd: 'codex', args: ['app-server', '-c', 'sandbox_mode=read-only'], rpc: { prompt: 'p', thread: { threadId: 'th-1', sandbox: 'read-only', approvalPolicy: 'never' } } });
+  assert.deepEqual(Object.keys(codex.launch({ mode: 'sdk', prompt: 'p', write: true })).sort(), ['module', 'offRun', 'prompt', 'resume', 'thread']);
+  for (const mode of ['app-server', 'sdk']) {
+    assert.throws(() => codex.launch({ mode }), /needs a prompt/);
+    assert.throws(() => codex.launch({ mode, prompt: 'x', budget: 0 }), /no run budget left/);
+    assert.throws(() => codex.launch({ mode, prompt: 'x', resume: '-x' }), /resume must be a codex session id/);
+  }
+  assert.deepEqual(codex.modes, ['headless', 'terminal', 'app-server', 'sdk']);
   for (const mode of codex.modes) for (const write of [false, true]) for (const resume of [undefined, 'abc-1']) {
     const spec = codex.launch({ mode, prompt: mode === 'terminal' ? undefined : 'x', resume, write });
     assert.doesNotMatch(JSON.stringify(spec), BYPASS, `${mode} write=${write} resume=${resume}`);
-    if (mode === 'headless') assert.equal(sandboxOf(spec.args), write ? 'workspace-write' : 'read-only');
+    if (mode !== 'terminal') assert.equal(policyOf(spec), write ? 'workspace-write' : 'read-only', mode);
   }
+  const as = codex.launch({ mode: 'app-server', prompt: 'x' }), sd = codex.launch({ mode: 'sdk', prompt: 'x' });
+  for (const bad of [{ ...as, args: ['app-server', '-c', 'sandbox_mode=danger-full-access'] }, { ...as, rpc: { ...as.rpc, thread: { ...as.rpc.thread, sandbox: 'danger-full-access' } } },
+    { ...as, rpc: { ...as.rpc, thread: { ...as.rpc.thread, approvalPolicy: 'on-request' } } }, { ...as, rpc: { ...as.rpc, thread: { ...as.rpc.thread, config: { 'sandbox_workspace_write.network_access': true } } } },
+    { ...sd, thread: { ...sd.thread, networkAccessEnabled: true } }, { ...sd, thread: { ...sd.thread, sandboxMode: 'danger-full-access' } }, { ...sd, thread: { ...sd.thread, approvalPolicy: 'untrusted' } }])
+    assert.throws(() => policyOf(bad), undefined, JSON.stringify(bad)); // the check itself catches each
   for (const bad of [['-s', 'danger-full-access'], ['--dangerously-bypass-approvals-and-sandbox'], ['--yolo'], ['--full-auto'], ['-c', 'sandbox_workspace_write.network_access=true'], ['resume', '-c', 'sandbox_mode=workspace-write', 'x'], ['-c', 'sandbox_permissions=["disk-full-read-access"]'], ['--config', 'sandbox_mode=read-only']]) // the check itself catches each
     assert.throws(() => { const args = ['exec', '--json', '-s', 'read-only', ...bad, '-']; assert.doesNotMatch(args.join(' '), BYPASS); sandboxOf(args); }, undefined, bad.join(' '));
 });
@@ -878,4 +902,52 @@ test('F start logs, read by their own harness: a clean codex turn isn\'t misread
   assert.deepEqual(go('acme/app#98').slice(0, 2), ['--resume', 'cl-98'], 'a malformed id is skipped, not taken');
   assert.deepEqual(go('acme/app#99').slice(0, 2), ['--resume', 'cl-99']);
   assert.ok(fs.readdirSync(runDir('acme/app#99')).filter((f) => /^headless-.*\.claude-code\.log$/.test(f)).length === 2, 'its own log says claude-code');
+});
+
+test('codex app-server session: JSON-RPC to the stub (initialize, initialized, thread/start with the sandbox, turn/start with the prompt); the server\'s pid reaches onPid; a request is never granted', { skip: process.platform === 'win32' && 'the stub runs under a cmd.exe shim there' }, async () => {
+  const run = (opts, env = stubEnv, onPid) => startSession(codex, { mode: 'app-server', prompt: 'hello there', ...opts }, { cwd: home, env, label: 't', onPid });
+  const pids = [], s = run({}, { ...stubEnv, CLAUDE_CODE_SESSION_ID: 'outer-1' }, (p) => pids.push(p));
+  const ev = await finished(s), data = ev.map((e) => e.data).filter(Boolean);
+  const p = data.find((m) => m.method === 'stub/params').params;
+  assert.deepEqual([p.argv, p.initialized, p.method, p.params, p.parentIds], [['app-server', '-c', 'sandbox_mode=read-only'], true, 'thread/start', { cwd: home, sandbox: 'read-only', approvalPolicy: 'never' }, []]);
+  assert.equal(data.find((m) => m.method === 'item/completed').params.item.text, 'prompt: hello there');
+  assert.ok(ev.some((e) => e.type === 'stderr' && /ERROR a log line/.test(e.data)));
+  assert.deepEqual([s.harnessSession, ev.at(-1).code, pids.length], ['stub-thread', 0, 1]);
+  for (let i = 0; i < 100; i++) { try { process.kill(pids[0], 0); } catch { break; } await new Promise((r) => setTimeout(r, 20)); }
+  assert.throws(() => process.kill(pids[0], 0), /ESRCH/, 'the server is gone once its turn ends');
+
+  const re = await finished(run({ resume: 'th-9', write: true }));
+  const rp = re.map((e) => e.data).find((m) => m?.method === 'stub/params').params;
+  assert.deepEqual([rp.argv, rp.method, rp.params], [['app-server', '-c', 'sandbox_mode=workspace-write'], 'thread/resume', { cwd: home, threadId: 'th-9', sandbox: 'workspace-write', approvalPolicy: 'never' }]);
+  const ask = await finished(run({}, { ...stubEnv, STUB_ASK: '1' }));
+  const reply = ask.map((e) => e.data).find((m) => m?.method === 'stub/reply').params;
+  assert.deepEqual([reply.id, 'result' in reply, typeof reply.error?.message], [99, false, 'string'], 'an approval request gets an error, never a result');
+  assert.equal((await finished(run({}, { ...stubEnv, STUB_FAIL: '1' }))).at(-1).code, 1);
+  const hang = run({}, { ...stubEnv, STUB_HANG: '1' });
+  await new Promise((r) => { const off = subscribe(hang, (e) => { if (e.data?.method === 'item/completed') { off(); r(); } }); });
+  const end = finished(hang); hang.stop(); assert.equal((await end).at(-1).code, 'stopped');
+});
+
+const fakeCodexSdk = (events) => { const rec = {}; return { rec, Codex: class {
+  constructor(o) { rec.opts = o; }
+  thread(how, id, o) { Object.assign(rec, { how, id, thread: o }); return { runStreamed: async (prompt, t) => { rec.prompt = prompt; rec.signal = t.signal; return { events: (async function* () { for (const e of events) { if (t.signal.aborted) throw new Error('aborted'); yield e; await new Promise((r) => setTimeout(r, 5)); } })() }; } }; }
+  startThread(o) { return this.thread('start', undefined, o); }
+  resumeThread(id, o) { return this.thread('resume', id, o); }
+} }; };
+test('codex sdk mode: never on a run (no pid for its claim); off a run, a thread with the sandbox, the thread id as harness session, 0 only for a completed turn', async () => {
+  const sdk = fakeCodexSdk([{ type: 'thread.started', thread_id: 'th-1' }, { type: 'turn.started' }, { type: 'turn.completed', usage: {} }]);
+  const go = (opts, mod = sdk, label = 'acme/app') => startSession(codex, { mode: 'sdk', prompt: 'hi', ...opts }, { cwd: home, env: { ...stubEnv, CLAUDE_CODE_SESSION_ID: 'outer-1' }, label, modules: { '@openai/codex-sdk': mod } });
+  assert.throws(() => go({}, sdk, 'acme/app#3'), /codex sdk mode can't run on acme\/app#3: .*reports no pid.*run headless or in a terminal/);
+  assert.equal(sdk.rec.opts, undefined, 'nothing loaded or spawned');
+  const s = go({});
+  const ev = await finished(s);
+  assert.deepEqual([sdk.rec.how, sdk.rec.thread, sdk.rec.prompt, sdk.rec.opts.env.CLAUDE_CODE_SESSION_ID, path.basename(sdk.rec.opts.codexPathOverride)], ['start', { sandboxMode: 'read-only', approvalPolicy: 'never', workingDirectory: home }, 'hi', undefined, 'codex']);
+  assert.deepEqual([s.harnessSession, ev.filter((e) => e.type === 'event').length, ev.at(-1).code], ['th-1', 3, 0]);
+  await finished(go({ resume: 'th-1', write: true }));
+  assert.deepEqual([sdk.rec.how, sdk.rec.id, sdk.rec.thread.sandboxMode], ['resume', 'th-1', 'workspace-write']);
+  assert.equal((await finished(go({}, fakeCodexSdk([{ type: 'thread.started', thread_id: 'th-2' }, { type: 'turn.failed', error: { message: 'x' } }])))).at(-1).code, 1);
+  const slow = go({}, fakeCodexSdk(Array.from({ length: 50 }, () => ({ type: 'item.updated' }))));
+  const end = finished(slow); setTimeout(() => slow.stop(), 20); assert.equal((await end).at(-1).code, 'stopped');
+  const none = startSession(codex, { mode: 'sdk', prompt: 'hi' }, { cwd: home, env: stubEnv, label: 'x' });
+  assert.match((await finished(none)).find((e) => e.type === 'error').message, /sdk mode needs @openai\/codex-sdk, which is not installed here/);
 });

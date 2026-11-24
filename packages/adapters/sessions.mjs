@@ -1,6 +1,6 @@
 // Runs what a harness's launch() describes and keeps its events in memory for the server to stream (ADR §5).
-// Outside harnesses/, so the registry never loads it as a harness. headless spawns the CLI; terminal needs node-pty and
-// sdk the harness's SDK. Neither is a dependency of F: the host passes them in, keyed by package name (modules['node-pty'],
+// Outside harnesses/, so the registry never loads it as a harness. headless spawns the CLI, app-server too (JSON-RPC over
+// stdio); terminal needs node-pty and sdk the harness's SDK. Neither is a dependency of F: the host passes them in, keyed by package name (modules['node-pty'],
 // modules['@anthropic-ai/claude-agent-sdk']), else they are imported lazily by name. argv only, never a shell (core/src/platform.ts).
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -70,6 +70,7 @@ export function startSession(h, opts, { cwd, env: parent = process.env, label = 
   if (typeof h.launch !== 'function' || !(h.modes || []).includes(opts.mode)) throw new Error(`${h.id} cannot launch in ${opts.mode} mode`);
   if (opts.mode === 'terminal' && opts.budget != null) throw new Error('a terminal session has no budget cap: run headless or sdk for a budget');
   const spec = h.launch(opts);
+  if (spec.offRun && label.includes('#')) throw new Error(`${h.id} ${opts.mode} mode can't run on ${label}: ${spec.offRun}`);
   const s = { id: crypto.randomUUID(), harness: h.id, mode: opts.mode, label, cwd, state: 'running', exit: null, started: new Date().toISOString(), events: [], next: 0, listeners: new Set(), bytes: 0, stop: () => {}, harnessSession: undefined, ended: null };
   sessions.set(s.id, s);
   const done = (exit) => {
@@ -83,7 +84,8 @@ export function startSession(h, opts, { cwd, env: parent = process.env, label = 
   const fail = (e) => { emit(s, { type: 'error', message: e.message }); done(null); };
   if (cwd && !fs.existsSync(cwd)) { fail(new Error(`the folder ${cwd} does not exist`)); return s; } // else ENOENT reads as "not installed"
   if (opts.mode === 'terminal') { terminal(s, spec, { cwd, env, modules, resolve, done, onPid }).catch(fail); return s; }
-  if (opts.mode === 'sdk') { sdk(s, spec, { cwd, env, modules, done, onPid }).catch(fail); return s; }
+  if (opts.mode === 'sdk') { (spec.thread ? codexSdk : sdk)(s, spec, { cwd, env, modules, resolve, done, onPid }).catch(fail); return s; }
+  if (opts.mode === 'app-server') { try { appServer(s, spec, { cwd, env, resolve, done, onPid }); } catch (e) { fail(e); } return s; }
   let c;
   try { c = resolveSpec(spec, env, resolve); } catch (e) { fail(e); return s; }
   // spec.stdin carries the prompt: as an argument its space and # would need cmd.exe quoting, which a .cmd shim can't get
@@ -162,4 +164,64 @@ async function sdk(s, spec, { cwd, env, modules, done, onPid }) {
     }
   } catch (e) { if (!aborted()) throw e; } // an abort ends the iterator with an AbortError
   done(aborted() ? 'stopped' : result?.subtype === 'success' && !result.is_error ? 0 : 1);
+}
+
+const THREAD = /^[\w-]{1,100}$/; // a thread id as harnessSession: what a resume can pass back as an argument
+// A long-lived app-server (Codex): JSON-RPC over stdio, one message per line. initialize, then thread/start or thread/resume
+// with the spec's sandbox and approval policy, then one turn/start with the prompt; every message is an event, and the
+// server goes once the turn ends. A request from the server (an approval, user input, a tool call) is never granted: it
+// gets an error. Exit: 'stopped' after stop(); 0 when the turn completed; 1 when it failed, was interrupted, a request was
+// refused, or the server ended first.
+function appServer(s, spec, { cwd, env, resolve, done, onPid }) {
+  const c = resolveSpec(spec, env, resolve), { prompt, thread } = spec.rpc;
+  const child = spawn(c.file, c.args, { cwd, env: { ...env, ...c.env }, stdio: ['pipe', 'pipe', 'pipe'], detached: process.platform !== 'win32', windowsVerbatimArguments: !!c.windowsVerbatimArguments });
+  let exit, stopped = false;
+  const end = (code) => { exit ??= code; killTree(child); };
+  s.stop = (wait) => { stopped = true; killTree(child, process.platform, undefined, process.kill, wait); };
+  if (child.pid) onPid(child.pid);
+  const send = (m) => { if (child.stdin.writable) child.stdin.write(JSON.stringify(m) + '\n'); };
+  child.stdin.on('error', () => { /* gone: reported by close */ });
+  readline.createInterface({ input: child.stdout }).on('line', (line) => {
+    let m;
+    try { m = JSON.parse(line); } catch { return emit(s, { type: 'text', data: line }); }
+    emit(s, { type: 'event', data: m });
+    if (m?.method && m.id !== undefined) return send({ id: m.id, error: { code: -32601, message: 'not granted: this session never approves' } });
+    if (m?.error && [1, 2, 3].includes(m.id)) return end(1);
+    if (m?.id === 1) {
+      send({ method: 'initialized' });
+      send({ id: 2, method: thread.threadId ? 'thread/resume' : 'thread/start', params: { cwd, ...thread } });
+    } else if (m?.id === 2) {
+      const id = m.result?.thread?.id;
+      if (!THREAD.test(String(id))) return end(1);
+      s.harnessSession ??= id;
+      send({ id: 3, method: 'turn/start', params: { threadId: id, input: [{ type: 'text', text: prompt, text_elements: [] }] } });
+    } else if (m?.method === 'turn/completed') end(m.params?.turn?.status === 'completed' ? 0 : 1);
+  });
+  readline.createInterface({ input: child.stderr }).on('line', (line) => emit(s, { type: 'stderr', data: line }));
+  child.on('error', (e) => { emit(s, { type: 'error', message: e.code === 'ENOENT' ? `${spec.cmd} is not installed` : e.message }); if (!child.pid) done(null); });
+  child.on('close', (code, signal) => done(stopped ? 'stopped' : exit ?? (signal || code || 1))); // a server that ends before its turn did not finish it
+  send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'software-factory', title: 'Software Factory', version: '1' }, capabilities: null } });
+}
+
+// The Codex SDK in this process: a thread (started, or resumed by id) run once with the prompt, each event one event. It
+// spawns its own codex (the one on the PATH the session gets) with no spawn hook, so no pid reaches onPid: startSession
+// keeps it off runs (spec.offRun). Exit: 'stopped' after stop(); 0 when the turn completed, else 1.
+async function codexSdk(s, spec, { cwd, env, modules, resolve, done }) {
+  const abort = new AbortController(), aborted = () => abort.signal.aborted;
+  s.stop = () => abort.abort(); // before the await, so a stop while the SDK loads is kept
+  const mod = await load(modules, spec.module, 'sdk mode');
+  if (aborted()) return done('stopped');
+  const c = resolveSpec({ cmd: 'codex', args: [] }, env, resolve); // a .cmd shim can't be the SDK's binary: it finds its own then
+  const codex = new mod.Codex({ ...(!c.windowsVerbatimArguments && { codexPathOverride: c.file }), env });
+  const opts = { ...spec.thread, workingDirectory: cwd };
+  let ok = false;
+  try {
+    const { events } = await (spec.resume ? codex.resumeThread(spec.resume, opts) : codex.startThread(opts)).runStreamed(spec.prompt, { signal: abort.signal });
+    for await (const e of events) {
+      if (s.harnessSession === undefined && e?.type === 'thread.started' && THREAD.test(String(e.thread_id))) s.harnessSession = e.thread_id;
+      if (e?.type === 'turn.completed') ok = true;
+      emit(s, { type: 'event', data: e });
+    }
+  } catch (e) { if (!aborted()) throw e; }
+  done(aborted() ? 'stopped' : ok ? 0 : 1);
 }

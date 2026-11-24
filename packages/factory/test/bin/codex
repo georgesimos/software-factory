@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Fake `codex` for the harness contract test and the wizard e2e. STUB_LOGGED_OUT=1 simulates a signed-out CLI.
 // exec --json: codex-cli 0.141.0's JSONL events for one turn; STUB_FAIL ends it with turn.failed (exit 1), STUB_HANG never ends.
+// app-server: minimal JSON-RPC (initialize, thread/start|resume, turn/start), the same turn as notifications.
 const a = process.argv.slice(2).join(' '), out = !!process.env.STUB_LOGGED_OUT;
 if (a === '--version') process.stdout.write('codex-cli 0.141.0\n');
 else if (a === 'login status') { process.stderr.write(out ? 'Not logged in\n' : 'Logged in using ChatGPT\n'); process.exit(out ? 1 : 0); }
@@ -19,6 +20,29 @@ else if (/^exec --json -s (read-only|workspace-write) (resume -c sandbox_mode=\1
       ev({ type: 'turn.completed', usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } });
     });
   }
+}
+else if (/^app-server -c sandbox_mode=(read-only|workspace-write)$/.test(a)) { // JSON-RPC over stdio: STUB_ASK sends an approval request first
+  const say = (m) => process.stdout.write(JSON.stringify(m) + '\n');
+  let initialized = false, finish;
+  const turn = (threadId, text) => {
+    say({ method: 'item/completed', params: { threadId, item: { type: 'agentMessage', id: 'item_0', text: 'prompt: ' + text } } });
+    process.stderr.write('2026-11-24T00:00:00Z ERROR a log line\n');
+    if (!process.env.STUB_HANG) say({ method: 'turn/completed', params: { threadId, turn: { id: 'turn-1', status: process.env.STUB_FAIL ? 'failed' : 'completed', items: [], error: null } } });
+  };
+  let buf = '';
+  process.stdin.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\n')) >= 0) { const l = buf.slice(0, i); buf = buf.slice(i + 1); on(JSON.parse(l)); } });
+  const on = (m) => {
+    if (m.method === 'initialize') say({ id: m.id, result: { userAgent: 'codex-stub/0.141.0' } });
+    else if (m.method === 'initialized') initialized = true;
+    else if (m.method === 'thread/start' || m.method === 'thread/resume') {
+      say({ method: 'stub/params', params: { argv: process.argv.slice(2), initialized, method: m.method, params: m.params, parentIds: [process.env.CLAUDE_CODE_SESSION_ID, process.env.CLAUDE_CODE_HOST_SESSION_ID].filter(Boolean) } });
+      say({ id: m.id, result: { thread: { id: m.params.threadId || 'stub-thread' } } });
+    } else if (m.method === 'turn/start') {
+      say({ id: m.id, result: { turn: { id: 'turn-1', status: 'inProgress' } } });
+      if (process.env.STUB_ASK) { finish = () => turn(m.params.threadId, m.params.input[0].text); say({ id: 99, method: 'item/commandExecution/requestApproval', params: { command: 'rm -rf /' } }); }
+      else turn(m.params.threadId, m.params.input[0].text);
+    } else if (m.id === 99) { say({ method: 'stub/reply', params: m }); finish(); }
+  };
 }
 else if (!a || /^resume \w[\w-]*$/.test(a)) { // terminal mode, in a pty: echoes each line until "exit"
   process.stdout.write(`stub codex${a ? ` (${a})` : ''} pid ${process.pid}\r\n> `);

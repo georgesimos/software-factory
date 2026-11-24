@@ -87,7 +87,7 @@ The harness adapter contract (`packages/adapters/harnesses`) gains an optional `
 | Claude Code | Open in an app | Documented routes:<ul><li>`claude-cli://open?cwd=…&q=…` opens a new terminal session, on macOS, Windows and Linux once the handler is registered;</li><li>`claude --desktop` opens the desktop app;</li><li>`claude://code/new` opens Desktop's new-session page, documented only for SSH folders.</li></ul> Opening an **existing** desktop session by its `claude://claude.ai/epitaxy/local_<id>` link is **observed, not documented**. Treat it as best-effort and fall back to `claude --resume <id>` in a terminal. |
 | Codex | Headless | `codex exec --json` (JSONL events), with `--sandbox read-only` or `workspace-write`, `--output-schema`, and `codex exec resume`. |
 | Codex | Long-lived session | `codex app-server`, which drives the VS Code extension: JSON-RPC 2.0 messages, without the `jsonrpc` field, as JSONL over stdio. It is documented, but `codex --help` in 0.141.0 still labels it `[experimental]`, so pin the version and generate the protocol types with `codex app-server generate-ts`. |
-| Codex | In-process | The Codex TypeScript SDK, `@openai/codex-sdk`: `new Codex().startThread().run()`. It spawns the `codex` CLI and exchanges JSONL with it. |
+| Codex | In-process | The Codex TypeScript SDK, `@openai/codex-sdk`: `new Codex().startThread().run()`. It spawns the `codex` CLI and exchanges JSONL with it. In 0.141.0 it has no spawn hook and reports no pid, so the factory never runs it on a run: a run's claim needs the harness's pid. |
 
 **Rules carried over from today's harness code:**
 - argv only, never a shell;
