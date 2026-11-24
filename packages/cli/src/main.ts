@@ -18,13 +18,14 @@ import { issuesCreate, loop, newProject, projectStatus, queue, retireIdea } from
 import { loadShip, loadShipList, ship } from '../../core/src/ship.ts';
 import { claudeDir, onboardState, onboardText, setShip } from '../../core/src/onboard.ts';
 import { artifact, parseRun, render, startRun, ui } from '../../server/src/server.ts';
-import { claimedElsewhere, refuseClaimed, unclaim } from '../../server/src/claim.ts';
+import { refuseClaimed, unclaim } from '../../core/src/claim.ts';
 import { rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
 import { note, takeNotes } from '../../core/src/notes.ts';
 import { withMeasured } from '../../core/src/burn.ts';
 import { installCli, linkSkill, open } from '../../core/src/platform.ts';
 import { pathToFileURL } from 'node:url';
 
+const GATED = new Set(['event', 'review', 'checks', 'notes', 'axes', 'worktree', 'deps', 'gate', 'intake', 'decide', 'merge', 'approval', 'postmerge', 'revert']);
 export async function main(argv) {
   const [cmd, run, ...rest] = argv;
   const fb = rest.indexOf('--fallback'), fallback = fb < 0 ? undefined : rest.splice(fb, 2)[1] || 'configured runner unavailable'; // the configured runner couldn't run; the built-in did
@@ -34,6 +35,9 @@ export async function main(argv) {
   try {
     if (['sync', 'postmerge', 'revert', 'decide', 'merge', 'ship', 'onboard', 'ui'].includes(cmd)) ship.mod = await loadShip();
     if (cmd === 'onboard') await loadShipList(); // ui: serve() loads it
+    // Every command that changes a run waits while another launcher holds it (#105); its own harness passes (FACTORY_CLAIM).
+    // Not note: a person steers a running run with it. A missing or malformed run falls through to the command's own check.
+    if (GATED.has(cmd) && typeof run === 'string' && run.includes('#')) refuseClaimed(run);
     switch (cmd) {
       case 'event': {
         const [stage, status] = rest, p = json(rest[2]);
@@ -103,11 +107,11 @@ export async function main(argv) {
         record(run, 'review', 'started', { axes, sha, range });
         out({ axes, range, files }); break;
       }
-      case 'worktree': refuseClaimed(run); out(worktree(run, rest[0])); break; // these three start work on a run: not while another launcher holds it
+      case 'worktree': out(worktree(run, rest[0])); break;
       case 'deps': console.log(deps(run)); break;
       case 'gc': out(gc()); break;
       case 'gate': { const { status, ...p } = gate(getRun(run)); record(run, 'gate', status, p, { fallback }); out({ status, ...p }); break; }
-      case 'intake': refuseClaimed(run); out(intake(run)); break;
+      case 'intake': out(intake(run)); break;
       case 'sync': { // `sync` alone re-syncs every attached project
         const list = run ? [[run, rest[0]]] : Object.entries(projects()).map(([k, v]) => [k, v.path]);
         out(list.map(([k, p]) => sync(k, p))); break;
@@ -127,13 +131,10 @@ export async function main(argv) {
       case 'decide': { const r = getRun(run); const f = r.imported ? {} : facts(r); const d = decide(r, f); record(run, 'approve', 'decided', { ...d, facts: f }); out({ ...d, facts: f }); break; }
       case 'merge': out(merge(run)); break;
       case 'risk': out(risk(getRun(run), rest)); break;
-      case 'approval': refuseClaimed(run); out(approval(run)); break;
+      case 'approval': out(approval(run)); break;
       case 'postmerge': out(postmerge(run)); break;
       case 'revert': out(revert(run, rest.join(' ') || 'CI failed on the base branch after merge')); break;
-      case 'queue': { // next and triage never pick a run another launcher holds (an F start before its first event)
-        const q = await queue(run), free = (x) => claimedElsewhere(x.run) === undefined;
-        out({ ...q, ready: q.ready.filter(free), untriaged: q.untriaged.filter(free) }); break;
-      }
+      case 'queue': out(await queue(run)); break;
       case 'new': { // new "<idea>" [--name owner/repo] [--stack id] [--dry-run] [--yes] [--out dir] [--path dir] [--public] [--host id] [--tracker id]
         const has = (f) => { const i = rest.indexOf(f); return i >= 0 && !!rest.splice(i, 1); };
         const opt = (f) => { const i = rest.indexOf(f); return i < 0 ? undefined : rest.splice(i, 2)[1]; };

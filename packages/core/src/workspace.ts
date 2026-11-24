@@ -7,6 +7,7 @@ import { exec, posixShell } from './platform.ts';
 import { gh, parseRun } from './github.ts';
 import { io, read, record, runDir, stateDir } from './log.ts';
 import { rules } from './rules.ts';
+import { withClaim } from './claim.ts';
 import type { Project, WorktreeInfo } from './types.ts';
 
 export const git = (...args: string[]): string => exec(io.git, args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
@@ -65,7 +66,7 @@ export function deps(run) {
   if (!w) throw new Error(`no worktree for ${run}; run "worktree" first`);
   const has = (dir, f) => fs.existsSync(path.join(dir, f));
   const sh = (cmd, args) => {
-    try { exec(cmd, args, { cwd: w.path, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) {
+    try { exec(cmd, args, { cwd: w.path, env: withClaim(process.env), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); } catch (e) { // the repo's install scripts never get the run's claim token
       const tail = (x) => String(x || '').trim().split('\n').slice(-15).join('\n');
       throw new Error(`${cmd} ${args.join(' ')} failed:\n${tail(e.stdout)}\n${tail(e.stderr)}`);
     }
@@ -107,7 +108,7 @@ export function localChecks(run) {
       fs.writeSync(fd, `$ ${cmd}\n`);
       const t = Date.now();
       let exit = 0;
-      try { execFileSync(shell, ['-c', cmd], { cwd: w.path, env: { ...process.env, CI: '1' }, stdio: ['ignore', fd, fd], timeout: 30 * 60e3 }); } // to a file: no maxBuffer limit
+      try { execFileSync(shell, ['-c', cmd], { cwd: w.path, env: { ...withClaim(process.env), CI: '1' }, stdio: ['ignore', fd, fd], timeout: 30 * 60e3 }); } // to a file: no maxBuffer limit
       catch (e) { exit = e.status ?? (e.signal ? 'timeout' : 1); }
       commands.push({ cmd, exit, ms: Date.now() - t });
     }

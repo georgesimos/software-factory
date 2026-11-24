@@ -15,7 +15,7 @@ import { command, opener } from '../../core/src/platform.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { MAX_BYTES, killTree, listSessions, resolveSpec, startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
 import { artifact, budgetLeft, harnessReady, launchSession, page, resumable, resumeFor, serve, startRun, terminalSession, uiHandle } from '../../server/src/server.ts';
-import { procStart, readClaim, statTicks, takeClaim, unclaim } from '../../server/src/claim.ts';
+import { procStart, readClaim, statTicks, takeClaim, unclaim } from '../../core/src/claim.ts';
 
 setup();
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-shome-'));
@@ -260,15 +260,16 @@ test('startRun() (F start, POST /api/runs): launchSession\'s checks, then a deta
   assert.match(fs.readFileSync(log, 'utf8'), /prompt: \/software-factory acme\/app#42/);
 });
 
-test('#105: F intake, approval and worktree refuse a run another live launcher holds; its own harness passes; the token stays out of the log and the page', () => {
+test('#105: every F command that changes a run refuses one another live launcher holds; its own harness passes; the token stays out of the log and the page', () => {
   const id = 'eval/golden#4';
   const f = (args, extra = {}) => spawnSync(process.execPath, [path.join(HERE, 'factory.mjs'), ...args], { env: { ...stubEnv, FACTORY_DIR: io.dir, FACTORY_FIXTURES: path.join(HERE, 'evals', 'golden'), ...extra }, encoding: 'utf8' });
   const cl = takeClaim(id, 'start'); // an F start between its claim and its harness's first event
-  for (const [cmd, tok] of [['intake'], ['approval'], ['worktree'], ['intake', 'another-token']]) {
-    const r = f([cmd, id], tok ? { FACTORY_CLAIM: tok } : {});
-    assert.match(r.stderr, /eval\/golden#4 already has a running session \(start, not started yet\)\. If nothing is starting it .*F unclaim eval\/golden#4 --force/, `${cmd} ${tok ?? ''}`);
+  for (const [args, tok] of [[['intake', id]], [['approval', id]], [['worktree', id]], [['merge', id]], [['event', id, 'spec', 'passed', '{}']], [['intake', id], 'another-token'], [['intake', 'Eval/Golden#4']]]) {
+    const r = f(args, tok ? { FACTORY_CLAIM: tok } : {});
+    assert.match(r.stderr, /olden#4 already has a running session \(start, not started yet\)\. If nothing is starting it .*F unclaim .*olden#4 --force/, `${args.join(' ')} ${tok ?? ''}`);
     assert.notEqual(r.status, 0);
   }
+  assert.match(f(['worktree']).stderr, /^factory: run must look like owner\/repo#N/, 'no run: the command\'s own usage error');
   const ok = f(['intake', id], { FACTORY_CLAIM: cl.claim.token });
   assert.equal(ok.status, 0, ok.stderr);
   assert.equal(JSON.parse(ok.stdout).association, 'NONE', 'the holder\'s own harness');

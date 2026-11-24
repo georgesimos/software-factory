@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { runDir } from '../../core/src/log.ts';
+import { runDir } from './log.ts';
 
 // One claim per run, across processes (#25): whoever starts a harness on a run (F start, F ui or the desktop app, a
 // terminal pane) first creates the run's claim.json with 'wx', so two launchers can't both pass the checks and start. It
@@ -11,7 +11,8 @@ import { runDir } from '../../core/src/log.ts';
 // can't be read, never goes stale by age. Every refusal names the way out for a person: F unclaim <run>, which refuses
 // too while the claim may be live, unless --force.
 export interface Claim { pid: number; since?: string; launcher: string; at: string; log?: string; token?: string }
-const file = (id: string) => path.join(runDir(id), 'claim.json');
+// Owner and repo are case-insensitive on GitHub: Acme/App#41 and acme/app#41 share one claim, on any file system.
+const dir = (id: string) => runDir(id.toLowerCase()), file = (id: string) => path.join(dir(id), 'claim.json');
 
 // The OS's start time for a pid, to tell it from a later process that got the same pid. Linux: the start in clock ticks
 // since boot (/proc/<pid>/stat field 22), which a clock step doesn't move and which needs no ps. Elsewhere on POSIX:
@@ -56,7 +57,7 @@ function put(id: string, c: Claim, create: boolean) {
 }
 // Takes the run, or throws while a live launcher holds it. update() records the pid once spawned; release() lets go.
 export function takeClaim(id: string, launcher: string, fields: Partial<Claim> = {}) {
-  fs.mkdirSync(runDir(id), { recursive: true });
+  fs.mkdirSync(dir(id), { recursive: true });
   const c: Claim = { pid: 0, launcher, at: new Date().toISOString(), token: crypto.randomUUID(), ...fields };
   for (let tries = 0; ; tries++) {
     try { put(id, c, true); break; } catch (e) {
@@ -81,7 +82,7 @@ export function takeClaim(id: string, launcher: string, fields: Partial<Claim> =
 }
 export const running = (id: string, c = readClaim(id)) => new Error(`${id} already has a running session (${c ? `${c.launcher}${c.pid ? `, pid ${c.pid}` : ', not started yet'}` : 'unreadable claim'}). `
   + (c?.pid ? `If that process is gone: F unclaim ${id}` : `If nothing is starting it (check for a running claude on ${id} first): F unclaim ${id} --force`) + ` (it deletes ${file(id)})`);
-// The factory's own steps on a run (#105: F intake, approval, worktree; F queue's picks) yield to another live launcher's
+// The factory's own steps on a run (#105: every F command that changes a run; F queue's and F loop's picks) yield to another live launcher's
 // claim. The holder's harness passes: its launcher hands it the claim's token in FACTORY_CLAIM (env only: never argv or the
 // log). Returns the blocking claim (null: unreadable, so live), or undefined when the run is free or the claim is ours.
 export function claimedElsewhere(id: string, env: NodeJS.ProcessEnv = process.env): Claim | null | undefined {
@@ -94,6 +95,8 @@ export function refuseClaimed(id: string, env: NodeJS.ProcessEnv = process.env) 
   const c = claimedElsewhere(id, env);
   if (c !== undefined) throw running(id, c ?? undefined);
 }
+// How a person clears a claim that blocks: --force when it has no pid yet or can't be read (rule 2).
+export const unclaimCmd = (id: string, c?: Claim | null) => `F unclaim ${id}${c?.pid ? '' : ' --force'}`;
 // The env for a harness on a run: its claim's token, and never one inherited from whoever started this process.
 export const withClaim = (env: NodeJS.ProcessEnv, token?: string) => { const { FACTORY_CLAIM: _, ...rest } = env; return token ? { ...rest, FACTORY_CLAIM: token } : rest; };
 // F unclaim <run>: a person clears a claim that blocks the run. Refused while it may be live (unreadable included), unless forced.

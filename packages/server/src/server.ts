@@ -22,7 +22,7 @@ import { logMetrics } from '../../core/src/metrics.ts';
 import { open } from '../../core/src/platform.ts';
 import { spawn } from 'node:child_process';
 import { getSession, killTree, listSessions, resolveSpec, startSession, stopAll, subscribe } from '../../adapters/sessions.mjs';
-import { claimLive, procStart, readClaim, running, takeClaim, withClaim } from './claim.ts';
+import { claimLive, procStart, readClaim, running, takeClaim, withClaim } from '../../core/src/claim.ts';
 
 // `F ui`: the dashboard on a loopback port, where the Skills sheet can save. Pure, so the self-test can drive it.
 export const same = (a, b) => typeof a === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));

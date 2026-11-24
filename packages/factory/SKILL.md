@@ -12,8 +12,8 @@ description: Attach a GitHub repo to a software factory (importing open PRs and 
 | `owner/repo#N` or an issue URL | Build that issue end to end (stages 0–7). |
 | `owner/repo#N --dry-run --intake-only` | Intake only. No GitHub writes and no worktree. Used by `F eval`. |
 | `sync [owner/repo <clone path>]` | Attach a project and import work already in flight. See [Attach a project](#attach-a-project). |
-| `next owner/repo` | Take the first issue from `F queue owner/repo` `.ready` and build it. This is meant for a scheduled routine. |
-| `triage owner/repo` | Run intake only on the first 5 entries of `F queue owner/repo` `.untriaged`. |
+| `next owner/repo` | Take the first issue from `F queue owner/repo` `.ready` and build it. This is meant for a scheduled routine. Tell the user every entry in `.claimed` (another launcher holds that run) with its `unclaim` command, to run only if that launcher is gone. |
+| `triage owner/repo` | Run intake only on the first 5 entries of `F queue owner/repo` `.untriaged`. Report `.claimed` as `next` does. |
 | `new: <idea>` | Start an app from an idea: plan, repo, issue batch, then build issue by issue. See [New project from an idea](#new-project-from-an-idea). |
 | `new owner/repo` | The idea was recorded through `F ui`'s `POST /idea` endpoint (there is no dashboard form for it yet). Read it with `F project owner/repo` `.idea`, then start at I0 with `--name owner/repo`. |
 | `continue owner/repo` | Resume an idea project: `F project owner/repo`, then I4. |
@@ -75,7 +75,7 @@ In the commands below:
 | A PR exists and `gh pr checks` is red, and `policy.ci` is unset or `required` | Go to Build with the failing log. Use `gh run view <id> --log-failed \| tail -n 80`. Under `advisory` or `skip`, red CI is not a reason to rebuild. |
 | Otherwise | Continue from the recorded stage, using the last gate's `next`. |
 
-A start refused with `already has a running session (…)` means another launcher (`F start`, the app, a terminal) holds the run's claim. `F intake`, `F approval` and `F worktree` refuse the same way, and `F queue` leaves such runs out of `ready` and `untriaged`. The harness a launcher started passes its own claim. On that refusal, report it to the user and stop: never work the run alongside the holder. Leave it while that pid runs. Once it is gone (crashed, rebooted) and the claim still blocks, tell the user to run `F unclaim RUN`; it refuses while the pid looks alive, and `--force` is the user's call, never yours.
+A start refused with `already has a running session (…)` means another launcher (`F start`, the app, a terminal) holds the run's claim. Every `F` command that changes the run (`intake`, `approval`, `worktree`, `deps`, `event`, `review`, `axes`, `checks`, `notes`, `gate`, `decide`, `merge`, `postmerge`, `revert`) refuses the same way. `F queue` and `F loop` never pick such a run; `F queue` lists it under `claimed`. The harness a launcher started passes its own claim. On that refusal, report it to the user and stop: never work the run alongside the holder. Leave it while that pid runs. Once it is gone (crashed, rebooted) and the claim still blocks, tell the user to run `F unclaim RUN`; it refuses while the pid looks alive, and `--force` is the user's call, never yours.
 
 ## 1. Intake: is it worth building?
 
