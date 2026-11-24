@@ -71,7 +71,7 @@ In the commands below:
 | `imported` | Report the PR and branch, then stop. |
 | `merged`, `escalated`, `rejected`, `closed` or `split` | Report the outcome and links, then stop. Redo it only if the user explicitly asks. |
 | `needs-info` | Redo intake. `F intake` returns the new comments. |
-| `awaiting-approval` | Run `F approval RUN`. **approve**: record `F event RUN spec passed -` with `{"approvedBy":"…"}`, then go to Build. **reject**: record `intake rejected` with the reason. **waiting**: tell the user, then stop. |
+| `awaiting-approval` | Run `F approval RUN`. **approve**: record `F event RUN spec passed -` with `{"approvedBy":"…"}`, then go to Build. **reject**: record `intake rejected` with the reason. **waiting**: tell the user, then stop. A local item (a git project) waits for the user to run `F approve RUN` in their own terminal: tell them that, and never run it yourself (it refuses an agent session anyway). |
 | A PR exists and `gh pr checks` is red, and `policy.ci` is unset or `required` | Go to Build with the failing log. Use `gh run view <id> --log-failed \| tail -n 80`. Under `advisory` or `skip`, red CI is not a reason to rebuild. |
 | Otherwise | Continue from the recorded stage, using the last gate's `next`. |
 
@@ -113,7 +113,7 @@ Then run `F risk RUN <files to touch…>`.
 - **Risky** (untrusted author or sensitive paths):
   1. Post the spec as an issue comment that ends: "A maintainer can reply `/factory approve` or `/factory reject`."
   2. Add `factory:needs-approval`.
-  3. Record `F event RUN spec awaiting-approval -` with `{"spec":"one line","reasons":[…]}`.
+  3. Record `F event RUN spec awaiting-approval -` with `{"spec":"one line","reasons":[…]}`. On a local item, F hashes `DIR/spec.md` here and `F approve` shows that file, so write it first and don't change it until the spec passes; it can't build before then.
   4. [Publish](#publish-to-the-artifact), then stop.
 - **Not risky:** record `F event RUN spec passed -` with `{"spec":"one-line summary"}`.
 

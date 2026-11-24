@@ -105,12 +105,12 @@ export async function projectTest({ uiHandle, read, project: { validateIssues, v
   fs.writeFileSync(path.join(clone, 'a.txt'), 'a');
   git(clone, 'add', '.'); git(clone, 'commit', '-qm', 'init');
   const H = await hosts.load(), T = await trackers.load();
-  assert.deepEqual([Object.keys(H).sort(), Object.keys(T)], [['git', 'github'], ['github-issues']]); // _template.ts and index.ts are not providers
+  assert.deepEqual([Object.keys(H).sort(), Object.keys(T)], [['git', 'github'], ['github-issues', 'local']]); // _template.ts and index.ts are not providers
   // the git host has no server: it never passes F new's first check, so the repo contract is not its to pass
   assert.deepEqual(H.git.authStatus(ctxFor(cstub)), { ok: false, detail: 'host "git" cannot create a repo: it has no server; start the project on github, or attach an existing clone with F sync' });
   assert.throws(() => H.git.createRepo(ctxFor(cstub), { repo: 'acme/contract', visibility: 'private' }), /host "git" cannot create a repo/);
   for (const p of Object.values(H).filter((h) => h.id !== 'git')) hosts.contract(p, { ctx: ctxFor(cstub), repo: 'acme/contract', clone });
-  for (const p of Object.values(T)) trackers.contract(p, { ctx: ctxFor(cstub), repo: 'acme/contract' });
+  for (const p of Object.values(T)) trackers.contract(p, { ctx: ctxFor(cstub), repo: 'acme/contract', path: clone }); // local writes the clone's .factory/issues
   assert.equal(git(root, '--git-dir', stubStateOf(cstub).repos['acme/contract'].bare, 'log', '--format=%s', 'main').trim(), 'init'); // a real push
   assert.equal(T['github-issues'].createIssues(ctxFor(cstub), { repo: 'acme/contract', items: [{ key: 'a', title: 'First', body: '', acceptance: ['x'], dependsOn: [], milestone: 'M1' }] })[0].created, false); // the hidden key marker, with no local map
   const reg = path.join(root, 'registry');

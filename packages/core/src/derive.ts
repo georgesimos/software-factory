@@ -99,7 +99,7 @@ export function derive(events: FactoryEvent[]): Record<string, Run> {
     if (e.costUsd) r.costUsd = +((r.costUsd || 0) + e.costUsd).toFixed(4);
     if (e.tokens) r.tokens = (r.tokens || 0) + e.tokens;
     if (e.stage === 'intake' && e.status === 'started') { r.outcome = 'in-progress'; delete r.humanMerge; delete r.reverted; } // resume after needs-info, or a new run after a revert
-    if (r.outcome === 'awaiting-approval' && !OUTCOMES.includes(e.status)) r.outcome = 'in-progress'; // spec approved
+    if (r.outcome === 'awaiting-approval' && e.stage === 'spec' && e.status === 'passed') r.outcome = 'in-progress'; // only the spec passing ends the wait
     if (e.status === 'reverted') r.reverted = { pr: e.pr, reason: e.reason };
     if (e.stage === 'build' && e.status === 'started') r.iteration++;
     if (e.tokens || e.costUsd) { // reported: what the orchestrator copied from a subagent result

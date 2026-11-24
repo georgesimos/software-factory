@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { setup } from './setup.mjs';
+import { passSpec, setup } from './setup.mjs';
 import { HERE } from '../factory.mjs';
 import * as host from '../../adapters/hosts/git.ts';
 import { derive } from '../../core/src/derive.ts';
@@ -131,12 +131,13 @@ test('no remote: a clean checked-out base fast-forwards with its files; a dirty 
   assert.deepEqual([gone.merged, /^main is checked out in .*l1-wt, which is missing: git worktree prune/.test(gone.detail)], [false, true], gone.detail);
 });
 
-test('a git older than 2.38 (no merge-tree --write-tree) says so, and is never read as a conflict', () => {
+test('a git older than the minimum (2.40) says so, and is never read as a conflict', () => {
   const d = repo('v1'), head = work(d, 1), at = g(d, 'rev-parse', 'main');
   const old = (out) => { const c = ctx(); const git = c.git; return { ...c, git: (...a) => (a[0] === 'version' ? (out === null ? assert.fail('no git') : out) : git(...a)) }; };
-  assert.deepEqual(host.merge(old('git version 2.30.1\n'), { repo: 'local/v1', path: d, id: 'factory/issue-1', sha: head, base: 'main' }), { merged: false, detail: 'git 2.30 is too old: merging needs git 2.38 or later (merge-tree --write-tree)' });
-  assert.throws(() => host.mergeTree(old('git version 2.37.9').git, d, 'main', head), /git 2\.37 is too old/);
-  assert.equal(host.mergeTreeMissing(old('git version 2.38.0').git), null);
+  assert.deepEqual(host.merge(old('git version 2.30.1\n'), { repo: 'local/v1', path: d, id: 'factory/issue-1', sha: head, base: 'main' }), { merged: false, detail: 'git 2.30 is too old: the factory needs git 2.40 or later' });
+  assert.throws(() => host.mergeTree(old('git version 2.39.5').git, d, 'main', head), /git 2\.39 is too old/);
+  assert.equal(host.gitTooOld(old('git version 2.40.0').git), null);
+  assert.equal(host.gitTooOld(old('git version 3.0.0').git), null);
   assert.deepEqual(host.merge(old(null), { repo: 'local/v1', path: d, id: 'factory/issue-1', sha: head, base: 'main' }), { merged: false, detail: 'cannot run git version: is git installed?' });
   assert.equal(g(d, 'rev-parse', 'main'), at, 'nothing moved');
 });
@@ -350,6 +351,7 @@ test('#138 r1 finding 1: a tag or branch named like the base never hides the dif
   assert.deepEqual(seen('local/sh2', s2), want);
   // F axes in the run's worktree, which shares the clone's refs
   record('local/sh2#6', 'intake', 'started', { title: 't' });
+  passSpec('local/sh2#6');
   const wt = JSON.parse(F('worktree', 'local/sh2#6')).path;
   commit(wt, 'src/page.tsx', 'p\n');
   g(d2, 'branch', '-f', 'origin/main', g(wt, 'rev-parse', 'HEAD'));

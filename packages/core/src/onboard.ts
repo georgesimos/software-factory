@@ -6,7 +6,8 @@ import { dashboard } from './log.ts';
 import { hooks, shipConnectors } from './ship.ts';
 import { discover } from './sync.ts';
 import { harnesses } from '../../adapters/harnesses/index.ts';
-import { projects } from './workspace.ts';
+import { GIT_MIN, gitTooOld } from '../../adapters/hosts/git.ts';
+import { git, projects } from './workspace.ts';
 import { readSkills, skillsData } from './skills.ts';
 import { stateDir } from './log.ts';
 
@@ -92,7 +93,7 @@ export function onboardState() {
       // its desktop app, and what the factory does with it: imports its local sessions, opens a run in it
       app: h.desktop ? { ...h.desktop(), sessions: !!h.sessions, opens: !!h.openDesktop } : null };
   });
-  return { harnesses: hs, repos: discover(), hooks: { ...hooks(), connectors: shipConnectors() }, ...onboardConfig() };
+  return { harnesses: hs, git: gitTooOld(git), repos: discover(), hooks: { ...hooks(), connectors: shipConnectors() }, ...onboardConfig() }; // git: null, or why it is too old
 }
 export function onboardText(s: ReturnType<typeof onboardState>, platform = process.platform) {
   const f = fFound(platform), F_CMD = f?.cmd ?? null; // now, not at import: a plugin installed while the app runs counts
@@ -105,7 +106,7 @@ export function onboardText(s: ReturnType<typeof onboardState>, platform = proce
     if (h.login) L.push(`     ${mark(h.login.ok)} login: ${h.login.hint}`);
     for (const n of h.notes) L.push(`     ${mark(n.ok)} ${n.label}: ${n.hint}`);
   }
-  L.push('', '2. Repo');
+  L.push('', '2. Repo', `   ${mark(!s.git)} ${s.git ?? `git ${GIT_MIN.join('.')} or later`}`);
   for (const [r, p] of Object.entries(s.projects)) L.push(`   ✓ ${r}  ${p.path}`);
   for (const r of s.repos.filter((r) => !r.attached)) L.push(`   · ${r.repo}   ${F_CMD} sync ${r.repo} ${shq(r.path)}`);
   if (!s.repos.length && !Object.keys(s.projects).length) L.push(`   no git clones found: ${F_CMD} discover <folder>`);

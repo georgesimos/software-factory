@@ -1,12 +1,12 @@
 # Trackers
 
-A tracker is where `F issues create` files a project's issue batch, and where `F queue` / `F loop` read open issues and their dependencies. One file per tracker, loaded automatically: `github-issues.ts` ships. `index.mjs`, `index.ts`, files starting with `_` and declaration files are skipped.
+A tracker is where `F issues create` files a project's issue batch, and where `F queue` / `F loop` read open issues and their dependencies. One file per tracker, loaded automatically: `github-issues.ts` and `local.ts` ship. `index.mjs`, `index.ts`, files starting with `_` and declaration files are skipped.
 
 ## Add one
 
 1. Copy `_template.ts` to `<id>.ts` (its types come from `index.ts`). For one kept outside this repo, copy it to `<id>.mjs`
    and delete the type annotations and `import type` lines. The file name, without its extension, must equal `export const id`.
-2. Implement the three functions. Each gets `ctx = {gh, git}`:
+2. Implement the three functions. Each gets `ctx = {gh, git}`, and its options carry `path`, the project's clone, when core knows it:
 
 | Function | Returns | Must |
 |---|---|---|
@@ -42,6 +42,18 @@ declaration files (`*.d.ts`, `*.d.mts`) are never loaded. A file that fails to i
 Node only strips types, it compiles nothing: a `.ts` file must use erasable syntax only (no `enum`, `namespace`,
 parameter properties or other TypeScript that emits code; type-only imports as `import type`). The desktop build
 would compile those, but F under Node fails on them, naming the file.
+
+## `local`
+
+A git project's default tracker (local-first D3, D4). Each item is `<clone>/.factory/issues/<N>.md`: front matter with
+`title`, `state` and `labels`, then the body as GitHub Issues writes it, so `Depends on #3` and the key marker read the
+same. `.factory/issues/` is untracked: `F item new` (or `createIssues`) adds `/.factory/issues/` to the clone's
+`info/exclude` once, never the tracked `.gitignore`, and never commits. Only plain files are read or written: a symlinked
+`.factory` or `.factory/issues`, an item that is a symlink or a folder, and items git tracks are refused. A new item takes
+the next free N with an exclusive create, so two `F` processes never share one. An item has no verifiable author:
+`getItem` gives association `NONE` and no comments, and there is no `trust`, so every spec waits for `F approve RUN` at
+the user's own terminal and `facts()` escalates. That approval is a speed bump, not a security boundary (local-first
+5b); merges don't rest on it.
 
 ## Not yet on the adapter
 

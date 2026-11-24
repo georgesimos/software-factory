@@ -8,6 +8,7 @@ import { attach } from './sync.ts';
 import { io, read, record, runDir, stateDir } from './log.ts';
 import { rules } from './rules.ts';
 import { withClaim } from './claim.ts';
+import { specCleared } from './approve.ts';
 import { builtin as builtinHosts, type Host } from '../../adapters/hosts/index.ts';
 import { builtin as builtinTrackers, type Tracker } from '../../adapters/trackers/index.ts';
 import type { Project, WorktreeInfo } from './types.ts';
@@ -59,6 +60,7 @@ export const wtFile = (run: string) => path.join(runDir(run), 'worktree.json');
 export const wtInfo = (run: string): WorktreeInfo | null => { try { return JSON.parse(fs.readFileSync(wtFile(run), 'utf8')); } catch { return null; } };
 // One git worktree per run, sharing the clone's object store (not a second clone). A resume recreates it from the pushed branch.
 export function worktree(run: string, repoPath?: string): WorktreeInfo {
+  specCleared(run, 'get a worktree'); // a local item builds only after its spec passed (approve.ts)
   const have = wtInfo(run);
   if (have && fs.existsSync(have.path)) return have;
   const { repo, n } = parseRun(run);

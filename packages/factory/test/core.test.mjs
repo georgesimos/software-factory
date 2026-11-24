@@ -241,3 +241,12 @@ test('the committed app.html carries nothing from the machine that built it', ()
   if (host.length >= 3) assert.ok(!html.toLowerCase().includes(host.toLowerCase()), 'the host name');
   assert.doesNotMatch(html, SECRET);
 }); // runs after coreTest, on its state
+
+// pnpm -r build doesn't rebuild app.html (the web package's dashboard script does), so a page change can ship with a stale one.
+const web = path.join(HERE, '..', '..', 'apps', 'web'), vite = path.join(web, 'node_modules', 'vite', 'bin', 'vite.js');
+test('the committed app.html is a fresh web build (else: pnpm --filter @software-factory/web dashboard, and commit it)', { skip: !fs.existsSync(vite) && 'apps/web is not installed' }, () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-app-'));
+  execFileSync(process.execPath, [vite, 'build', '--outDir', out, '--emptyOutDir', '--logLevel', 'error'], { cwd: web, stdio: ['ignore', 'ignore', 'pipe'] });
+  const lf = (f) => fs.readFileSync(f, 'utf8').replace(/\r\n/g, '\n'); // a Windows checkout may turn the committed copy's line ends
+  assert.ok(lf(path.join(out, 'index.html')) === lf(path.join(HERE, 'app.html')), 'packages/factory/app.html differs from a fresh build of apps/web: run pnpm --filter @software-factory/web dashboard and commit it');
+});
