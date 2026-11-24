@@ -497,6 +497,37 @@ test('a start resumes from the newest F start log that wrote the run\'s last eve
   assert.deepEqual(calls[0].slice(0, 2), ['--resume', 'old-sess']);
 });
 
+test('#105: an F start\'s clean exit is its log\'s last JSON line, past stderr and a long result; a killed one is resumable()', () => {
+  const now = Date.now(), stamp = (t) => new Date(t).toISOString().replace(/[:.]/g, '-');
+  const log = (id, ...lines) => {
+    fs.mkdirSync(runDir(id), { recursive: true });
+    const f = path.join(runDir(id), `headless-${stamp(now - 600_000)}.log`);
+    fs.writeFileSync(f, [JSON.stringify({ type: 'system', subtype: 'init', session_id: `s-${id.slice(-2)}` }), ...lines].join('\n') + '\n');
+    fs.utimesSync(f, new Date(now + 1_000), new Date(now + 1_000));
+    record(id, 'intake', 'started', {});
+  };
+  log('acme/app#67', JSON.stringify({ type: 'result', subtype: 'success', result: 'x'.repeat(200_000) }), 'warn: stderr after the result');
+  log('acme/app#68', JSON.stringify({ type: 'assistant' }), 'Killed: 9');
+  const go = (id) => { const calls = []; startRun(id, stubEnv, (file, args) => { calls.push(args); return { pid: process.pid, on() { return this; }, unref() {} }; }); return calls[0]; };
+  assert.deepEqual([resumable().includes('acme/app#67'), resumable().includes('acme/app#68')], [false, true], 'the dashboard offers the killed F start');
+  assert.throws(() => go('acme/app#67'), /already has an active run/, 'a clean finish, 200 KB result and a stderr line after it: not resumed');
+  assert.deepEqual(go('acme/app#68').slice(0, 2), ['--resume', 's-68']);
+  assert.equal(resumable().includes('acme/app#68'), false, 'held by the new start\'s live claim');
+});
+
+test('#105: an in-app resume that died before its first event doesn\'t hide the session that wrote it', { skip: process.platform === 'win32' && 'the stub runs under a cmd.exe shim there' }, async () => {
+  const id = 'acme/app#69', first = launchSession({ repo: 'acme/app', issue: 69 }, { ...stubEnv, STUB_HANG: '1' });
+  await new Promise((r) => { const off = subscribe(first, (e) => { if (e.data?.subtype === 'init') { off(); r(); } }); });
+  record(id, 'intake', 'started', {});
+  let end = finished(first); first.stop(); await end;
+  await new Promise((r) => setTimeout(r, 10));
+  const second = launchSession({ repo: 'acme/app', issue: 69 }, { ...stubEnv, STUB_HANG: '1' }); // a resume, stopped before it writes anything
+  end = finished(second); second.stop(); await end;
+  assert.ok(resumable().includes(id));
+  const third = await finished(launchSession({ repo: 'acme/app', issue: 69 }, stubEnv));
+  assert.deepEqual(third.find((e) => e.data?.subtype === 'init').data.argv.slice(0, 2), ['--resume', 'stub-session']);
+});
+
 const logged = async (log, re) => { for (let i = 0; i < 100 && !re.test(fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : ''); i++) await new Promise((res) => setTimeout(res, 100)); };
 test('F start, killed: the next start resumes its harness session from its log, after a terminal or a failed start too; a clean exit is not resumed', { skip: process.platform === 'win32' && 'the stub runs under a cmd.exe shim there' }, async () => {
   const id = 'acme/app#62', r = startRun(id, { ...stubEnv, STUB_HANG: '1' });
@@ -610,14 +641,16 @@ test('terminalSession(): a person\'s own harness in the desktop app\'s pane, in 
   const run = launchSession({ repo: 'acme/term', issue: 92 }, { ...stubEnv, STUB_HANG: '1' });
   await new Promise((r) => { const off = subscribe(run, (e) => { if (e.data?.subtype === 'init') { off(); r(); } }); });
   record('acme/term#92', 'intake', 'started', {});
-  assert.throws(() => terminalSession({ repo: 'acme/term', issue: 92, resume: 'stub-session' }, stubEnv, modules), /already has a running session/, 'never two claudes on one harness session');
+  assert.throws(() => terminalSession({ repo: 'acme/term', issue: 92, resume: 'stub-session' }, stubEnv, modules), /acme\/term#92 already has a running session in this app \(headless, started [^)]+\): stop it in Sessions first \(POST \/api\/sessions\/stop \{"id":"[\w-]+"\}\)/, 'never two claudes on one harness session; #107: it says how to clear it');
+  assert.throws(() => terminalSession({ repo: 'acme/term', issue: 92 }, stubEnv, modules), /acme\/term#92 already has a running session in this app \(headless, started [^)]+\): stop it in Sessions first \(POST \/api\/sessions\/stop \{"id":"[\w-]+"\}\)/, 'a new terminal names the in-app holder, not a claim');
+  assert.throws(() => launchSession({ repo: 'acme/term', issue: 92 }, stubEnv), /acme\/term#92 already has a running session in this app \(headless, started [^)]+\): stop it in Sessions first \(POST \/api\/sessions\/stop \{"id":"[\w-]+"\}\)/);
   end = finished(run); run.stop(); await end;
   assert.ok(resumable().includes('acme/term#92'));
   const s = terminalSession({ repo: 'acme/term', resume: 'stub-session' }, stubEnv, modules); // no issue in the body: the label is the session's
   await new Promise((r) => setTimeout(r, 20));
   assert.deepEqual([s.label, pty.rec.args, fs.realpathSync(pty.rec.cwd)], ['acme/term#92', ['--resume', 'stub-session'], fs.realpathSync(clone)]);
-  assert.throws(() => terminalSession({ repo: 'acme/term', resume: 'stub-session' }, stubEnv, modules), /acme\/term#92 already has a running session/);
-  assert.throws(() => launchSession({ repo: 'acme/term', issue: 92 }, stubEnv), /already has a running session/, 'not while a person has it open');
+  assert.throws(() => terminalSession({ repo: 'acme/term', resume: 'stub-session' }, stubEnv, modules), /acme\/term#92 already has a running session in this app \(terminal, started [^)]+\): stop it in Sessions first \(POST \/api\/sessions\/stop \{"id":"[\w-]+"\}\)/);
+  assert.throws(() => launchSession({ repo: 'acme/term', issue: 92 }, stubEnv), /already has a running session in this app \(terminal, started [^)]+\): stop it in Sessions first \(POST \/api\/sessions\/stop \{"id":"[\w-]+"\}\)/, 'not while a person has it open');
   end = finished(s); s.stop(); assert.equal((await end).at(-1).code, 'stopped');
   assert.ok(resumable().includes('acme/term#92'), 'the terminal session doesn\'t replace the run\'s last session');
   const again = await finished(launchSession({ repo: 'acme/term', issue: 92 }, stubEnv));
