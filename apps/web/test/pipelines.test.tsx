@@ -35,6 +35,7 @@ describe('Pipelines sheet', () => {
   it('names the project’s tracker and host, marks locked steps, and counts what it drew', () => {
     render(<PipelinesSheet open onClose={() => {}} data={data} project="acme/shop" />);
     const graph = screen.getByRole('list', { name: 'acme/shop pipeline' });
+    expect(within(screen.getByRole('navigation', { name: 'Pipelines' })).getAllByRole('button').map((b) => b.textContent)).toEqual(['acme/shop9 runs']); // attached projects only, never default
     expect(within(graph).getByRole('listitem', { name: /Issue ready/ })).toHaveTextContent('GitHub Issues');
     expect(within(graph).getByRole('listitem', { name: /^Security review/ })).toHaveTextContent('Locked');
     expect(within(graph).getByRole('listitem', { name: /^UI review/ })).toHaveTextContent('when UI files change');
