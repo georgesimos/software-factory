@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { CAP, DOCS, MAX_DIFF, SEO, SOURCE, TEST, TRUSTED, UI, blocking, sensitive } from './constants.ts';
 import { budget, budgetWhy } from './derive.ts';
-import type { AxisReview, Deploy, Rule, Run } from './types.ts';
+import type { AxisReview, Deploy, Metrics, Rule, Run } from './types.ts';
 
 /** An extra review axis from skills.json: added when a changed file matches one of its globs. */
 export interface ExtraAxis { axis: string; when: string[] }
@@ -106,7 +106,7 @@ export function risk(r: Run, plannedFiles: string[]) {
   if (sens.length) reasons.push(`plans to touch sensitive paths: ${sens.join(', ')}`);
   return { risky: reasons.length > 0, reasons };
 }
-export function metrics(runs: Run[]) {
+export function metrics(runs: Run[]): Metrics {
   const count = (o: string) => runs.filter((r) => r.outcome === o).length;
   const humanMerged = runs.filter((r) => r.outcome === 'merged' && r.humanMerge).length; // escalated, then merged on GitHub by a human (#21)
   const merged = count('merged') - humanMerged, escalated = count('escalated') + humanMerged; // merge rate = the factory's own merges
@@ -123,7 +123,7 @@ export function metrics(runs: Run[]) {
     closed: count('closed'), awaitingApproval: count('awaiting-approval'), split: count('split'),
     mergeRate: merged + escalated ? +(merged / (merged + escalated)).toFixed(3) : null,
     avgIterations: built.length ? +(built.reduce((s, r) => s + r.iteration, 0) / built.length).toFixed(2) : null,
-    medianCycleMs: cycles.length ? cycles[Math.floor(cycles.length / 2)] : null,
+    medianCycleMs: cycles[Math.floor(cycles.length / 2)] ?? null,
     reverts, revertRate: merged ? +(reverts / merged).toFixed(3) : null,
     costUsd, costPerMergeUsd: merged ? +(costUsd / merged).toFixed(2) : null,
     tokens, tokensPerMerge: merged ? Math.round(tokens / merged) : null, measuredRuns: runs.filter((r) => r.burn?.measured).length,
