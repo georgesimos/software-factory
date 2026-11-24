@@ -6,5 +6,12 @@
   "description": "The loopback HTTP server behind `F ui` and the dashboard renderer. Run by Node directly (type stripping).",
   "type": "module",
   "engines": { "node": ">=24.12" },
-  "exports": { ".": "./src/server.ts" }
+  "exports": { ".": "./src/server.ts" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "~5.9.3"
+  }
 }

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -20,19 +19,31 @@ import { note } from '../../core/src/notes.ts';
 import { measure, withMeasured } from '../../core/src/burn.ts';
 import { logMetrics } from '../../core/src/metrics.ts';
 import { open } from '../../core/src/platform.ts';
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
+import type { AddressInfo } from 'node:net';
 import { childEnv, getSession, killTree, listSessions, resolveSpec, startSession, stopAll, subscribe } from '../../adapters/sessions.mjs';
 import { claimedElsewhere, claimLive, procStart, readClaim, refuseClaimed, running, takeClaim, withClaim } from '../../core/src/claim.ts';
+import type { Session, SessionInfo } from '../../adapters/sessions.mjs';
+import type { FactoryEvent, Run } from '../../core/src/types.ts';
+
+// A request as uiHandle() reads it. Node joins a repeated header into one string (set-cookie aside), so each is a string.
+type UiRequest = { method?: string; url: string; headers?: Record<string, string | undefined>; body?: string };
+// What uiHandle() answers: a body, a redirect (location) or a session's event stream (stream, from).
+type UiReply = { status: number; type: string; body?: string; location?: string; stream?: Session; from?: number };
+// A POST's parsed JSON body: untrusted, so `any`; each route hands it to the validated function its CLI command calls.
+type Body = Record<string, any>;
+// A session that ran on a run, here (listSessions()) or as an F start (detachedRun()): what resumeFor() reads.
+type Ran = { state: string; harness: string; started: string; ended: string | null; harnessSession?: string; exit: number | string | null };
 
 // `F ui`: the dashboard on a loopback port, where the Skills sheet can save. Pure, so the self-test can drive it.
-export const same = (a, b) => typeof a === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+export const same = (a: unknown, b: string) => typeof a === 'string' && a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 // apps/web's single-file build (#55), committed so plugin and skill installs need no build step: `pnpm --filter
 // @software-factory/web dashboard` rebuilds it. F render fills its #data tag; F ui serves it unfilled, and it reads GET /api/state.
 export const APP_HTML = path.join(import.meta.dirname, '..', '..', 'factory', 'app.html');
-export function uiHandle({ method, url, headers = {}, body = '' }, { token, port }) {
-  const reply = (status, x) => ({ status, type: 'application/json', body: JSON.stringify(x) });
+export function uiHandle({ method, url, headers = {}, body = '' }: UiRequest, { token, port }: { token: string; port: number }): UiReply {
+  const reply = (status: number, x: unknown) => ({ status, type: 'application/json', body: JSON.stringify(x) });
   const hosts = [`127.0.0.1:${port}`, `localhost:${port}`];
-  if (!hosts.includes(headers.host)) return reply(403, { error: 'unexpected Host header' }); // DNS rebinding
+  if (!hosts.includes(headers.host as string)) return reply(403, { error: 'unexpected Host header' }); // DNS rebinding
   const u = new URL(url, 'http://local');
   if (method === 'GET' && u.pathname === '/') {
     if (!same(u.searchParams.get('t'), token)) return reply(403, { error: 'open the URL that `F ui` printed' });
@@ -47,19 +58,19 @@ export function uiHandle({ method, url, headers = {}, body = '' }, { token, port
     if (route === '/state') return reply(200, pageData({ resumable: resumable(), terminal: !!hostModules['node-pty'] })); // what page() embeds, for apps/web; never the token
     if (route === '/sessions') return reply(200, { sessions: listSessions() });
     if (route === '/metrics') { // #82: burn, outcomes and timing derived from the log; ?project=owner/repo&since=<ISO date>
-      const q = (k) => u.searchParams.get(k) || undefined;
-      if (q('since') && Number.isNaN(Date.parse(q('since')))) return reply(400, { error: 'since must be an ISO date like 2026-11-01' });
+      const q = (k: string) => u.searchParams.get(k) || undefined;
+      if (q('since') && Number.isNaN(Date.parse(q('since')!))) return reply(400, { error: 'since must be an ISO date like 2026-11-01' });
       try { const events = read(); return reply(200, logMetrics(events, { project: q('project'), since: q('since'), measured: measure(events), archive: readArchive() })); }
-      catch (e) { console.error(`factory: /api/metrics: ${e.message}`); return reply(500, { error: 'metrics failed; see the F ui terminal' }); } // no internal message in the response
+      catch (e) { console.error(`factory: /api/metrics: ${(e as Error).message}`); return reply(500, { error: 'metrics failed; see the F ui terminal' }); } // no internal message in the response
     }
     const ev = route.match(/^\/sessions\/([0-9a-f-]{36})\/events$/);
     if (ev) { // server-sent events; ui() writes the stream. EventSource can't send x-factory-token, so clients read it with fetch.
-      const s = getSession(ev[1]);
+      const s = getSession(ev[1]!);
       return s ? { status: 200, type: 'text/event-stream', stream: s, from: /^\d+$/.test(headers['last-event-id'] || '') ? Number(headers['last-event-id']) + 1 : 0 } : reply(404, { error: `no session ${ev[1]}` });
     }
     const m = route.match(/^\/runs\/([^/]+)\/([^/]+)\/([^/]+)$/);
     if (!m) return reply(404, { error: 'not found' });
-    const [, owner, repo, n] = m; // raw segments: the checks below admit no %-escapes
+    const [, owner, repo, n] = m as unknown as [string, string, string, string]; // three required groups; raw segments: the checks below admit no %-escapes
     if (!LOGIN.test(owner) || !/^[\w.-]{1,100}$/.test(repo) || !/^\d{1,9}$/.test(n)) return reply(400, { error: 'expected /api/runs/<owner>/<repo>/<issue number>' });
     const run = runsData().find((r) => r.id === `${owner}/${repo}#${n}`);
     return run ? reply(200, { run }) : reply(404, { error: `no run ${owner}/${repo}#${n}` });
@@ -71,13 +82,13 @@ export function uiHandle({ method, url, headers = {}, body = '' }, { token, port
     try {
       const x = JSON.parse(body || '{}');
       if (!x || typeof x !== 'object' || Array.isArray(x)) throw new Error('expected a JSON object');
-      return reply(200, UI_ROUTES[route](x));
-    } catch (e) { return reply(400, { error: e.message }); }
+      return reply(200, UI_ROUTES[route]!(x)); // hasOwn above
+    } catch (e) { return reply(400, { error: (e as Error).message }); }
   }
   return reply(404, { error: 'not found' });
 }
 // Each route calls the same validated function as its CLI command.
-export const UI_ROUTES = {
+export const UI_ROUTES: Record<string, (x: Body) => unknown> = {
   '/skills': ({ scope, step, runner }) => { setSkill(scope, step, runner === null ? undefined : runner); return skillsData(runRepos()); },
   // applied/skipped/inherited say what changed: in a project a preset only touches the steps it already sets.
   '/skills/preset': ({ name, scope }) => { const { applied, skipped, inherited } = applyPreset(name, scope ?? 'default'); return { ...skillsData(runRepos()), applied, skipped, inherited }; },
@@ -110,7 +121,7 @@ export const UI_ROUTES = {
     if (data !== undefined && (typeof data !== 'string' || data.length > 32768)) throw new Error('data must be a string up to 32 KB'); // JSON escaping can double it: the body cap is 64K
     if (size && ![cols, rows].every((n) => Number.isInteger(n) && n > 0 && n <= 1000)) throw new Error('cols and rows must be 1-1000');
     if (data !== undefined) s.write(data);
-    if (size) s.resize(cols, rows);
+    if (size) s.resize!(cols, rows); // a terminal session: write() above, resize() too
     return { ok: true };
   },
   '/sessions/stop': ({ id }) => { const s = getSession(id); if (s?.state !== 'running') throw new Error('no running session with that id'); s.stop(); return { ok: true }; },
@@ -118,39 +129,40 @@ export const UI_ROUTES = {
 };
 // POST /api/sessions: start the factory on one issue in an attached clone (#25's checks). The request names a repo and an
 // issue only; the folder comes from projects() and the prompt is built here, so no request text reaches the harness.
-export const harnessReady = new Map(); // harness id -> when detect() and login() last passed
+export const harnessReady = new Map<string, number>(); // harness id -> when detect() and login() last passed
 // The harness session to resume for a run, or undefined. Only a run that is still active and that the stopped or crashed
 // session last wrote: its last event falls inside that session's life. Anything else, such as a terminal /software-factory
 // run that has owned the issue since, is refused as an active run.
 const SESSION_ID = /^\w[\w-]{0,99}$/; // a harness session id as an argument: plain, and never a flag (no leading '-')
-export function resumeFor(r, last) {
+export function resumeFor(r: Run | undefined, last: Ran | undefined) {
   if (!r || TERMINAL.includes(r.outcome) || !last || last.state === 'running' || last.exit === 0 || last.exit === 'unknown') return undefined; // unsure: no auto-resume
   const v = last.harnessSession;
   return covers(r, last) && SESSION_ID.test(v || '') ? v : undefined;
 }
-const covers = (r, x) => { // the run's last event falls inside x's life; its last lines land just after
-  const at = Date.parse(r?.events?.at(-1)?.ts || 0);
-  return at >= Date.parse(x.started) && at <= Date.parse(x.ended) + 5_000;
+const covers = (r: Run | undefined, x: { started: string; ended: string | null }) => { // the run's last event falls inside x's life; its last lines land just after
+  const at = Date.parse((r?.events?.at(-1)?.ts || 0) as string); // as before: Date.parse coerces 0 and null
+  return at >= Date.parse(x.started) && at <= Date.parse(x.ended as string) + 5_000;
 };
 // The factory's own sessions: a person's terminal on the same run label never stands in for the run's last session.
-const factorySessions = (label) => listSessions().filter((x) => x.mode !== 'terminal' && x.label === label);
+const factorySessions = (label: string) => listSessions().filter((x) => x.mode !== 'terminal' && x.label === label);
 // Runs a POST /api/sessions would resume now (#105): active, not closed or over budget, last written by a session here or an F
 // start that stopped or crashed, and held by no live claim. GET /api/state polls it, so the cheap checks come first: a run
 // with no session here and no F start log costs one readdir, a log is read once per change, and the claim (ps) comes last.
 export function resumable() {
   const runs = derive(read()), archive = readArchive();
-  return Object.keys(runs).filter((id) => { const r = runs[id];
+  return Object.keys(runs).filter((id) => {
+    const r = runs[id]!; // a key of runs
     return !TERMINAL.includes(r.outcome) && !closedWhy(id, r, archive) && !budget(r).over && resumeOf(id, r)?.harness === 'claude-code' && !claimedElsewhere(id, {}); }); // what a POST with no harness resumes
 }
 // A session of this app's is on that run (#107): the way out is to stop it here, not F unclaim.
 const inApp = (label: string, s: { id: string; mode: string; started: string }) => new Error(`${label} already has a running session in this app (${s.mode}, started ${s.started}): stop it in Sessions first (POST /api/sessions/stop {"id":"${s.id}"})`);
 const runningOn = (label: string) => listSessions().find((x) => x.state === 'running' && x.label === label);
 // What the run may still spend: COST_CAP less the dollars, and less the share of TOKEN_CAP used, for usage with no price.
-export const budgetLeft = (b) => b ? Math.min(COST_CAP - b.usd, COST_CAP * (1 - b.tokens / TOKEN_CAP)) : COST_CAP;
+export const budgetLeft = (b: { usd: number; tokens: number } | null | undefined) => b ? Math.min(COST_CAP - b.usd, COST_CAP * (1 - b.tokens / TOKEN_CAP)) : COST_CAP;
 // node-pty and the SDK for terminal and sdk sessions, keyed by package name. Empty until a host that ships them (apps/desktop,
 // main.ts) sets them: packages/adapters' lazy import() can't see apps/desktop's dependencies under pnpm (ADR 0001).
 export const hostModules: Record<string, unknown> = {};
-const checkRepo = (repo) => {
+const checkRepo = (repo: unknown) => {
   const [owner, name, extra] = typeof repo === 'string' ? repo.split('/') : [];
   if (extra !== undefined || !LOGIN.test(owner || '') || !/^(?!\.\.?$)[\w.-]{1,100}$/.test(name || '')) throw new Error('repo must be owner/repo');
 };
@@ -163,23 +175,24 @@ export function parseRun(x: unknown) {
   if (issue < 1 || issue > 1e9) throw new Error('issue must be a positive issue number');
   return { repo: m[1], issue, id: `${m[1]}#${issue}` };
 }
-const clone = (repo) => { // an attached repo's folder
+const clone = (repo: unknown) => { // an attached repo's folder
   checkRepo(repo);
-  const cwd = projects()[repo]?.path;
+  const cwd = projects()[repo as string]?.path; // checkRepo(): a string
   if (!cwd || !fs.existsSync(cwd)) throw new Error(`${repo} is not attached: F sync ${repo} <path> first`);
   return cwd;
 };
 // A person's own interactive harness in the desktop app's terminal pane (#58): no prompt and no budget, so never a factory
 // run's session. In the run's worktree when it has one, else the clone. `resume` continues a session this app started, in
 // that session's own folder: claude keeps its sessions per project folder, so elsewhere --resume wouldn't find it.
-export function terminalSession({ harness = 'claude-code', repo, issue, resume }, env = process.env, modules = hostModules) {
+type TerminalOpts = { harness?: string; repo?: string; issue?: number; resume?: string };
+export function terminalSession({ harness = 'claude-code', repo, issue, resume }: TerminalOpts, env = process.env, modules = hostModules) {
   const h = harnesses.find((y) => y.id === harness);
   if (!h?.launch || !(h.modes || []).includes('terminal')) throw new Error(`harness ${String(harness).slice(0, 40)} has no terminal mode`);
   if (!modules['node-pty']) throw new Error('a terminal needs the desktop app, which supplies node-pty: run it in your own terminal');
   let cwd = clone(repo);
   if (issue !== undefined && (!Number.isInteger(issue) || issue < 1 || issue > 1e9)) throw new Error('issue must be a positive issue number');
   if (resume !== undefined && !SESSION_ID.test(String(resume))) throw new Error('resume must be a harness session id');
-  const id = issue ? `${repo}#${issue}` : repo, wt = issue && wtInfo(id)?.path;
+  const id = issue ? `${repo}#${issue}` : repo!, wt = issue && wtInfo(id)?.path; // clone() checked repo
   if (wt && fs.existsSync(wt)) cwd = wt;
   // A new terminal on a run active with nothing to resume: a skill run in another claude (it holds no claim) may still be
   // working it, and this terminal's claim would refuse that harness's next step. Resuming this app's own session is fine.
@@ -194,7 +207,7 @@ export function terminalSession({ harness = 'claude-code', repo, issue, resume }
     if (!from) throw new Error('resume a session this app started');
     const on = listSessions().find((x) => x.state === 'running' && (x.label === from.label || x.harnessSession === resume)); // one claude per harness session
     if (on) throw inApp(from.label, on);
-    cwd = getSession(from.id).cwd ?? cwd; label = from.label;
+    cwd = getSession(from.id)!.cwd ?? cwd; label = from.label; // from is a listed session
   }
   const start = (onPid?: (pid: number) => void, claim?: string) => startSession(h, { mode: 'terminal', resume }, { cwd, env: withClaim(env, claim), label, modules, onPid });
   return label.includes('#') ? claimed(label, 'terminal', start) : start(); // on a run: no F start or other app alongside
@@ -205,23 +218,23 @@ export function terminalSession({ harness = 'claude-code', repo, issue, resume }
 // a later resume that died before its first event doesn't hide the one that wrote it (#105), and a clean exit since still
 // refuses. The newer of the two.
 // That session (its harness and harnessSession) when a start would resume it, else undefined.
-function resumeOf(id: string, r): { harness: string; harnessSession: string } | undefined {
+function resumeOf(id: string, r: Run | undefined): { harness: string; harnessSession: string } | undefined {
   const mine = factorySessions(id);
   const here = [...mine].reverse().find((x) => x.state === 'running' || x.exit === 0 || covers(r, x)) ?? mine.at(-1);
-  const there = detachedRun(id, r), last = there && !(Date.parse(here?.started) > Date.parse(there.started)) ? there : here;
-  return resumeFor(r, last) ? last : undefined;
+  const there = detachedRun(id, r), last = there && !(Date.parse(here?.started as string) > Date.parse(there.started)) ? there : here;
+  return resumeFor(r, last) ? last as { harness: string; harnessSession: string } : undefined; // resumeFor() checked harnessSession
 }
 // A start resumes on the harness that ran the session: a Claude session id never reaches codex, nor the other way round.
-function activeRun(id: string, r, instead: string, harness?: string) {
+function activeRun(id: string, r: Run | undefined, instead: string, harness?: string) {
   const last = resumeOf(id, r);
   if (r && !TERMINAL.includes(r.outcome) && !last) throw new Error(`${id} already has an active run (${r.outcome || r.stage}): its harness may still be working it (a skill run in another claude); ${instead}`);
   if (last && harness && last.harness !== harness) throw new Error(`${id} was left active by a ${last.harness} session: ${harness} can't resume it`);
   return last?.harnessSession;
 }
 // Why no start may take run r at all, for launchGate and resumable() alike.
-function closedWhy(id: string, r, archive = readArchive()) {
+function closedWhy(id: string, r: Run | undefined, archive = readArchive()) {
   if (r?.imported) return `${id} is imported: never run claude -p in its checkout`;
-  if (['escalated', 'rejected'].includes(r?.outcome)) return `${id} is ${r.outcome}: it needs a human, not a new run`; // the factory handed it over
+  if (['escalated', 'rejected'].includes(r?.outcome as string)) return `${id} is ${r!.outcome}: it needs a human, not a new run`; // the factory handed it over
   // F archive drops a run from the log, not from history: a stray later event (a sync, a step) doesn't reopen it. Only a new
   // intake does, which a person starts (/software-factory <id>), so that is the explicit reopen.
   const reopened = r?.events?.some((e) => e.stage === 'intake' && e.status === 'started');
@@ -229,7 +242,8 @@ function closedWhy(id: string, r, archive = readArchive()) {
   return gone ? `${id} is ${gone.outcome} (archived): it needs a human, not a new run` : undefined;
 }
 // The checks every factory start passes (#25), for a live session here (launchSession) and a detached run (startRun).
-function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue }, modules = hostModules) {
+type GateOpts = { harness?: string; mode?: string; repo?: string; issue?: number };
+function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue }: GateOpts, modules = hostModules) {
   const h = harnesses.find((y) => y.id === harness);
   if (!h?.launch) throw new Error(`harness ${String(harness).slice(0, 40)} cannot launch sessions`);
   // A factory run is the factory skill under a budget cap: only a harness that loads the skill itself (host) and caps spend.
@@ -240,7 +254,7 @@ function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue },
   const need = mode === 'sdk' && h.launch({ mode, prompt: 'x' }).module;
   if (need && !modules[need]) throw new Error(`${mode} mode needs the desktop app, which supplies ${need}: run headless`);
   const cwd = clone(repo);
-  if (!Number.isInteger(issue) || issue < 1 || issue > 1e9) throw new Error('issue must be a positive issue number');
+  if (!Number.isInteger(issue) || issue! < 1 || issue! > 1e9) throw new Error('issue must be a positive issue number');
   const id = `${repo}#${issue}`, r = derive(read())[id];
   const held = readClaim(id); // a stale one is taken over by the launcher's takeClaim(); a live one refuses, finished run or not
   const why = closedWhy(id, r);
@@ -261,7 +275,7 @@ function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue },
   }
   return { h, mode, cwd, id, resume, budget: budgetLeft(b) };
 }
-export function launchSession(x, env = process.env, modules = hostModules) {
+export function launchSession(x: GateOpts, env = process.env, modules = hostModules) {
   const { h, mode, cwd, id, resume, budget: left } = launchGate(x, modules);
   return claimed(id, 'session', (onPid, claim) => startSession(h, { mode, prompt: `/software-factory ${id}`, resume, budget: left, write: true }, { cwd, env: withClaim(env, claim), label: id, modules, onPid }));
 }
@@ -286,14 +300,13 @@ const startTime = (pid: number) => {
   if (!since && process.platform !== 'win32') throw new Error(`could not read the start time of pid ${pid} (ps): stopped it`);
   return since;
 };
-type Session = { id: string; stop: () => void };
 // The F start run a start on run r would look at, as resumeFor() reads a stopped session, from its log in the run's folder (not
 // the claim, which a later launcher may have taken over). Of the newest 20 logs that name a harness session, newest first, the
 // first that wrote r's last event (its life, from the time in its name to its last write, covers it) or that exited 0:
 // a later start that died before writing doesn't hide the one that wrote it, and a clean exit since refuses.
 // Its name ends .<harness>.log; a plain .log is claude-code's (written before codex could run).
 const LOG = /^headless-(\d{4}-\d\d-\d\dT\d\d)-(\d\d)-(\d\d)-(\d{3}Z)(?:\.([a-z][a-z0-9-]{0,30}))?\.log$/;
-function detachedRun(id: string, r) {
+function detachedRun(id: string, r: Run | undefined) {
   let names: string[] = [];
   try { names = fs.readdirSync(runDir(id)).filter((f) => LOG.test(f)).sort().reverse().slice(0, 20); } catch { /* no folder */ }
   for (const n of names) {
@@ -329,15 +342,15 @@ function readLog(file: string, st: fs.Stats, harness: string) {
 // F start and POST /api/runs (#25): the factory on one issue as a detached headless harness that outlives F and F ui, with
 // launchSession's checks. Not a session here: GET /api/sessions doesn't list it and quitting doesn't stop it. The prompt
 // and output are files in the run's folder, so nothing waits on F. run is for tests (child_process.spawn's shape).
-export function startRun(issue, env = process.env, run = spawn, harness?: string) {
+export function startRun(issue: unknown, env = process.env, run = spawn, harness?: string) {
   const { h, cwd, id, resume, budget: left } = launchGate({ ...parseRun(issue), harness });
   const cl = takeClaim(id, 'start'); // before the spawn: a second launcher now waits on this claim, not on the run's first event
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const log = path.join(runDir(id), `headless-${stamp}.${h.id}.log`), prompt = path.join(runDir(id), `headless-${stamp}.${h.id}.prompt`);
   fs.mkdirSync(runDir(id), { recursive: true }); // the claim's folder is the id lowercased: on a case-sensitive disk, not this one
-  let child;
+  let child: ChildProcess | undefined;
   try {
-    const spec = h.launch({ mode: 'headless', prompt: `/software-factory ${id}`, resume, budget: left, write: true }), c = resolveSpec(spec, env);
+    const spec = h.launch!({ mode: 'headless', prompt: `/software-factory ${id}`, resume, budget: left, write: true }), c = resolveSpec(spec, env);
     fs.writeFileSync(prompt, spec.stdin ?? '');
     const stdin = fs.openSync(prompt, 'r'), out = fs.openSync(log, 'a');
     try {
@@ -352,8 +365,8 @@ export function startRun(issue, env = process.env, run = spawn, harness?: string
     for (const f of [log, prompt]) try { fs.unlinkSync(f); } catch { /* not written */ }
     throw e;
   }
-  child.unref();
-  return { pid: child.pid, log };
+  child!.unref(); // the catch rethrows when there is no child
+  return { pid: child!.pid, log };
 }
 
 // F open <session> and POST /api/sessions/open (#26): a session in the Claude desktop app on this machine when it has a
@@ -375,8 +388,8 @@ export function openSession({ harness = 'claude-code', id }: { harness?: string;
   for (const run of new Set([...runs.filter(([, r]) => r.sessions?.some((x) => x.id === sid)).map(([k]) => k), ...(mine?.includes('#') ? [mine] : [])])) {
     refuseClaimed(run, {}); // no token: any live claim, an unreadable one included (F unclaim --force), refuses
   }
-  const spec = h.launch({ mode: 'terminal', resume: sid });
-  return { resume: { command: [spec.cmd, ...spec.args].join(' '), ...(cwd && { cwd }) } }; // started outside the desktop app
+  const spec = h.launch!({ mode: 'terminal', resume: sid }); // as before: a harness with a terminal mode launches
+  return { resume: { command: [spec.cmd, ...spec.args!].join(' '), ...(cwd && { cwd }) } }; // started outside the desktop app // a terminal spec has args
 }
 
 // The F ui server, unprinted: the desktop main loads `url` in its window; F ui prints it. Resolves once listening.
@@ -387,8 +400,8 @@ export async function serve(port = 0) {
     let body = '';
     req.on('data', (c) => { body += c; if (body.length > 64 * 1024) req.destroy(); });
     req.on('end', () => {
-      let r;
-      try { r = uiHandle({ method: req.method, url: req.url, headers: req.headers, body }, { token, port: server.address().port }); } catch (e) { r = { status: 500, type: 'application/json', body: JSON.stringify({ error: e.message }) }; }
+      let r: UiReply;
+      try { r = uiHandle({ method: req.method, url: req.url!, headers: req.headers as Record<string, string | undefined>, body }, { token, port: (server.address() as AddressInfo).port }); } catch (e) { r = { status: 500, type: 'application/json', body: JSON.stringify({ error: (e as Error).message }) }; } // url: always set on a server's request; address(): a TCP listener's
       res.writeHead(r.status, { 'content-type': r.type, 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', ...(r.location && { location: r.location }) });
       if (!r.stream) return res.end(r.body);
       let stop = () => {};
@@ -405,12 +418,12 @@ export async function serve(port = 0) {
     server.listen(port, '127.0.0.1', () => {
       server.off('error', reject); // later errors are logged, not swallowed by a settled promise
       server.on('error', (e) => console.error(`factory ui: ${e.message}`));
-      resolve({ server, token, url: `http://127.0.0.1:${server.address().port}/?t=${token}`, close });
+      resolve({ server, token, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/?t=${token}`, close });
     });
   });
 }
 export const ui = (port = 0) => serve(port).then(({ url }) => console.log(`factory ui: ${url}\nOnly this URL can change settings (skills.json, rules, projects). Ctrl-C to stop.`));
-export const runRepos = () => [...new Set([...Object.keys(derive(read())), ...readArchive().map((a) => a.id)].map((id) => id.split(/[#:]/)[0]))];
+export const runRepos = () => [...new Set([...Object.keys(derive(read())), ...readArchive().map((a) => a.id)].map((id) => id.split(/[#:]/)[0]!))]; // split() always gives a first part
 export function render() {
   const out = path.join(stateDir(), 'dashboard.html');
   fs.mkdirSync(stateDir(), { recursive: true });
@@ -419,16 +432,16 @@ export function render() {
 }
 // Core calls this after every state change, once the event is written: a broken app.html must not fail the write (the
 // skill would retry and record twice), so it warns and leaves the last dashboard.html. F render itself still throws.
-dashboard.render = () => { try { return render(); } catch (e) { console.error(`factory: dashboard not updated: ${e.message}`); return undefined; } };
+dashboard.render = () => { try { return render(); } catch (e) { console.error(`factory: dashboard not updated: ${(e as Error).message}`); return undefined; } };
 // The run list the dashboard embeds and GET /api/runs returns: live + archived, linked sessions, worktree path.
 export function runsData(events = read()) {
   const live = Object.values(withMeasured(derive(events), events));
   const archived = readArchive().filter((a) => !live.some((r) => r.id === a.id));
   for (const a of archived) for (const c of a.children || []) { const child = live.find((r) => r.id === c); if (child) child.parent = a.id; }
   const runs = [...live, ...archived].sort((a, b) => b.updated.localeCompare(a.updated));
-  let links = {};
+  let links: Record<string, NonNullable<Run['sessions']>> = {};
   try { links = JSON.parse(fs.readFileSync(sessionsFile(), 'utf8')); } catch { /* no sync yet */ }
-  for (const r of runs) if (links[r.id]) r.sessions = [...(r.sessions || []), ...links[r.id].filter((x) => !(r.sessions || []).some((y) => y.id === x.id))];
+  for (const r of runs) if (links[r.id]) r.sessions = [...(r.sessions || []), ...links[r.id]!.filter((x) => !(r.sessions || []).some((y) => y.id === x.id))];
   for (const r of runs) { const w = wtInfo(r.id); if (w?.path) r.worktree = w.path; } // the dashboard's "Open in Claude" cwd
   // Notes leave F as the box shows them: pending ones, with no author login. Their events keep id, step and status for the
   // timeline's "note · pending|applied" rows, never the text or `by`, so an applied note's text stays in F's log.
@@ -444,16 +457,16 @@ export function runsData(events = read()) {
 // all-projects entries keep byProject, and a cell drops its zero counts (never costUsd: missing reads as unpriced).
 export const SHEET_RANGES = ['7', '30', '90', ''];
 const sinceFor = (days: string, now: number) => (days ? new Date(now - (Number(days) - 1) * 864e5).toISOString().slice(0, 10) : ''); // as apps/web's
-const slim = (c) => Object.fromEntries(Object.entries(c).filter(([k, v]) => k === 'costUsd' || (v !== 0 && v != null)));
-export function sheetMetrics(events, projectIds: string[], now = Date.now(), archive = readArchive()) {
-  const measured = measure(events), runs = withMeasured(derive(events), events, measured, archive), out = {}; // derived once for every call below
+const slim = (c: object) => Object.fromEntries(Object.entries(c).filter(([k, v]) => k === 'costUsd' || (v !== 0 && v != null)));
+export function sheetMetrics(events: FactoryEvent[], projectIds: string[], now = Date.now(), archive = readArchive()) {
+  const measured = measure(events), runs = withMeasured(derive(events), events, measured, archive), out: Record<string, Record<string, object>> = {}; // derived once for every call below
   for (const p of ['', ...projectIds]) {
     out[p] = {};
     for (const range of SHEET_RANGES) {
       const { project, since, byDay, byProject, ...m } = logMetrics(events, { project: p || null, since: sinceFor(range, now) || null, measured, archive, runs });
-      const keep = { ...m, ...(range === '' && { byDay }), ...(p === '' && { byProject }) };
-      for (const k of ['byDay', 'byProject', 'byStage', 'byAxis', 'byModel', 'byHarness']) if (keep[k]) keep[k] = Object.fromEntries(Object.entries(cleanKeys(keep[k])).map(([x, c]) => [x, slim(c)]));
-      out[p][range] = { ...keep, total: slim(m.total) };
+      const keep: Record<string, unknown> = { ...m, ...(range === '' && { byDay }), ...(p === '' && { byProject }) };
+      for (const k of ['byDay', 'byProject', 'byStage', 'byAxis', 'byModel', 'byHarness']) if (keep[k]) keep[k] = Object.fromEntries(Object.entries(cleanKeys(keep[k] as Parameters<typeof cleanKeys>[0])).map(([x, c]) => [x, slim(c as object)]));
+      out[p]![range] = { ...keep, total: slim(m.total) };
     }
   }
   return out;
@@ -476,24 +489,24 @@ function cleanKeys(by: Record<string, any>) {
 // Everything the dashboard shows: runs, metrics, rules, skills, harnesses, hooks, ideas. page() embeds it; GET /api/state returns it.
 // sheet: also metricsLog, for the Artifact only (artifact()'s page): ~50 ms per logMetrics() call on a real log is too slow for
 // render() after every record(), and F ui's sheet asks GET /api/metrics.
-export function pageData(extra = {}, { sheet = false } = {}) {
+export function pageData(extra: object = {}, { sheet = false } = {}) {
   const events = read(), now = Date.now();
   const runs = runsData(events);
-  const repoOf = (id) => id.split(/[#:]/)[0];
-  const byProject = {};
+  const repoOf = (id: string) => id.split(/[#:]/)[0]!;
+  const byProject: Record<string, ReturnType<typeof metrics>> = {};
   for (const p of new Set(runs.map((r) => repoOf(r.id)))) byProject[p] = metrics(runs.filter((r) => repoOf(r.id) === p));
-  const ruleData = { rules: {}, ruleHistory: read().filter((e) => e.stage === 'rules').slice(-100) };
+  const ruleData: { rules: Record<string, ReturnType<typeof rules>>; ruleHistory: FactoryEvent[]; rulesError?: string } = { rules: {}, ruleHistory: read().filter((e) => e.stage === 'rules').slice(-100) };
   try { const cfg = readSkills(); for (const p of new Set([...Object.keys(byProject), ...Object.keys(projects())])) ruleData.rules[p] = rules(p, cfg); }
-  catch (e) { ruleData.rulesError = e.message; } // render runs after every record(): a bad config must not half-fail the event
-  let idea = {};
-  try { idea = { ideas: ideas(events, Object.fromEntries(runs.map((r) => [r.id, r]))) }; } catch (e) { idea = { ideasError: e.message }; } // never fail the event that triggered the render
+  catch (e) { ruleData.rulesError = (e as Error).message; } // render runs after every record(): a bad config must not half-fail the event
+  let idea: object = {};
+  try { idea = { ideas: ideas(events, Object.fromEntries(runs.map((r) => [r.id, r]))) }; } catch (e) { idea = { ideasError: (e as Error).message }; } // never fail the event that triggered the render
   const F_CMD = fCmd(); // per page build, so installing the plugin while the app runs clears fMissing without a restart
   const sheetData = sheet ? { metricsLog: sheetMetrics(events, Object.keys(byProject), now) } : {}; // a failure fails the publish: F render --artifact says why
   return { generated: new Date(now).toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)),
     harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), fCmd: F_CMD, ...(!F_CMD && { fMissing: true }),
     autoMerge: Object.fromEntries(Object.entries(projects()).map(([r, p]) => [r, p?.autoMerge !== false])), ...idea, ...sheetData, ...extra };
 }
-export function page(extra = {}, opts?: { sheet?: boolean }) {
+export function page(extra: object = {}, opts?: { sheet?: boolean }) {
   const data = JSON.stringify(pageData(extra, opts)).replace(/</g, '\\u003c'), html = fs.readFileSync(APP_HTML, 'utf8');
   if (!DATA_TAG.test(html)) throw new Error(`${APP_HTML} has no data tag: rebuild it with pnpm --filter @software-factory/web dashboard`);
   return html.replace(DATA_TAG, (_, open, _old, close) => open + data + close);
@@ -519,14 +532,14 @@ const LOCAL_PATH = new RegExp([
   String.raw`(?<!\w)\/(?:${ROOTS})(?![\w.-])${BODY}`, // also after ':' or '=' (PATH=/a:/Users/…, cwd:/Users/…)
   String.raw`(?<![\w.\/~-])\/(?!api\/)[^\s\/${STOP}]+\/${BODY}`, // any other path with 2+ segments (cwd:/data/x); "/factory approve" and /api/… routes stay
 ].join('|'), 'g');
-const scrub = (v, under = '') => typeof v === 'string' ? v.replace(LOCAL_PATH, '[local path]')
+const scrub = (v: unknown, under = ''): unknown => typeof v === 'string' ? v.replace(LOCAL_PATH, '[local path]')
   : Array.isArray(v) ? v.map((x) => scrub(x))
   : v && typeof v === 'object' ? scrubKeys(v, under) : v;
 // Keys too: a burn cell's models map is keyed by model id, which a provider runner may give as a file path. Counts that land on
 // one key add up; anything else, the last one stands. A key ending in "token" is left for artifact()'s refusal, except in the
 // maps keyed by labels (model, axis, stage, harness; a run's reviews by axis), where it names a model or axis, never holds a credential.
 const LABELS = new Set(['models', 'subModels', 'byAxis', 'byStage', 'byModel', 'byHarness', 'reviews:axes']); // reviews: {iteration: {axis: result}}
-function scrubKeys(v, under: string) {
+function scrubKeys(v: object, under: string) {
   const labels = LABELS.has(under);
   const out = Object.create(null); // a "__proto__" key stays a key
   for (const [k, x] of Object.entries(v)) {
@@ -540,17 +553,19 @@ function scrubKeys(v, under: string) {
 // http://localhost:3000/Users/bob). Two exceptions keep it from refusing every page: the login counts only as a path
 // segment outside GitHub URLs and owner/repo ids (the owner, and a profile repo login/login, is often the login), and a
 // short host name counts only as a host (host.local, user@host, \\host, //host[:port]), since "build" or "app" is prose.
-const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const machine = () => ({ user: os.userInfo().username, host: os.hostname(), home: os.homedir(), projects: projects() });
-export function residue(json, raw, me = machine()) {
-  const jsonOf = (x) => JSON.stringify(x).slice(1, -1), runs = raw.runs || [], left = [];
+// raw: the page data before scrub(), as JSON.parse read it.
+type RawPage = { runs?: { id: unknown; worktree?: string; sessions?: { cwd?: string }[] }[] };
+export function residue(json: string, raw: RawPage, me = machine()) {
+  const jsonOf = (x: string) => JSON.stringify(x).slice(1, -1), runs = raw.runs || [], left = [];
   const paths = [me.home, ...Object.values(me.projects).map((p) => p?.path), ...runs.flatMap((r) => [r.worktree, ...(r.sessions || []).map((s) => s.cwd)])];
   if (paths.some((p) => typeof p === 'string' && p.length > 3 && json.includes(jsonOf(p)))) left.push('a home, clone or worktree path');
-  const ids = new Set([...Object.keys(me.projects), ...runs.map((r) => String(r.id).split(/[#:]/)[0])]);
+  const ids = new Set([...Object.keys(me.projects), ...runs.map((r) => String(r.id).split(/[#:]/)[0]!)]);
   let text = json.replace(/(?:https?:\/\/)?(?:www\.)?github\.com[/:][^\s"\\,]*/gi, ''); // JSON text: \n is two characters, so stop at '\' too
   for (const id of ids) text = text.replace(new RegExp(String.raw`(?<![\w.\/\\-])${esc(id)}(?![\w.-])`, 'g'), '');
   if (me.user.length >= 3 && new RegExp(String.raw`(?:\\\\|\/)${esc(me.user)}(?![\w.-])`, 'i').test(text)) left.push('the login name in a path');
-  const short = me.host.split('.')[0], hosts = [];
+  const short = me.host.split('.')[0]!, hosts: string[] = [];
   if (me.host.includes('.') && me.host.length >= 3) hosts.push(String.raw`(?<![\w-])${esc(me.host)}(?![\w-])`);
   if (short.length >= 3) hosts.push(String.raw`(?<![\w-])${esc(short)}(?=\.local\b)`, String.raw`(?:(?<=[\w.-])[@＠]|\\\\\\\\|\/\/)${esc(short)}(?![\w.-])`); // user@host, not @scope/pkg
   if (hosts.length && new RegExp(hosts.join('|'), 'i').test(json)) left.push('the host name');
@@ -562,14 +577,15 @@ export const SECRET = /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_\w{30,}|sk-(?:
 export function artifact(html = page({}, { sheet: true })) {
   // Opening tags and metas come before the inlined script, so their first match is the tag; closing tags come after it, so their last.
   for (const [re, last] of [[/^<!doctype html>\s*/i], [/<html[^>]*>\s*/i], [/<head>\s*/i], [/<meta charset="utf-8">\s*/i], [/<meta name="viewport"[^>]*>\s*/i],
-    [/<\/head>\s*/i], [/<body[^>]*>\s*/i], [/<\/body>\s*/gi, true], [/<\/html>\s*/gi, true]]) {
+    [/<\/head>\s*/i], [/<body[^>]*>\s*/i], [/<\/body>\s*/gi, true], [/<\/html>\s*/gi, true]] as [RegExp, boolean?][]) {
     const hits = [...html.matchAll(new RegExp(re.source, 'gi'))], m = last ? hits.at(-1) : hits[0];
     if (!m) throw new Error(`artifact: the dashboard no longer has ${re}`);
     html = html.slice(0, m.index) + html.slice(m.index + m[0].length);
   }
   const m = html.match(DATA_TAG);
   if (!m) throw new Error('artifact: the dashboard no longer has its data tag');
-  const raw = JSON.parse(m[2]), d = scrub(raw);
+  // d: the page data, scrubbed; group 2 always matches
+  const raw = JSON.parse(m[2]!), d = scrub(raw) as { ui?: unknown; reload?: unknown; skills?: { catalog?: unknown } };
   if (d.ui) throw new Error('artifact: refusing to publish a page built for F ui');
   delete d.reload; // updates arrive by republish
   if (d.skills?.catalog) d.skills.catalog = { global: [], projects: {} }; // install paths; the Skills sheet can't save there anyway

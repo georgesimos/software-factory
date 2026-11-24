@@ -4,6 +4,11 @@
 export interface HarnessModel { id: string; alias: string; label: string; minVersion?: string }
 /** providerTools(): an entry of the runner picker; tool, when set, becomes the runner's name. */
 export interface ProviderTool { name: string; desc: string; tool?: string }
+/** What launch() describes: a command (headless, terminal, app-server), or for sdk mode a module and its options; sessions.mjs runs it. */
+export interface LaunchSpec {
+  cmd?: string; args?: string[]; stdin?: string; rpc?: object;
+  module?: string; prompt?: string; resume?: string; options?: object; thread?: object; offRun?: string;
+}
 export interface Harness {
   id: string;
   label: string;
@@ -21,7 +26,7 @@ export interface Harness {
   headlessArgs?(opts?: object): string[];
   providerTools?(): ProviderTool[];
   models?(): HarnessModel[];
-  launch?(opts: object): unknown;
+  launch?(opts: { mode: string; prompt?: string; resume?: string; budget?: number; write?: boolean }): LaunchSpec;
   openDesktop?(id: string): string | null;
   sessionOf?(event: unknown): string | undefined;
   exitOf?(event: unknown): 0 | null;

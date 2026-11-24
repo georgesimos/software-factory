@@ -10,7 +10,7 @@ import { harnesses } from '../../adapters/harnesses/index.mjs';
 import type { FactoryEvent, Run } from './types.ts';
 
 // The dashboard renderer, registered by packages/server when it loads. Core alone (no server) skips the render.
-export const dashboard = { render: () => undefined };
+export const dashboard: { render: () => unknown } = { render: () => undefined }; // server.ts sets render(), which returns the page's path
 
 // One mutable object, not `let`s: once code moves into packages, an importer cannot reassign a binding (docs/plans/split.md S1): where F reads and writes, and which binaries it runs.
 // gh/git are overridable only so the self-test can stub GitHub; projects: demo and test point it at fixture transcripts.
