@@ -102,9 +102,10 @@ The `Project` type in `core/src/types.ts` gains these optional fields:
 `{ host?: string; tracker?: string; ci?: string; base?: string; merge?: 'auto'|'ask' }`.
 - **Old entries.** An existing entry with none of these fields loads as host `github`, tracker `github-issues` and CI
   `github-actions`, which is exactly what it does today. The `merge` default is D1.
-- **New entries.** `F sync` (or attach) infers the host from `remote.origin.url`: `github.com` gives `github`; any other
-  network host gives `git`. With no remote, or a local-path or `file://` origin, a `local/` id gives `git`; an
-  `owner/repo` attached by path stays `github`, as it is today. The host is set on the first attach and a re-sync never
+- **New entries.** `F sync` (or attach) infers the host from `remote.origin.url`: `github.com`, `www.github.com` or
+  `ssh.github.com` (any port) gives `github`; any other network host gives `git`. A `local/` id is always `git`. With no
+  remote, or a local-path or `file://` origin, an `owner/repo` attached by path stays `github`, as it is today.
+  `F worktree RUN <path>` attaches through the same check. The host is set on the first attach and a re-sync never
   changes it. The tracker and CI default to `local` and `none` for a `git` host. The user changes
   them with `F project set <repo> host|tracker|ci|base <id>`. That command validates the id against the loaded registry
   and writes an audit event like the one `F rules` writes.
@@ -121,7 +122,8 @@ The `Project` type in `core/src/types.ts` gains these optional fields:
   - **Collisions:** two clones that map to one id (two `local/app` folders, or the same owner/name on two hosts)
     aren't merged. Attaching refuses when the id already exists with a different remote. The ssh, scp and https forms
     of one remote are equal, and a legacy entry counts as `github.com/<id>`. A second clone of the same repository
-    is not a collision. With no remote on either side, the folder is the identity (case-folded on Windows). The
+    is not a collision. With no remote on either side, the folder is the identity (case-folded on Windows). If the
+    attached folder is gone (moved or deleted), the new path re-points the project and its runs stay with it. The
     message is: "<id> is already attached to <remote or another folder>, and <path> is a different repository:
     attach it under another id".
 - **Run ids.** These stay `owner/repo#N`. A local item's id is its integer N, taken from the file name

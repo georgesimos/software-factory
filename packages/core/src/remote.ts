@@ -4,7 +4,12 @@
 import path from 'node:path';
 
 // user@host:path (no scheme, no drive letter) or scheme://[user[:pass]@]host[:port]/path. A plain or file:// path has no host.
-const SCP = /^(?:[^@/\s]+@)?([^:/\s]+):(?!\/\/)(.+)$/, URLISH = /^[a-z][\w+.-]*:\/\/(?:[^@/\s]*@)?([^/:\s]*)(?::\d+)?(\/.*)?$/i;
+// The userinfo runs to the last @ before the path: a password may hold one.
+const SCP = /^(?:[^@/\s]+@)?([^:/\s]+):(?!\/\/)(.+)$/, URLISH = /^[a-z][\w+.-]*:\/\/(?:[^/\s]*@)?([^/:@\s]*)(?::\d+)?(\/.*)?$/i;
+// GitHub's own host names, the ones its clone URLs use (ssh.github.com is ssh over port 443). Ports are dropped before this.
+const GITHUB_HOSTS = new Set(['github.com', 'www.github.com', 'ssh.github.com']);
+/** True for a github.com origin in any form, with any port: the one host test for discover(), cloneId() and hostFor(). */
+export const isGithubRemote = (url: string | undefined | null) => { const r = remoteParts(url); return !!r && GITHUB_HOSTS.has(r.host); };
 const isDrive = (u: string) => /^[A-Za-z]:[\\/]/.test(u);
 
 /** {host, path} of a network remote ("github.com", "acme/shop"), or null for a local path, file:// or nothing. */
@@ -16,11 +21,11 @@ export function remoteParts(url: string | undefined | null): { host: string; pat
   const p = String(m[2] || '').replace(/^\/+/, '').replace(/\/+$/, '').replace(/\.git$/, '');
   return p ? { host: m[1].toLowerCase(), path: p } : null;
 }
-/** One form for "the same repo": ssh, scp and https of it are equal ("github.com/acme/shop"); null for a local origin. */
-export const normRemote = (url: string | undefined | null) => { const r = remoteParts(url); return r ? `${r.host}/${r.path.toLowerCase()}` : null; };
+/** One form for "the same repo": ssh, scp and https of it, on any port or GitHub host name, are equal ("github.com/acme/shop"); null for a local origin. */
+export const normRemote = (url: string | undefined | null) => { const r = remoteParts(url); return r ? `${GITHUB_HOSTS.has(r.host) ? 'github.com' : r.host}/${r.path.toLowerCase()}` : null; };
 /** The URL without credentials, the only form F stores: http(s) loses its whole user[:token]@ (a token is often the user
  *  part), any other scheme its :password (ssh://git@host keeps the login it needs). */
-export const withoutUserinfo = (url: string) => url.replace(/^(https?:\/\/)[^@/\s]*@/i, '$1').replace(/^([a-z][\w+.-]*:\/\/[^:@/\s]*):[^@/\s]*@/i, '$1@');
+export const withoutUserinfo = (url: string) => url.replace(/^(https?:\/\/)[^/\s]*@/i, '$1').replace(/^([a-z][\w+.-]*:\/\/[^:@/\s]*):[^/\s]*@/i, '$1@');
 
 const owner = (s: string) => s.replace(/[^A-Za-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 39) || 'x';
 const name = (s: string) => (s.replace(/[^\w.-]+/g, '-').replace(/^[.-]+/, '').slice(0, 100) || 'x');
@@ -29,13 +34,12 @@ export function cloneId(url: string | undefined | null, dir: string): string {
   const r = remoteParts(url);
   if (!r) return `local/${name(path.basename(path.resolve(dir)))}`;
   const parts = r.path.split('/').filter(Boolean);
-  if (r.host === 'github.com' && parts.length === 2 && /^[\w.-]+$/.test(parts.join(''))) return `${parts[0]}/${parts[1]}`;
+  if (GITHUB_HOSTS.has(r.host) && parts.length === 2 && /^[\w.-]+$/.test(parts.join(''))) return `${parts[0]}/${parts[1]}`;
   return `${owner(parts.slice(0, -1).join('-') || r.host.split('.')[0]!)}/${name(parts.at(-1)!)}`;
 }
-/** The host a new project gets: github for a github.com origin; git for any other network origin, or for a local/ id with a
- *  local or no origin. Anything else (an owner/repo attached by path, as before) stays github. */
+/** The host a new project gets: git for a local/ id; github for a github.com origin; git for any other network origin. Anything else (an owner/repo attached by path, as before) stays github. */
 export function hostFor(url: string | undefined | null, id: string): 'github' | 'git' {
-  const r = remoteParts(url);
-  if (r) return r.host === 'github.com' ? 'github' : 'git';
+  if (id.startsWith('local/')) return 'git'; // never GitHub, whatever its origin
+  if (remoteParts(url)) return isGithubRemote(url) ? 'github' : 'git';
   return id.startsWith('local/') ? 'git' : 'github';
 }

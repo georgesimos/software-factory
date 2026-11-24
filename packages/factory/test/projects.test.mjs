@@ -11,9 +11,9 @@ import { setup } from './setup.mjs';
 import { io, record } from '../../core/src/log.ts';
 import { cloneId, hostFor, normRemote, withoutUserinfo } from '../../core/src/remote.ts';
 import { clash, discover, sync } from '../../core/src/sync.ts';
-import { projects, projectsFile, worktree } from '../../core/src/workspace.ts';
+import { hostOf, projects, projectsFile, worktree } from '../../core/src/workspace.ts';
 import { approval, facts, intake, merge, openPRs, postmerge, relabelMerged, revert } from '../../core/src/github.ts';
-import { artifact, page, residue } from '../../server/src/server.ts';
+import { artifact, page, residue, runsData } from '../../server/src/server.ts';
 
 setup();
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-projects-'));
@@ -44,6 +44,15 @@ test('remote ids: one repo in any URL form is one remote; GitHub ids unchanged; 
   assert.equal(withoutUserinfo('https://ghp_token@github.com/a/b'), 'https://github.com/a/b');
   assert.equal(withoutUserinfo('ssh://git:pw@host/a/b'), 'ssh://git@host/a/b'); // ssh keeps the login it needs
   assert.equal(withoutUserinfo('git@gitlab.com:a/b.git'), 'git@gitlab.com:a/b.git');
+  assert.equal(withoutUserinfo('https://pat:p@ss@gitlab.com/a/b.git'), 'https://gitlab.com/a/b.git'); // a password holding @: all of it goes
+  assert.equal(withoutUserinfo('ssh://git:p@w@host:2222/a/b'), 'ssh://git@host:2222/a/b');
+  assert.equal(normRemote('https://pat:p@ss@gitlab.com/a/b.git'), 'gitlab.com/a/b');
+  // one GitHub host test, for hostFor() and discover(): github.com, www.github.com and ssh.github.com, on any port
+  for (const u of ['ssh://git@ssh.github.com:443/acme/shop.git', 'https://www.github.com/acme/shop', 'ssh://git@github.com:22/acme/shop.git']) {
+    assert.deepEqual([hostFor(u, 'acme/shop'), normRemote(u), cloneId(u, '/x')], ['github', 'github.com/acme/shop', 'acme/shop'], u);
+  }
+  assert.equal(hostFor('https://notgithub.com/acme/shop', 'acme/shop'), 'git');
+  assert.equal(hostFor('git@github.com:acme/notes.git', 'local/notes'), 'git', 'a local/ id is never GitHub');
 });
 
 test('attach refuses an id that is already another repository; a second clone of one repo is fine', () => {
@@ -103,6 +112,47 @@ test('a git project never calls gh: every GitHub path refuses by name, and its w
   } finally { io.gh = gh; }
 });
 
+test('review: a resume keeps a git project\'s commits; discover never renames an attached id; a moved folder re-points; worktree attaches like sync', () => {
+  const gh = io.gh; io.gh = ghStub;
+  fs.rmSync(ghLog, { force: true }); // the call the test above made on purpose
+  try {
+    // a git project with an origin it can fetch from (a bare repo), where nothing pushes factory/issue-N
+    const bare = path.join(root, 'rt.git');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', bare]);
+    const c = clone('rt/app', bare);
+    git(c, 'push', '-q', 'origin', 'main');
+    sync('local/rt', c);
+    const w = worktree('local/rt#5');
+    git(w.path, '-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '--allow-empty', '-m', 'run work');
+    const work = git(w.path, 'rev-parse', 'HEAD');
+    git(c, 'worktree', 'remove', '--force', w.path);
+    assert.equal(git(worktree('local/rt#5').path, 'rev-parse', 'HEAD'), work, 'the resumed worktree starts from the local branch');
+    assert.equal(git(c, 'rev-parse', 'factory/issue-5'), work);
+    // an attached GitLab acme/shop keeps its id next to a GitHub acme/shop clone
+    const gl = clone('d/shop-gitlab', 'git@gitlab.com:acme/shop.git');
+    clone('d/shop-github', 'git@github.com:acme/shop.git');
+    sync('acme/shop', gl);
+    const rows = discover([path.join(root, 'd')]).map((f) => [f.repo, f.attached, f.host ?? 'github']).sort((x, y) => x[2].localeCompare(y[2]));
+    assert.deepEqual(rows, [['acme/shop', true, 'git'], ['acme/shop', false, 'github']]);
+    // a no-remote project whose folder moved is re-pointed, its runs kept
+    const m1 = clone('m1/moved');
+    sync('local/moved', m1);
+    record('local/moved#1', 'intake', 'started', { title: 'before the move' });
+    const m2 = path.join(root, 'm2-moved');
+    fs.renameSync(m1, m2);
+    sync('local/moved', m2);
+    assert.deepEqual([projects()['local/moved'].path, projects()['local/moved'].host], [m2, 'git']);
+    assert.ok(runsData().some((r) => r.id === 'local/moved#1'));
+    // worktree with a path: an unattached local/ project is attached as git, with no gh call; another folder is a clash
+    const x = clone('x/wt');
+    worktree('local/wt#1', x);
+    assert.equal(projects()['local/wt'].host, 'git');
+    assert.equal(hostOf('local/never-attached'), 'git');
+    assert.throws(() => worktree('local/wt#2', clone('y/wt')), /local\/wt is already attached to another folder/);
+    assert.deepEqual(ghCalls(), [], 'no gh call');
+  } finally { io.gh = gh; }
+});
+
 test('the published page leaves out every project not on GitHub; the backstop refuses one left in', () => {
   record('acme/thing#2', 'intake', 'started', { title: 'a private host item' });
   record('acme/app#3', 'intake', 'started', { title: 'a github item' });
@@ -117,7 +167,7 @@ test('the published page leaves out every project not on GitHub; the backstop re
   assert.ok(!artifact(full).includes('local/notes'));
   // the backstop alone: an id left in prose refuses the page
   assert.throws(() => artifact(page({ note: 'see local/notes#1' })), /still carries a project that is not on GitHub/);
-  for (const note of ['mirrored at https://gitlab.com/acme/thing', 'git@GitLab.com:acme/thing.git']) assert.throws(() => artifact(page({ note })), /a remote that is not on GitHub/, note);
+  for (const note of ['mirrored at https://gitlab.com/acme/thing', 'git@GitLab.com:acme/thing.git', 'ssh://gitlab.com:2222/acme/thing.git', 'gitlab.com:8443/acme/thing']) assert.throws(() => artifact(page({ note })), /a remote that is not on GitHub/, note);
   assert.deepEqual(residue(JSON.stringify({ runs: [{ id: 'acme/thing#2' }] }), { runs: [] }, { user: 'nobody-x', host: 'h', home: '/nowhere', projects: projects() }), ['a project that is not on GitHub']);
   assert.deepEqual(residue(JSON.stringify({ x: 'local/notesy and acme/things' }), { runs: [] }, { user: 'nobody-x', host: 'h', home: '/nowhere', projects: projects() }), []); // whole ids only
 });

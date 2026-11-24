@@ -4,6 +4,7 @@ import { derive } from './derive.ts';
 import { execFileSync } from 'node:child_process';
 import { exec, posixShell } from './platform.ts';
 import { gh, parseRun } from './github.ts';
+import { attach } from './sync.ts';
 import { io, read, record, runDir, stateDir } from './log.ts';
 import { rules } from './rules.ts';
 import { withClaim } from './claim.ts';
@@ -17,8 +18,9 @@ export const ls = (d: string): string[] => { try { return fs.readdirSync(d); } c
 export const projectsFile = () => path.join(stateDir(), 'projects.json');
 export const projects = (): Record<string, Project> => { try { return JSON.parse(fs.readFileSync(projectsFile(), 'utf8')); } catch { return {}; } };
 export const saveProject = (repo: string, p: string) => { fs.mkdirSync(stateDir(), { recursive: true }); fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...projects()[repo], path: p, synced: projects()[repo]?.synced } }, null, 2)); };
-/** The project's host: set at attach (sync), never read from the id's shape. A legacy entry, or none, is GitHub. */
-export const hostOf = (repo: string) => projects()[repo]?.host ?? 'github';
+/** The project's host: set at attach (sync), never read from the id's shape, except that a local/ id is never GitHub. A legacy
+ *  entry, or none, is GitHub. stored: the host to use instead of projects.json's (attach, before it writes). */
+export const hostOf = (repo: string, stored = projects()[repo]?.host) => repo.startsWith('local/') ? 'git' : stored ?? 'github';
 /** Refuses a GitHub call for a git-hosted project, before anything runs, with what was being done. */
 export function requireGithub(repo: string, doing: string) {
   if (hostOf(repo) !== 'github') throw new Error(`${repo} is a git project, not on GitHub: ${doing} works only for GitHub projects for now`);
@@ -45,6 +47,7 @@ export function worktree(run: string, repoPath?: string): WorktreeInfo {
   const { repo, n } = parseRun(run);
   repoPath = repoPath ? path.resolve(repoPath) : projects()[repo]?.path;
   if (!repoPath || !fs.existsSync(path.join(repoPath, '.git'))) throw new Error(`no local clone for ${repo}; pass its path: worktree ${run} <path>`);
+  if (projects()[repo]?.path !== repoPath) attach(repo, repoPath); // a new or changed clone: the clash check and host decision sync makes
   // GitHub says what the base is; a git project's clone does (local refs when it has no remote)
   const local = hostOf(repo) !== 'github', remote = !local || !!originUrl(repoPath);
   const at = local ? gitBase(repoPath) : null, base = at?.base ?? gh('repo', 'view', repo, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name').trim();
@@ -54,12 +57,13 @@ export function worktree(run: string, repoPath?: string): WorktreeInfo {
   git('-C', repoPath, 'worktree', 'prune');
   if (remote) git('-C', repoPath, 'fetch', '-q', 'origin', base);
   let from = at && !remote ? at.ref : `origin/${base}`;
-  if (remote) try { git('-C', repoPath, 'fetch', '-q', 'origin', `${branch}:refs/remotes/origin/${branch}`); from = `origin/${branch}`; } catch { /* first run: nothing pushed yet */ }
-  else try { git('-C', repoPath, 'rev-parse', '--verify', '-q', `refs/heads/${branch}`); from = branch; } catch { /* no remote: a resume starts from the local branch, never resets it */ }
+  let fetched = false;
+  if (remote) try { git('-C', repoPath, 'fetch', '-q', 'origin', `${branch}:refs/remotes/origin/${branch}`); from = `origin/${branch}`; fetched = true; } catch { /* first run: nothing pushed yet */ }
+  // a git project pushes nothing yet: a resume starts from its local branch, never resets it to the base
+  if (local && !fetched) try { git('-C', repoPath, 'rev-parse', '--verify', '-q', `refs/heads/${branch}`); from = branch; } catch { /* first run */ }
   git('-C', repoPath, 'worktree', 'add', '-q', '-B', branch, wt, from);
   const info: WorktreeInfo = { repoPath, path: wt, branch, base };
   fs.writeFileSync(wtFile(run), JSON.stringify(info, null, 2));
-  if (projects()[repo]?.path !== repoPath) saveProject(repo, repoPath);
   return info;
 }
 // Removes a run's worktree and local branch, unless that would lose uncommitted or unpushed work.

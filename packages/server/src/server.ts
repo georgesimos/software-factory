@@ -573,8 +573,9 @@ export function residue(json: string, raw: RawPage, me = machine()) {
   const ids = new Set([...Object.keys(me.projects), ...runs.map((r) => String(r.id).split(/[#:]/)[0]!)]);
   // checked on json itself: a private id stripped below to spare the login check must still refuse the page
   if ([...privateIds(me.projects, runs.map((r) => r.id))].some((id) => new RegExp(String.raw`(?<![\w.\/\\-])${esc(id)}(?![\w.-])`).test(json))) left.push('a project that is not on GitHub');
-  const remotes = Object.values(me.projects).flatMap((p) => { const r = remoteParts(p?.remote); return r ? [`${r.host}/${r.path}`, `${r.host}:${r.path}`] : []; }); // git projects' origins
-  if (remotes.some((x) => json.toLowerCase().includes(x.toLowerCase()))) left.push('a remote that is not on GitHub');
+  // git projects' origins, in any form: host, an optional :port, then / or : and the path (git.corp:2222/team/app, git.corp:team/app)
+  const remotes = Object.values(me.projects).flatMap((p) => { const r = remoteParts(p?.remote); return r ? [String.raw`(?<![\w.-])${esc(r.host)}(?::\d+)?[/:]${esc(r.path)}(?![\w-])`] : []; });
+  if (remotes.length && new RegExp(remotes.join('|'), 'i').test(json)) left.push('a remote that is not on GitHub');
   let text = json.replace(/(?:https?:\/\/)?(?:www\.)?github\.com[/:][^\s"\\,]*/gi, ''); // JSON text: \n is two characters, so stop at '\' too
   for (const id of ids) text = text.replace(new RegExp(String.raw`(?<![\w.\/\\-])${esc(id)}(?![\w.-])`, 'g'), '');
   if (me.user.length >= 3 && new RegExp(String.raw`(?:\\\\|\/)${esc(me.user)}(?![\w.-])`, 'i').test(text)) left.push('the login name in a path');
