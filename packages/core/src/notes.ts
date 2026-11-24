@@ -34,7 +34,7 @@ export function note(run: string, step: string, text: unknown) {
   const done = step !== 'next' && ran(r, step) && !(step === 'intake' && r.outcome === 'needs-info'); // needs-info: intake runs again
   // Gates loop back only to spec or build; intake reruns only from needs-info, postmerge never. Refuse rather than keep a note nobody reads.
   if (done && ['intake', 'postmerge'].includes(step)) throw new Error(`${step} already ran for ${run} and won't run again, so no step would read the note; use "next"`);
-  const e = { id: `n-${randomUUID()}`, step, text: body, ...(({ by, via }) => ({ by, ...(via === 'local' && { via }) }))(whoami('writing the note', undefined, run.split(/[#:]/)[0])) }; // unique: two writers may append at once
+  const e = { id: `n-${randomUUID()}`, step, text: body, ...(({ by, via }) => ({ by, ...(via === 'local' && { via }) }))(whoami('writing the note')) }; // unique: two writers may append at once
   audit(run, 'pending', e, 'note');
   return done ? { ...e, warning: `${step} already ran: the note is handed out only if a gate loops back to it, so it may never be used` } : e;
 }

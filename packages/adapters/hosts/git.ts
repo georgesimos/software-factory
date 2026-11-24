@@ -13,12 +13,15 @@ export function pushInitial(): never { throw new Error('host "git" cannot push a
 export const whoami = (_ctx: Ctx, { user }: { user: () => string }) => ({ login: String(user()).trim(), verified: false });
 
 // The project's own base (F project set <repo> base), else origin's HEAD, else main or master on origin, else locally. It
-// refuses when none exists, rather than guess.
+// refuses when none exists, rather than guess. A set base must be a branch on origin when the clone has one (runs fetch it
+// from there, and reviewers see it there), else a local branch: never a tag, a sha or @{-1}.
 export function baseBranch({ git }: Ctx, { path, base }: { repo: string; path: string; base?: string }) {
   const has = (ref: string) => { try { git('-C', path, 'rev-parse', '--verify', '-q', `${ref}^{commit}`); return true; } catch { return false; } };
   if (base) {
-    if (has(`origin/${base}`) || has(base)) return base;
-    throw new Error(`the project's base branch ${base} is neither on origin nor local in ${path}`);
+    let origin = false;
+    try { origin = !!git('-C', path, 'remote', 'get-url', 'origin').trim(); } catch { /* none */ }
+    if (has(origin ? `refs/remotes/origin/${base}` : `refs/heads/${base}`)) return base;
+    throw new Error(origin ? `the project's base branch ${base} is not on origin in ${path} (push it, then git fetch origin)` : `the project's base branch ${base} is not a branch in ${path}`);
   }
   try {
     const ref = git('-C', path, 'symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD').trim();

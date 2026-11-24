@@ -30,7 +30,7 @@ export function requireGithub(repo: string, doing: string) {
 export const originUrl = (repoPath: string) => { try { return git('-C', repoPath, 'remote', 'get-url', 'origin').trim(); } catch { return ''; } };
 /** The project's host adapter function, or a refusal naming the host and what it can't do. Never another host's. */
 export function hostFn<K extends 'whoami' | 'baseBranch'>(id: string, fn: K, verb: string): NonNullable<Host[K]> {
-  const f = builtinHosts[id]?.[fn];
+  const f = Object.hasOwn(builtinHosts, id) ? (builtinHosts as Record<string, Host>)[id]![fn] : undefined;
   if (!f) throw new Error(`host "${id}" cannot ${verb}`);
   return f as NonNullable<Host[K]>;
 }

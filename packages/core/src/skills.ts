@@ -189,7 +189,7 @@ export function applyPreset(name: unknown, scope = 'default') {
     applied.push(key);
   }
   if (!applied.length) return { scope, preset: name, applied, skipped, inherited }; // nothing to write or audit
-  const { by: setBy, via } = whoami('changing the preset', undefined, scope);
+  const { by: setBy, via } = whoami();
   cfg[scope] = s;
   writeSkills(cfg);
   audit(scope, 'set', { key: 'preset', value: name, setBy, ...(via === 'local' && { via }) });

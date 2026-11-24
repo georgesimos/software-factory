@@ -149,10 +149,11 @@ export async function main(argv: string[]) {
         out(await issuesCreate(rest[0], rest[1], { yes: rest.includes('--yes') })); break;
       }
       case 'project': {
-        if (run === 'set') { // project set <owner/repo> host|ci|base <value> [--reason "…"]: only from your own terminal
+        if (run === 'set') { // project set <owner/repo> host|ci|base <value>|--unset [--reason "…"]: only from your own terminal
           const i = rest.indexOf('--reason'), reason = i < 0 ? undefined : rest.splice(i, 2)[1] ?? '';
-          if (rest.length !== 3) throw new Error('usage: project set <owner/repo> host|ci|base <value> [--reason "…"]');
-          out(setProject(rest[0]!, rest[1]!, rest[2]!, { reason })); break;
+          const unset = rest.includes('--unset'), a = rest.filter((x) => x !== '--unset'); // base --unset: back to the host's own
+          if (a.length !== (unset ? 2 : 3)) throw new Error('usage: project set <owner/repo> host|ci|base <value>|--unset [--reason "…"]');
+          out(setProject(a[0]!, a[1]!, unset ? null : a[2]!, { reason })); break;
         }
         const s = projectStatus(run || ''); if (!s) throw new Error(`no project ${run}; start one with "new"`); out(s); break;
       }
@@ -252,7 +253,7 @@ export async function main(argv: string[]) {
                                           idea-to-app: record the idea, validate PLAN.md + issues.json, then (with --yes) create the private repo + scaffold
   issues create <owner/repo> <file.json> [--yes]  validate and preview an issue batch; with --yes create it (idempotent by key)
   project <owner/repo>                    idea-to-app status: plan, milestones, next issue, dependency order, burn, loop
-  project set <owner/repo> host|ci|base <value> [--reason "…"]  a project's host (github|git), CI provider (github-actions|local|none) or base branch (git hosts); yours only, never an agent's; a relaxing change needs --reason, and a verified login on a GitHub project
+  project set <owner/repo> host|ci|base <value>|--unset [--reason "…"]  a project's host (github|git), CI provider (github-actions|local|none) or base branch (git hosts; on origin when it has one; --unset: the host's own); yours only, never an agent's; a relaxing change needs --reason, and a verified login on a GitHub project
   retire <owner/repo> --reason "<why>"     hide an idea that never got a repo (a leaked fixture) with a recorded event; the log is never rewritten
   loop   <owner/repo>                     next issue to build, or stop (first escalation, project budget, session cap, empty queue)
   automerge <owner/repo> on|off           allow or forbid auto-merge for a project

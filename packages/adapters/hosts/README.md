@@ -24,7 +24,11 @@ more things. Both are optional; a host without one is refused by name (`host "<i
 | Function | Returns | Must |
 |---|---|---|
 | `whoami(ctx, {user})` | `{login, verified}` or `null` | `verified: true` only for a login the host vouches for. `null` when there is no login here (F then uses the OS user, unverified); throw on any other failure. |
-| `baseBranch(ctx, {repo, path, base})` | a branch name | The branch runs start from. `base` is the project's own setting; refuse rather than guess. |
+| `baseBranch(ctx, {repo, path, base})` | a branch name | The branch runs start from. `base` is the project's own setting, a branch that must be where runs fetch it (on origin, when there is one); refuse rather than guess. |
+
+An attached project's `host` can be `github` or `git` only: core imports those two by name, so this folder's other files
+(and `FACTORY_HOSTS`) only change what `F new` offers. Who acts is a verified login first on every project, whatever its
+host; `whoami` here says what a host vouches for.
 
 `git.ts` is the host for a clone not on GitHub. It has no server, so its `authStatus` fails and `F new` never uses it; the
 repo `contract()` runs only against hosts that can create a repo.

@@ -94,7 +94,8 @@ export type Measured = Record<string, Transcript[]>;
 export interface Slot { t: number; run: string; stage: string; status: string; iteration: number; harness?: string }
 
 /** projects.json, per owner/repo. */
-/** One projects.json entry. host is set at attach and never changes (absent: github); remote (git hosts only) has no user:password@. */
+/** One projects.json entry. host is set at the first attach (absent: github); a re-sync never changes it, only F project set
+ *  does. remote (git hosts only) has no user:password@. */
 export interface Project { path?: string; synced?: string; autoMerge?: boolean; host?: 'github' | 'git'; remote?: string;
   base?: string; ci?: string } // F project set (base: git hosts only; ci: recorded for the CI providers to come)
 /** A run's worktree.json. */
