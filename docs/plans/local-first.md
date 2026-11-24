@@ -138,8 +138,8 @@ optional. When the core needs one a host doesn't have, the run escalates with th
 `host "<id>" cannot <verb>`, and the factory never falls back to another host.
 
 ```ts
-whoami(ctx): { login: string; verified: boolean }            // github: gh api user (verified). git: OS user (unverified)
-baseBranch(ctx, { repo, path }): string                      // git: refs/remotes/origin/HEAD → init.defaultBranch → projects.json base
+whoami(ctx, { user }): { login: string; verified: boolean } | null  // github: gh api user (verified), null with no login. git: OS user (unverified)
+baseBranch(ctx, { repo, path, base? }): string               // git: projects.json base → origin/HEAD → main|master (origin, then local)
 openChangeRequest(ctx, { repo, path, branch, base, sha, title, body, closes? }): { id: string; url?: string }
 changeRequest(ctx, { repo, path, id }): {
   state: 'open'|'merged'|'closed'|'unknown'; headSha: string|null;
@@ -250,8 +250,9 @@ The `ci` rule stays (`required|advisory|skip`), and its meaning is kept:
 
 1. **Every write records its source.** Rule changes and notes record `{setBy, via}`, where `via` is the host id whose
    `whoami` produced the login (`github`, `git`, …), plus `verified: boolean`.
-   - `rules.ts whoami()` calls the project's host `whoami`. If that throws or returns an empty login, it falls back to the
-     `git` host's OS user with `verified: false`, and never fails because `gh` is missing.
+   - `rules.ts whoami()` asks the verified sources first, whatever the project's host: a verified identity counts
+     everywhere (today gh; later a host's own verified `whoami`). With none, it falls back to the `git` host's OS user
+     with `verified: false`, and never fails because `gh` is missing.
    - This is the fix that unblocks rules and notes offline.
 2. **Display.** An unverified source always shows as "set by <login> (local, unverified)" in `decide()` reasons, the
    rules list and the UI. It never displays like a verified login.
@@ -448,9 +449,26 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
      - Copy: "git clones" (Setup, ProjectPicker).
      - Acceptance: the privacy test (§2.3) for remote hostnames, `local/<folder>` ids and clone paths.
    - **2b** (after PR 1):
-     - `F project set` (human-only and audited, §2.2 step 4).
-     - `Host.whoami` (github, git): core's `whoami()` asks the project's host.
-     - `host.baseBranch` behind the adapter, for `worktree()` and `revert()`.
+     - `F project set <repo> host|ci|base <value> [--reason]` (human-only and audited, §2.2 step 4).
+       - Refused inside an agent session (`FACTORY_CLAIM`, `CLAUDECODE`, any harness's `current()`), and there is no page
+         or HTTP route for it.
+       - Audited as a `rules` event with key `project.<key>`, `from`, `value`, `reason` and `setBy`/`via`.
+       - Relaxing changes (github → git, CI down the order github-actions → local → none) need `--reason`. On a GitHub
+         project they need a verified login: a local login is refused and told to `gh auth login`, or to attach the
+         clone under a `local/<name>` id.
+       - `host` is github or git only, until another host file implements `whoami` and `baseBranch`. `host github`
+         needs the clone's GitHub origin to be the id, and a `local/` id is never GitHub; it clears `base`.
+       - `base` is for `git` hosts: a branch on origin when the clone has one (runs fetch it from there), else a local
+         branch; never a tag, sha or `@{-1}`. `base --unset` returns to the host's own, audited as an unset.
+       - An unknown stored `ci` counts as the strictest, so any change from it needs a reason.
+       - `ci` is recorded only, until PR 3 gives it a registry and a reader. `tracker` waits for a second tracker.
+       - `merge` waits for PR 7 (D1), together with guarding `F automerge`, which today turns auto-merge on unguarded.
+     - `Host.whoami` (github, git): core's `whoami()` takes a verified login first on every project, so a git or
+       `local/` project's verified rules stay changeable by their author; the OS user alone is unverified and #131's
+       guard applies. Core imports github and git by name, so a bad host file fails only `F new`'s picker.
+     - `host.baseBranch` behind the adapter, for `worktree()`, `revert()` and sync. The `git` host's order is the
+       project's `base`, then `origin/HEAD`, then main or master on origin, then locally.
+     - The `git` host file. It has no server, so its `authStatus` fails and `F new` never uses it.
 3. **CI family, a move plus `none`/`local`.** (~500 lines)
    - `adapters/ci/` registry, template, README, `contract()`, `github-actions`, `local`, `none`.
    - `facts()` and `postmerge()` call the provider.
@@ -485,6 +503,10 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
    - The one-line `F sync` notice.
    - The explicit head ≠ `reviewedSha` escalation.
    - No provider-approval wait on GitHub (D2).
+   - Required: one guard for every way auto-merge is turned on: `F automerge on`, `POST /onboard/automerge` with
+     `on: true`, and `F project set merge auto`. It refuses inside a harness session, and it refuses an unverified
+     local login on a verified-host project. The Setup toggle may still turn auto-merge off freely. (2b left `merge`
+     out because a missing key already means auto, so guarding the "on" direction then would close no gap.)
 8. **Docs only.** A plugin guide for hosts, trackers and CI: how to write Bitbucket, GitLab, Jenkins or Jira as one file
    each against the contract tests, and why the factory doesn't ship them (nobody can test them).
 

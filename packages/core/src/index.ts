@@ -12,6 +12,7 @@ export * from './workspace.ts';
 export * from './github.ts';
 export * from './sync.ts';
 export * from './remote.ts';
+export * from './projectset.ts';
 export * from './eval.ts';
 export * from './project.ts';
 export * from './onboard.ts';

@@ -8,6 +8,7 @@ import { attach } from './sync.ts';
 import { io, read, record, runDir, stateDir } from './log.ts';
 import { rules } from './rules.ts';
 import { withClaim } from './claim.ts';
+import { builtin as builtinHosts, type Host } from '../../adapters/hosts/index.ts';
 import type { Project, WorktreeInfo } from './types.ts';
 
 /** What execFileSync throws: Node types it as a plain Error. */
@@ -27,17 +28,17 @@ export function requireGithub(repo: string, doing: string) {
 }
 /** A clone's origin URL, or '' when it has none (or the folder is not a clone). */
 export const originUrl = (repoPath: string) => { try { return git('-C', repoPath, 'remote', 'get-url', 'origin').trim(); } catch { return ''; } };
-/** The base branch of a git-hosted clone and the ref to start from: origin's HEAD, else origin/main or origin/master, else the
- *  local main or master (a clone with no remote). Refuses when none exists, rather than guessing. */
-export function gitBase(repoPath: string): { base: string; ref: string } {
-  const has = (ref: string) => { try { git('-C', repoPath, 'rev-parse', '--verify', '-q', `${ref}^{commit}`); return true; } catch { return false; } };
-  try {
-    const ref = git('-C', repoPath, 'symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD').trim();
-    if (ref.startsWith('origin/') && has(ref)) return { base: ref.slice('origin/'.length), ref };
-  } catch { /* no origin/HEAD */ }
-  for (const ref of ['origin/main', 'origin/master', 'main', 'master']) if (has(ref)) return { base: ref.replace(/^origin\//, ''), ref };
-  throw new Error(`cannot tell the base branch of ${repoPath}: it has no main or master branch${originUrl(repoPath) ? ', locally or on origin, and no origin/HEAD (git remote set-head origin -a sets it)' : ''}`);
+/** The project's host adapter function, or a refusal naming the host and what it can't do. Never another host's. */
+export function hostFn<K extends 'whoami' | 'baseBranch'>(id: string, fn: K, verb: string): NonNullable<Host[K]> {
+  const f = Object.hasOwn(builtinHosts, id) ? (builtinHosts as Record<string, Host>)[id]![fn] : undefined;
+  if (!f) throw new Error(`host "${id}" cannot ${verb}`);
+  return f as NonNullable<Host[K]>;
 }
+/** The branch `repo`'s runs start from, from its host (host: before projects.json has it, at attach). */
+export const baseBranch = (repo: string, repoPath: string, host = hostOf(repo)) =>
+  hostFn(host, 'baseBranch', 'tell the base branch')({ gh, git }, { repo, path: repoPath, ...(projects()[repo]?.base && { base: projects()[repo]!.base }) });
+/** The ref for a base branch in a clone: origin's copy when the clone has one, else the local branch (no remote). */
+export const baseRef = (repoPath: string, base: string) => { try { git('-C', repoPath, 'rev-parse', '--verify', '-q', `origin/${base}^{commit}`); return `origin/${base}`; } catch { return base; } };
 export const wtFile = (run: string) => path.join(runDir(run), 'worktree.json');
 export const wtInfo = (run: string): WorktreeInfo | null => { try { return JSON.parse(fs.readFileSync(wtFile(run), 'utf8')); } catch { return null; } };
 // One git worktree per run, sharing the clone's object store (not a second clone). A resume recreates it from the pushed branch.
@@ -50,13 +51,13 @@ export function worktree(run: string, repoPath?: string): WorktreeInfo {
   if (projects()[repo]?.path !== repoPath) attach(repo, repoPath); // a new or changed clone: the clash check and host decision sync makes
   // GitHub says what the base is; a git project's clone does (local refs when it has no remote)
   const local = hostOf(repo) !== 'github', remote = !local || !!originUrl(repoPath);
-  const at = local ? gitBase(repoPath) : null, base = at?.base ?? gh('repo', 'view', repo, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name').trim();
+  const base = baseBranch(repo, repoPath);
   const branch = `factory/issue-${n}`;
   const wt = path.join(runDir(run), 'wt');
   fs.mkdirSync(runDir(run), { recursive: true });
   git('-C', repoPath, 'worktree', 'prune');
   if (remote) git('-C', repoPath, 'fetch', '-q', 'origin', base);
-  let from = at && !remote ? at.ref : `origin/${base}`;
+  let from = remote ? `origin/${base}` : base;
   let fetched = false;
   if (remote) try { git('-C', repoPath, 'fetch', '-q', 'origin', `${branch}:refs/remotes/origin/${branch}`); from = `origin/${branch}`; fetched = true; } catch { /* first run: nothing pushed yet */ }
   // a git project pushes nothing yet: a resume starts from its local branch, never resets it to the base

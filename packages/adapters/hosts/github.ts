@@ -29,3 +29,19 @@ export function pushInitial({ gh, git }: Ctx, { repo, path, branch = 'main' }: {
   git('-C', path, 'push', '-q', '-u', 'origin', `HEAD:${branch}`);
   return { pushed: true, remote, branch };
 }
+
+// A verified login, or null when gh is missing or logged out. Any other failure (offline, rate-limited) throws: a logged-in
+// user must never be recorded as unverified.
+export function whoami({ gh }: Ctx) {
+  const out = (x: unknown) => String((x as { stderr?: unknown })?.stderr ?? '') + String((x as { stdout?: unknown })?.stdout ?? '');
+  let login = '';
+  try { login = gh('api', 'user', '--jq', '.login').trim(); } catch (e) {
+    let noLogin = (e as { code?: string })?.code === 'ENOENT'; // gh not installed
+    if (!noLogin) try { gh('auth', 'status'); } catch (s) { noLogin = /not logged in/i.test(out(s)); } // exits 1 with no login, and on a failed check
+    if (!noLogin) throw new Error(`gh is logged in but "gh api user" failed (${out(e).trim().split('\n')[0] || (e as Error)?.message}); try again`);
+  }
+  return login ? { login, verified: true } : null;
+}
+
+// GitHub's default branch; a project's own base setting does not apply here.
+export const baseBranch = ({ gh }: Ctx, { repo }: { repo: string }) => gh('repo', 'view', repo, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name').trim();

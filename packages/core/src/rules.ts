@@ -4,7 +4,7 @@ import { MAX_DIFF, MAX_ISSUES_PER_SESSION, PROJECT_BUDGET_USD, isLocal } from '.
 import { STEP_KEYS, isObj, isStepKey, readSkills, writeSkills, type ScopeConfig, type SkillsConfig } from './skills.ts';
 import { dashboard } from './log.ts';
 import { gh } from './github.ts';
-import { projects, projectsFile } from './workspace.ts';
+import { git, hostFn, projects, projectsFile } from './workspace.ts';
 import { log, stateDir } from './log.ts';
 import type { Rule } from './types.ts';
 
@@ -85,21 +85,18 @@ export function rules(repo: string, cfg: SkillsConfig = readSkills(), now = Date
   }
   return { repo, policy, guide, expired, warnings };
 }
-// The person changing a rule (or writing a note), never typed in: whoever gh is logged in as, or, with no gh login, the OS user
-// (via 'local'), so rules and notes still save on a machine without GitHub. at: for tests.
-// Only a missing gh or one with no login falls back: an offline or rate-limited gh must not record a logged-in user as local.
+// The person changing a rule (or writing a note), never typed in. A verified identity counts on every project, whatever its
+// host: whoever gh is logged in as. With gh missing or logged out, or a login gh shouldn't return, the OS user, unverified (via
+// 'local'), so rules and notes still save on a machine without GitHub; #131's guard keeps that user from loosening a verified
+// rule. Any other gh failure throws: a logged-in user is never recorded as local. at: for tests.
+// shortcut: gh is the one verified source; ask a host's own whoami here first once a host has verified logins of its own.
 export function whoami(doing = 'changing the rule', at = { user: () => os.userInfo().username }): { by: string; via: Via } {
-  let login = '';
-  try { login = gh('api', 'user', '--jq', '.login').trim(); } catch (e) {
-    const out = (x: unknown) => String((x as { stderr?: unknown })?.stderr ?? '') + String((x as { stdout?: unknown })?.stdout ?? '');
-    let noLogin = (e as { code?: string })?.code === 'ENOENT'; // gh not installed
-    if (!noLogin) try { gh('auth', 'status'); } catch (s) { noLogin = /not logged in/i.test(out(s)); } // exits 1 with no login, and on a failed check
-    if (!noLogin) throw new Error(`cannot tell who is ${doing}: gh is logged in but "gh api user" failed (${out(e).trim().split('\n')[0] || (e as Error)?.message}); try again`);
-  }
-  if (LOGIN.test(login)) return { by: login, via: 'github' };
+  let w: { login: string } | null = null;
+  try { w = hostFn('github', 'whoami', 'tell who you are')({ gh, git }, { user: at.user }); } catch (e) { throw new Error(`cannot tell who is ${doing}: ${(e as Error).message}`); }
+  if (w && LOGIN.test(w.login)) return { by: w.login, via: 'github' };
   let user = '';
-  try { user = String(at.user()).trim(); } catch { /* no OS user (uid without a passwd entry): below */ }
-  if (!LOCAL_BY.test(user)) throw new Error(`cannot tell who is ${doing}: "gh api user" failed and there is no OS user name`);
+  try { user = hostFn('git', 'whoami', 'tell who you are')({ gh, git }, { user: at.user })!.login; } catch { /* no OS user (uid without a passwd entry): below */ }
+  if (!LOCAL_BY.test(user)) throw new Error(`cannot tell who is ${doing}: no verified gh login, and there is no OS user name`);
   return { by: user, via: 'local' };
 }
 const stamp = (who: { by: string; via: Via }) => ({ setBy: who.by, ...(who.via === 'local' && { via: who.via }) }); // a GitHub login is stored as before: no via
