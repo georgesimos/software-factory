@@ -43,7 +43,7 @@ export function App() {
         <Sec id="tokens" title="Tokens" lede="tokens.ts is the source; tokens.css is generated. Every colour pair passes WCAG AA in both themes (pnpm contrast)."><Tokens /></Sec>
         <Sec id="basics" title="Basics" lede="Plain CSS on tokens. Native elements where the platform already does the keyboard and screen-reader work."><Basics /></Sec>
         <Sec id="factory" title="Factory components" lede="Take factory.mjs run objects directly; presentational, no fetching."><FactoryParts /></Sec>
-        <Sec id="onboarding" title="Onboarding" lede="Discover every local clone with a GitHub remote, pick several, attach them in one go."><Onboarding /></Sec>
+        <Sec id="onboarding" title="Onboarding" lede="Discover every local git clone, pick several, attach them in one go."><Onboarding /></Sec>
         <Sec id="board" title="Board" lede="The dashboard, rebuilt from components. Click a card for its detail sheet; ⌘K jumps to any run."><Board selected={selected} onSelect={setSelected} /></Sec>
         <Sec id="detail" title="Run detail" lede="acme/shop#43: two loop-backs, a dismissed finding, merged then reverted."><div className="pg-detail-frame"><RunDetail run={detail} /></div></Sec>
       </main>

@@ -4,7 +4,7 @@ import { TRUSTED } from './constants.ts';
 import { decide } from './gate.ts';
 import { derive, getRun } from './derive.ts';
 import { exec } from './platform.ts';
-import { git, projects } from './workspace.ts';
+import { git, projects, requireGithub } from './workspace.ts';
 import { io, read, readArchive, record, runDir } from './log.ts';
 import { shipTrack } from './ship.ts';
 import { rules } from './rules.ts';
@@ -38,6 +38,7 @@ export const parseRun = (run: string) => {
 export function intake(run: string) {
   const { repo, n } = parseRun(run);
   if (process.env.FACTORY_FIXTURES && repo === 'eval/golden') return intakeFixture(run, n); // offline eval: no GitHub
+  requireGithub(repo, 'intake (reading the issue)');
   const done = derive(read())[run] || readArchive().find((a) => a.id === run);
   if (done?.humanMerge && !done.reverted) throw new Error(`${run} was escalated, then merged by ${done.humanMerge.by || 'a human'}: it needs a human, not a new run`);
   // Exact links only (GitHub closing references); the factory's own branch is a resume, not a clash.
@@ -73,6 +74,7 @@ export function intakeFixture(run: string, n: string) {
 }
 export const adapterCtx = () => ({ gh, git }); // what host and tracker adapters get: the same stubbable gh and git
 export function openPRs(repo: string): { base: string; prs: GhPullRequest[]; doneBranches: string[] } {
+  requireGithub(repo, 'listing open pull requests');
   const [o, n] = repo.split('/');
   const q = 'query($o:String!,$n:String!){repository(owner:$o,name:$n){defaultBranchRef{name} pullRequests(states:OPEN,first:100){nodes{number url title headRefName headRefOid authorAssociation author{login} closingIssuesReferences(first:20){nodes{number}}}} done: pullRequests(states:[MERGED,CLOSED],last:100){nodes{headRefName}}}}';
   const r: GhRepository = JSON.parse(gh('api', 'graphql', '-f', `query=${q}`, '-f', `o=${o}`, '-f', `n=${n}`)).data.repository;
@@ -81,6 +83,7 @@ export function openPRs(repo: string): { base: string; prs: GhPullRequest[]; don
 // Reads CI + diff facts from GitHub so the merge decision never depends on typed-in numbers.
 export function facts(r: Run): Facts {
   const { repo, n } = parseRun(r.id);
+  requireGithub(repo, 'reading CI and the diff');
   const association = gh('api', `repos/${repo}/issues/${n}`, '--jq', '.author_association').trim();
   const autoMerge = projects()[repo]?.autoMerge !== false;
   const policy = rules(repo).policy; // a broken config throws here, so decide/merge fail and the run escalates
@@ -105,6 +108,7 @@ export function facts(r: Run): Facts {
 export function merge(run: string) {
   const r = getRun(run);
   const { repo, n } = parseRun(run);
+  requireGithub(repo, 'merging');
   const f = r.imported ? {} : facts(r);
   const d = decide(r, f);
   record(run, 'approve', 'decided', { ...d, facts: f });
@@ -121,6 +125,7 @@ export function merge(run: string) {
 // Labels are cosmetic: warn, never throw.
 export function relabelMerged(run: string) {
   const { repo, n } = parseRun(run);
+  requireGithub(repo, 'relabelling the issue');
   const warn = (e: any) => console.error(`factory: label update on ${run} failed: ${String(e?.stderr || e?.message || e).trim().split('\n')[0]}`); // any: whatever was thrown
   try { exec(io.gh, ['api', '-X', 'POST', `repos/${repo}/issues/${n}/labels`, '--input', '-'], { encoding: 'utf8', input: JSON.stringify({ labels: ['factory:merged'] }), stdio: ['pipe', 'pipe', 'pipe'] }); } catch (e) { warn(e); }
   try { gh('api', '-X', 'DELETE', `repos/${repo}/issues/${n}/labels/factory:in-progress`); } catch (e: any) { if (!/Label does not exist/.test(`${e?.stderr}${e?.stdout}`)) warn(e); } // the only silent 404: it wasn't on the issue
@@ -129,6 +134,7 @@ export function relabelMerged(run: string) {
 export function approval(run: string) {
   const r = getRun(run);
   const { repo, n } = parseRun(run);
+  requireGithub(repo, 'reading spec approval');
   const since = [...r.events].reverse().find((e) => e.status === 'awaiting-approval')?.ts;
   if (!since) throw new Error(`${run} is not awaiting approval`);
   const comments: GhComment[] = gh('api', '--paginate', `repos/${repo}/issues/${n}/comments`, '--jq', '.[]').split('\n').filter(Boolean).map((l) => JSON.parse(l));
@@ -147,6 +153,7 @@ export function approvalVote(comments: GhComment[], since: string) {
 export function postmerge(run: string): PostMerge {
   const r = getRun(run);
   const { repo } = parseRun(run);
+  requireGithub(repo, 'post-merge CI');
   if (!r.pr) return { state: 'no-pr', reason: 'no PR recorded for this run' }; // never `gh pr view undefined`
   const sha: string | undefined = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'mergeCommit')).mergeCommit?.oid;
   if (!sha) return { state: 'not-merged' };
@@ -162,6 +169,7 @@ export function postmerge(run: string): PostMerge {
 export function revert(run: string, reason: string) {
   const r = getRun(run);
   const { repo, n } = parseRun(run);
+  requireGithub(repo, 'opening a revert PR');
   const pm = postmerge(run);
   if (!pm.sha) throw new Error(pm.reason || 'run has no merge commit');
   const repoPath = projects()[repo]?.path;

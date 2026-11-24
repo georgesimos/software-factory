@@ -22,7 +22,7 @@ export interface ProjectPickerProps {
 
 const home = (p: string) => p.replace(/^\/Users\/[^/]+|^\/home\/[^/]+/, '~');
 
-/** Step 1 of onboarding: every local clone with a GitHub remote, multi-select, one "Attach" action. ⌘↵ submits. */
+/** Step 1 of onboarding: every local git clone, multi-select, one "Attach" action. ⌘↵ submits. */
 export function ProjectPicker({ repos, selected, onChange, onSubmit, scannedRoots, now }: ProjectPickerProps) {
   const titleId = useId();
   const [q, setQ] = useState('');
@@ -43,7 +43,7 @@ export function ProjectPicker({ repos, selected, onChange, onSubmit, scannedRoot
         <div>
           <h2 id={titleId} className="sf-picker-title">Choose projects to attach</h2>
           <p className="sf-picker-sub">
-            {repos === null ? 'Looking for git clones with a GitHub remote…'
+            {repos === null ? 'Looking for git clones…'
               : `${repos.length} repositories found${scannedRoots?.length ? ` in ${scannedRoots.map(home).join(', ')}` : ''}${attachedCount ? ` · ${attachedCount} already attached` : ''}`}
           </p>
         </div>
@@ -55,7 +55,7 @@ export function ProjectPicker({ repos, selected, onChange, onSubmit, scannedRoot
           {[0, 1, 2, 3].map((i) => <li key={i} className="sf-picker-row"><Skeleton width={16} height={16} /><div className="sf-picker-main"><Skeleton width="40%" /><Skeleton width="65%" height={10} style={{ marginTop: 8 }} /></div></li>)}
         </ul>
       ) : !repos.length ? (
-        <EmptyState title="No GitHub clones found" compact>Clone a repository under one of the scanned folders, or attach one by path.</EmptyState>
+        <EmptyState title="No git clones found" compact>Clone a repository under one of the scanned folders, or attach one by path.</EmptyState>
       ) : (
         <>
           <div className="sf-picker-all">

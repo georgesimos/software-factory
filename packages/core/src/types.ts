@@ -81,6 +81,7 @@ export type Measured = Record<string, Transcript[]>;
 export interface Slot { t: number; run: string; stage: string; status: string; iteration: number; harness?: string }
 
 /** projects.json, per owner/repo. */
-export interface Project { path?: string; synced?: string; autoMerge?: boolean }
+/** One projects.json entry. host is set at attach and never changes (absent: github); remote (git hosts only) has no user:password@. */
+export interface Project { path?: string; synced?: string; autoMerge?: boolean; host?: 'github' | 'git'; remote?: string }
 /** A run's worktree.json. */
 export interface WorktreeInfo { path: string; repoPath: string; branch: string; [k: string]: unknown }

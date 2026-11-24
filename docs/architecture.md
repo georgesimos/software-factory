@@ -415,7 +415,7 @@ Each step can be run by the built-in brief, a user skill or brief, or a harness 
 
 ```mermaid
 flowchart LR
-  D["F discover<br/>scan ~/Development, ~/code, … up to 5 deep<br/>read .git/config → GitHub origins"] --> P{"pick repo + clone"}
+  D["F discover<br/>scan ~/Development, ~/code, … up to 5 deep<br/>read .git/config → origins (GitHub, any git host, or none)"] --> P{"pick repo + clone"}
   P --> S["F sync owner/repo clone-path"]
   S --> S1["register in projects.json"]
   S --> S2["import each open PR as a run<br/>source: claude-code / codex / none, by branch"]

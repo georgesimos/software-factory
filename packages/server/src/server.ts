@@ -24,7 +24,7 @@ import type { AddressInfo } from 'node:net';
 import { childEnv, getSession, killTree, listSessions, resolveSpec, startSession, stopAll, subscribe } from '../../adapters/sessions.ts';
 import { claimedElsewhere, claimLive, procStart, readClaim, refuseClaimed, running, takeClaim, withClaim } from '../../core/src/claim.ts';
 import type { Session, SessionInfo } from '../../adapters/sessions.ts';
-import type { FactoryEvent, Run } from '../../core/src/types.ts';
+import type { FactoryEvent, Project, Run } from '../../core/src/types.ts';
 
 // A request as uiHandle() reads it. Node joins a repeated header into one string (set-cookie aside), so each is a string.
 type UiRequest = { method?: string; url: string; headers?: Record<string, string | undefined>; body?: string };
@@ -489,24 +489,26 @@ function cleanKeys(by: Record<string, any>) {
 // Everything the dashboard shows: runs, metrics, rules, skills, harnesses, hooks, ideas. page() embeds it; GET /api/state returns it.
 // sheet: also metricsLog, for the Artifact only (artifact()'s page): ~50 ms per logMetrics() call on a real log is too slow for
 // render() after every record(), and F ui's sheet asks GET /api/metrics.
-export function pageData(extra: object = {}, { sheet = false } = {}) {
-  const events = read(), now = Date.now();
-  const runs = runsData(events);
+// publish: the Artifact's build, without the projects that are not on GitHub (privateIds), so no total counts them either.
+export function pageData(extra: object = {}, { sheet = false, publish = false } = {}) {
+  const all = read(), hidden = publish ? ofIds(privateIds(projects(), all.map((e) => e.run))) : () => false, now = Date.now();
+  const events = all.filter((e) => !hidden(String(e.run)));
+  const runs = runsData(events).filter((r) => !hidden(r.id));
   const repoOf = (id: string) => id.split(/[#:]/)[0]!;
   const byProject: Record<string, ReturnType<typeof metrics>> = {};
   for (const p of new Set(runs.map((r) => repoOf(r.id)))) byProject[p] = metrics(runs.filter((r) => repoOf(r.id) === p));
-  const ruleData: { rules: Record<string, ReturnType<typeof rules>>; ruleHistory: FactoryEvent[]; rulesError?: string } = { rules: {}, ruleHistory: read().filter((e) => e.stage === 'rules').slice(-100) };
+  const ruleData: { rules: Record<string, ReturnType<typeof rules>>; ruleHistory: FactoryEvent[]; rulesError?: string } = { rules: {}, ruleHistory: events.filter((e) => e.stage === 'rules').slice(-100) };
   try { const cfg = readSkills(); for (const p of new Set([...Object.keys(byProject), ...Object.keys(projects())])) ruleData.rules[p] = rules(p, cfg); }
   catch (e) { ruleData.rulesError = (e as Error).message; } // render runs after every record(): a bad config must not half-fail the event
   let idea: object = {};
   try { idea = { ideas: ideas(events, Object.fromEntries(runs.map((r) => [r.id, r]))) }; } catch (e) { idea = { ideasError: (e as Error).message }; } // never fail the event that triggered the render
   const F_CMD = fCmd(); // per page build, so installing the plugin while the app runs clears fMissing without a restart
-  const sheetData = sheet ? { metricsLog: sheetMetrics(events, Object.keys(byProject), now) } : {}; // a failure fails the publish: F render --artifact says why
+  const sheetData = sheet ? { metricsLog: sheetMetrics(events, Object.keys(byProject), now, readArchive().filter((a) => !hidden(a.id))) } : {}; // a failure fails the publish: F render --artifact says why
   return { generated: new Date(now).toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)),
     harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), fCmd: F_CMD, ...(!F_CMD && { fMissing: true }),
     autoMerge: Object.fromEntries(Object.entries(projects()).map(([r, p]) => [r, p?.autoMerge !== false])), ...idea, ...sheetData, ...extra };
 }
-export function page(extra: object = {}, opts?: { sheet?: boolean }) {
+export function page(extra: object = {}, opts?: { sheet?: boolean; publish?: boolean }) {
   const data = JSON.stringify(pageData(extra, opts)).replace(/</g, '\\u003c'), html = fs.readFileSync(APP_HTML, 'utf8');
   if (!DATA_TAG.test(html)) throw new Error(`${APP_HTML} has no data tag: rebuild it with pnpm --filter @software-factory/web dashboard`);
   return html.replace(DATA_TAG, (_, open, _old, close) => open + data + close);
@@ -562,6 +564,8 @@ export function residue(json: string, raw: RawPage, me = machine()) {
   const paths = [me.home, ...Object.values(me.projects).map((p) => p?.path), ...runs.flatMap((r) => [r.worktree, ...(r.sessions || []).map((s) => s.cwd)])];
   if (paths.some((p) => typeof p === 'string' && p.length > 3 && json.includes(jsonOf(p)))) left.push('a home, clone or worktree path');
   const ids = new Set([...Object.keys(me.projects), ...runs.map((r) => String(r.id).split(/[#:]/)[0]!)]);
+  // checked on json itself: a private id stripped below to spare the login check must still refuse the page
+  if ([...privateIds(me.projects, runs.map((r) => r.id))].some((id) => new RegExp(String.raw`(?<![\w.\/\\-])${esc(id)}(?![\w.-])`).test(json))) left.push('a project that is not on GitHub');
   let text = json.replace(/(?:https?:\/\/)?(?:www\.)?github\.com[/:][^\s"\\,]*/gi, ''); // JSON text: \n is two characters, so stop at '\' too
   for (const id of ids) text = text.replace(new RegExp(String.raw`(?<![\w.\/\\-])${esc(id)}(?![\w.-])`, 'g'), '');
   if (me.user.length >= 3 && new RegExp(String.raw`(?:\\\\|\/)${esc(me.user)}(?![\w.-])`, 'i').test(text)) left.push('the login name in a path');
@@ -571,10 +575,27 @@ export function residue(json: string, raw: RawPage, me = machine()) {
   if (hosts.length && new RegExp(hosts.join('|'), 'i').test(json)) left.push('the host name');
   return left;
 }
+// Projects not on GitHub stay off the published page (docs/plans/local-first.md §2.3): a local/<folder> id names a folder on
+// this machine, another host's id a private server. They are left out, not renamed, since a stand-in would still say they exist.
+export const privateIds = (ps: Record<string, Project>, runIds: unknown[] = []) => new Set([
+  ...Object.entries(ps).filter(([id, p]) => p?.host === 'git' || id.startsWith('local/')).map(([id]) => id),
+  ...runIds.map((r) => String(r).split(/[#:]/)[0]!).filter((id) => id.startsWith('local/')), // a run whose project was detached
+]);
+const ofIds = (priv: Set<string>) => (s: string) => priv.size > 0 && priv.has(s.split(/[#:]/)[0]!); // "id", "id#3", "id:branch"
+// Drops every key, string and list item that belongs to a private project: a list item by its id, run, repo or scope.
+export function dropPrivate(v: unknown, mine: (s: string) => boolean): unknown {
+  const owned = (x: unknown) => typeof x === 'string' ? mine(x)
+    : !!x && typeof x === 'object' && ['id', 'run', 'repo', 'scope'].some((k) => typeof (x as Record<string, unknown>)[k] === 'string' && mine((x as Record<string, string>)[k]!));
+  if (Array.isArray(v)) return v.filter((x) => !owned(x)).map((x) => dropPrivate(x, mine));
+  if (!v || typeof v !== 'object') return v;
+  const out = Object.create(null); // as scrubKeys: a "__proto__" key stays a key
+  for (const [k, x] of Object.entries(v)) if (!mine(k)) out[k] = dropPrivate(x, mine);
+  return out;
+}
 const DATA_TAG = /(<script type="application\/json" id="data">)([^<]*)(<\/script>)/;
 // GitHub, Anthropic and OpenAI key shapes, and an F ui URL with its token.
 export const SECRET = /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_\w{30,}|sk-(?:ant-)?[\w-]{30,})|127\.0\.0\.1:\d+\/?\?t=[\w-]{20,}/;
-export function artifact(html = page({}, { sheet: true })) {
+export function artifact(html = page({}, { sheet: true, publish: true })) {
   // Opening tags and metas come before the inlined script, so their first match is the tag; closing tags come after it, so their last.
   for (const [re, last] of [[/^<!doctype html>\s*/i], [/<html[^>]*>\s*/i], [/<head>\s*/i], [/<meta charset="utf-8">\s*/i], [/<meta name="viewport"[^>]*>\s*/i],
     [/<\/head>\s*/i], [/<body[^>]*>\s*/i], [/<\/body>\s*/gi, true], [/<\/html>\s*/gi, true]] as [RegExp, boolean?][]) {
@@ -585,7 +606,7 @@ export function artifact(html = page({}, { sheet: true })) {
   const m = html.match(DATA_TAG);
   if (!m) throw new Error('artifact: the dashboard no longer has its data tag');
   // d: the page data, scrubbed; group 2 always matches
-  const raw = JSON.parse(m[2]!), d = scrub(raw) as { ui?: unknown; reload?: unknown; skills?: { catalog?: unknown } };
+  const raw = JSON.parse(m[2]!), d = dropPrivate(scrub(raw), ofIds(privateIds(projects(), (raw.runs || []).map((r: { id: unknown }) => r.id)))) as { ui?: unknown; reload?: unknown; skills?: { catalog?: unknown } };
   if (d.ui) throw new Error('artifact: refusing to publish a page built for F ui');
   delete d.reload; // updates arrive by republish
   if (d.skills?.catalog) d.skills.catalog = { global: [], projects: {} }; // install paths; the Skills sheet can't save there anyway
