@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadDir } from '../registry.mjs';
+import { loadDir } from '../registry.ts';
 
 export const REQUIRED = ['authStatus', 'createRepo', 'pushInitial'];
 export const load = (dir = process.env.FACTORY_HOSTS || path.dirname(fileURLToPath(import.meta.url))) => loadDir(dir, REQUIRED);

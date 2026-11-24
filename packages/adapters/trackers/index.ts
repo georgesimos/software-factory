@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadDir } from '../registry.mjs';
+import { loadDir } from '../registry.ts';
 
 export const REQUIRED = ['createIssues', 'listOpen', 'dependencies'];
 export const load = (dir = process.env.FACTORY_TRACKERS || path.dirname(fileURLToPath(import.meta.url))) => loadDir(dir, REQUIRED);

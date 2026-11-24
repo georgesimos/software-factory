@@ -12,7 +12,7 @@ import { derive } from '../../core/src/derive.ts';
 import { relabelMerged } from '../../core/src/github.ts';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
-import { pluginFiles, stem } from '../../adapters/registry.mjs';
+import { pluginFiles, stem } from '../../adapters/registry.ts';
 import { hooks } from '../../core/src/ship.ts';
 import { io, read, record, runDir } from '../../core/src/log.ts';
 import { ls, saveProject } from '../../core/src/workspace.ts';

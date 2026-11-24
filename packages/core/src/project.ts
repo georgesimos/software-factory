@@ -13,10 +13,10 @@ import { allRuns, budget } from './derive.ts';
 import { isSensitive, PROJECT_BUDGET_USD, MAX_ISSUES_PER_SESSION } from './constants.ts';
 import { claimedElsewhere, unclaimCmd, type Claim } from './claim.ts';
 import { dashboard } from './log.ts';
-import * as hosts from '../../adapters/hosts/index.mjs';
-import * as trackers from '../../adapters/trackers/index.mjs';
-import type { Ctx } from '../../adapters/hosts/index.mjs';
-import type { Item, OpenIssue } from '../../adapters/trackers/index.mjs';
+import * as hosts from '../../adapters/hosts/index.ts';
+import * as trackers from '../../adapters/trackers/index.ts';
+import type { Ctx } from '../../adapters/hosts/index.ts';
+import type { Item, OpenIssue } from '../../adapters/trackers/index.ts';
 import type { FactoryEvent, Rule, Run } from './types.ts';
 
 // The issue list a plan holds, and the issues a tracker created (with their ids).
