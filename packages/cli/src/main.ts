@@ -3,14 +3,16 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { COST_CAP } from '../../core/src/constants.ts';
-import { approval, facts, intake, merge, postmerge, revert } from '../../core/src/github.ts';
+import { adapterCtx, approval, facts, intake, merge, postmerge, revert } from '../../core/src/github.ts';
+import { approveSpec } from '../../core/src/approve.ts';
+import { newItem } from '../../adapters/trackers/local.ts';
 import { closeMerged, setProject } from '../../core/src/projectset.ts';
 import { archive, io, read, record, runDir } from '../../core/src/log.ts';
 import { budget, budgetWhy, derive, getRun } from '../../core/src/derive.ts';
 import { DEFAULT_PRESET, PRESETS, applyPreset, availablePlan, catalog, setSkill, skills } from '../../core/src/skills.ts';
 import { decide, gate, reviewAxes, risk } from '../../core/src/gate.ts';
 import { demo } from '../../core/src/demo.ts';
-import { baseRef, deps, gc, git, localChecks, projects, worktree, wtInfo } from '../../core/src/workspace.ts';
+import { baseRef, deps, gc, git, localChecks, projects, trackerOf, worktree, wtInfo } from '../../core/src/workspace.ts';
 import { discover, sync } from '../../core/src/sync.ts';
 import { evals } from '../../core/src/eval.ts';
 import { headlessArgs, reviewFromText, stepModel } from '../../core/src/review.ts';
@@ -43,7 +45,7 @@ export async function main(argv: string[]) {
     switch (cmd) {
       case 'event': {
         const [stage, status] = rest as [string, string], p = json(rest[2]); // as argv above: record() checks them
-        const owned: Record<string, string> = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'approve:closed': 'sync', 'idea:retired': 'retire' };
+        const owned: Record<string, string> = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'spec:decided': 'approve', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'approve:closed': 'sync', 'idea:retired': 'retire' };
         const owner = owned[`${stage}:${status}`] || ({ gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop', ship: 'ship' } as Record<string, string>)[stage];
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
         if (stage === 'review' && p.role !== 'verifier') throw new Error('axis verdicts are recorded by "review", not by hand; "event" only takes the verifier usage record ({"role":"verifier",…})');
@@ -134,6 +136,16 @@ export async function main(argv: string[]) {
       case 'merge': out(merge(run)); break;
       case 'risk': out(risk(getRun(run), rest)); break;
       case 'approval': out(approval(run)); break;
+      case 'approve': // approve <owner/repo#N>: you approve a local item's spec at your own terminal; never an agent, the page or HTTP
+        if (!run || rest.length) throw new Error('usage: approve <owner/repo#N>');
+        out(approveSpec(run)); break;
+      case 'item': { // item new <owner/repo> "<title>" [-]: a local item in the clone's untracked .factory/issues (- reads its body from stdin)
+        if (run !== 'new' || !rest[0] || !rest[1] || rest.length > 3 || (rest[2] !== undefined && rest[2] !== '-')) throw new Error('usage: item new <owner/repo> "<title>" [-]');
+        const [repo, title] = rest as [string, string], t = trackerOf(repo), at = projects()[repo]?.path;
+        if (t !== 'local') throw new Error(`${repo}'s tracker is ${t}: F item new writes local items only`);
+        const it = newItem(adapterCtx(), { ...(at && { path: at }), title, body: rest[2] ? fs.readFileSync(0, 'utf8') : '' });
+        out({ run: `${repo}#${it.id}`, id: it.id, file: it.file }); break;
+      }
       case 'postmerge': out(postmerge(run)); break;
       case 'revert': out(revert(run, rest.join(' ') || 'CI failed on the base branch after merge')); break;
       case 'queue': out(await queue(run)); break;
@@ -249,7 +261,9 @@ export async function main(argv: string[]) {
   decide <run>                            fetch CI + diff, compute + record merge/escalate
   merge  <run>                            re-decide, then merge the reviewed commit (the only merge path)
   risk   <run> <planned files...>         does the spec need human approval before building?
-  approval <run>                          trusted "/factory approve|reject" comment since waiting?
+  approval <run>                          spec approved since waiting? (GitHub: a trusted "/factory approve|reject" comment; local items: F approve)
+  approve <run>                           approve a local item's spec at your own terminal (type the code it shows); yours only, never an agent's
+  item new <owner/repo> "<title>" [-]     write a local item in the clone's untracked .factory/issues (- reads its body from stdin)
   postmerge <run>                         CI state of the merge commit on the base branch
   revert <run> [reason]                   open a revert PR (never merged by the factory)
   queue  <owner/repo>                     factory:ready issues whose dependencies are merged (ready), the rest (blocked), untriaged open issues

@@ -42,22 +42,24 @@ const hasOrigin = (git: Git, path: string) => !!tryGit(git, '-C', path, 'remote'
 const firstLine = (e: unknown) => String((e as { stderr?: unknown })?.stderr || (e as Error)?.message || e).trim().split('\n').filter((l) => !/^(hint|To) /.test(l))[0] || 'refused';
 const treeOf = (git: Git, path: string, c: string) => git('-C', path, 'rev-parse', `${c}^{tree}`).trim();
 
-// merge-tree --write-tree needs git 2.38: checked once per git, so an old git says so instead of failing as a conflict.
+// The one git the factory needs: 2.40, for diff --attr-source (a git project's line count); merge-tree --write-tree needs 2.38.
+// Checked once per git, so an old git says so instead of failing as a conflict or a miscount; F onboard shows it.
 // A failed `git version` isn't remembered: it says so, and the next call asks again.
+export const GIT_MIN = [2, 40] as const;
 const versions = new WeakMap<Git, string | null>();
-export function mergeTreeMissing(git: Git): string | null {
+export function gitTooOld(git: Git): string | null {
   if (versions.has(git)) return versions.get(git)!;
   const out = tryGit(git, 'version');
   if (out === null) return 'cannot run git version: is git installed?';
   const v = /(\d+)\.(\d+)/.exec(out);
-  const missing = v && (+v[1]! > 2 || (+v[1]! === 2 && +v[2]! >= 38)) ? null : `git ${v ? `${v[1]}.${v[2]}` : `"${out}"`} is too old: merging needs git 2.38 or later (merge-tree --write-tree)`;
+  const [maj, min] = GIT_MIN, missing = v && (+v[1]! > maj || (+v[1]! === maj && +v[2]! >= min)) ? null : `git ${v ? `${v[1]}.${v[2]}` : `"${out}"`} is too old: the factory needs git ${maj}.${min} or later`;
   versions.set(git, missing);
   return missing;
 }
 // The tree of merging theirs into ours with no checkout, or null on a conflict: exit 1 with the conflicted tree on stdout.
 // git also exits 1 for an unknown commit, with nothing on stdout; that and anything else throws its first line.
 export function mergeTree(git: Git, path: string, ours: string, theirs: string): string | null {
-  const old = mergeTreeMissing(git);
+  const old = gitTooOld(git);
   if (old) throw new Error(old);
   try { return git('-C', path, 'merge-tree', '--write-tree', '--no-messages', ours, theirs).trim().split('\n')[0]!; }
   catch (e) {
@@ -160,7 +162,7 @@ function ignoredInTheWay(git: Git, dir: string, paths: string[]) {
 export function merge(ctx: Ctx, { repo, path, id, sha, base }: { repo: string; path: string; id: string; sha: string; base?: string }) {
   const { git } = ctx, branch = branchOf(id), no = (detail: string) => ({ merged: false, detail });
   if (tryGit(git, '-C', path, 'rev-parse', '--verify', '-q', `refs/heads/${branch}^{commit}`) !== sha) return no(`${branch} is not at the reviewed commit ${sha.slice(0, 7)}`);
-  const old = mergeTreeMissing(git);
+  const old = gitTooOld(git);
   if (old) return no(old);
   try { base ??= baseBranch(ctx, { repo, path }); } catch (e) { return no(firstLine(e)); }
   const origin = hasOrigin(git, path), ref = baseRef(origin, base);

@@ -8,6 +8,9 @@ import { exec } from './platform.ts';
 import { baseBranch, baseRef, git, hostFn, hostOf, projects, requireGithub, trackerFn, trackerOf } from './workspace.ts';
 import { io, read, readArchive, record, runDir } from './log.ts';
 import { shipTrack } from './ship.ts';
+import { gitTooOld } from '../../adapters/hosts/git.ts';
+import { pending } from './approve.ts';
+import { createHash } from 'node:crypto';
 import { rules } from './rules.ts';
 import type { Facts } from './gate.ts';
 import type { Comment } from '../../adapters/trackers/index.ts';
@@ -28,7 +31,8 @@ export const parseRun = (run: string) => {
 export function intake(run: string) {
   const { repo, n } = parseRun(run);
   if (process.env.FACTORY_FIXTURES && repo === 'eval/golden') return intakeFixture(run, n); // offline eval: no GitHub
-  requireGithub(repo, 'intake (reading the issue)');
+  const t = trackerOf(repo), ctx = adapterCtx(), at = projects()[repo]?.path, where = { repo, id: n, ...(at && { path: at }) };
+  if (t === 'github-issues') requireGithub(repo, 'intake (reading the issue)');
   const done = derive(read())[run] || readArchive().find((a) => a.id === run);
   if (done?.humanMerge && !done.reverted) throw new Error(`${run} was escalated, then merged by ${done.humanMerge.by || 'a human'}: it needs a human, not a new run`);
   // Exact links only (GitHub closing references); the factory's own branch is a resume, not a clash.
@@ -37,14 +41,19 @@ export function intake(run: string) {
     .filter((p) => p.branch !== `factory/issue-${n}` && p.closes.includes(n))
     .map((p) => p.url);
   if (inProgress.length) return { inProgress }; // nothing recorded: someone is already on it
-  const t = trackerOf(repo), ctx = adapterCtx();
-  const i = trackerFn(t, 'getItem', 'read an item')(ctx, { repo, id: n });
+  const i = trackerFn(t, 'getItem', 'read an item')(ctx, where);
   if (i.isChangeRequest) return { notAnIssue: `#${n} is a pull request` };
   if (i.state !== 'open') return { notAnIssue: `#${n} is ${i.state}` };
   // Advisory only: PRs naming the issue in their title without a formal closing link.
   const mentions = prs.filter((p) => p.branch !== `factory/issue-${n}` && new RegExp(`(^|[^\\w])#${n}(?!\\d)`).test(p.title)).map((p) => ({ url: p.url, title: p.title }));
-  const comments = trackerFn(t, 'comments', 'read comments')(ctx, { repo, id: n });
-  const meta: { title: string; url?: string | undefined; author: string; association: string; origin?: string; originAssociation?: string | undefined } = { title: i.title, url: i.url, author: i.author, association: i.association };
+  const comments = trackerFn(t, 'comments', 'read comments')(ctx, where);
+  const meta: { title: string; url?: string | undefined; author: string; association: string; origin?: string; originAssociation?: string | undefined; itemSha?: string } = { title: i.title, url: i.url, author: i.author, association: i.association };
+  if (t !== 'github-issues') { // D3: what intake read, kept in the run's state dir; the run never re-reads the item, so a later edit changes nothing
+    const snap = `# ${i.title}\n\n${i.body ?? ''}\n`;
+    fs.mkdirSync(runDir(run), { recursive: true });
+    fs.writeFileSync(path.join(runDir(run), 'item.md'), snap);
+    meta.itemSha = createHash('sha256').update(snap).digest('hex');
+  }
   // A split child is authored by whoever ran the split; it inherits its parent's (possibly untrusted) author.
   const parent = [...Object.values(derive(read())), ...readArchive()].find((r) => (r.children || []).includes(run));
   if (parent) Object.assign(meta, { origin: parent.id, originAssociation: parent.originAssociation || parent.association });
@@ -96,13 +105,13 @@ export function facts(r: Run): Facts {
 }
 // A git project's diff: the reviewed commit against its fork point from the base (three dots), as GitHub counts a PR's.
 // numstat -z: "added<TAB>deleted<TAB>path<NUL>"; a binary file's "-" counts 0 lines, as on GitHub.
-// --attr-source=<empty tree>: the branch's own .gitattributes can't mark files -diff to count as binary (git 2.40+, else refused).
+// --attr-source=<empty tree>: the branch's own .gitattributes can't mark files -diff to count as binary (git 2.40, GIT_MIN).
 const EMPTY_TREE = { sha1: '4b825dc642cb6eb9a060e54bf8d69288fbee4904', sha256: '6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321' };
 function gitDiff(repo: string, sha: string) {
   const at = projects()[repo]?.path;
   if (!at) throw new Error(`no local clone registered for ${repo}`);
-  const [maj = 0, min = 0] = (/(\d+)\.(\d+)/.exec(git('--version')) ?? []).slice(1).map(Number);
-  if (maj < 2 || (maj === 2 && min < 40)) throw new Error('git 2.40 or later is needed to count a git project\'s diff');
+  const old = gitTooOld(git);
+  if (old) throw new Error(old);
   const empty = git('-C', at, 'rev-parse', '--show-object-format').trim() === 'sha256' ? EMPTY_TREE.sha256 : EMPTY_TREE.sha1;
   const rows = git('-C', at, `--attr-source=${empty}`, 'diff', '--numstat', '-z', '--no-renames', `${baseRef(at, baseBranch(repo, at))}...${sha}`).split('\0').filter(Boolean).map((l) => l.split('\t'));
   const lines = (i: number) => rows.reduce((t, x) => t + (Number(x[i]) || 0), 0);
@@ -136,11 +145,16 @@ export function relabelMerged(run: string) {
 // Spec approval: a trusted "/factory approve" (or "/factory reject") comment after the run started waiting.
 export function approval(run: string) {
   const r = getRun(run);
-  const { repo, n } = parseRun(run);
+  const { repo, n } = parseRun(run), t = trackerOf(repo);
+  if (t !== 'github-issues') { // F approve's record, after the spec it approved (approve.ts)
+    const { asked, said } = pending(r);
+    if (!asked) throw new Error(`${run} is not awaiting approval`);
+    return said ? { decision: said.decision, by: said.by } : { decision: 'waiting', next: `the user runs F approve ${run} in their own terminal` };
+  }
   requireGithub(repo, 'reading spec approval');
   const since = [...r.events].reverse().find((e) => e.status === 'awaiting-approval')?.ts;
   if (!since) throw new Error(`${run} is not awaiting approval`);
-  return approvalVote(trackerFn(trackerOf(repo), 'comments', 'read comments')(adapterCtx(), { repo, id: n }), since);
+  return approvalVote(trackerFn(t, 'comments', 'read comments')(adapterCtx(), { repo, id: n }), since);
 }
 // The latest trusted "/factory approve|reject" posted after `since`. GitHub stamps comments to the whole second and F to the
 // millisecond, so only a comment from a later second counts: one in the same second may predate the spec it would approve.

@@ -108,10 +108,12 @@ test('a git project never calls gh: every GitHub path refuses by name, and its w
   try {
     const run = 'local/notes#1';
     record(run, 'intake', 'started', { title: 'a local item' });
-    // local-first 5a: the change requests and facts come from git; trust waits for the local tracker (5b), so it escalates
+    // local-first 5a: the change requests and facts come from git; the local tracker (5b) has no trust() to read, so it escalates
     assert.deepEqual(openPRs('local/notes'), { base: 'main', open: [], doneBranches: ['main'] });
     assert.deepEqual([facts({ id: run, events: [] }).host, facts({ id: run, events: [] }).trustBroken], ['git', 'tracker "local" cannot tell who wrote an item, so local/notes#1\'s author is unknown and not trusted']);
-    for (const [name, f] of [['intake', () => intake(run)], ['merge', () => merge(run)], ['relabelMerged', () => relabelMerged(run)], ['approval', () => approval(run)], ['postmerge', () => postmerge(run)], ['revert', () => revert(run, 'red')]])
+    assert.throws(() => intake(run), /no item 1 in \.factory\/issues: write one with F item new/, 'intake reads the local tracker (5b), never gh');
+    assert.throws(() => approval(run), /local\/notes#1 is not awaiting approval/, 'approval reads F approve\'s record, never gh');
+    for (const [name, f] of [['merge', () => merge(run)], ['relabelMerged', () => relabelMerged(run)], ['postmerge', () => postmerge(run)], ['revert', () => revert(run, 'red')]])
       assert.throws(f, /local\/notes is a git project, not on GitHub: .* works only for GitHub projects/, name);
     const w = worktree(run);
     assert.deepEqual([w.base, w.branch], ['main', 'factory/issue-1']);

@@ -575,6 +575,20 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
    - `trackers/local.ts` (D3, D4).
    - `.factory/` added to `SENSITIVE`.
    - `F item new` (writes the file and the `.git/info/exclude` entry, D3), and `F approve RUN` for specs: refused inside a harness session, behind the TTY prompt, and refused for a verified host's items (§2.2). Tests for each refusal.
+   - Landed as:
+     - `trackers/local.ts`: `<N>.md` with `title`, `state` and `labels` in the front matter. The body is rendered as
+       GitHub Issues renders it, so dependencies are its `Depends on #N` line (not a `depends-on` key) and the key marker is
+       the same. Ids come from an exclusive create of the next N, not a lock file. No `trust`: `facts()` escalates.
+     - Intake reads the item from the clone, writes what it read to the run's `item.md` and records its sha-256 as `itemSha`.
+     - The check is in core, not only the skill: `record()` refuses `spec passed` on any tracker but GitHub Issues unless
+       an `F approve` record (`spec decided`, which `F event` can't write) follows the latest `awaiting-approval`, carries
+       that spec's sha-256, and hasn't been used. A loop-back to spec asks again. `F approval` reads the record.
+     - The TTY prompt shows the spec and asks for the first 7 characters of its sha-256, on `/dev/tty` (`CONIN$` and
+       `CONOUT$` on Windows), never stdin. Checked: Claude Code's shell in the desktop app has no terminal (ENXIO).
+       Not checked: the `claude` CLI started from a terminal, and Codex (a `shortcut:` in `approve.ts`).
+     - One git minimum, `GIT_MIN` (2.40, for `diff --attr-source`) in `hosts/git.ts`, for merging and for a git project's
+       line count; `F onboard` shows it. Merging needed 2.38 before.
+     - Not here: `F queue` and `F loop` still read GitHub Issues only (they take the tracker from `F new`'s project state).
 5c. **Desktop approval.** (~300 lines)
    - The Electron main-process menu item and native dialog (§2.2 step 3). It writes the same approve event, and the page and HTTP can't reach it.
 6. **SKILL.md stops naming gh.** (~300 lines)
