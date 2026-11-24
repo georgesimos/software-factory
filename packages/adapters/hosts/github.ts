@@ -45,3 +45,44 @@ export function whoami({ gh }: Ctx) {
 
 // GitHub's default branch; a project's own base setting does not apply here.
 export const baseBranch = ({ gh }: Ctx, { repo }: { repo: string }) => gh('repo', 'view', repo, '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name').trim();
+
+// ---- change requests: moved here from core's github.ts and sync.ts (local-first PR 4a), with the same gh calls ----
+
+/** An open PR as GitHub's GraphQL gives it. */
+interface GhPullRequest {
+  number: number; url: string; title: string; headRefName: string; headRefOid: string; authorAssociation: string; author?: { login: string } | null;
+  closingIssuesReferences: { nodes: { number: number }[] };
+}
+// The default branch, the open PRs, and the branches of the last 100 merged or closed ones (what sync and intake read).
+export function listChangeRequests({ gh }: Ctx, { repo }: { repo: string }) {
+  const [o, n] = repo.split('/');
+  const q = 'query($o:String!,$n:String!){repository(owner:$o,name:$n){defaultBranchRef{name} pullRequests(states:OPEN,first:100){nodes{number url title headRefName headRefOid authorAssociation author{login} closingIssuesReferences(first:20){nodes{number}}}} done: pullRequests(states:[MERGED,CLOSED],last:100){nodes{headRefName}}}}';
+  const r: { defaultBranchRef: { name: string }; pullRequests: { nodes: GhPullRequest[] }; done?: { nodes: { headRefName: string }[] } | null } = JSON.parse(gh('api', 'graphql', '-f', `query=${q}`, '-f', `o=${o}`, '-f', `n=${n}`)).data.repository;
+  return {
+    base: r.defaultBranchRef.name, doneBranches: (r.done?.nodes || []).map((x) => x.headRefName),
+    open: r.pullRequests.nodes.map((p) => ({ id: String(p.number), url: p.url, title: p.title, branch: p.headRefName, headSha: p.headRefOid,
+      closes: p.closingIssuesReferences.nodes.map((x) => String(x.number)), author: p.author?.login, association: p.authorAssociation })),
+  };
+}
+// One PR by number, as sync's human-merge check (#21) reads it. Throws when gh fails: the caller reports it.
+// shortcut: no headSha (headRefOid) yet, so the gh call is the one sync always made; add it when a caller reads it.
+export function changeRequest({ gh }: Ctx, { repo, id }: { repo: string; id: string }) {
+  const p: { state: string; mergedAt: string | null; mergedBy?: { login: string } | null; mergeCommit?: { oid: string } | null; headRefName: string; isCrossRepository?: boolean } =
+    JSON.parse(gh('pr', 'view', id, '-R', repo, '--json', 'state,mergedAt,mergedBy,mergeCommit,headRefName,isCrossRepository'));
+  const state = ({ OPEN: 'open', MERGED: 'merged', CLOSED: 'closed' } as const)[p.state as 'OPEN'] ?? 'unknown';
+  return { state, approval: null, branch: p.headRefName, fork: p.isCrossRepository, mergedAt: p.mergedAt, mergedBy: p.mergedBy?.login, mergeSha: p.mergeCommit?.oid }; // approval: GitHub merges on the gates alone (D2)
+}
+// Marks the PR ready, then squash-merges exactly sha (--match-head-commit). A refusal throws, as it always has.
+export function merge({ gh }: Ctx, { repo, id, sha }: { repo: string; id: string; sha: string }) {
+  gh('pr', 'ready', id, '-R', repo);
+  gh('pr', 'merge', id, '-R', repo, '--squash', '--delete-branch', '--match-head-commit', sha);
+  return { merged: true };
+}
+// Opens a PR from an already pushed branch; labels must exist (sync creates the factory's).
+export function openChangeRequest({ gh }: Ctx, { repo, branch, base, title, body, labels = [] }: { repo: string; branch: string; base: string; title: string; body: string; labels?: string[] }) {
+  const url = gh('pr', 'create', '-R', repo, '--base', base, '--head', branch, '--title', title, '--body', body, ...labels.flatMap((l) => ['--label', l])).trim();
+  return { id: url, url };
+}
+// What the published page's scrub removes (any GitHub URL), and GitHub's token shapes for its leak check.
+export const publicUrl = /(?:https?:\/\/)?(?:www\.)?github\.com[/:][^\s"\\,]*/gi; // JSON text: \n is two characters, so stop at '\' too
+export const secretPatterns = [/gh[pousr]_[A-Za-z0-9]{30,}/, /github_pat_\w{30,}/];

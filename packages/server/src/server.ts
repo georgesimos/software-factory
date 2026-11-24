@@ -13,6 +13,7 @@ import { metrics } from '../../core/src/gate.ts';
 import { fCmd, onboardConfig, onboardState, readOnboard, setShip } from '../../core/src/onboard.ts';
 import { projects, wtInfo } from '../../core/src/workspace.ts';
 import { remoteParts } from '../../core/src/remote.ts';
+import { builtin as builtinHosts } from '../../adapters/hosts/index.ts';
 import { HOST_ID, dashboard, read, readArchive, runDir, sessionsFile, stateDir } from '../../core/src/log.ts';
 import { applyPreset, readSkills, setSkill, skillsData } from '../../core/src/skills.ts';
 import { sync } from '../../core/src/sync.ts';
@@ -576,7 +577,8 @@ export function residue(json: string, raw: RawPage, me = machine()) {
   // git projects' origins, in any form: host, an optional :port, then / or : and the path (git.corp:2222/team/app, git.corp:team/app)
   const remotes = Object.values(me.projects).flatMap((p) => { const r = remoteParts(p?.remote); return r ? [String.raw`(?<![\w.-])${esc(r.host)}(?::\d+)?[/:]${esc(r.path)}(?![\w-])`] : []; });
   if (remotes.length && new RegExp(remotes.join('|'), 'i').test(json)) left.push('a remote that is not on GitHub');
-  let text = json.replace(/(?:https?:\/\/)?(?:www\.)?github\.com[/:][^\s"\\,]*/gi, ''); // JSON text: \n is two characters, so stop at '\' too
+  let text = json;
+  for (const h of Object.values(builtinHosts)) if (h.publicUrl) text = text.replace(h.publicUrl, ''); // a public host's URLs (GitHub's) name nothing local
   for (const id of ids) text = text.replace(new RegExp(String.raw`(?<![\w.\/\\-])${esc(id)}(?![\w.-])`, 'g'), '');
   if (me.user.length >= 3 && new RegExp(String.raw`(?:\\\\|\/)${esc(me.user)}(?![\w.-])`, 'i').test(text)) left.push('the login name in a path');
   const short = me.host.split('.')[0]!, hosts: string[] = [];
@@ -613,8 +615,8 @@ export function localLeft(v: unknown): boolean {
   return Object.values(v).some(localLeft);
 }
 const DATA_TAG = /(<script type="application\/json" id="data">)([^<]*)(<\/script>)/;
-// GitHub, Anthropic and OpenAI key shapes, and an F ui URL with its token.
-export const SECRET = /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_\w{30,}|sk-(?:ant-)?[\w-]{30,})|127\.0\.0\.1:\d+\/?\?t=[\w-]{20,}/;
+// The hosts' token shapes (GitHub's), Anthropic and OpenAI key shapes, and an F ui URL with its token.
+export const SECRET = new RegExp(String.raw`\b(?:${[...Object.values(builtinHosts).flatMap((h) => h.secretPatterns ?? []).map((r) => r.source), String.raw`sk-(?:ant-)?[\w-]{30,}`].join('|')})|127\.0\.0\.1:\d+\/?\?t=[\w-]{20,}`);
 export function artifact(html = page({}, { sheet: true, publish: true })) {
   // Opening tags and metas come before the inlined script, so their first match is the tag; closing tags come after it, so their last.
   for (const [re, last] of [[/^<!doctype html>\s*/i], [/<html[^>]*>\s*/i], [/<head>\s*/i], [/<meta charset="utf-8">\s*/i], [/<meta name="viewport"[^>]*>\s*/i],

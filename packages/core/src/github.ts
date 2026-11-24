@@ -5,7 +5,7 @@ import { decide, localResult } from './gate.ts';
 import { ciBroken, ciChecks, ciOf } from './ci.ts';
 import { derive, getRun } from './derive.ts';
 import { exec } from './platform.ts';
-import { baseBranch, git, projects, requireGithub } from './workspace.ts';
+import { baseBranch, git, hostFn, hostOf, projects, requireGithub } from './workspace.ts';
 import { io, read, readArchive, record, runDir } from './log.ts';
 import { shipTrack } from './ship.ts';
 import { rules } from './rules.ts';
@@ -16,16 +16,6 @@ import type { Deploy, Run } from './types.ts';
 interface GhUser { login: string }
 interface GhIssue { pull_request?: unknown; state: string; title: string; html_url: string; user: GhUser; author_association: string; body?: string | null }
 export interface GhComment { user: GhUser; author_association: string; created_at: string; body?: string | null }
-/** An open PR from openPRs()'s GraphQL query. */
-export interface GhPullRequest {
-  number: number; url: string; title: string; headRefName: string; headRefOid: string; authorAssociation: string; author?: GhUser | null;
-  closingIssuesReferences: { nodes: { number: number }[] };
-}
-interface GhRepository {
-  defaultBranchRef: { name: string };
-  pullRequests: { nodes: GhPullRequest[] };
-  done?: { nodes: { headRefName: string }[] } | null;
-}
 /** postmerge(): CI on the merge commit, and its production deploys. */
 // SKILL.md §7 says what to do on each (test/ci.test.mjs checks it names them all).
 export const POSTMERGE_STATES = ['no-pr', 'not-merged', 'skipped', 'unknown', 'pending', 'none', 'pass', 'fail'] as const;
@@ -45,16 +35,16 @@ export function intake(run: string) {
   const done = derive(read())[run] || readArchive().find((a) => a.id === run);
   if (done?.humanMerge && !done.reverted) throw new Error(`${run} was escalated, then merged by ${done.humanMerge.by || 'a human'}: it needs a human, not a new run`);
   // Exact links only (GitHub closing references); the factory's own branch is a resume, not a clash.
-  const { prs } = openPRs(repo);
+  const prs = openPRs(repo).open;
   const inProgress = prs
-    .filter((p) => p.headRefName !== `factory/issue-${n}` && p.closingIssuesReferences.nodes.some((x) => String(x.number) === n))
+    .filter((p) => p.branch !== `factory/issue-${n}` && p.closes.includes(n))
     .map((p) => p.url);
   if (inProgress.length) return { inProgress }; // nothing recorded: someone is already on it
   const i: GhIssue = JSON.parse(gh('api', `repos/${repo}/issues/${n}`));
   if (i.pull_request) return { notAnIssue: `#${n} is a pull request` };
   if (i.state !== 'open') return { notAnIssue: `#${n} is ${i.state}` };
   // Advisory only: PRs naming the issue in their title without a formal closing link.
-  const mentions = prs.filter((p) => p.headRefName !== `factory/issue-${n}` && new RegExp(`(^|[^\\w])#${n}(?!\\d)`).test(p.title)).map((p) => ({ url: p.url, title: p.title }));
+  const mentions = prs.filter((p) => p.branch !== `factory/issue-${n}` && new RegExp(`(^|[^\\w])#${n}(?!\\d)`).test(p.title)).map((p) => ({ url: p.url, title: p.title }));
   const comments: GhComment[] = gh('api', '--paginate', `repos/${repo}/issues/${n}/comments`, '--jq', '.[]').split('\n').filter(Boolean).map((l) => JSON.parse(l));
   const meta: { title: string; url: string; author: string; association: string; origin?: string; originAssociation?: string | undefined } = { title: i.title, url: i.html_url, author: i.user.login, association: i.author_association };
   // A split child is authored by whoever ran the split; it inherits its parent's (possibly untrusted) author.
@@ -76,12 +66,10 @@ export function intakeFixture(run: string, n: string) {
   return { ...meta, state: 'open', body: fx.issue.body, mentions: [], comments: fx.comments || [], ignoredComments: 0, dryRun: true };
 }
 export const adapterCtx = () => ({ gh, git }); // what host and tracker adapters get: the same stubbable gh and git
-export function openPRs(repo: string): { base: string; prs: GhPullRequest[]; doneBranches: string[] } {
+/** The project's open change requests, from its host. */
+export function openPRs(repo: string) {
   requireGithub(repo, 'listing open pull requests');
-  const [o, n] = repo.split('/');
-  const q = 'query($o:String!,$n:String!){repository(owner:$o,name:$n){defaultBranchRef{name} pullRequests(states:OPEN,first:100){nodes{number url title headRefName headRefOid authorAssociation author{login} closingIssuesReferences(first:20){nodes{number}}}} done: pullRequests(states:[MERGED,CLOSED],last:100){nodes{headRefName}}}}';
-  const r: GhRepository = JSON.parse(gh('api', 'graphql', '-f', `query=${q}`, '-f', `o=${o}`, '-f', `n=${n}`)).data.repository;
-  return { base: r.defaultBranchRef.name, prs: r.pullRequests.nodes, doneBranches: (r.done?.nodes || []).map((x) => x.headRefName) };
+  return hostFn(hostOf(repo), 'listChangeRequests', 'list change requests')(adapterCtx(), { repo });
 }
 // Reads CI + diff facts from GitHub so the merge decision never depends on typed-in numbers.
 export function facts(r: Run): Facts {
@@ -113,8 +101,7 @@ export function merge(run: string) {
   record(run, 'approve', 'decided', { ...d, facts: f });
   if (d.action !== 'merge') return { merged: false, ...d };
   if (!r.reviewedSha) throw new Error('no reviewed commit recorded; refusing to merge');
-  gh('pr', 'ready', r.pr as string, '-R', repo); // decide() escalates a run with no PR
-  gh('pr', 'merge', r.pr as string, '-R', repo, '--squash', '--delete-branch', '--match-head-commit', r.reviewedSha);
+  hostFn(hostOf(repo), 'merge', 'merge')(adapterCtx(), { repo, id: r.pr as string, sha: r.reviewedSha }); // decide() escalates a run with no PR
   record(run, 'approve', 'merged');
   relabelMerged(run);
   return { merged: true, ...d };
@@ -187,8 +174,8 @@ export function revert(run: string, reason: string) {
   try {
     git('-C', wt, 'revert', '--no-edit', pm.sha);
     git('-C', wt, 'push', '-q', '-u', 'origin', branch);
-    const url = gh('pr', 'create', '-R', repo, '--base', base, '--head', branch, '--title', `Revert: ${r.title}`,
-      '--body', `Reverts ${r.pr} (#${n}): ${reason}\n\nOpened by the software factory. Needs a human to merge.`, '--label', 'factory:needs-human').trim();
+    const url = hostFn(hostOf(repo), 'openChangeRequest', 'open a change request')(adapterCtx(), { repo, branch, base, title: `Revert: ${r.title}`,
+      body: `Reverts ${r.pr} (#${n}): ${reason}\n\nOpened by the software factory. Needs a human to merge.`, labels: ['factory:needs-human'] }).id;
     record(run, 'approve', 'reverted', { pr: url, reason });
     return { pr: url };
   } finally {
