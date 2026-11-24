@@ -32,13 +32,13 @@ export const RULES: Record<string, [check: (v: unknown) => boolean, want: string
 };
 export const RULE_FIELDS = ['value', 'reason', 'setBy', 'setAt', 'until'];
 export const LOGIN = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/;
-export const isDay = (s: unknown) => { const t = String(s || ''); return /^\d{4}-\d{2}-\d{2}$/.test(t) && !isNaN(Date.parse(t)) && new Date(t).toISOString().startsWith(t); }; // t: what test(), Date.parse() and startsWith() made of s anyway
+export const isDay = (s: unknown): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s)) && new Date(s).toISOString().startsWith(s); // a string: ["2026-11-01"] read as one
 export const dayOf = (now = Date.now()) => new Date(now).toISOString().slice(0, 10); // UTC; a rule applies through its whole `until` day
 export const isGuideKey = (k: string) => k === '*' || isStepKey(k) || /^review\.[a-z][a-z0-9-]{0,30}$/.test(k); // review.<extra axis> too
 export function checkRules(v: unknown, at: string): void {
   if (!isObj(v)) throw new Error(`${at}: must be an object of rules`);
   for (const [k, x] of Object.entries(v)) {
-    const rule = RULES[k];
+    const rule = Object.hasOwn(RULES, k) ? RULES[k] : undefined; // own: "constructor" is not a rule
     if (!rule) throw new Error(`${at}: unknown rule "${k}" (${Object.keys(RULES).join('|')}). Trusted authors, sensitive paths, required axes and the merge checks are not configurable`);
     if (!isObj(x)) throw new Error(`${at}.${k}: must be {value, reason, setBy, setAt, until?}`);
     const bad = Object.keys(x).filter((f) => !RULE_FIELDS.includes(f));
@@ -99,7 +99,7 @@ export function setRule(scope: string, key: string, raw: unknown, { reason, unti
   let value: unknown = raw;
   if (step !== null) s.guide = { ...s.guide, [step]: String(raw ?? '') };
   else {
-    if (!RULES[key]) checkRules({ [key]: {} }, `rules ${scope}`); // throws the unknown-rule message
+    if (!Object.hasOwn(RULES, key)) checkRules({ [key]: {} }, `rules ${scope}`); // throws the unknown-rule message
     if (key === 'artifact' && scope === 'default') throw new Error('artifact is a per-repo opt-in: set it on owner/repo, not default');
     if (['diffCap', 'project.budgetUsd', 'project.maxIssuesPerSession'].includes(key)) value = Number(raw);
     if (key === 'checks.commands') { try { value = JSON.parse(String(raw)); } catch { value = [raw]; } } // JSON.parse makes a string of raw anyway
@@ -116,7 +116,7 @@ export function unsetRule(scope: string, key: string, { reason }: { reason?: str
   checkScope(scope);
   const cfg = readSkills(), s: ScopeConfig = { ...cfg[scope] }, step = key.startsWith('guide.') ? key.slice(6) : null;
   const bag = step !== null ? 'guide' : 'rules', k = step ?? key, cur = s[bag];
-  if (!cur || !(k in cur)) throw new Error(`no ${bag === 'guide' ? 'guidance' : 'rule'} "${key}" set for ${scope}`);
+  if (!cur || !Object.hasOwn(cur, k)) throw new Error(`no ${bag === 'guide' ? 'guidance' : 'rule'} "${key}" set for ${scope}`);
   const setBy = whoami();
   const without = <T,>(m: Record<string, T> = {}) => { const { [k]: _gone, ...left } = m; return left; }; // a copy without k
   if (bag === 'guide') s.guide = without(s.guide); else s.rules = without(s.rules);
