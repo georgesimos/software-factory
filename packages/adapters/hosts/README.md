@@ -53,7 +53,7 @@ there is one, with a plain push. `merge` squashes exactly the reviewed sha onto 
 A refusal (a moved or protected base, a conflict, a dirty checkout) returns `merged: false` with what to do next. It is
 never retried or forced, and `test/githost.test.mjs` greps this file for force flags. When the push is refused, merge at
 the host's own UI, then run `F close RUN --merged <sha>` from your own terminal. That records the human merge once the sha
-is on the base.
+is on the base and contains the reviewed commit.
 
 ## Test
 

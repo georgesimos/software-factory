@@ -93,28 +93,41 @@ test('no remote: a clean checked-out base fast-forwards with its files; a dirty 
   assert.deepEqual([ff.merged, /^main moved while merging/.test(ff.detail), g(d, 'rev-parse', 'main'), g(d, 'status', '--porcelain')], [false, true, moved2, '']);
 });
 
-test('F close RUN --merged <sha>: yours only, git projects only, the sha must be on the base, the run escalated', () => {
+test('F close RUN --merged <sha>: yours only, git projects only, the sha on the base and containing the reviewed commit, the run escalated', () => {
   const { bare, d } = remote('c1');
   sync('local/c1', d);
-  const R = 'local/c1#4';
+  const R = 'local/c1#4', reviewed = work(d, 4, 'm.txt'); // the factory's branch: m.txt = "4"
+  g(d, 'push', '-q', 'origin', 'factory/issue-4');
   record(R, 'intake', 'started', { title: 't' });
-  // the user squash-merged at the remote's own UI
   const other = path.join(root, 'c1-other'); run('clone', '-q', bare, other);
-  const merged = commit(other, 'm.txt', 'm\n', 'squash of issue 4'); g(other, 'push', '-q', 'origin', 'main');
+  const onBase = (file, text, msg) => { g(other, 'pull', '-q'); const sha = commit(other, file, text, msg); g(other, 'push', '-q', 'origin', 'main'); return sha; };
+  const init = g(bare, 'rev-parse', 'main'), unrelated = onBase('y.txt', 'y\n', 'unrelated'); // on the base, without the change
+  // the user squash-merged at the remote's own UI: the same change as the reviewed commit, one new commit on main
+  const squash = onBase('m.txt', '4\n', 'issue 4 (squash)');
   process.env.CLAUDECODE = '1';
-  try { assert.throws(() => closeMerged(R, merged), /recording a merge must come from you, not from an agent session/); } finally { delete process.env.CLAUDECODE; }
-  assert.throws(() => closeMerged('acme/app#1', merged), /acme\/app is on GitHub: F sync records a human merge there itself/);
+  try { assert.throws(() => closeMerged(R, squash), /recording a merge must come from you, not from an agent session/); } finally { delete process.env.CLAUDECODE; }
+  assert.throws(() => closeMerged('acme/app#1', squash), /acme\/app is on GitHub: F sync records a human merge there itself/);
   assert.throws(() => closeMerged(R, 'nope'), /"nope" is not a commit sha/);
-  assert.throws(() => closeMerged(R, commit(other, 'x.txt', 'x\n')), /is not on main at origin in /, 'a commit that never reached the base');
-  assert.throws(() => closeMerged(R, merged), /local\/c1#4 is not escalated/);
+  const stray = commit(other, 'x.txt', 'x\n'); g(other, 'reset', '-q', '--hard', 'HEAD~1');
+  assert.throws(() => closeMerged(R, stray), /is not on main at origin in /, 'a commit that never reached the base');
+  assert.throws(() => closeMerged(R, squash), /local\/c1#4 is not escalated/);
   record(R, 'approve', 'escalated', { reasons: ['push to main refused'] });
-  assert.deepEqual(closeMerged(R, merged.slice(0, 10)), { run: R, merged: true, sha: merged });
+  assert.throws(() => closeMerged(R, squash), /local\/c1#4 has no reviewed commit/);
+  record(R, 'review', 'started', { axes: ['code'], sha: reviewed });
+  // on the base, but without the reviewed change: commits before the squash, and a later one that changed it again
+  const changed = onBase('m.txt', 'edited at the remote\n', 'issue 4, changed');
+  for (const sha of [init, unrelated, changed]) assert.throws(() => closeMerged(R, sha), new RegExp(`${sha} does not contain the reviewed commit ${reviewed.slice(0, 7)}`), sha);
+  assert.equal(derive(read())[R].outcome, 'escalated', 'every refusal leaves the run escalated');
+  assert.deepEqual(closeMerged(R, squash.slice(0, 10)), { run: R, merged: true, sha: squash });
   const r = derive(read())[R];
-  assert.deepEqual([r.outcome, r.humanMerge.sha], ['merged', merged]);
+  assert.deepEqual([r.outcome, r.humanMerge.sha], ['merged', squash]);
   const F = (...a) => execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FACTORY_DIR: io.dir } });
   assert.throws(() => F('close', R), /usage: close <owner\/repo#N> --merged <sha>/);
-  const R2 = 'local/c1#5';
-  record(R2, 'intake', 'started', { title: 't' }); record(R2, 'approve', 'escalated', { reasons: ['x'] });
-  assert.deepEqual(JSON.parse(F('close', R2, '--merged', merged)), { run: R2, merged: true, sha: merged });
-  assert.equal(derive(read())[R2].humanMerge.sha, merged);
+  // a plain merge commit (the reviewed commit is its ancestor) also contains it; through the CLI
+  const R2 = 'local/c1#5', reviewed2 = work(d, 5); g(d, 'push', '-q', 'origin', 'factory/issue-5');
+  record(R2, 'intake', 'started', { title: 't' }); record(R2, 'review', 'started', { axes: ['code'], sha: reviewed2 }); record(R2, 'approve', 'escalated', { reasons: ['x'] });
+  g(other, 'pull', '-q'); g(other, 'fetch', '-q', 'origin', 'factory/issue-5'); g(other, 'merge', '-q', '--no-ff', '--no-edit', 'FETCH_HEAD'); g(other, 'push', '-q', 'origin', 'main');
+  const mergeCommit = g(other, 'rev-parse', 'main');
+  assert.deepEqual(JSON.parse(F('close', R2, '--merged', mergeCommit)), { run: R2, merged: true, sha: mergeCommit });
+  assert.equal(derive(read())[R2].humanMerge.sha, mergeCommit);
 });

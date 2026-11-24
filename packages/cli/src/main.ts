@@ -257,7 +257,7 @@ export async function main(argv: string[]) {
                                           idea-to-app: record the idea, validate PLAN.md + issues.json, then (with --yes) create the private repo + scaffold
   issues create <owner/repo> <file.json> [--yes]  validate and preview an issue batch; with --yes create it (idempotent by key)
   project <owner/repo>                    idea-to-app status: plan, milestones, next issue, dependency order, burn, loop
-  close <owner/repo#N> --merged <sha>  a git project's escalated run you merged yourself (at the remote's UI): records the merge; the sha must be on the base; yours only, never an agent's
+  close <owner/repo#N> --merged <sha>  a git project's escalated run you merged yourself (at the remote's UI): records the merge; the sha must be on the base and contain the reviewed commit; yours only, never an agent's
   project set <owner/repo> host|ci|base <value>|--unset [--reason "…"]  a project's host (github|git), CI provider (github-actions|local|none) or base branch (git hosts; on origin when it has one; --unset: the host's own); yours only, never an agent's; a relaxing change needs --reason, and a verified login on a GitHub project
   retire <owner/repo> --reason "<why>"     hide an idea that never got a repo (a leaked fixture) with a recorded event; the log is never rewritten
   loop   <owner/repo>                     next issue to build, or stop (first escalation, project budget, session cap, empty queue)

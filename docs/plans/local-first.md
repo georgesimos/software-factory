@@ -502,8 +502,8 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
      projects.
    - A temp-repo contract test: a moved base makes the plain push fail as non-fast-forward and leaves the remote unchanged; no-remote `update-ref` CAS; no force flag anywhere (§1.2).
    - Landed as: `openChangeRequest`, `changeRequest` and `merge` on `hosts/git.ts` (see its README section), and `F close
-     RUN --merged <sha>` (`closeMerged` in `projectset.ts`: human-only, git projects only, the sha must be on the base, the
-     run must be escalated; it records the same `approve merged` event as sync's GitHub human-merge). A protected base is
+     RUN --merged <sha>` (`closeMerged` in `projectset.ts`: human-only, git projects only, the sha must be on the base and
+     contain the run's reviewed commit (merging that commit into it changes nothing), the run must be escalated; it records the same `approve merged` event as sync's GitHub human-merge). A protected base is
      the refused push: its detail says to merge at the host and then run `F close`. `test/githost.test.mjs` covers:
      - the no-force grep, and every `update-ref` comparing against the sha it saw;
      - a moved base during the push, which leaves the remote untouched;

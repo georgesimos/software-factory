@@ -77,7 +77,7 @@ export function setProject(repo: string, key: string, value: string | null, { re
 
 // F close RUN --merged <sha> (local-first §1.2, git host): a change request merged outside the factory, say a squash at the
 // remote's own review UI, which git can't see. Yours only, like F project set: it records a merge. The sha must be on the
-// base (fetched from origin when there is one); the run must be escalated, as sync's GitHub human-merge record requires.
+// base (fetched from origin when there is one) and contain the reviewed commit; the run must be escalated, as sync's GitHub human-merge record requires.
 export function closeMerged(run: string, sha: string) {
   humanOnly('recording a merge');
   const { repo } = parseRun(run), p = projects()[repo];
@@ -92,7 +92,17 @@ export function closeMerged(run: string, sha: string) {
   catch { throw new Error(`${sha} is not on ${base}${origin ? ' at origin' : ''} in ${p.path}: give the merge commit on ${base}`); }
   // shortcut: any commit on the base passes, even one older than the escalation (GitHub's sync checks mergedAt); git has no
   // trustworthy merge time. Upgrade when the git host records its change requests' history (5a's sync for git projects).
-  if (getRun(run).outcome !== 'escalated') throw new Error(`${run} is not escalated: only an escalated run is merged by hand`);
+  const r = getRun(run);
+  if (r.outcome !== 'escalated') throw new Error(`${run} is not escalated: only an escalated run is merged by hand`);
+  if (!r.reviewedSha) throw new Error(`${run} has no reviewed commit: nothing to check the merge against`);
+  // The merge must contain the reviewed commit: merging it into the merge commit changes nothing. That holds for a
+  // fast-forward, a merge commit and a squash of exactly what was reviewed; a commit missing any reviewed change fails.
+  let contains = false;
+  try {
+    const t = git('-C', p.path, 'merge-tree', '--write-tree', '--no-messages', full, r.reviewedSha).trim().split('\n')[0];
+    contains = t === git('-C', p.path, 'rev-parse', `${full}^{tree}`).trim();
+  } catch { /* a conflict or an unknown reviewed commit: not contained */ }
+  if (!contains) throw new Error(`${sha} does not contain the reviewed commit ${r.reviewedSha.slice(0, 7)}: give the commit that merged it`);
   record(run, 'approve', 'merged', { by: 'human', mergedBy: whoami('recording a merge').by, sha: full });
   return { run, merged: true, sha: full };
 }
