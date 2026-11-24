@@ -5,11 +5,12 @@ import { dashboard } from './log.ts';
 import { shipTrack } from './ship.ts';
 import { read, record, sessionsFile, stateDir } from './log.ts';
 import { derive } from './derive.ts';
-import { gh, openPRs, relabelMerged } from './github.ts';
-import { baseBranch, baseRef, git, hostOf, ls, originUrl, projects, projectsFile } from './workspace.ts';
+import { adapterCtx, gh, openPRs, relabelMerged } from './github.ts';
+import { baseBranch, baseRef, git, hostFn, hostOf, ls, originUrl, projects, projectsFile } from './workspace.ts';
 import { cloneId, hostFor, isGithubRemote, normRemote, remoteParts, withoutUserinfo } from './remote.ts';
 import { harnesses } from '../../adapters/harnesses/index.ts';
 import type { FactoryEvent, Project, Session } from './types.ts';
+import type { Host } from '../../adapters/hosts/index.ts';
 
 /** Agent sessions on one branch, from the harnesses' local logs. */
 export interface BranchSessions { agents: string[]; last: string; sessions: (Session & { last: string })[] }
@@ -126,7 +127,7 @@ export function sync(repo: string, repoPath?: string) {
   const byPr = new Map(runs.filter((r) => r.pr).map((r) => [r.pr, r]));
   const byBranch = new Map(runs.filter((r) => r.branch).map((r) => [r.branch, r]));
   // a git project: no GitHub calls; nothing is open on a host, and the base comes from the clone (a local ref without a remote)
-  const { base, prs, doneBranches } = onGithub ? openPRs(repo) : { base: '', prs: [], doneBranches: [] };
+  const { base, open: prs, doneBranches } = onGithub ? openPRs(repo) : { base: '', open: [], doneBranches: [] };
   const sessions = sessionsByBranch(repo, repoPath);
   const ours = (b: string) => b.startsWith('factory/'); // the factory's own branches are never imported
   const added: string[] = [], attached: string[] = [], closed: string[] = [];
@@ -135,24 +136,24 @@ export function sync(repo: string, repoPath?: string) {
     record(id, 'intake', 'passed', { summary });
   };
   for (const p of prs) {
-    if (byPr.has(p.url) || ours(p.headRefName)) continue;
-    const prior = byBranch.get(p.headRefName);
+    if (byPr.has(p.url) || ours(p.branch)) continue;
+    const prior = byBranch.get(p.branch);
     if (prior) { // a session-only run whose branch now has a PR
       if (!prior.pr && prior.outcome === 'in-progress') { record(prior.id, 'build', 'passed', { pr: p.url }); attached.push(prior.id); }
       continue;
     }
-    const s = sessions[p.headRefName];
+    const s = sessions[p.branch];
     const source = s ? s.agents.join('+') : 'none';
-    const id = `${repo}#${p.number}`; // PRs and issues share GitHub's number space
-    importRun(id, { title: p.title, url: p.url, author: p.author?.login, association: p.authorAssociation, source, issues: p.closingIssuesReferences.nodes.map((x) => x.number) },
+    const id = `${repo}#${p.id}`; // PRs and issues share GitHub's number space
+    importRun(id, { title: p.title, url: p.url, author: p.author, association: p.association, source, issues: p.closes.map(Number) },
       `Imported open PR${s ? ` from a ${source} session` : ' (no local session found)'}; not built by the factory.`);
     record(id, 'build', 'started');
-    record(id, 'build', 'passed', { pr: p.url, branch: p.headRefName });
+    record(id, 'build', 'passed', { pr: p.url, branch: p.branch });
     added.push(id);
   }
   // shortcut: only local branches count as session work; a session on a remote-only branch is skipped until it has a PR.
   const unmerged = new Set(git('-C', repoPath, 'branch', '--no-merged', baseRef ?? `origin/${base}`, '--format=%(refname:short)').split('\n').map((b) => b.trim()).filter(Boolean));
-  const openHeads = new Set(prs.map((p) => p.headRefName));
+  const openHeads = new Set(prs.map((p) => p.branch));
   const done = new Set(doneBranches); // squash-merged branches still look unmerged to git
   const recent = new Date(Date.now() - 14 * 864e5).toISOString();
   for (const [branch, s] of Object.entries(sessions)) {
@@ -188,11 +189,11 @@ export function sync(repo: string, repoPath?: string) {
     if (!onGithub || r.outcome !== 'escalated' || r.imported || !m || m[1] !== repo || open.has(r.pr as string)) continue; // imported runs: not the factory's work
     const decided = r.events.findLast((e) => e.stage === 'approve' && e.status === 'decided');
     const since = decided?.action === 'escalate' ? decided.ts : r.events.findLast((e) => e.stage === 'approve' && e.status === 'escalated')?.ts;
-    let p: { state: string; mergedAt: string; mergedBy?: { login: string } | null; mergeCommit?: { oid: string } | null; headRefName: string; isCrossRepository?: boolean };
-    try { p = JSON.parse(gh('pr', 'view', m[2] as string, '-R', repo, '--json', 'state,mergedAt,mergedBy,mergeCommit,headRefName,isCrossRepository')); }
+    let p: ReturnType<NonNullable<Host['changeRequest']>>;
+    try { p = hostFn(hostOf(repo), 'changeRequest', 'look up a change request')(adapterCtx(), { repo, id: m[2] as string }); }
     catch (e: any) { humanMergeErrors.push({ run: r.id, error: String(e?.stderr || e?.message || e).trim().split('\n')[0] as string }); continue; }
-    if (p.state !== 'MERGED' || p.isCrossRepository !== false || p.headRefName !== `factory/issue-${r.id.split('#')[1]}` || !(Date.parse(p.mergedAt) > Date.parse(since as string))) continue; // a fork's factory/issue-N branch never counts; no since: NaN, never later, so skipped
-    record(r.id, 'approve', 'merged', { by: 'human', mergedBy: p.mergedBy?.login || null, sha: p.mergeCommit?.oid || null });
+    if (p.state !== 'merged' || p.fork !== false || p.branch !== `factory/issue-${r.id.split('#')[1]}` || !(Date.parse(p.mergedAt as string) > Date.parse(since as string))) continue; // a fork's factory/issue-N branch never counts; no since: NaN, never later, so skipped
+    record(r.id, 'approve', 'merged', { by: 'human', mergedBy: p.mergedBy || null, sha: p.mergeSha || null });
     relabelMerged(r.id);
     humanMerged.push(r.id);
   }
@@ -202,7 +203,7 @@ export function sync(repo: string, repoPath?: string) {
     if (r.branch && sessions[r.branch]) prev[r.id] = (sessions[r.branch] as BranchSessions).sessions.sort((a, b) => b.last.localeCompare(a.last)).slice(0, 5);
   }
   fs.writeFileSync(links, JSON.stringify(prev, null, 2));
-  const head = new Map(prs.map((p) => [p.url, p.headRefOid])); // deploy state of each in-progress run's PR head (finished runs aren't polled)
+  const head = new Map(prs.map((p) => [p.url, p.headSha])); // deploy state of each in-progress run's PR head (finished runs aren't polled)
   const ship = shipTrack(Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') && r.outcome === 'in-progress' && head.get(r.pr as string)).map((r) => ({ run: r.id, repo, sha: head.get(r.pr as string), path: repoPath })));
   dashboard.render();
   return { repo, path: repoPath, added, attached, closed, humanMerged, ...(humanMergeErrors.length && { humanMergeErrors }), ...(ship && { ship }), ...(note && { note }) };

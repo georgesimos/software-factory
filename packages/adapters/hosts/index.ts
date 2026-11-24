@@ -17,7 +17,21 @@ export interface Host {
   whoami?(ctx: Ctx, opts: { user: () => string }): { login: string; verified: boolean } | null;
   /** The branch a project's runs start from and merge into. base: the project's own setting, when it has one. */
   baseBranch?(ctx: Ctx, opts: { repo: string; path: string; base?: string }): string;
+  /** The base, the open change requests, and the branches of recently merged or closed ones (sync and intake read these). */
+  listChangeRequests?(ctx: Ctx, opts: { repo: string; path?: string }): { base: string; open: ChangeRequest[]; doneBranches: string[] };
+  /** One change request by id. approval: a merge approval on its head (null where the host's own gates decide). */
+  changeRequest?(ctx: Ctx, opts: { repo: string; path?: string; id: string }): { state: 'open' | 'merged' | 'closed' | 'unknown'; headSha?: string | null;
+    approval: { by: string; via: string; sha: string } | null; branch?: string; fork?: boolean; mergedAt?: string | null; mergedBy?: string; mergeSha?: string };
+  /** Merges exactly sha into the base; merged:false (or a throw) when the host refuses. */
+  merge?(ctx: Ctx, opts: { repo: string; path?: string; id: string; sha: string; base?: string }): { merged: boolean; sha?: string; detail?: string };
+  /** Opens a change request from a branch already pushed. */
+  openChangeRequest?(ctx: Ctx, opts: { repo: string; path?: string; branch: string; base: string; title: string; body: string; labels?: string[] }): { id: string; url?: string };
+  /** What the published page's scrub removes, and the host's token shapes for its leak check (server.ts). */
+  publicUrl?: RegExp;
+  secretPatterns?: RegExp[];
 }
+/** An open change request, as listChangeRequests gives it. closes: the issue ids it closes. */
+export interface ChangeRequest { id: string; url?: string; title: string; branch: string; headSha: string; closes: string[]; author?: string; association?: string }
 
 export const REQUIRED = ['authStatus', 'createRepo', 'pushInitial'];
 const HERE = path.dirname(fileURLToPath(import.meta.url));

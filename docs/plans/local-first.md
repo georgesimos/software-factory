@@ -490,6 +490,13 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
      `github.ts` and `sync.ts`.
    - `publicUrl` and `secretPatterns` feed `server.ts`.
    - `RunDetail` links come from the event's `url`.
+   - Landed as: `listChangeRequests` (from `openPRs()`), `changeRequest` (from sync's human-merge lookup), `merge` (`gh pr
+     ready` + `gh pr merge`; a refusal still throws) and `openChangeRequest` (from `revert()`) on `hosts/github.ts`, with
+     the same gh calls. Proof: the factory tests' full gh argv log on `origin/main` and on the branch diff empty.
+     - Not moved: sync's state-only `gh pr view` and postmerge's `mergeCommit` lookup, whose stubbed answers differ from
+       the human-merge one; they move with 5a's `facts()` split. `comment` has no caller in core until PR 6.
+     - `RunDetail`'s "Closes #N" link stays GitHub's: no event carries the issue URL yet. It moves with the local tracker
+       (5b), which is the first issue that isn't on GitHub.
 4b. **`git` host change requests.** (~500 lines)
    - The branch change request, the CAS merge, protected-base handling, `F close RUN --merged`, and sync for `git`
      projects.
