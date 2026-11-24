@@ -116,7 +116,7 @@ describe('Metrics sheet', () => {
     } finally { vi.unstubAllGlobals(); }
   });
 
-  it('is offered under F ui only: F render’s file and the Artifact have no API', async () => {
+  it('is offered under F ui and on the Artifact (embedded numbers), not on F render’s file', async () => {
     const { unmount } = render(<App load={async () => demo as unknown as FactoryData} />);
     await screen.findByText('Merge rate');
     expect(screen.queryAllByRole('button', { name: 'Metrics' })).toEqual([]);
@@ -130,6 +130,42 @@ describe('Metrics sheet', () => {
       expect(await screen.findByRole('region', { name: 'Burn and cost' })).toBeTruthy();
       expect(vi.mocked(fetch).mock.calls[0]![0]).toMatch(/^\/api\/metrics\?since=\d{4}-\d{2}-\d{2}$/);
       expect(vi.mocked(fetch).mock.calls[0]![1]).toEqual({ headers: { 'x-factory-token': 'tok' } });
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  // #82 PR C: the Artifact's page embeds logMetrics() per project and range (server.ts sheetMetrics); only all-time keeps byDay.
+  const { byDay, byProject, ...ranged } = reply, generated = '2026-11-22T12:00:00.000Z';
+  const metricsLog = {
+    '': { '': { ...ranged, byDay, byProject }, '90': { ...ranged, byProject }, '30': { ...ranged, byProject }, '7': { ...ranged, byProject } },
+    'acme/b': { '': { ...ranged, total: c(500, 0.01), byStage: { spec: c(500, 0.01) } }, '90': {}, '30': {}, '7': {} },
+  };
+  it('without a token, renders from the page’s embedded data, as of when it was published, and never fetches', async () => {
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    try {
+      render(<App load={async () => ({ ...(demo as unknown as FactoryData), generated, metricsLog })} />);
+      const [top] = await screen.findAllByRole('button', { name: 'Metrics' });
+      await userEvent.click(top!);
+      const sheet = await screen.findByRole('dialog', { name: 'Metrics' });
+      expect(within(sheet).getByText(/as of 2026-11-22/)).toBeTruthy();
+      expect(await within(sheet).findByRole('img', { name: /^Tokens per day, 2026-10-24 to 2026-11-22/ })).toBeTruthy(); // 30 days to the publish day
+      await userEvent.selectOptions(within(sheet).getByRole('combobox', { name: 'Range' }), '7');
+      await waitFor(() => expect(within(sheet).getByRole('img', { name: /^Tokens per day, 2026-11-16 to 2026-11-22; peak [^;]* tokens on 2026-11-20$/ })).toBeTruthy()); // the all-time days from since on
+      expect(fetch).not.toHaveBeenCalled();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it('embedded: a project’s own entry, an empty one says so, and unknown keys read as nothing', async () => {
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    try {
+      render(<MetricsSheet open onClose={() => {}} projects={['acme/b', '__proto__']} project="acme/b" metricsLog={metricsLog} generated={generated} />);
+      expect(await screen.findByText(/No run spent tokens or finished in the last 30 days in acme\/b\./)).toBeTruthy();
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Range' }), '');
+      const strip = await screen.findByRole('region', { name: 'Burn and cost' });
+      expect(within(strip).getByText('500 tokens')).toBeTruthy();
+      expect(screen.queryByRole('region', { name: 'Burn by project' })).toBeNull();
+      await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Project' }), '__proto__');
+      expect(await screen.findByText(/^No run spent tokens or finished yet in __proto__\./)).toBeTruthy();
+      expect(fetch).not.toHaveBeenCalled();
     } finally { vi.unstubAllGlobals(); }
   });
 });

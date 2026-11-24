@@ -32,6 +32,8 @@ export interface FactoryData {
   costCap?: number;
   projects?: string[];
   metrics?: { all: Metrics; byProject: Record<string, Metrics> };
+  /** The Artifact's Metrics sheet (#82): logMetrics() per project ('' for all) and range ('7', '30', '90', '' all time), as of `generated`. */
+  metricsLog?: Record<string, Record<string, unknown>>;
   rules?: Record<string, { policy?: Record<string, Rule>; expired?: Rule[] }>;
   rulesError?: string;
   ruleHistory?: RuleChange[];

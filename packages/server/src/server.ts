@@ -438,9 +438,46 @@ export function runsData(events = read()) {
   }
   return runs;
 }
+// The Metrics sheet for a page with no API (#82): logMetrics() for all projects and each one, for each range the sheet offers,
+// as of `now`. Aggregates only (days, projects, stages, axes, models, harnesses), nothing per run or session. To stay small, only
+// the all-time entry keeps byDay (a range's days are the all-time ones from its since on: both cut at UTC midnight), only the
+// all-projects entries keep byProject, and a cell drops its zero counts (never costUsd: missing reads as unpriced).
+export const SHEET_RANGES = ['7', '30', '90', ''];
+const sinceFor = (days: string, now: number) => (days ? new Date(now - (Number(days) - 1) * 864e5).toISOString().slice(0, 10) : ''); // as apps/web's
+const slim = (c) => Object.fromEntries(Object.entries(c).filter(([k, v]) => k === 'costUsd' || (v !== 0 && v != null)));
+export function sheetMetrics(events, projectIds: string[], now = Date.now(), archive = readArchive()) {
+  const measured = measure(events), runs = withMeasured(derive(events), events, measured, archive), out = {}; // derived once for every call below
+  for (const p of ['', ...projectIds]) {
+    out[p] = {};
+    for (const range of SHEET_RANGES) {
+      const { project, since, byDay, byProject, ...m } = logMetrics(events, { project: p || null, since: sinceFor(range, now) || null, measured, archive, runs });
+      const keep = { ...m, ...(range === '' && { byDay }), ...(p === '' && { byProject }) };
+      for (const k of ['byDay', 'byProject', 'byStage', 'byAxis', 'byModel', 'byHarness']) if (keep[k]) keep[k] = Object.fromEntries(Object.entries(cleanKeys(keep[k])).map(([x, c]) => [x, slim(c)]));
+      out[p][range] = { ...keep, total: slim(m.total) };
+    }
+  }
+  return out;
+}
+// Breakdown keys are raw event fields (a provider runner's model may be a file path), and scrub() rewrites values, not keys:
+// a key with a local path becomes "[local path]", one shaped like a credential or ending in "token" "[redacted]", and cells
+// that land on one key add up.
+function cleanKeys(by: Record<string, any>) {
+  const out = Object.create(null);
+  for (const [k, c] of Object.entries(by)) {
+    const x = k.replace(LOCAL_PATH, '[local path]'), key = SECRET.test(x) || /token$/i.test(x) ? '[redacted]' : x, a = out[key];
+    out[key] = !a ? c : {
+      ...Object.fromEntries(['tokens', 'input', 'output', 'cacheRead', 'cacheWrite', 'unpriced', 'reported'].map((f) => [f, a[f] + c[f]])),
+      costUsd: a.costUsd == null && c.costUsd == null ? null : +((a.costUsd || 0) + (c.costUsd || 0)).toFixed(4),
+      source: a.source === c.source || !c.source ? a.source : !a.source ? c.source : 'mixed',
+    };
+  }
+  return out;
+}
 // Everything the dashboard shows: runs, metrics, rules, skills, harnesses, hooks, ideas. page() embeds it; GET /api/state returns it.
-export function pageData(extra = {}) {
-  const events = read();
+// sheet: also metricsLog, for the Artifact only (artifact()'s page): ~50 ms per logMetrics() call on a real log is too slow for
+// render() after every record(), and F ui's sheet asks GET /api/metrics.
+export function pageData(extra = {}, { sheet = false } = {}) {
+  const events = read(), now = Date.now();
   const runs = runsData(events);
   const repoOf = (id) => id.split(/[#:]/)[0];
   const byProject = {};
@@ -451,12 +488,13 @@ export function pageData(extra = {}) {
   let idea = {};
   try { idea = { ideas: ideas(events, Object.fromEntries(runs.map((r) => [r.id, r]))) }; } catch (e) { idea = { ideasError: e.message }; } // never fail the event that triggered the render
   const F_CMD = fCmd(); // per page build, so installing the plugin while the app runs clears fMissing without a restart
-  return { generated: new Date().toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)),
+  const sheetData = sheet ? { metricsLog: sheetMetrics(events, Object.keys(byProject), now) } : {}; // a failure fails the publish: F render --artifact says why
+  return { generated: new Date(now).toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)),
     harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), fCmd: F_CMD, ...(!F_CMD && { fMissing: true }),
-    autoMerge: Object.fromEntries(Object.entries(projects()).map(([r, p]) => [r, p?.autoMerge !== false])), ...idea, ...extra };
+    autoMerge: Object.fromEntries(Object.entries(projects()).map(([r, p]) => [r, p?.autoMerge !== false])), ...idea, ...sheetData, ...extra };
 }
-export function page(extra = {}) {
-  const data = JSON.stringify(pageData(extra)).replace(/</g, '\\u003c'), html = fs.readFileSync(APP_HTML, 'utf8');
+export function page(extra = {}, opts?: { sheet?: boolean }) {
+  const data = JSON.stringify(pageData(extra, opts)).replace(/</g, '\\u003c'), html = fs.readFileSync(APP_HTML, 'utf8');
   if (!DATA_TAG.test(html)) throw new Error(`${APP_HTML} has no data tag: rebuild it with pnpm --filter @software-factory/web dashboard`);
   return html.replace(DATA_TAG, (_, open, _old, close) => open + data + close);
 }
@@ -481,9 +519,23 @@ const LOCAL_PATH = new RegExp([
   String.raw`(?<!\w)\/(?:${ROOTS})(?![\w.-])${BODY}`, // also after ':' or '=' (PATH=/a:/Users/…, cwd:/Users/…)
   String.raw`(?<![\w.\/~-])\/(?!api\/)[^\s\/${STOP}]+\/${BODY}`, // any other path with 2+ segments (cwd:/data/x); "/factory approve" and /api/… routes stay
 ].join('|'), 'g');
-const scrub = (v) => typeof v === 'string' ? v.replace(LOCAL_PATH, '[local path]')
-  : Array.isArray(v) ? v.map(scrub)
-  : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([k]) => !PATH_ONLY.has(k)).map(([k, x]) => [k, scrub(x)])) : v;
+const scrub = (v, under = '') => typeof v === 'string' ? v.replace(LOCAL_PATH, '[local path]')
+  : Array.isArray(v) ? v.map((x) => scrub(x))
+  : v && typeof v === 'object' ? scrubKeys(v, under) : v;
+// Keys too: a burn cell's models map is keyed by model id, which a provider runner may give as a file path. Counts that land on
+// one key add up; anything else, the last one stands. A key ending in "token" is left for artifact()'s refusal, except in the
+// maps keyed by labels (model, axis, stage, harness; a run's reviews by axis), where it names a model or axis, never holds a credential.
+const LABELS = new Set(['models', 'subModels', 'byAxis', 'byStage', 'byModel', 'byHarness', 'reviews:axes']); // reviews: {iteration: {axis: result}}
+function scrubKeys(v, under: string) {
+  const labels = LABELS.has(under);
+  const out = Object.create(null); // a "__proto__" key stays a key
+  for (const [k, x] of Object.entries(v)) {
+    if (PATH_ONLY.has(k)) continue;
+    const c = k.replace(LOCAL_PATH, '[local path]'), key = labels && /token$/i.test(c) ? '[redacted]' : c, y = scrub(x, under === 'reviews' ? 'reviews:axes' : k);
+    out[key] = typeof out[key] === 'number' && typeof y === 'number' ? out[key] + y : y;
+  }
+  return out;
+}
 // The backstop: what identifies this machine must not be in the page at all, URLs included (http://host.local:5173,
 // http://localhost:3000/Users/bob). Two exceptions keep it from refusing every page: the login counts only as a path
 // segment outside GitHub URLs and owner/repo ids (the owner, and a profile repo login/login, is often the login), and a
@@ -507,7 +559,7 @@ export function residue(json, raw, me = machine()) {
 const DATA_TAG = /(<script type="application\/json" id="data">)([^<]*)(<\/script>)/;
 // GitHub, Anthropic and OpenAI key shapes, and an F ui URL with its token.
 export const SECRET = /\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_\w{30,}|sk-(?:ant-)?[\w-]{30,})|127\.0\.0\.1:\d+\/?\?t=[\w-]{20,}/;
-export function artifact(html = page()) {
+export function artifact(html = page({}, { sheet: true })) {
   // Opening tags and metas come before the inlined script, so their first match is the tag; closing tags come after it, so their last.
   for (const [re, last] of [[/^<!doctype html>\s*/i], [/<html[^>]*>\s*/i], [/<head>\s*/i], [/<meta charset="utf-8">\s*/i], [/<meta name="viewport"[^>]*>\s*/i],
     [/<\/head>\s*/i], [/<body[^>]*>\s*/i], [/<\/body>\s*/gi, true], [/<\/html>\s*/gi, true]]) {
