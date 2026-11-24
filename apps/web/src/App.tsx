@@ -5,6 +5,7 @@ import { loadData, post, projectsOf, CAP, COST_CAP, type FactoryData } from './d
 import { MetricsSheet } from './Metrics.tsx';
 import { LiveSessions } from './Live.tsx';
 import { Panel } from './Panel.tsx';
+import { PipelinesSheet, pipelinesOf } from './Pipelines.tsx';
 import { RuleChips } from './Rules.tsx';
 import { RunDetail, type StartState } from './RunDetail.tsx';
 import { SetupWizard } from './Setup.tsx';
@@ -80,6 +81,7 @@ function Shell({ data, patch, refresh }: { data: FactoryData; patch: (p: Partial
   const wide = useMedia(WIDE);
   const [skillsOpen, setSkillsOpen] = useState<string | false>(false); // the scope it opens on
   const [metricsOpen, setMetricsOpen] = useState(false);
+  const [pipelinesOpen, setPipelinesOpen] = useState(false);
   // Nothing yet (no project, run or idea): set up first, unless it was closed in this tab. Data without a projects list never opens it.
   const [liveOpen, setLiveOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(() => Array.isArray(data.projects) && !projects.length && session('sf.onboardClosed') !== '1');
@@ -109,6 +111,7 @@ function Shell({ data, patch, refresh }: { data: FactoryData; patch: (p: Partial
   const inProg = runs.filter((r) => (r.outcome ?? 'in-progress') === 'in-progress').length;
   useEffect(() => { document.title = (inProg ? `(${inProg}) ` : '') + (sel ? (sel.title || sel.id) + ' · ' : '') + 'Software Factory'; }, [inProg, sel]);
 
+  const pl = pipelinesOf(data.skills).length > 0; // only when F sent a pipeline: the page never draws one of its own
   const fresh = Date.now() - Date.parse(data.generated ?? '') < 5 * 60e3;
   const mx = !!data.token || (!!data.metricsLog && typeof data.metricsLog === 'object'); // F ui's API, or the Artifact's embedded numbers
   const token = data.token, [starts, setStarts] = useState<Record<string, StartState>>({}); // per run, so switching runs keeps a pending result
@@ -130,6 +133,7 @@ function Shell({ data, patch, refresh }: { data: FactoryData; patch: (p: Partial
         <RuleChips data={data} project={project} />
         {data.generated ? <span className="web-updated"><Dot tone={fresh ? 'ok' : 'idle'} /><time dateTime={data.generated} title={formatClock(data.generated)}><span className="web-upd-word">Updated </span>{formatAgo(data.generated)}</time></span> : null}
         {mx ? <Button size="sm" variant="ghost" className="web-mx-top" aria-haspopup="dialog" title="Token burn, cost and outcomes over time" onClick={() => setMetricsOpen(true)}>Metrics</Button> : null}
+        {pl ? <Button size="sm" variant="ghost" className="web-pl-top" aria-haspopup="dialog" title="The steps each issue goes through" onClick={() => setPipelinesOpen(true)}>Pipelines</Button> : null}
         {data.skills ? <Button size="sm" variant="ghost" aria-haspopup="dialog" title="Who runs each step" onClick={() => setSkillsOpen(project || 'default')}>Skills</Button> : null}
         {token ? <Button size="sm" variant="ghost" className="web-live-top" aria-haspopup="dialog" title="Sessions this app started, and terminals" onClick={() => setLiveOpen(true)}>Sessions</Button> : null}
         <Button size="sm" variant="ghost" aria-haspopup="dialog" title="Set up the factory" onClick={() => setSetupOpen(true)}>Set up</Button>
@@ -146,6 +150,7 @@ function Shell({ data, patch, refresh }: { data: FactoryData; patch: (p: Partial
           if (a && wide && collapsed && a.hash === location.hash && byId.has(readHash())) setCollapsed(false);
         }}>
           {token ? <Button size="sm" variant="secondary" className="web-live-alt" aria-haspopup="dialog" onClick={() => setLiveOpen(true)}>Sessions</Button> : null}
+          {pl ? <Button size="sm" variant="secondary" className="web-pl-alt" aria-haspopup="dialog" onClick={() => setPipelinesOpen(true)}>Pipelines</Button> : null}
           {mx ? <Button size="sm" variant="secondary" className="web-mx-alt" aria-haspopup="dialog" onClick={() => setMetricsOpen(true)}>Metrics</Button> : null}
           <Tabs label="Project" value={project} onChange={setProject} className="web-tabs"
             items={[{ id: '', label: 'All', count: data.runs.length }, ...projects.map((p) => ({ id: p, prefix: p.includes('/') ? p.split('/')[0] + '/' : undefined, label: p.split('/')[1] ?? p }))]}>
@@ -164,6 +169,7 @@ function Shell({ data, patch, refresh }: { data: FactoryData; patch: (p: Partial
       <SetupWizard open={setupOpen} onClose={() => { session('sf.onboardClosed', '1'); setSetupOpen(false); }} data={data} token={data.token}
         onSkills={(skills) => patch({ skills })} refresh={refresh} openSkills={(s) => setSkillsOpen(s)} />
       {data.skills ? <SkillsSheet open={!!skillsOpen} onClose={() => setSkillsOpen(false)} skills={data.skills} harnesses={data.harnesses} token={data.token} scope={skillsOpen || project} fCmd={data.fCmd ?? undefined} onSaved={(skills) => patch({ skills })} /> : null}
+      {pipelinesOpen ? <PipelinesSheet open onClose={() => setPipelinesOpen(false)} data={data} project={project} /> : null}
       {mx ? <MetricsSheet open={metricsOpen} onClose={() => setMetricsOpen(false)} token={data.token} metricsLog={data.metricsLog} generated={data.generated} projects={projects} project={project} /> : null}
       {token ? <LiveSessions open={liveOpen} onClose={() => setLiveOpen(false)} token={token} repos={Array.isArray(data.projects) ? data.projects : []} terminal={data.terminal} /> : null}
       {wide ? null : <Sheet open={!!sel} onClose={close} title={sel?.id ?? 'Run'}>{sel ? detail(sel) : null}</Sheet>}

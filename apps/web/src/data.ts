@@ -16,11 +16,16 @@ export interface Harness { id: string; label?: string; install?: string }
 /** A step's runner in skills.json (packages/core/src/skills.ts checkRunner). Extra axes add `axis` and `when`. */
 export interface StepRunner { use?: string; name?: string; path?: string; harness?: string; model?: string; effort?: string; fallback?: string[]; axis?: string; when?: string[] }
 export interface CatalogEntry { source: string; group: string; name: string; kind: string; desc?: string; runner: StepRunner }
+/** A project's pipeline as F resolves it (packages/core/src/skills.ts pipeline()): the Pipelines page draws only this. */
+export interface Pipeline {
+  host: string | null; tracker: string | null; locked: string[]; optional: string[]; steps: string[]; intake: string[]; loops: string[];
+  axes: { axis: string; when: string | string[] }[]; off: string[]; custom: Record<string, StepRunner[]>; warnings: string[];
+}
 /** skillsData(): raw config (to tell "set here" from "inherited"), resolved plans, the catalog, models and presets. */
 export interface SkillsData {
   error?: string; steps?: string[]; required?: string[]; scopes?: string[];
   config?: Record<string, Record<string, StepRunner | StepRunner[] | unknown>>;
-  plans?: Record<string, { plan?: Record<string, StepRunner>; extra?: StepRunner[] }>;
+  plans?: Record<string, { plan?: Record<string, StepRunner>; extra?: StepRunner[]; pipeline?: Pipeline }>;
   catalog?: { global?: CatalogEntry[]; projects?: Record<string, CatalogEntry[]> };
   models?: string[]; efforts?: string[]; preset?: string; presets?: Record<string, Record<string, [string, string]>>;
   applied?: string[]; skipped?: string[]; inherited?: string[];

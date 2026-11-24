@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ls, projects } from './workspace.ts';
+import { hostOf, ls, projects } from './workspace.ts';
 import { audit, checkGuide, checkRules, checkScope, rules, whoami } from './rules.ts';
 import { harnesses, type Harness } from '../../adapters/harnesses/index.ts';
 import { stateDir } from './log.ts';
@@ -16,6 +16,25 @@ export const REQUIRED_AXES: BuiltinAxis[] = ['code', 'security']; // axesFor alw
 export type StepKey = 'intake' | 'spec' | 'build' | `review.${BuiltinAxis}` | 'verifier' | 'postmerge';
 export const STEP_KEYS: StepKey[] = ['intake', 'spec', 'build', ...BUILTIN_AXES.map((a) => `review.${a}` as const), 'verifier', 'postmerge'];
 export const isStepKey = (k: unknown): k is StepKey => STEP_KEYS.some((x) => x === k);
+// docs/plans/pipelines.md §2: what no config can turn off or move. gate, merge and watch (F postmerge) are F's own decisions, not runners.
+export const LOCKED_STEPS = ['intake', 'spec', 'build', ...REQUIRED_AXES.map((a) => `review.${a}`), 'verifier', 'gate', 'merge', 'watch'];
+export const OPTIONAL_STEPS = BUILTIN_AXES.filter((a) => !REQUIRED_AXES.includes(a)).map((a) => `review.${a}`);
+// When axesFor (gate.ts) selects each built-in axis: always, or when a UI, SEO or docs file changes.
+// shortcut: a copy of axesFor's choice for display; make axesFor read it when gate.ts is next changed (after #138).
+const AXIS_WHEN: Record<BuiltinAxis, 'always' | 'ui' | 'seo' | 'docs'> = { code: 'always', security: 'always', ux: 'ui', ui: 'ui', seo: 'seo', docs: 'docs' };
+/** The pipeline's structure for the Pipelines page (docs/plans/pipelines.md §6). Read-only: off and custom stay empty until slices 3 and 4. */
+export function pipeline(repo: string, extra: ExtraAxis[] = []) {
+  const attached = !!projects()[repo], host = attached ? hostOf(repo) : null;
+  // shortcut: on main only GitHub projects have a tracker; use trackerOf (workspace.ts) once #138 merges
+  const tracker = host === 'github' ? 'github-issues' : null;
+  return {
+    host, tracker, locked: LOCKED_STEPS, optional: OPTIONAL_STEPS,
+    steps: ['intake', 'spec', 'build', 'review', 'verifier', 'gate', 'merge', 'watch'],
+    intake: ['pass', 'split', 'needs-info', 'reject'], loops: ['spec', 'build'], // intake's outcomes; where the gate loops back to
+    axes: [...BUILTIN_AXES.map((axis) => ({ axis, when: AXIS_WHEN[axis] as string | string[] })), ...extra.map((x) => ({ axis: x.axis, when: x.when }))],
+    off: [] as string[], custom: { 'spec.after': [], 'build.after': [] }, warnings: [] as string[],
+  };
+}
 export const isBuiltinAxis = (a: unknown): a is BuiltinAxis => BUILTIN_AXES.some((x) => x === a);
 
 /** A step's runner in skills.json, as checkRunner() admits it. */
@@ -153,7 +172,7 @@ export function skills(repo: string, cfg: SkillsConfig = readSkills()) {
   const plan = Object.fromEntries(STEP_KEYS.map((k) => [k, fill(k, p[k] || g[k] || { use: 'default' })]));
   const all = [...(g['axes.extra'] || []), ...(p['axes.extra'] || [])];
   const extra = all.filter((x, i) => all.findLastIndex((y) => y.axis === x.axis) === i);
-  return { repo, plan, extra, required: REQUIRED_AXES, guide: rules(repo, cfg).guide };
+  return { repo, plan, extra, required: REQUIRED_AXES, guide: rules(repo, cfg).guide, pipeline: pipeline(repo, extra) };
 }
 export function writeSkills(cfg: unknown): asserts cfg is SkillsConfig {
   checkSkills(cfg);

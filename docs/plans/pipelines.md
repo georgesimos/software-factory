@@ -105,9 +105,10 @@ Rules for custom steps:
 - **Missing records:**
   - **Before build:** `F event RUN build started` refuses while a due `spec.after` step has no result. It also refuses when that slot was never recorded this iteration but the resolved list isn't empty.
   - **Before review:** `F axes` refuses in the same cases for `build.after`.
-  - **At the gate:** `gate()` refuses on a missing result, as it does for a missing verdict. It fails on a custom failure and routes it by slot (`spec.after` to spec, `build.after` to build).
+  - **At the gate:** `gate()` fails on a custom failure and routes it by slot (`spec.after` to spec, `build.after` to build). On a due step with no result it doesn't refuse: it fails with `next: approve`, as the loop cap does.
 - **Due stays due:** once `F steps` has recorded a step as due, it stays due for that iteration even if it is removed from config. Otherwise removing a failing step would clear its failure.
-- **A missing result escalates, never strands the run.** A due step with no result makes `decide()` escalate through `F merge`, with the reason "custom step <id> has no result". So a broken runner never leaves a run where `gate()` refuses forever. Slice 4 tests this.
+- **A missing result escalates, never strands the run.** The session runs `F gate`, then `F merge` as for any gate result with `next: approve`. `decide()` then escalates with the reason "custom step <id> has no result". So a broken runner never leaves a run stuck. Slice 4 tests this.
+  - **Why the earlier refusals don't strand it:** `F event RUN build started` and `F axes` refuse only until something is recorded, and output outside the contract records a failure. So a broken runner's step is always recordable.
 - **`F step` has `F review`'s contract.** Output outside the contract records a failure, never a pass, and a runner never fixes up its own JSON.
 - **What a custom step can't do:** nothing it reports can mark a locked step passed.
 
