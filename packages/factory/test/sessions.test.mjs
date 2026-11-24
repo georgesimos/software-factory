@@ -282,6 +282,30 @@ test('#105: every F command that changes a run refuses one another live launcher
   fs.rmSync(path.join(runDir(id), 'claim.json'));
 });
 
+test('#109: a mixed-case run id, a #102 claim at its old path, and a terminal on a run a skill session is working', () => {
+  const clone = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-mclone-'));
+  saveProject('Acme/Mixed', clone);
+  const calls = [], r = startRun('Acme/Mixed#1', stubEnv, (file, args, opts) => { calls.push(opts); return { pid: process.pid, on() { return this; }, unref() {} }; });
+  assert.equal(path.dirname(r.log), runDir('Acme/Mixed#1'));
+  assert.ok(fs.statSync(runDir('Acme/Mixed#1')).isDirectory() && fs.existsSync(r.log), 'startRun makes its own folder: the claim\'s is the id lowercased');
+  assert.deepEqual([readClaim('acme/mixed#1')?.token, readClaim('Acme/Mixed#1')?.token], [calls[0].env.FACTORY_CLAIM, calls[0].env.FACTORY_CLAIM], 'one claim, either spelling');
+  unclaim('acme/mixed#1', true);
+  const id = 'Acme/Legacy#1', old = path.join(runDir(id), 'claim.json'); // where #102 wrote it
+  claimAt(id, { pid: process.pid, since: procStart(process.pid), launcher: 'start', token: 'old' });
+  assert.throws(() => takeClaim(id, 'session'), /already has a running session \(start, pid \d+\)/, 'a live #102 claim still holds the run');
+  assert.throws(() => takeClaim('acme/legacy#1', 'session'), /already has a running session/);
+  assert.equal(readClaim(id).token, 'old');
+  assert.deepEqual(unclaim(id, true), { unclaimed: true, pid: process.pid, launcher: 'start' });
+  assert.equal(fs.existsSync(old), false);
+  claimAt(id, { pid: 999_999_9, launcher: 'start', token: 'dead' });
+  const t = takeClaim(id, 'session'); // a dead one is taken over, as any stale claim
+  assert.equal(fs.existsSync(old) && readClaim(id).token !== t.claim.token, false);
+  t.release();
+  record('Acme/Mixed#2', 'intake', 'started', {}); // a skill run typed in another claude: in the log, no claim
+  assert.throws(() => terminalSession({ repo: 'Acme/Mixed', issue: 2 }, stubEnv, { [PTY]: fakePty() }), /Acme\/Mixed#2 already has an active run \(in-progress\): .*open the terminal on Acme\/Mixed instead/);
+  assert.equal(readClaim('Acme/Mixed#2'), undefined, 'refused before taking the claim');
+});
+
 // An lstart string ms later than another, as ps prints it (UTC).
 const lstartPlus = (x, ms) => { const d = new Date(Date.parse(x.replace(/^\w{3} +(\w{3}) +(\d+) (\S+) (\d{4})$/, '$2 $1 $4 $3 UTC')) + ms);
   return `${'SunMonTueWedThuFriSat'.slice(d.getUTCDay() * 3, d.getUTCDay() * 3 + 3)} ${d.toUTCString().slice(8, 11)} ${String(d.getUTCDate()).padStart(2)} ${d.toISOString().slice(11, 19)} ${d.getUTCFullYear()}`; };
@@ -422,7 +446,7 @@ test('a start resumes from the newest F start log that wrote the run\'s last eve
 const logged = async (log, re) => { for (let i = 0; i < 100 && !re.test(fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : ''); i++) await new Promise((res) => setTimeout(res, 100)); };
 test('F start, killed: the next start resumes its harness session from its log, after a terminal or a failed start too; a clean exit is not resumed', { skip: process.platform === 'win32' && 'the stub runs under a cmd.exe shim there' }, async () => {
   const id = 'acme/app#62', r = startRun(id, { ...stubEnv, STUB_HANG: '1' });
-  const alive = () => { try { process.kill(r.pid, 0); return true; } catch { return false; } };
+  const alive = (pid = r.pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
   try {
     await logged(r.log, /"session_id":"stub-session"/);
     assert.equal(readClaim(id).pid, r.pid);
@@ -440,6 +464,7 @@ test('F start, killed: the next start resumes its harness session from its log, 
 
   const done = startRun('acme/app#63', stubEnv); // runs to its success result
   await logged(done.log, /"subtype":"success"/);
+  for (let i = 0; i < 100 && alive(done.pid); i++) await new Promise((res) => setTimeout(res, 20)); // else its claim is still live
   record('acme/app#63', 'intake', 'started', {});
   assert.throws(() => startRun('acme/app#63', stubEnv, () => assert.fail('no spawn')), /already has an active run/, 'it finished cleanly: active for its own reasons');
 });

@@ -179,6 +179,9 @@ export function terminalSession({ harness = 'claude-code', repo, issue, resume }
   if (resume !== undefined && !SESSION_ID.test(String(resume))) throw new Error('resume must be a harness session id');
   const id = issue ? `${repo}#${issue}` : repo, wt = issue && wtInfo(id)?.path;
   if (wt && fs.existsSync(wt)) cwd = wt;
+  // A new terminal on a run active with nothing to resume: a skill run in another claude (it holds no claim) may still be
+  // working it, and this terminal's claim would refuse that harness's next step. Resuming this app's own session is fine.
+  if (issue && resume === undefined) activeRun(id, derive(read())[id], `open the terminal on ${repo} instead, or wait until that run is done`);
   let label = id;
   if (resume !== undefined) { // under the resumed session's own label, so launchSession's running check sees it
     const from = listSessions().filter((x) => x.harnessSession === resume && x.harness === h.id).at(-1);
@@ -188,6 +191,16 @@ export function terminalSession({ harness = 'claude-code', repo, issue, resume }
   }
   const start = (onPid?: (pid: number) => void, claim?: string) => startSession(h, { mode: 'terminal', resume }, { cwd, env: withClaim(env, claim), label, modules, onPid });
   return label.includes('#') ? claimed(label, 'terminal', start) : start(); // on a run: no F start or other app alongside
+}
+// A run left active by a session that was stopped or crashed (here, or an F start whose process is gone) resumes that
+// harness session instead of staying stuck; one active with nothing to resume refuses, saying what to do instead.
+// Here, the last session (one that exited 0 since refuses, as before); of F start's logs, the newest that wrote the run's
+// last event, so a later start that died before writing doesn't hide it. The newer of the two.
+function activeRun(id: string, r, instead: string) {
+  const here = factorySessions(id).at(-1), there = detachedRuns(id).find((x) => covers(r, x));
+  const resume = resumeFor(r, there && !(Date.parse(here?.started) > Date.parse(there.started)) ? there : here);
+  if (r && !TERMINAL.includes(r.outcome) && !resume) throw new Error(`${id} already has an active run (${r.outcome || r.stage}): its harness may still be working it (a skill run in another claude); ${instead}`);
+  return resume;
 }
 // The checks every factory start passes (#25), for a live session here (launchSession) and a detached run (startRun).
 function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue }, modules = hostModules) {
@@ -211,13 +224,7 @@ function launchGate({ harness = 'claude-code', mode = 'headless', repo, issue },
   // Any running session on the run, a person's terminal included: two harnesses would share one session or worktree.
   if (listSessions().some((x) => x.label === id && x.state === 'running')) throw new Error(`${id} already has a running session`); // before its first event lands
   if (held && claimLive(held)) throw running(id, held); // another process's, or a harness this app left running
-  // A run left active by a session that was stopped or crashed (here, or an F start whose process is gone) resumes that
-  // harness session instead of staying stuck.
-  // Here, the last session (one that exited 0 since refuses, as before); of F start's logs, the newest that wrote the run's
-  // last event, so a later start that died before writing doesn't hide it. The newer of the two.
-  const here = factorySessions(id).at(-1), there = detachedRuns(id).find((x) => covers(r, x));
-  const resume = resumeFor(r, there && !(Date.parse(here?.started) > Date.parse(there.started)) ? there : here);
-  if (r && !TERMINAL.includes(r.outcome) && !resume) throw new Error(`${id} already has an active run (${r.outcome || r.stage})`);
+  const resume = activeRun(id, r, 'wait until that run is done');
   const b = r ? budget(r) : null;
   if (b?.over) throw new Error(`run budget exceeded ${budgetWhy(b)}`);
   if (!(Date.now() - (harnessReady.get(h.id) || 0) < 60_000)) { // spawnSync twice: once a minute, not per request
@@ -286,6 +293,7 @@ export function startRun(issue, env = process.env, run = spawn) {
   const cl = takeClaim(id, 'start'); // before the spawn: a second launcher now waits on this claim, not on the run's first event
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const log = path.join(runDir(id), `headless-${stamp}.log`), prompt = path.join(runDir(id), `headless-${stamp}.prompt`);
+  fs.mkdirSync(runDir(id), { recursive: true }); // the claim's folder is the id lowercased: on a case-sensitive disk, not this one
   let child;
   try {
     const spec = h.launch({ mode: 'headless', prompt: `/software-factory ${id}`, resume, budget: left, write: true }), c = resolveSpec(spec, env);
