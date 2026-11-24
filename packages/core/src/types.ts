@@ -45,7 +45,7 @@ export interface Burn {
   reported?: BurnCell | null;
 }
 /** A rule in effect (rules.ts rules().policy); value is whatever `F rules set` stored. */
-export interface Rule { value?: unknown; reason?: string; setBy?: string; setAt?: string; until?: string; scope?: string }
+export interface Rule { value?: unknown; reason?: string; setBy?: string; setAt?: string; until?: string; scope?: string; key?: string } // scope, key: in rules()' policy and expired lists
 export interface Loopback { iteration: number; route?: string; reasons?: string[]; ts: string }
 
 export type Outcome = 'in-progress' | 'rejected' | 'needs-info' | 'merged' | 'escalated' | 'closed' | 'awaiting-approval' | 'split';
