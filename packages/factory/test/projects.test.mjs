@@ -23,7 +23,7 @@ const clone = (rel, origin, branch = 'main') => { // a real repo with one commit
   fs.mkdirSync(d, { recursive: true });
   git(d, 'init', '-q', '-b', branch);
   git(d, '-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '--allow-empty', '-m', 'init');
-  if (origin) git(d, 'remote', 'add', 'origin', origin);
+  if (origin) { git(d, 'remote', 'add', 'origin', origin); git(d, 'update-ref', `refs/remotes/origin/${branch}`, 'HEAD'); } // as if fetched
   return d;
 };
 // a gh that logs every call and fails, so a call nobody catches still shows in the log
@@ -69,6 +69,7 @@ test('attach refuses an id that is already another repository; a second clone of
     const seen = discover([root]).filter((f) => f.path === a || f.path === b).map((f) => [f.repo, f.attached]).sort();
     assert.deepEqual(seen, [['local/notes', true], ['local/notes-b', true]], 'discover shows each folder under the id it was attached as');
     git(a, 'remote', 'add', 'origin', 'git@gitlab.com:me/notes.git'); // its own folder, now with an origin: not a clash
+    git(a, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
     sync('local/notes', a);
     assert.deepEqual([projects()['local/notes'].host, projects()['local/notes'].remote], ['git', undefined], 'host and remote stay as first attached');
     git(a, 'remote', 'remove', 'origin');

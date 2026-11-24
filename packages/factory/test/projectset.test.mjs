@@ -148,3 +148,18 @@ test('core\'s hosts are imported by name: a bad host file fails only the host pi
   fs.writeFileSync(path.join(dir, 'broken.mjs'), 'export const id = "broken"; this is not javascript\n');
   await assert.rejects(load(dir), /broken\.mjs/);
 });
+
+test('the git host\'s default base comes from origin when the clone has one (runs fetch it there), else from local branches', () => {
+  const ctx = { gh: () => { throw new Error('no gh here'); }, git: (...a) => execFileSync('git', a, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) };
+  const base = (c) => builtin.git.baseBranch(ctx, { repo: 'acme/ob', path: c });
+  const c = clone('ob', 'git@gitlab.com:acme/ob.git');
+  git(c, 'update-ref', '-d', 'refs/remotes/origin/main'); // a local main only, nothing fetched
+  assert.throws(() => base(c), /no main or master branch on origin, and no origin\/HEAD/);
+  git(c, 'update-ref', 'refs/remotes/origin/master', 'HEAD');
+  assert.equal(base(c), 'master', 'origin\'s branch, never the local-only main');
+  git(c, 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk');
+  assert.equal(base(c), 'master', 'an origin/HEAD pointing nowhere is skipped');
+  git(c, 'update-ref', 'refs/remotes/origin/trunk', 'HEAD');
+  assert.equal(base(c), 'trunk');
+  assert.equal(base(clone('nb')), 'main', 'no origin: the local branch');
+});

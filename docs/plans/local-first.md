@@ -139,7 +139,7 @@ optional. When the core needs one a host doesn't have, the run escalates with th
 
 ```ts
 whoami(ctx, { user }): { login: string; verified: boolean } | null  // github: gh api user (verified), null with no login. git: OS user (unverified)
-baseBranch(ctx, { repo, path, base? }): string               // git: projects.json base → origin/HEAD → main|master (origin, then local)
+baseBranch(ctx, { repo, path, base? }): string               // git: projects.json base → origin/HEAD → main|master, on origin when the clone has one, else local
 openChangeRequest(ctx, { repo, path, branch, base, sha, title, body, closes? }): { id: string; url?: string }
 changeRequest(ctx, { repo, path, id }): {
   state: 'open'|'merged'|'closed'|'unknown'; headSha: string|null;
@@ -467,7 +467,7 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
        `local/` project's verified rules stay changeable by their author; the OS user alone is unverified and #131's
        guard applies. Core imports github and git by name, so a bad host file fails only `F new`'s picker.
      - `host.baseBranch` behind the adapter, for `worktree()`, `revert()` and sync. The `git` host's order is the
-       project's `base`, then `origin/HEAD`, then main or master on origin, then locally.
+       project's `base`, then `origin/HEAD`, then main or master: on origin when the clone has one (runs fetch it there), else locally.
      - The `git` host file. It has no server, so its `authStatus` fails and `F new` never uses it.
 3. **CI family, a move plus `none`/`local`.** (~500 lines)
    - `adapters/ci/` registry, template, README, `contract()`, `github-actions`, `local`, `none`.

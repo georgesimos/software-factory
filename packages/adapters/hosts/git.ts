@@ -12,23 +12,22 @@ export function pushInitial(): never { throw new Error('host "git" cannot push a
 
 export const whoami = (_ctx: Ctx, { user }: { user: () => string }) => ({ login: String(user()).trim(), verified: false });
 
-// The project's own base (F project set <repo> base), else origin's HEAD, else main or master on origin, else locally. It
+// The project's own base (F project set <repo> base), else origin's HEAD, else main or master: on origin when the clone has one, else locally. It
 // refuses when none exists, rather than guess. A set base must be a branch on origin when the clone has one (runs fetch it
 // from there, and reviewers see it there), else a local branch: never a tag, a sha or @{-1}.
 export function baseBranch({ git }: Ctx, { path, base }: { repo: string; path: string; base?: string }) {
   const has = (ref: string) => { try { git('-C', path, 'rev-parse', '--verify', '-q', `${ref}^{commit}`); return true; } catch { return false; } };
+  let origin = false;
+  try { origin = !!git('-C', path, 'remote', 'get-url', 'origin').trim(); } catch { /* none */ }
   if (base) {
-    let origin = false;
-    try { origin = !!git('-C', path, 'remote', 'get-url', 'origin').trim(); } catch { /* none */ }
     if (has(origin ? `refs/remotes/origin/${base}` : `refs/heads/${base}`)) return base;
     throw new Error(origin ? `the project's base branch ${base} is not on origin in ${path} (push it, then git fetch origin)` : `the project's base branch ${base} is not a branch in ${path}`);
   }
-  try {
+  // a clone with an origin takes the base from origin only: runs fetch it from there (a local-only main would fail that fetch)
+  if (origin) try {
     const ref = git('-C', path, 'symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD').trim();
-    if (ref.startsWith('origin/') && has(ref)) return ref.slice('origin/'.length);
+    if (ref.startsWith('origin/') && has(`refs/remotes/${ref}`)) return ref.slice('origin/'.length);
   } catch { /* no origin/HEAD */ }
-  for (const ref of ['origin/main', 'origin/master', 'main', 'master']) if (has(ref)) return ref.replace(/^origin\//, '');
-  let remote = false;
-  try { remote = !!git('-C', path, 'remote', 'get-url', 'origin').trim(); } catch { /* none */ }
-  throw new Error(`cannot tell the base branch of ${path}: it has no main or master branch${remote ? ', locally or on origin, and no origin/HEAD (git remote set-head origin -a sets it)' : ''}`);
+  for (const b of ['main', 'master']) if (has(origin ? `refs/remotes/origin/${b}` : `refs/heads/${b}`)) return b;
+  throw new Error(`cannot tell the base branch of ${path}: it has no main or master branch${origin ? ' on origin, and no origin/HEAD (git fetch origin; git remote set-head origin -a)' : ''}`);
 }
