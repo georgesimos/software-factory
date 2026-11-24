@@ -19,7 +19,7 @@ const ownChannel = (repo: string) => { try { return trackerOf(repo) === 'github-
 /** A tracker item's run (owner/repo#N) off GitHub Issues; F sync's imports of branches (owner/repo:branch) are not specced. */
 const needsF = (run: string) => { try { return !ownChannel(parseRun(run).repo); } catch { return false; } };
 /** Control characters (C0 and C1, keeping tab and newline) out of what goes to the terminal: an item's title or spec can't move the cursor or retitle the window. */
-export const clean = (s: string) => s.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '');
+export const clean = (s: string) => s.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, ''); // and bidi and zero-width marks, which can reorder or hide what the spec says
 
 /** The spec put to the user: all of DIR/spec.md, a plain file, never empty. */
 function specOf(run: string) {
@@ -48,9 +48,13 @@ export function pending(r: Run) {
 export function specApproved(run: string, p: { spec?: unknown }) {
   if (!needsF(run)) return;
   const r = derive(read())[run], { asked, said, used } = r ? pending(r) : { asked: undefined, said: undefined, used: false };
-  const why = !asked ? 'it was never put to you (record "spec awaiting-approval" first)' : !said ? 'you have not approved it'
-    : used ? 'that approval was already used' : !asked.specSha || said.specSha !== asked.specSha || current(run) !== asked.specSha || (p.spec !== undefined && p.spec !== asked.spec) ? 'it is not the spec you approved' : null;
-  if (why) throw new Error(`${run}'s spec can't pass: ${why}. A local item's spec needs your approval: run F approve ${run} in your own terminal`);
+  const ASK = 'record "spec awaiting-approval" again, so the user can approve this one with F approve';
+  const [why, next] = !asked ? ['it was never put to you', `record "spec awaiting-approval", then the user runs F approve ${run} in their own terminal`]
+    : !said ? ['you have not approved it', `the user runs F approve ${run} in their own terminal`]
+    : used ? ['that approval was already used', ASK]
+    : !asked.specSha || said.specSha !== asked.specSha || current(run) !== asked.specSha ? ['DIR/spec.md is not the spec you approved', `put back the approved spec.md, or ${ASK}`]
+    : p.spec !== undefined && p.spec !== asked.spec ? ['it is not the spec you approved', 'pass the approved spec line, or none'] : [null, null];
+  if (why) throw new Error(`${run}'s spec can't pass: ${why}. Next: ${next}`);
 }
 const current = (run: string) => { try { return specOf(run).sha; } catch { return undefined; } };
 
@@ -62,8 +66,9 @@ export function specCleared(run: string, doing: string) {
   if (r?.imported) return; // F sync's import of work done outside the factory: nothing was specced
   const ev = r?.events ?? [], i = ev.findLastIndex((e) => e.stage === 'intake' && e.status === 'started' || e.stage === 'spec' && e.status === 'awaiting-approval');
   const passed = i >= 0 && ev.slice(i + 1).some((e) => e.stage === 'spec' && e.status === 'passed'), asked = r && pending(r).asked;
-  const why = !passed ? 'its spec has not passed since it was last put to you' : current(run) !== asked?.specSha ? 'DIR/spec.md is not the spec you approved' : null;
-  if (why) throw new Error(`${run} can't ${doing}: ${why}. A local item's spec needs your approval: run F approve ${run} in your own terminal, then record "spec passed"`);
+  const [why, next] = !passed ? ['its spec has not passed since it was last put to you', `F approval ${run} says where it stands: the spec is put to the user ("spec awaiting-approval"), they run F approve ${run} in their own terminal, then "spec passed"`]
+    : current(run) !== asked?.specSha ? ['DIR/spec.md is not the spec you approved', 'put back the approved spec.md, or record "spec awaiting-approval" again, so the user can approve this one with F approve'] : [null, null];
+  if (why) throw new Error(`${run} can't ${doing}: ${why}. Next: ${next}`);
 }
 
 /** Asks on the controlling terminal, never stdin, so piped input can't answer it. An agent's shell tool has no terminal: checked
@@ -92,9 +97,9 @@ export function approveSpec(run: string, ask: (prompt: string) => string = ttyAs
   const r = derive(read())[run];
   if (r?.outcome !== 'awaiting-approval') throw new Error(`${run} is not awaiting approval`);
   const { asked, said } = pending(r); // awaiting-approval: the outcome comes from that event
-  if (said) throw new Error(`${run}'s spec is already approved: the run goes on with "spec passed"`);
   const { text, sha: h } = specOf(run), code = h.slice(0, 7);
-  if (asked!.specSha !== h) throw new Error(`${run}'s DIR/spec.md changed after it was put to you: the run records "spec awaiting-approval" again`);
+  if (asked!.specSha !== h) throw new Error(`${run}'s DIR/spec.md changed after it was put to you${said ? ' and approved' : ''}: the run records "spec awaiting-approval" again, then you approve that`);
+  if (said) throw new Error(`${run}'s spec is already approved: the run goes on with "spec passed"`);
   const typed = ask(clean(`${run}: ${r.title ?? ''}\n\nSpec (DIR/spec.md):\n${text}\n\nWhy it waits: ${(asked!.reasons as string[] | undefined ?? []).join('; ') || '-'}\n\nType ${code} to approve this spec (anything else cancels): `));
   if (typed.trim() !== code) throw new Error('not approved: what you typed did not match');
   const who = whoami('approving a spec');

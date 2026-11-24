@@ -20,7 +20,8 @@ function dirOf({ git }: Ctx, at?: string) {
     try { s = fs.lstatSync(path.join(at, p)); } catch { /* not there yet */ }
     if (s && !s.isDirectory()) throw new Error(`${p} in the clone is not a plain folder (a symlink or a file): local items are never read or written through it`);
   }
-  if (git('-C', at, 'ls-files', '--', '.factory/issues').trim()) throw new Error('.factory/issues has files tracked by git: they came with the repo, so they are not your local items. Untrack them (git rm -r --cached .factory/issues) or move them');
+  // icase: on macOS and Windows a committed .Factory/Issues/ is the same folder
+  if (git('-C', at, 'ls-files', '--', ':(icase).factory/issues').trim()) throw new Error('.factory/issues has files tracked by git: they came with the repo, so they are not your local items. Untrack them (git rm -r --cached .factory/issues) or move them');
   return path.join(at, '.factory', 'issues');
 }
 const isLink = (f: string) => { try { return fs.lstatSync(f).isSymbolicLink(); } catch { return false; } };

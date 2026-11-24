@@ -262,7 +262,7 @@ export async function main(argv: string[]) {
   merge  <run>                            re-decide, then merge the reviewed commit (the only merge path)
   risk   <run> <planned files...>         does the spec need human approval before building?
   approval <run>                          spec approved since waiting? (GitHub: a trusted "/factory approve|reject" comment; local items: F approve)
-  approve <run>                           approve a local item's spec at your own terminal (type the code it shows); yours only, never an agent's
+  approve <run>                           approve a local item's spec at your own terminal (type the code it shows); meant for you, refused inside agent sessions
   item new <owner/repo> "<title>" [-]     write a local item in the clone's untracked .factory/issues (- reads its body from stdin)
   postmerge <run>                         CI state of the merge commit on the base branch
   revert <run> [reason]                   open a revert PR (never merged by the factory)

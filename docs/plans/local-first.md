@@ -63,7 +63,7 @@ never reach the remote.
 **D4. Trust for local items, and who may approve.** A file has no verifiable author, so every local item is
 `trust: 'untrusted'`. That means:
 - every spec needs approval through `F approve RUN`, at a terminal or in the desktop app's dialog (§2.2). Approval never
-  comes from the page (#21), and never from an agent session;
+  comes from the page (#21), and `F approve` refuses inside an agent session; that is a speed bump, not a boundary (§2.2);
 - on the `git` host, every merge asks (`merge: 'ask'` is forced, whatever the project's setting).
 
 No trusted-authors list gets built. That idea was in the inventory, not in the owner's decisions.
@@ -288,8 +288,9 @@ Telling the agent not to (in the skill text) isn't enough. Even so, it is a spee
 2. **The terminal path also needs a TTY.** It prints the run, sha and diff stats, and makes the user type the first 7
    characters of the sha on `/dev/tty` (`CONIN$` on Windows). Agent tool calls run with no controlling terminal, so the
    prompt can't be answered there.
-   - Limit: an agent can unset the environment variables in a subprocess, so step 1 is a speed bump, not a boundary.
-     The TTY prompt and the desktop dialog are what it rests on.
+   - Limit: an agent can unset the environment variables in a subprocess, and get a pty (`script -q /dev/null`), so
+     steps 1 and 2 together are a speed bump, not a boundary, and so is the dialog. Merges don't rest on them: a local
+     item is always trustBroken.
    - `shortcut:` whether each harness's shell tool really has no TTY gets checked per harness (claude-code, codex)
      in PR 5b, before that PR relies on it.
 3. **The desktop app path** (the owner works in the app). This is the main approval path; the terminal is the second.
@@ -597,6 +598,12 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
        an item told it to. An agent set on it can get past it: `script -q /dev/null` gives it a pty, unsetting the
        session variables gets past `humanOnly`, and it can append a `spec decided` line to `events.jsonl` itself. The 5c
        dialog stops neither. Merges stay safe because a local item is always trustBroken, so its run escalates.
+     - Known limits of 5b, accepted:
+       - A re-ask round can still use the run's old worktree. `decide()` escalates on trustBroken, and nothing pins
+         `spec.md` once building started.
+       - A hard link or a FIFO as an item, or `.factory/issues` swapped for a link after the check, are not refused. Each
+         needs a local process running as the user.
+       - On Windows only the `lstat` check protects a read: there is no `O_NOFOLLOW`.
      - One git minimum, `GIT_MIN` (2.40, for `diff --attr-source`) in `hosts/git.ts`, for merging and for a git project's
        line count; `F onboard` shows it. Merging needed 2.38 before.
      - Not here: `F queue` and `F loop` still read GitHub Issues only (they take the tracker from `F new`'s project state).

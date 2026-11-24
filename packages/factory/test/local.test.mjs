@@ -87,7 +87,7 @@ test('a local spec passes only after F approve of exactly that spec, once; F app
   fails(['event', R, 'spec', 'passed', '-'], /local\/ap#1's spec can't pass: it was never put to you/);
   ask('Fix the typo.')(R);
   assert.deepEqual(approval(R), { decision: 'waiting', next: 'the user runs F approve local/ap#1 in their own terminal' });
-  fails(['event', R, 'spec', 'passed', '-'], /you have not approved it\. A local item's spec needs your approval: run F approve local\/ap#1/);
+  fails(['event', R, 'spec', 'passed', '-'], /you have not approved it\. Next: the user runs F approve local\/ap#1 in their own terminal/);
   fails(['event', R, 'spec', 'decided', '-'], /"spec decided" is recorded by "approve", not by hand/);
   assert.throws(() => approveSpec(R, () => 'nope'), /not approved: what you typed did not match/);
   let prompt = '';
@@ -131,6 +131,14 @@ test('F onboard names the git the factory needs', () => {
   const s = { harnesses: [], repos: [], hooks: {}, projects: {}, ship: {}, skills: { plans: {} }, rules: {} };
   assert.match(onboardText({ ...s, git: null }), /2\. Repo\n {3}✓ git 2\.40 or later\n/);
   assert.match(onboardText({ ...s, git: 'git 2.39 is too old: the factory needs git 2.40 or later' }), /✗ git 2\.39 is too old: the factory needs git 2\.40 or later/);
+});
+
+test('items a repo commits under another case (.Factory/Issues) are refused too: the same folder on macOS and Windows', () => {
+  const up = clone('case'); fs.mkdirSync(path.join(up, '.Factory', 'Issues'), { recursive: true });
+  fs.writeFileSync(path.join(up, '.Factory', 'Issues', '7.md'), '---\ntitle: planted\n---\n'); g(up, 'add', '-f', '.'); g(up, 'commit', '-qm', 'ship an item');
+  const d = path.join(root, 'case-clone'); execFileSync('git', ['clone', '-q', up, d]); sync('local/case', d);
+  fails(['item', 'new', 'local/case', 'x'], /\.factory\/issues has files tracked by git: they came with the repo/);
+  assert.throws(() => intake('local/case#7'), /\.factory\/issues has files tracked by git/);
 });
 
 test('symlinked or tracked items are never read or written through: refused cleanly, never followed', { skip: !symlinks && 'no symlinks here' }, () => {
@@ -183,16 +191,16 @@ test('info/exclude gets /.factory/issues/ once, even when a .gitignore negates .
   assert.equal(fs.readFileSync(path.join(u, '.git', 'info', 'exclude'), 'utf8').split('\n').filter((l) => l === '/.factory/issues/').length, 1);
 });
 
-test("the approval prompt strips control characters from the item's title and spec.md, keeping newlines and tabs", () => {
+test("the approval prompt strips control, bidi and zero-width characters from the item's title and spec.md, keeping newlines and tabs", () => {
   const d = clone('esc'); sync('local/esc', d);
-  F(['item', 'new', 'local/esc', 'evil \x1b]0;pwned\x07\x1b[2J title']);
+  F(['item', 'new', 'local/esc', 'evil \x1b]0;pwned\x07\x1b[2J \u202etitle\u202c\u200b']);
   const R = 'local/esc#1'; intake(R);
-  specMd(R, '# Goal\n\n\x1b[31mred\x1b[0m\tand a C1 \x9b2J bell\x07\n');
+  specMd(R, '# Goal\n\n\x1b[31mred\x1b[0m\tand a C1 \x9b2J bell\x07 \u2066hidden\u2069\u200f\n');
   record(R, 'spec', 'awaiting-approval', { spec: 'S', reasons: [] });
   let prompt = '';
   assert.throws(() => approveSpec(R, (p) => { prompt = p; return 'no'; }), /not approved/);
-  assert.doesNotMatch(prompt, /[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
-  assert.match(prompt, /^local\/esc#1: evil \]0;pwned\[2J title\n\nSpec \(DIR\/spec\.md\):\n# Goal\n\n\[31mred\[0m\tand a C1 2J bell\n/);
+  assert.doesNotMatch(prompt, /[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/);
+  assert.match(prompt, /^local\/esc#1: evil \]0;pwned\[2J title\n\nSpec \(DIR\/spec\.md\):\n# Goal\n\n\[31mred\[0m\tand a C1 2J bell hidden\n/);
 });
 
 test('a local run builds only after its spec passed, on the spec.md that was approved; unapproved never shows as in progress', () => {
@@ -244,5 +252,18 @@ test("F hashes all of DIR/spec.md at the ask: a missing, empty or edited spec.md
   assert.match(prompt, /## Files to touch\n\nsrc\/a\.ts\n/, 'the whole file is shown');
   assert.equal(codeOf(prompt), asked.specSha.slice(0, 7));
   specMd(R, full + '\nsrc/b.ts\n'); // edited after the approval
-  fails(['event', R, 'spec', 'passed', '-'], /it is not the spec you approved/);
+  fails(['event', R, 'spec', 'passed', '-'], /DIR\/spec\.md is not the spec you approved\. Next: put back the approved spec\.md, or record "spec awaiting-approval" again/);
+});
+
+test('spec.md edited after approval: each refusal names the step that gets out of it, never a loop', () => {
+  const d = clone('dead'); sync('local/dead', d);
+  F(['item', 'new', 'local/dead', 'x']);
+  const R = 'local/dead#1'; intake(R); ask('S')(R); approveSpec(R, codeOf);
+  specMd(R, '# Goal\n\nS, and more.\n');
+  fails(['event', R, 'spec', 'passed', '-'], /Next: put back the approved spec\.md, or record "spec awaiting-approval" again/);
+  assert.throws(() => approveSpec(R, codeOf), /local\/dead#1's DIR\/spec\.md changed after it was put to you and approved: the run records "spec awaiting-approval" again, then you approve that/);
+  F(['event', R, 'spec', 'awaiting-approval', '-'], '{"spec":"S, and more."}'); // the step both name
+  approveSpec(R, codeOf);
+  F(['event', R, 'spec', 'passed', '-']);
+  F(['event', R, 'build', 'started', '-']);
 });
