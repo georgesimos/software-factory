@@ -1,4 +1,4 @@
-// Screenshots apps/web (board, then a run in the docked panel or, on a phone, the sheet, then the Skills sheet) in light and dark, at 1280px and
+// Screenshots apps/web (board, then a run in the docked panel or, on a phone, the sheet, then the Skills and Pipelines sheets) in light and dark, at 1280px and
 // 375px, into apps/web/screenshots/. Injects apps/web's fixture the way a host does (window.__FACTORY_DATA__), so no /api request is made.
 // Fails on horizontal overflow, a console error, or a request off localhost. Same approach as scripts/screenshots.mjs.
 // Usage: pnpm --filter @software-factory/web build && pnpm --filter @software-factory/web preview (in another terminal),
@@ -48,6 +48,12 @@ for (const theme of ['light', 'dark']) {
     await overflow('skills sheet');
     if (await page.evaluate(() => { const d = document.querySelector('dialog.web-sk'); return d.scrollWidth > d.clientWidth; })) problems.push(`${tag}: the Skills sheet scrolls sideways`);
     await save('skills');
+    await page.keyboard.press('Escape'); // then the Pipelines sheet, as it opens (zoom 1)
+    await page.getByRole('button', { name: 'Pipelines' }).click();
+    await page.waitForSelector('dialog.web-pl[open] .web-pl-canvas li');
+    await overflow('pipelines sheet');
+    if (await page.evaluate(() => { const d = document.querySelector('dialog.web-pl'); return d.scrollWidth > d.clientWidth; })) problems.push(`${tag}: the Pipelines sheet scrolls sideways`);
+    await save('pipelines');
     await ctx.close();
   }
 }

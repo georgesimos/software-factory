@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { CAP, DOCS, MAX_DIFF, SEO, SOURCE, TEST, TRUSTED, UI, blocking, byText, isLocal, sensitive } from './constants.ts';
 import { budget, budgetWhy } from './derive.ts';
+import { AXIS_WHEN, BUILTIN_AXES } from './skills.ts';
 import type { AxisReview, Deploy, LocalChecks, Metrics, Rule, Run } from './types.ts';
 
 /** An extra review axis from skills.json: added when a changed file matches one of its globs. */
@@ -28,10 +29,8 @@ export function localResult(lc: LocalChecks | undefined, cmds: unknown, sha: str
 }
 
 export function axesFor(files: string[], extra: ExtraAxis[] = []) {
-  const axes = ['code', 'security'];
-  if (files.some((f) => UI.test(f))) axes.push('ux', 'ui');
-  if (files.some((f) => SEO.test(f))) axes.push('seo');
-  if (files.some((f) => DOCS.test(f))) axes.push('docs');
+  const on = { ui: UI, seo: SEO, docs: DOCS };
+  const axes: string[] = BUILTIN_AXES.filter((a) => AXIS_WHEN[a] === 'always' || files.some((f) => on[AXIS_WHEN[a] as keyof typeof on].test(f))); // skills.ts's table, which the Pipelines page shows
   for (const x of extra) if (files.some((f) => x.when.some((g) => path.matchesGlob(f, g)))) axes.push(x.axis); // user axes only add, never replace. shortcut: path.matchesGlob needs Node >= 22.5 (experimental before 24); swap in a small glob regex if older Node matters
   return axes;
 }
