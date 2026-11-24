@@ -5,7 +5,7 @@ import { checkScope, rules } from './rules.ts';
 import { dashboard } from './log.ts';
 import { hooks, shipConnectors } from './ship.ts';
 import { discover } from './sync.ts';
-import { harnesses } from '../../adapters/harnesses/index.mjs';
+import { harnesses } from '../../adapters/harnesses/index.ts';
 import { projects } from './workspace.ts';
 import { readSkills, skillsData } from './skills.ts';
 import { stateDir } from './log.ts';

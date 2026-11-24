@@ -1,6 +1,6 @@
 import { INVALID, assertReviewOpen, derive, validateReview } from './derive.ts';
 import { blocking } from './constants.ts';
-import { harnesses } from '../../adapters/harnesses/index.mjs';
+import { harnesses } from '../../adapters/harnesses/index.ts';
 import { read } from './log.ts';
 import { resolvedSteps, skills, type ExtraAxisRunner, type StepRunner } from './skills.ts';
 import type { Runner } from './types.ts';

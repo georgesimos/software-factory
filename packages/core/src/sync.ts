@@ -7,7 +7,7 @@ import { read, record, sessionsFile, stateDir } from './log.ts';
 import { derive } from './derive.ts';
 import { gh, openPRs, relabelMerged } from './github.ts';
 import { git, ls, projects, projectsFile } from './workspace.ts';
-import { harnesses } from '../../adapters/harnesses/index.mjs';
+import { harnesses } from '../../adapters/harnesses/index.ts';
 import type { FactoryEvent, Session } from './types.ts';
 
 /** Agent sessions on one branch, from the harnesses' local logs. */

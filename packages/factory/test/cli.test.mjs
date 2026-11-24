@@ -11,7 +11,7 @@ import { PRESETS, availablePlan, checkRunner, older } from '../../core/src/skill
 import { derive } from '../../core/src/derive.ts';
 import { relabelMerged } from '../../core/src/github.ts';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { harnesses } from '../../adapters/harnesses/index.mjs';
+import { harnesses } from '../../adapters/harnesses/index.ts';
 import { pluginFiles, stem } from '../../adapters/registry.ts';
 import { hooks } from '../../core/src/ship.ts';
 import { io, read, record, runDir } from '../../core/src/log.ts';

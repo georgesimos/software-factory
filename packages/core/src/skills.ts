@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { ls, projects } from './workspace.ts';
 import { audit, checkGuide, checkRules, checkScope, rules, whoami } from './rules.ts';
-import { harnesses, type Harness } from '../../adapters/harnesses/index.mjs';
+import { harnesses, type Harness } from '../../adapters/harnesses/index.ts';
 import { stateDir } from './log.ts';
 import type { ExtraAxis } from './gate.ts';
 import type { Rule } from './types.ts';

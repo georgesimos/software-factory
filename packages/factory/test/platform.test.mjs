@@ -39,7 +39,7 @@ test('Windows: not found on PATH throws ENOENT "not installed", never hands spaw
 });
 
 test('claude-code notes(): an npm .cmd claude passes --version but not the headless flags, so the wizard says so', async () => {
-  const { default: claude } = await import('../../adapters/harnesses/claude-code.mjs');
+  const { default: claude } = await import('../../adapters/harnesses/claude-code.ts');
   const env = { PATH: 'C:\\npm', SystemRoot: 'C:\\Windows' }, shim = (n) => n.find((x) => x.label === 'headless runs');
   assert.equal(shim(claude.notes('win32', env, (p) => p === 'C:\\npm\\claude.cmd'))?.ok, false);
   assert.equal(shim(claude.notes('win32', env, (p) => p === 'C:\\npm\\claude.exe')), undefined);
@@ -64,7 +64,7 @@ test('harnesses (claude, codex, the template) spawn on Windows only a file found
     assert.equal(spawnFor('x', ['--version'], 'win32', { PATH: 'C:\\100%' }, at('C:\\100%\\x.cmd')), null, f);
   }
   const d = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-which-')); fs.mkdirSync(path.join(d, 'x.exe')); // a folder named x.exe is not the CLI
-  const { spawnFor } = await import('../../adapters/harnesses/codex.mjs');
+  const { spawnFor } = await import('../../adapters/harnesses/codex.ts');
   assert.equal(spawnFor('x', [], 'win32', { PATH: d }), null);
   fs.rmSync(d, { recursive: true });
 });

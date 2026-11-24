@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { stripTypeScriptTypes } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { importPlugin, loadDir, pluginFiles } from '../../adapters/registry.ts';
-import { load as loadHarnesses } from '../../adapters/harnesses/index.mjs';
+import { load as loadHarnesses } from '../../adapters/harnesses/index.ts';
 import { REQUIRED as HOST_FNS } from '../../adapters/hosts/index.ts';
 
 const ADAPTERS = path.join(import.meta.dirname, '..', '..', 'adapters');
