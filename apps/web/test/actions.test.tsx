@@ -18,6 +18,25 @@ describe('run actions (#27)', () => {
     expect(screen.queryByRole('button', { name: /Resume factory/ })).toBeNull();
   });
 
+  it('under F ui, an active run that is not resumable gets Start (POST /api/runs); a refusal shows its reason (#22)', async () => {
+    const posts: unknown[] = [];
+    let reply = new Response(JSON.stringify({ error: 'acme/shop#45 already has a running session in this app: stop it in Sessions' }), { status: 400 });
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method !== 'POST') return new Response(JSON.stringify({ sessions: [] })); // the session list's GET /api/sessions
+      posts.push([url, (init.headers as Record<string, string>)['x-factory-token'], JSON.parse(String(init.body))]);
+      return reply;
+    }));
+    render(<RunDetail run={run('acme/shop#45')} cap={3} costCap={5} token="tok" />);
+    expect(screen.queryByText('/software-factory acme/shop#45')).toBeNull(); // Copy is for the static page
+    await userEvent.click(screen.getByRole('button', { name: 'Start factory' }));
+    expect(await screen.findByText(/already has a running session in this app: stop it in Sessions/)).toHaveAttribute('data-bad');
+    reply = new Response(JSON.stringify({ pid: 4242, log: 'x.log' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Start factory' }));
+    expect(await screen.findByText(/Started headless \(pid 4242\)/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Start factory' })).toBeNull(); // live again: no second start
+    expect(posts).toEqual([['/api/runs', 'tok', { issue: 'acme/shop#45' }], ['/api/runs', 'tok', { issue: 'acme/shop#45' }]]);
+  });
+
   it('escalated, rejected, merged, split and awaiting-approval runs offer neither: those are a human’s call', () => {
     for (const id of ['acme/shop#44', 'acme/shop#41', 'acme/shop#43', 'acme/shop#46', 'acme/shop#49']) {
       const { unmount } = render(<RunDetail run={run(id)} cap={3} costCap={5} />);
@@ -30,7 +49,10 @@ describe('run actions (#27)', () => {
     wide();
     history.replaceState(null, '', '/?t=tok#' + encodeURIComponent(hash));
     const calls: [string, RequestInit][] = [];
-    vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit) => { calls.push([url, init]); return reply(); }));
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => { // writes only: the run detail also reads GET /api/sessions
+      if (init?.method !== 'POST') return new Response(JSON.stringify({ sessions: [] }));
+      calls.push([url, init]); return reply();
+    }));
     render(<App load={async () => ({ ...data, token: 'tok', resumable: ['acme/shop#45'] })} />);
     return calls;
   };
@@ -46,14 +68,21 @@ describe('run actions (#27)', () => {
     expect(JSON.parse(calls[0]![1].body as string)).toEqual({ repo: 'acme/shop', issue: 45 });
     done(new Response(JSON.stringify({}), { status: 200 })); // no session id: still a success
     expect(await within(panel).findByText('Resumed. It shows here as it runs.')).toBeTruthy();
-    expect(within(panel).queryByRole('button', { name: /Resum/ })).toBeNull(); // no second resume of a live run
+    expect(within(panel).queryByRole('button', { name: /Resume factory|Resuming/ })).toBeNull(); // no second resume of a live run
   });
 
-  it('under F ui: an active run the server would refuse gets the prompt, not a button', async () => {
+  it('under F ui: an active run not listed as resumable gets Start (F start), not Resume; the server decides', async () => {
     served(async () => new Response('{}'), 'acme/shop#48');
     const panel = await screen.findByRole('complementary');
-    expect(within(panel).getByText('/software-factory acme/shop#48')).toBeTruthy();
+    expect(within(panel).getByRole('button', { name: 'Start factory' })).toBeTruthy();
+    expect(within(panel).queryByText('/software-factory acme/shop#48')).toBeNull();
     expect(within(panel).queryByRole('button', { name: /Resume factory/ })).toBeNull();
+    await userEvent.click(within(panel).getByRole('button', { name: 'Start factory' }));
+    expect(await within(panel).findByText(/Started headless/)).toBeTruthy();
+    await userEvent.click(document.querySelector<HTMLAnchorElement>(`.web-board a[href="#${CSS.escape(encodeURIComponent('acme/shop#45'))}"]`)!);
+    const other = await screen.findByRole('complementary'); // #48's result stays with #48
+    expect(within(other).queryByText(/Started headless/)).toBeNull();
+    expect(within(other).getByRole('button', { name: 'Resume factory' })).toBeTruthy();
   });
 
   it('shows the server’s refusal, and keeps a run’s result when you switch away and back', async () => {

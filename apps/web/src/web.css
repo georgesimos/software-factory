@@ -251,6 +251,10 @@
 }
 .web-start { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sf-space-2) var(--sf-space-3); margin-bottom: var(--sf-space-3); }
 .web-start .web-sk-status { margin: 0; }
+.web-ob-start { align-items: flex-end; }
+.web-sopen { margin: var(--sf-space-1) 0 var(--sf-space-2); }
+.web-ob-start .web-ob-field { width: 8em; }
+.web-ob-start .web-sk-status { flex-basis: 100%; }
 .web-notes { list-style: none; margin: 0 0 var(--sf-space-3); padding: 0; display: grid; gap: var(--sf-space-2); }
 .web-notes li { padding: var(--sf-space-2) var(--sf-space-3); border: 1px solid var(--sf-color-line); border-radius: var(--sf-radius-md); font-size: var(--sf-text-sm); }
 .web-note-t { margin: 0 0 var(--sf-space-1); white-space: pre-wrap; overflow-wrap: anywhere; } /* the user's text as typed */

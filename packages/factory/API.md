@@ -8,7 +8,7 @@ factory ui: http://127.0.0.1:<port>/?t=<token>
 
 The token is random per launch and lives only in that process. Anyone with it can change the factory's settings, so don't share the URL.
 
-Each route calls the same validated function as its CLI command; there is no second code path. No route approves, merges, writes notes, or loosens rules, trust or the merge gate.
+Each route calls the same validated function as its CLI command; there is no second code path. No route approves, merges, or loosens rules, trust or the merge gate. One route writes a note, `POST /api/note`: #17 added it on purpose for the run detail's "Note for next step" box, which supersedes #22's "notes stay human-only". A note steers the next step's brief; it never moves the gate.
 
 ## Auth
 
@@ -54,6 +54,7 @@ Every write is also served at its original path without `/api` (for example `POS
 | `POST /api/skills` | `{"scope": "owner/repo"\|"default", "step": "<step>", "runner": {…}\|null}` (`null` unsets) | the Skills sheet data (runners with `model`, `effort`, `fallback`, plus `models`, `efforts`, `preset` and `presets`) | `F skills set\|unset` |
 | `POST /api/skills/preset` | `{"name": "all-claude"\|"all-claude-lean", "scope"?: "owner/repo"\|"default"}` | the Skills sheet data plus `applied`, `skipped` and `inherited` step lists (a project only gets the preset on steps it already sets) | `F skills preset <name> [scope]` |
 | `POST /api/idea` | `{"repo": "owner/repo", "idea": "…", "stack": "<id>"}` | `{"run", "next"}`; records the idea only | `F new "<idea>" --name owner/repo --stack <id>` |
+| `POST /api/note` | `{"run": "owner/repo#N", "text": "…"}` | `{"id", "step": "next", "text", "by"}` (plus `warning` when it may never be read); a one-shot note for whichever step starts next: 1–1000 characters, refused for unknown, imported and finished runs. `by` is `gh api user`. The page gets pending notes without `by`, and note events without their text | `F note owner/repo#N next -` |
 | `POST /api/onboard` | `{}` | setup state (harnesses, logins, repos, runners, rules); reads only | `F onboard --json` |
 | `POST /api/onboard/sync` | `{"repo": "owner/repo", "path": "<absolute clone path>"}` | onboarding config | `F sync owner/repo <path>` |
 | `POST /api/onboard/ship` | `{"scope": "owner/repo"\|"default", "ship": ["web","mobile","database"]}` | onboarding config | `F onboard ship <scope> <kinds>` |
