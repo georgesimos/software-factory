@@ -1,4 +1,5 @@
-import { Badge, formatClock, shortId } from '@software-factory/design-system';
+import { Badge, Tooltip, formatClock, shortId } from '@software-factory/design-system';
+import { useLayoutEffect, useRef, useState } from 'react';
 import type { FactoryData } from './data.ts';
 
 // Policy rules in force for the shown project(s), from `F rules set`. Quiet unless expired or ending within 3 days.
@@ -9,6 +10,14 @@ const LABEL: Record<string, (v: unknown) => string> = {
   'deploy.preview': (v) => ({ required: 'Preview required', advisory: 'Preview advisory', off: 'Preview off' } as Record<string, string>)[String(v)] ?? `Preview ${v}`,
   artifact: () => 'Publishes to Artifact',
 };
+
+/** How many leading chips fit in `avail` px. When not all do, room is kept for the +N chip (`more` px wide). */
+export function fitCount(widths: number[], avail: number, gap: number, more: number): number {
+  if (widths.reduce((a, w, i) => a + w + (i ? gap : 0), 0) <= avail) return widths.length;
+  let used = more, n = 0;
+  for (const w of widths) { if (used + gap + w > avail) break; used += gap + w; n++; }
+  return n;
+}
 
 export function RuleChips({ data, project, today = new Date().toISOString().slice(0, 10) }: { data: FactoryData; project: string; today?: string }) {
   const seen = new Set<string>(), out: { warn: boolean; text: string; title: string }[] = [];
@@ -30,8 +39,40 @@ export function RuleChips({ data, project, today = new Date().toISOString().slic
     }
   }
   if (data.rulesError) out.unshift({ warn: true, text: 'Rules config invalid', title: data.rulesError });
+  // One row: the chips that fit, then a +N chip naming the rest. Widths come from a hidden copy of every chip, so the
+  // count never feeds back into the width it is measured against.
+  const box = useRef<HTMLDivElement>(null), probe = useRef<HTMLDivElement>(null), [fit, setFit] = useState(Infinity);
+  const sig = out.map((c) => c.text).join('\n');
+  useLayoutEffect(() => {
+    const el = box.current, pr = probe.current;
+    if (!el || !pr) return;
+    const measure = () => {
+      const w = [...pr.children].map((c) => c.getBoundingClientRect().width), more = w.pop() ?? 0;
+      setFit(fitCount(w, el.clientWidth, parseFloat(getComputedStyle(pr).columnGap) || 0, more));
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el); ro.observe(pr); // the probe resizes when the web font arrives
+    return () => ro.disconnect();
+  }, [sig]);
   if (!out.length) return null;
-  return <div className="web-rules" role="group" aria-label="Active rules">{out.map((c, i) => <Badge key={i} tone={c.warn ? 'warn' : 'neutral'} quiet={!c.warn} title={c.title}>{c.text}</Badge>)}</div>;
+  const n = Math.max(fit, 1), shown = out.slice(0, n), rest = out.slice(n), warn = rest.some((c) => c.warn); // the first chip always shows, ellipsized if it must
+  const tip = (t: string) => <span className="web-rule-tip">{t}</span>;
+  return (
+    <div className="web-rules">
+      <div className="web-rules-row" ref={box} role="group" aria-label="Active rules">
+        {shown.map((c, i) => <Tooltip key={i} content={tip(c.title)}><Badge tabIndex={0} tone={c.warn ? 'warn' : 'neutral'} quiet={!c.warn}>{c.text}</Badge></Tooltip>)}
+        {rest.length ? (
+          <Tooltip content={tip(rest.map((c) => c.title).join('\n\n'))}>
+            <button type="button" className="sf-badge web-rules-more" data-tone={warn ? 'warn' : 'neutral'} data-quiet={warn ? undefined : true}
+              aria-label={`${rest.length} more rule${rest.length > 1 ? 's' : ''}: ${rest.map((c) => c.text).join('; ')}`}>+{rest.length}</button>
+          </Tooltip>
+        ) : null}
+      </div>
+      <div className="web-rules-probe" ref={probe} aria-hidden="true">{out.map((c, i) => <Badge key={i}>{c.text}</Badge>)}<Badge>+{out.length}</Badge></div>
+    </div>
+  );
 }
 
 /** Who changed which rule, when and why: the audit trail from `F rules set|unset`, newest first. */

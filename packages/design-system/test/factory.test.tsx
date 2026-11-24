@@ -2,6 +2,7 @@ import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import { breakable } from '../src/factory/breakable.tsx';
 import { CommandMenu, ReviewMatrix, RunCard, StageTrack, Timeline, runnerLabel, stageState, syncCounts, type Run } from '../src/index.ts';
 
 const run: Run = {
@@ -28,6 +29,32 @@ describe('factory', () => {
 
   it('syncCounts splits PRs from session-only branches', () => {
     expect(syncCounts({ repo: 'a/b', path: '/x', added: ['a/b#1', 'a/b#2', 'a/b:wip'], attached: ['a/b:old'], closed: [] })).toEqual({ prs: 2, sessions: 2, closed: 0 });
+  });
+
+  it('a branch run shows its whole branch, breakable at / and -, with the full id in the title (#9)', () => {
+    const { unmount } = render(<><RunCard run={{ ...run, id: 'acme/shop:alice/fix-login' }} showRepo /><RunCard run={{ ...run, id: 'acme/shop:bob/fix-login' }} showRepo /></>);
+    expect(['acme/shop:alice/fix-login', 'acme/shop:bob/fix-login'].map((t) => screen.getByTitle(t).textContent)).toEqual(['shop:alice/fix-login', 'shop:bob/fix-login']); // same last segment, still told apart
+    unmount();
+    render(<RunCard run={{ ...run, id: 'acme/shop:simos/incident-response-plan', imported: true, source: 'claude-code' }} showRepo />);
+    const id = screen.getByTitle('acme/shop:simos/incident-response-plan');
+    expect(id.textContent).toBe('shop:simos/incident-response-plan');
+    expect(id.querySelectorAll('wbr')).toHaveLength(4); // after : / - -
+  });
+
+  it('breakable keeps the text and splits after each separator without a lookbehind', () => {
+    const { container } = render(<span>{breakable('pr-review-toolkit:code.reviewer/x_y')}</span>);
+    expect(container.textContent).toBe('pr-review-toolkit:code.reviewer/x_y');
+    expect(container.querySelectorAll('wbr')).toHaveLength(6);
+    expect(container.firstElementChild?.innerHTML).toBe('pr-<wbr>review-<wbr>toolkit:<wbr>code.<wbr>reviewer/<wbr>x_<wbr>y');
+    expect(breakable('plain')).toEqual(['plain']);
+    expect(String(breakable)).not.toMatch(/\(\?<=/); // Safari < 16.4 can't parse a lookbehind
+  });
+
+  it('StageTrack lets a long runner name break at - : . instead of cutting it (#9)', () => {
+    render(<StageTrack run={{ ...run, runners: { review: { use: 'provider', harness: 'claude-code', name: 'pr-review-toolkit:code-reviewer' } } }} />);
+    const chip = screen.getByTitle(/pr-review-toolkit:code-reviewer/);
+    expect(chip.textContent).toBe('code-reviewer');
+    expect(chip.querySelectorAll('wbr')).toHaveLength(1);
   });
 
   it('StageTrack marks the current step and draws loop-backs', () => {

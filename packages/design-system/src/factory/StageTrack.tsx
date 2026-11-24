@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react';
 import { Badge } from '../components/Badge.tsx';
 import { STAGES, isDone, runnerLabel, stageOf, stageState, type Loopback, type Run } from './model.ts';
+import { breakable } from './breakable.tsx';
 
 const SR: Record<string, string> = { active: 'in progress', skipped: 'skipped', pending: 'not reached', done: 'done', failed: 'failed', warn: 'needs attention', idle: 'closed' };
 
@@ -25,7 +26,7 @@ export function StageTrack({ run }: { run: Run }) {
               <span className="sf-st-n" aria-hidden="true" />
               <div className="sf-st-nm">{s}<span className="sf-sr-only">: {SR[state]}</span></div>
               <div className="sf-st-sb">{sub || ' '}</div>
-              {rn ? <Badge quiet className="sf-rn" title={rn.title}>{rn.text}</Badge> : null}
+              {rn ? <Badge quiet className="sf-rn" title={rn.title}><span className="sf-rn-t">{breakable(rn.text)}</span></Badge> : null}
             </li>
           );
         })}

@@ -52,7 +52,7 @@ export async function projectTest({ uiHandle, read, project: { validateIssues, v
   const dir = path.join(root, 'state'), stub = path.join(root, 'gh'), home = path.join(root, 'home');
   for (const d of [dir, stub, home]) fs.mkdirSync(d);
   const env = { ...process.env, ...GIT_ENV, HOME: home, USERPROFILE: home, FACTORY_DIR: dir, FACTORY_GH: STUB, STUB_STATE: stub };
-  for (const k of ['CLAUDE_CODE_SESSION_ID', 'FACTORY_GIT', 'FACTORY_HOSTS', 'FACTORY_TRACKERS', 'FACTORY_TEMPLATES']) delete env[k];
+  for (const k of ['CLAUDE_CODE_SESSION_ID', 'FACTORY_CLAIM', 'FACTORY_GIT', 'FACTORY_HOSTS', 'FACTORY_TRACKERS', 'FACTORY_TEMPLATES']) delete env[k];
   const put = (p, text) => { fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, text); };
   const run = (args, extra = {}) => execFileSync(process.execPath, [F, ...args], { encoding: 'utf8', env: { ...env, ...extra }, stdio: ['ignore', 'pipe', 'pipe'] });
   const cli = (args, extra) => JSON.parse(run(args, extra));
@@ -186,9 +186,24 @@ export async function projectTest({ uiHandle, read, project: { validateIssues, v
   assert.deepEqual(q.ready.map((x) => x.run), ['acme/budget#1', 'acme/budget#2']);
   assert.deepEqual(q.blocked.find((x) => x.key === 'categories').waitingOn, ['acme/budget#2']);
   assert.deepEqual(q.untriaged, []);
+  const claims = ['acme/budget#1', 'acme/budget#2'].map((r) => path.join(run(['dir', r]).trim(), 'claim.json'));
+  const hold = (i, token = `tok-${i + 1}`) => put(claims[i], JSON.stringify({ pid: 0, launcher: 'start', at: new Date().toISOString(), token })); // an F start before its first event
+  hold(1);
+  const held = cli(['queue', 'acme/budget']);
+  assert.deepEqual(held.ready.map((x) => x.run), ['acme/budget#1'], 'next never picks a run another launcher holds');
+  assert.deepEqual(held.claimed, [{ run: 'acme/budget#2', launcher: 'start', pid: 0, unclaim: 'F unclaim acme/budget#2 --force' }], 'it is listed with its way out');
+  assert.deepEqual(cli(['queue', 'acme/budget'], { FACTORY_CLAIM: 'tok-2' }).ready.map((x) => x.run), ['acme/budget#1', 'acme/budget#2'], "the holder's own harness sees it");
+  hold(0);
+  const none = cli(['loop', 'acme/budget']);
+  assert.equal(none.state, 'stopped');
+  assert.match(none.reason, /^nothing ready: .*acme\/budget#1 is held by another launcher \(if that is stuck: F unclaim acme\/budget#1 --force\)/, 'F loop never picks one either');
+  for (const c of claims) fs.rmSync(c);
   assert.equal(cli(['loop', 'acme/budget']).next, 'acme/budget#1');
   assert.deepEqual(cli(['loop', 'acme/budget']), { state: 'running', next: 'acme/budget#1', resume: true, goal: '`node -e 0` exit 0, only files listed in the spec changed, or stop after 20 turns' });
   assert.equal(events('acme/budget').filter((e) => e.status === 'running').length, 1);
+  hold(0); // an F start on the issue the loop is on: the loop stops rather than resume it alongside
+  assert.match(cli(['loop', 'acme/budget']).reason, /^acme\/budget#1 is held by another launcher \(start, pid 0\); if that is stuck: F unclaim acme\/budget#1 --force$/);
+  fs.rmSync(claims[0]);
   merged('acme/budget#1');
   assert.equal(cli(['loop', 'acme/budget']).next, 'acme/budget#2');
   append('acme/budget#2', 'intake', 'started', { association: 'OWNER' });

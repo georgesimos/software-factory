@@ -30,5 +30,6 @@
 }
 .sf-arc::before { content: ""; position: absolute; left: -4.5px; top: -5px; border: 4px solid transparent; border-top: 0; border-bottom: 6px solid var(--sf-color-warn); }
 .sf-arc span { position: absolute; top: calc(100% + 4px); left: 0; white-space: nowrap; font: var(--sf-text-xs) var(--sf-font-mono); color: var(--sf-color-warn); }
-/* Who ran the stage and on which model: under the subtitle, clipped to the column. */
-.sf-st .sf-rn { display: block; max-width: 100%; margin: var(--sf-space-1) auto 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Who ran the stage and on which model: under the subtitle, wrapped at - : . to the column. */
+.sf-st .sf-rn { display: block; height: auto; max-width: 100%; margin: var(--sf-space-1) auto 0; padding-block: 3px; white-space: normal; }
+.sf-rn-t { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; line-height: 1.25; overflow-wrap: anywhere; } /* two lines at most, then … ; inside the padding */

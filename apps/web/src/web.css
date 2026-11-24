@@ -56,8 +56,17 @@
 .web-d-empty p { margin: var(--sf-space-2-5) auto 0; max-width: 36ch; color: var(--sf-color-ink-2); }
 
 /* Header rules, the rule log, the Done toggle */
-.web-rules { display: flex; gap: var(--sf-space-1-5); min-width: 0; overflow: hidden; flex: 0 1000 auto; }
+/* The free header space, whatever the chips: fitCount() measures against it. */
+.web-rules { position: relative; flex: 1 1 0; min-width: 0; overflow: hidden; padding: 3px; margin: -3px; } /* hidden: the probe; padding: room for focus rings */
+.web-rules-row, .web-rules-probe { display: flex; gap: var(--sf-space-1-5); }
+.web-rules-row { justify-content: flex-end; }
+.web-rules-probe { position: absolute; top: 0; left: 0; width: max-content; visibility: hidden; pointer-events: none; }
 .web-rules .sf-badge { flex: none; white-space: nowrap; cursor: default; }
+.web-rules-row .sf-badge { display: block; line-height: 18px; flex: 0 1 auto; min-width: 0; } /* block: a chip wider than the header ellipsizes */
+.web-rules-row .sf-tooltip-anchor { min-width: 0; }
+.web-rules-row .sf-tooltip-anchor:has(> .web-rules-more) { flex: none; } /* the +N chip never shrinks */
+.web-rules-more { background: none; }
+.web-rule-tip { white-space: pre-line; }
 .web-rlog { margin-top: var(--sf-space-10); }
 .web-rlog ul { list-style: none; margin: var(--sf-space-2-5) 0 0; padding: 0; font: var(--sf-text-sm) / 1.5 var(--sf-font-mono); color: var(--sf-color-ink-2); }
 .web-rlog li { padding: 3px 0; overflow-wrap: anywhere; }
