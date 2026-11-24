@@ -446,15 +446,30 @@ export const SHEET_RANGES = ['7', '30', '90', ''];
 const sinceFor = (days: string, now: number) => (days ? new Date(now - (Number(days) - 1) * 864e5).toISOString().slice(0, 10) : ''); // as apps/web's
 const slim = (c) => Object.fromEntries(Object.entries(c).filter(([k, v]) => k === 'costUsd' || (v !== 0 && v != null)));
 export function sheetMetrics(events, projectIds: string[], now = Date.now(), archive = readArchive()) {
-  const measured = measure(events), out = {};
+  const measured = measure(events), runs = withMeasured(derive(events), events, measured, archive), out = {}; // derived once for every call below
   for (const p of ['', ...projectIds]) {
     out[p] = {};
     for (const range of SHEET_RANGES) {
-      const { project, since, byDay, byProject, ...m } = logMetrics(events, { project: p || null, since: sinceFor(range, now) || null, measured, archive });
+      const { project, since, byDay, byProject, ...m } = logMetrics(events, { project: p || null, since: sinceFor(range, now) || null, measured, archive, runs });
       const keep = { ...m, ...(range === '' && { byDay }), ...(p === '' && { byProject }) };
-      for (const k of ['byDay', 'byProject', 'byStage', 'byAxis', 'byModel', 'byHarness']) if (keep[k]) keep[k] = Object.fromEntries(Object.entries(keep[k]).map(([x, c]) => [x, slim(c)]));
+      for (const k of ['byDay', 'byProject', 'byStage', 'byAxis', 'byModel', 'byHarness']) if (keep[k]) keep[k] = Object.fromEntries(Object.entries(cleanKeys(keep[k])).map(([x, c]) => [x, slim(c)]));
       out[p][range] = { ...keep, total: slim(m.total) };
     }
+  }
+  return out;
+}
+// Breakdown keys are raw event fields (a provider runner's model may be a file path), and scrub() rewrites values, not keys:
+// a key with a local path becomes "[local path]", one shaped like a credential or ending in "token" "[redacted]", and cells
+// that land on one key add up.
+function cleanKeys(by: Record<string, any>) {
+  const out = Object.create(null);
+  for (const [k, c] of Object.entries(by)) {
+    const x = k.replace(LOCAL_PATH, '[local path]'), key = SECRET.test(x) || /token$/i.test(x) ? '[redacted]' : x, a = out[key];
+    out[key] = !a ? c : {
+      ...Object.fromEntries(['tokens', 'input', 'output', 'cacheRead', 'cacheWrite', 'unpriced', 'reported'].map((f) => [f, a[f] + c[f]])),
+      costUsd: a.costUsd == null && c.costUsd == null ? null : +((a.costUsd || 0) + (c.costUsd || 0)).toFixed(4),
+      source: a.source === c.source || !c.source ? a.source : !a.source ? c.source : 'mixed',
+    };
   }
   return out;
 }
@@ -473,8 +488,7 @@ export function pageData(extra = {}, { sheet = false } = {}) {
   let idea = {};
   try { idea = { ideas: ideas(events, Object.fromEntries(runs.map((r) => [r.id, r]))) }; } catch (e) { idea = { ideasError: e.message }; } // never fail the event that triggered the render
   const F_CMD = fCmd(); // per page build, so installing the plugin while the app runs clears fMissing without a restart
-  let sheetData = {};
-  if (sheet) try { sheetData = { metricsLog: sheetMetrics(events, Object.keys(byProject), now) }; } catch (e) { sheetData = { metricsLogError: e.message }; } // never fail the event that triggered the render
+  const sheetData = sheet ? { metricsLog: sheetMetrics(events, Object.keys(byProject), now) } : {}; // a failure fails the publish: F render --artifact says why
   return { generated: new Date(now).toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)),
     harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), fCmd: F_CMD, ...(!F_CMD && { fMissing: true }),
     autoMerge: Object.fromEntries(Object.entries(projects()).map(([r, p]) => [r, p?.autoMerge !== false])), ...idea, ...sheetData, ...extra };
@@ -505,9 +519,23 @@ const LOCAL_PATH = new RegExp([
   String.raw`(?<!\w)\/(?:${ROOTS})(?![\w.-])${BODY}`, // also after ':' or '=' (PATH=/a:/Users/…, cwd:/Users/…)
   String.raw`(?<![\w.\/~-])\/(?!api\/)[^\s\/${STOP}]+\/${BODY}`, // any other path with 2+ segments (cwd:/data/x); "/factory approve" and /api/… routes stay
 ].join('|'), 'g');
-const scrub = (v) => typeof v === 'string' ? v.replace(LOCAL_PATH, '[local path]')
-  : Array.isArray(v) ? v.map(scrub)
-  : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).filter(([k]) => !PATH_ONLY.has(k)).map(([k, x]) => [k, scrub(x)])) : v;
+const scrub = (v, under = '') => typeof v === 'string' ? v.replace(LOCAL_PATH, '[local path]')
+  : Array.isArray(v) ? v.map((x) => scrub(x))
+  : v && typeof v === 'object' ? scrubKeys(v, under) : v;
+// Keys too: a burn cell's models map is keyed by model id, which a provider runner may give as a file path. Counts that land on
+// one key add up; anything else, the last one stands. A key ending in "token" is left for artifact()'s refusal, except in the
+// maps keyed by labels (model, axis, stage, harness; a run's reviews by axis), where it names a model or axis, never holds a credential.
+const LABELS = new Set(['models', 'subModels', 'byAxis', 'byStage', 'byModel', 'byHarness', 'reviews:axes']); // reviews: {iteration: {axis: result}}
+function scrubKeys(v, under: string) {
+  const labels = LABELS.has(under);
+  const out = Object.create(null); // a "__proto__" key stays a key
+  for (const [k, x] of Object.entries(v)) {
+    if (PATH_ONLY.has(k)) continue;
+    const c = k.replace(LOCAL_PATH, '[local path]'), key = labels && /token$/i.test(c) ? '[redacted]' : c, y = scrub(x, under === 'reviews' ? 'reviews:axes' : k);
+    out[key] = typeof out[key] === 'number' && typeof y === 'number' ? out[key] + y : y;
+  }
+  return out;
+}
 // The backstop: what identifies this machine must not be in the page at all, URLs included (http://host.local:5173,
 // http://localhost:3000/Users/bob). Two exceptions keep it from refusing every page: the login counts only as a path
 // segment outside GitHub URLs and owner/repo ids (the owner, and a profile repo login/login, is often the login), and a

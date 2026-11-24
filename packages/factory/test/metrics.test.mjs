@@ -157,3 +157,24 @@ test('the published Artifact embeds the Metrics sheet: aggregates only, no paths
   assert.equal(x['acme/a']['7'].total.tokens, 11_000); // since 2026-11-16
   assert.deepEqual(Object.keys(x[''][''].byDay), ['2026-11-20', '2026-11-21', '2026-11-22']);
 });
+
+// #116 R1: breakdown keys are raw event fields, and scrub() rewrites values only.
+test('the Artifact\'s Metrics sheet cleans breakdown keys: no local path or token-shaped key ships, and their cells add up', (t) => {
+  io.projects = path.join(io.dir, 'projects');
+  t.after(() => { io.projects = null; });
+  const home = os.homedir(), R = 'acme/k#1', at = (m) => `2026-11-22T09:${String(m).padStart(2, '0')}:00.000Z`;
+  const keys = [
+    ev(at(0), R, 'intake', 'started', { harness: 'claude-code' }),
+    ev(at(1), R, 'build', 'passed', { tokens: 100, model: '/opt/models/qwen.gguf', harness: 'claude-code' }),
+    ev(at(2), R, 'build', 'passed', { tokens: 200, model: `${home}/models/llama.gguf`, harness: 'claude-code' }),
+    ev(at(3), R, 'build', 'passed', { tokens: 50, model: 'qwen/qwen3-coder', harness: 'claude-code' }),
+    ev(at(4), R, 'review', 'passed', { axis: 'leaktoken', findings: [], tokens: 70, harness: 'claude-code' }),
+    ev(at(5), R, 'review', 'passed', { axis: 'code', findings: [], tokens: 30, harness: 'claude-code' }),
+  ];
+  fs.writeFileSync(log(), keys.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  const pub = artifact(), m = JSON.parse(pub.match(/<script type="application\/json" id="data">([^<]*)<\/script>/)[1]).metricsLog[''][''];
+  for (const raw of ['/opt/models', home]) assert.ok(!pub.includes(raw), raw); // the runs' own burn maps too
+  assert.doesNotMatch(pub, /"leaktoken"\s*:/); // as a key; the axis name stays as a value (an event's axis)
+  assert.deepEqual(Object.fromEntries(Object.entries(m.byModel).map(([k, c]) => [k, c.tokens])), { '[local path]': 300, 'qwen/qwen3-coder': 50 });
+  assert.deepEqual(Object.fromEntries(Object.entries(m.byAxis).map(([k, c]) => [k, c.tokens])), { '[redacted]': 70, code: 30 });
+});

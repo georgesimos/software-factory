@@ -204,8 +204,9 @@ function Body({ token, projects, initial, load, at }: { token: string; projects:
 export function MetricsSheet({ open, onClose, token, projects, project, load = fetchMetrics, metricsLog, generated }: {
   open: boolean; onClose: () => void; token?: string; projects: string[]; project: string; load?: typeof fetchMetrics; metricsLog?: unknown; generated?: string;
 }) {
-  const at = token ? undefined : Date.parse(generated ?? '') || Date.now(); // the published ranges end on the day it was published
-  const fromPage = useMemo(() => embedded(metricsLog, at ?? 0), [metricsLog, at]);
+  const published = useMemo(() => Date.parse(generated ?? '') || Date.now(), [generated]); // once: the sheet must not reload on every tick
+  const at = token ? undefined : published; // the published ranges end on the day it was published
+  const fromPage = useMemo(() => embedded(metricsLog, published), [metricsLog, published]);
   return (
     <Dialog open={open} onClose={onClose} variant="sheet" title="Metrics" className="web-mx-sheet"
       description={token ? 'Token burn, cost and outcomes, derived from the event log.' : `Token burn, cost and outcomes, derived from the event log as of ${dayOf(at ?? 0)}.`}>
