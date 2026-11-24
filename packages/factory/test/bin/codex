@@ -4,9 +4,9 @@
 const a = process.argv.slice(2).join(' '), out = !!process.env.STUB_LOGGED_OUT;
 if (a === '--version') process.stdout.write('codex-cli 0.141.0\n');
 else if (a === 'login status') { process.stderr.write(out ? 'Not logged in\n' : 'Logged in using ChatGPT\n'); process.exit(out ? 1 : 0); }
-else if (/^exec --json -s (read-only|workspace-write) (resume \w[\w-]* )?-$/.test(a)) {
+else if (/^exec --json -s (read-only|workspace-write) (resume -c sandbox_mode=\1 \w[\w-]* )?-$/.test(a)) {
   const ev = (x) => process.stdout.write(JSON.stringify(x) + '\n');
-  const resume = /resume (\S+)/.exec(a)?.[1];
+  const resume = /resume -c \S+ (\S+)/.exec(a)?.[1];
   ev({ type: 'thread.started', thread_id: resume || 'stub-thread', cwd: process.cwd(), argv: process.argv.slice(2), parentIds: [process.env.CLAUDE_CODE_SESSION_ID, process.env.CLAUDE_CODE_HOST_SESSION_ID].filter(Boolean) });
   ev({ type: 'turn.started' });
   if (process.env.STUB_HANG) setInterval(() => {}, 1000); // runs until killed

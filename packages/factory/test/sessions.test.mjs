@@ -795,11 +795,19 @@ test('launchSession() passes the host modules on: an sdk run in the attached clo
 
 // #59: Codex headless and terminal, against test/bin's codex stub. Codex runs steps and terminals, never a whole factory run.
 // The sandbox, as an allow-list: exactly one -s, read-only or workspace-write, and nothing that widens or bypasses it.
-const BYPASS = /dangerously|yolo|full-auto|danger-full-access|bypass|sandbox_|network_access|writable_roots/i;
-const sandboxOf = (args) => { assert.equal(args.filter((a) => a === '-s' || a === '--sandbox').length, 1, args.join(' ')); assert.ok(!args.some((a) => a === '-c' || a.startsWith('--config')), args.join(' ')); return args[args.indexOf('-s') + 1]; };
+// The one -c allowed restates -s for resume, which has no -s of its own.
+const BYPASS = /dangerously|yolo|full-auto|danger-full-access|bypass|network_access|writable_roots/i;
+const sandboxOf = (args) => {
+  assert.equal(args.filter((a) => a === '-s' || a === '--sandbox').length, 1, args.join(' '));
+  const mode = args[args.indexOf('-s') + 1];
+  assert.ok(['read-only', 'workspace-write'].includes(mode), args.join(' '));
+  assert.ok(!args.some((a) => a.startsWith('--config')), args.join(' '));
+  args.forEach((a, i) => { if (a === '-c') assert.equal(args[i + 1], `sandbox_mode=${mode}`, args.join(' ')); });
+  return mode;
+};
 test('codex launch(): exec --json with the prompt on stdin, the sandbox always read-only or (build) workspace-write, never widened or bypassed', () => {
   assert.deepEqual(codex.launch({ mode: 'headless', prompt: '/x acme/app#3', budget: 4.5 }), { cmd: 'codex', args: ['exec', '--json', '-s', 'read-only', '-'], stdin: '/x acme/app#3' });
-  assert.deepEqual(codex.launch({ mode: 'headless', prompt: 'x', resume: '01a2-b3', write: true }).args, ['exec', '--json', '-s', 'workspace-write', 'resume', '01a2-b3', '-']);
+  assert.deepEqual(codex.launch({ mode: 'headless', prompt: 'x', resume: '01a2-b3', write: true }).args, ['exec', '--json', '-s', 'workspace-write', 'resume', '-c', 'sandbox_mode=workspace-write', '01a2-b3', '-']);
   assert.deepEqual(codex.launch({ mode: 'terminal', resume: 'abc' }), { cmd: 'codex', args: ['resume', 'abc'] });
   assert.deepEqual(codex.launch({ mode: 'terminal' }), { cmd: 'codex', args: [] });
   for (const resume of ['-x', '--yolo', 'a b', '', 'x'.repeat(101)]) for (const mode of ['headless', 'terminal'])
@@ -813,7 +821,7 @@ test('codex launch(): exec --json with the prompt on stdin, the sandbox always r
     assert.doesNotMatch(JSON.stringify(spec), BYPASS, `${mode} write=${write} resume=${resume}`);
     if (mode === 'headless') assert.equal(sandboxOf(spec.args), write ? 'workspace-write' : 'read-only');
   }
-  for (const bad of [['-s', 'danger-full-access'], ['--dangerously-bypass-approvals-and-sandbox'], ['--yolo'], ['--full-auto'], ['-c', 'sandbox_workspace_write.network_access=true']]) // the check itself catches each
+  for (const bad of [['-s', 'danger-full-access'], ['--dangerously-bypass-approvals-and-sandbox'], ['--yolo'], ['--full-auto'], ['-c', 'sandbox_workspace_write.network_access=true'], ['resume', '-c', 'sandbox_mode=workspace-write', 'x'], ['-c', 'sandbox_permissions=["disk-full-read-access"]'], ['--config', 'sandbox_mode=read-only']]) // the check itself catches each
     assert.throws(() => { const args = ['exec', '--json', '-s', 'read-only', ...bad, '-']; assert.doesNotMatch(args.join(' '), BYPASS); sandboxOf(args); }, undefined, bad.join(' '));
 });
 

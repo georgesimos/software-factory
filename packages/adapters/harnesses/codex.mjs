@@ -64,8 +64,10 @@ const adapter = {
     if (mode === 'headless') {
       if (!prompt) throw new Error('a headless launch needs a prompt');
       if (budget != null && !(Number(budget) >= 0.01)) throw new Error(`no run budget left (${budget}); escalate instead of running`); // claude-code's whole-cent rule
-      // exec's own -s, before the resume subcommand (which has none). Never widened: no -c sandbox_*, network or writable roots.
-      return { cmd: 'codex', args: ['exec', '--json', '-s', write ? 'workspace-write' : 'read-only', ...(resume ? ['resume', resume] : []), '-'], stdin: prompt };
+      // exec's own -s, before the resume subcommand; resume has no -s, so it restates the same mode as config. Never widened:
+      // no other -c, no network or writable roots.
+      const sandbox = write ? 'workspace-write' : 'read-only';
+      return { cmd: 'codex', args: ['exec', '--json', '-s', sandbox, ...(resume ? ['resume', '-c', `sandbox_mode=${sandbox}`, resume] : []), '-'], stdin: prompt };
     }
     if (mode === 'terminal') { // a person types the prompt
       if (prompt) throw new Error('terminal mode takes no prompt: type it in the session');
