@@ -2,7 +2,7 @@ import { INVALID, assertReviewOpen, derive, validateReview } from './derive.ts';
 import { blocking } from './constants.ts';
 import { harnesses } from '../../adapters/harnesses/index.mjs';
 import { read } from './log.ts';
-import { resolvedSteps, skills } from './skills.ts';
+import { resolvedSteps, skills, type ExtraAxisRunner, type StepRunner } from './skills.ts';
 import type { Runner } from './types.ts';
 
 // Pinned unattended flags come from the harness that runs the skill (claude-code.mjs: `claude -p`), so F names no harness.
@@ -25,14 +25,15 @@ export function headlessArgs({ share = 1, ...opts }: { share?: number; budget?: 
 export function runnerStamp(run: string, stage: string, axis?: string, fallback?: unknown, role?: string): { runner?: Runner } {
   const key = stage === 'review' ? (role === 'verifier' ? 'verifier' : axis && `review.${axis}`) : stage === 'gate' ? 'verifier' : ['intake', 'spec', 'build'].includes(stage) ? stage : null;
   if (!key) return {};
-  const { plan, extra } = skills(run.split(/[#:]/)[0]);
-  const { axis: _a, when: _w, ...runner } = plan[key] || extra.find((x) => x.axis === axis) || { use: 'default' };
+  const { plan, extra } = skills(run.split(/[#:]/)[0] as string); // split always has a first part
+  const found: StepRunner & Partial<ExtraAxisRunner> = plan[key] || extra.find((x) => x.axis === axis) || { use: 'default' };
+  const { axis: _a, when: _w, ...runner } = found;
   if (fallback) return { runner: { use: 'default', fallback: { from: runner, reason: String(fallback).slice(0, 200) } } };
   return runner.use === 'default' && !runner.model ? {} : { runner }; // the configured model; the payload's `model` is the measured one
 }
 // The flags a headless run of one step gets from its resolved runner: model, effort and fallback after the version check.
 export function stepModel(run: string, key: string) {
-  const all = resolvedSteps(run.split(/[#:]/)[0]);
+  const all = resolvedSteps(run.split(/[#:]/)[0] as string); // split always has a first part
   if (!all[key]) throw new Error(`unknown step "${key}" (${Object.keys(all).join('|')})`);
   const { model, effort, fallback } = all[key];
   return { model, effort, fallback };

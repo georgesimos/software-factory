@@ -12,7 +12,7 @@ export interface Runner {
   fallback?: string[] | { from?: Runner; reason?: string };
 }
 export interface Usage { input?: number; output?: number; cacheRead?: number; cacheWrite?: number }
-export interface LocalChecks { sha?: string; state?: string; commands?: { cmd: string; exit: number }[] }
+export interface LocalChecks { sha?: string; state?: string; commands?: { cmd: string; exit: number | string; ms?: number }[] } // exit: a code, 'timeout' (killed after 30 min), or the signal that killed the command
 export interface Deploy { connector?: string; kind?: string; env?: string; state?: string; status?: string; url?: string; sha?: string | null; at?: string; detail?: string; creator?: string; ts?: string }
 export interface Note { id?: string; step?: string; text?: string; by?: string; ts?: string; state: 'pending' | 'applied'; appliedTo?: string[]; appliedAt?: string; claim?: unknown }
 export interface Session { agent?: string; id: string; cwd?: string; last?: string; hostId?: string } // hostId: the Claude desktop app's session (local_<uuid>)
@@ -45,7 +45,7 @@ export interface Burn {
   reported?: BurnCell | null;
 }
 /** A rule in effect (rules.ts rules().policy); value is whatever `F rules set` stored. */
-export interface Rule { value?: unknown; reason?: string; setBy?: string; setAt?: string; until?: string; scope?: string }
+export interface Rule { value?: unknown; reason?: string; setBy?: string; setAt?: string; until?: string; scope?: string; key?: string } // scope, key: in rules()' policy and expired lists
 export interface Loopback { iteration: number; route?: string; reasons?: string[]; ts: string }
 
 export type Outcome = 'in-progress' | 'rejected' | 'needs-info' | 'merged' | 'escalated' | 'closed' | 'awaiting-approval' | 'split';
