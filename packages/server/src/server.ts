@@ -535,7 +535,8 @@ const LOCAL_PATH = new RegExp([
 // A local (unverified) author is the OS user, which may be DOMAIN\user: never published. Its setBy/by becomes LOCAL_USER, and so
 // does the name in "set by <name> (local, unverified)" (gate.ts reasons); residue() refuses any that is left.
 const LOCAL_USER = 'a local user';
-const LOCAL_BY_TEXT = /\bset by [^\n"]{1,100}? \(local, unverified\)/g;
+// The name part is what LOCAL_BY allows (1-100 characters, no control character), quotes included.
+const LOCAL_BY_TEXT = /\bset by [^\x00-\x1f\x7f]{1,100}? \(local, unverified\)/g;
 const scrub = (v: unknown, under = ''): unknown => typeof v === 'string' ? v.replace(LOCAL_BY_TEXT, `set by ${LOCAL_USER} (local, unverified)`).replace(LOCAL_PATH, '[local path]')
   : Array.isArray(v) ? v.map((x) => scrub(x))
   : v && typeof v === 'object' ? scrubKeys(v, under) : v;
@@ -570,21 +571,21 @@ export function residue(json: string, raw: RawPage, me = machine()) {
   let text = json.replace(/(?:https?:\/\/)?(?:www\.)?github\.com[/:][^\s"\\,]*/gi, ''); // JSON text: \n is two characters, so stop at '\' too
   for (const id of ids) text = text.replace(new RegExp(String.raw`(?<![\w.\/\\-])${esc(id)}(?![\w.-])`, 'g'), '');
   if (me.user.length >= 3 && new RegExp(String.raw`(?:\\\\|\/)${esc(me.user)}(?![\w.-])`, 'i').test(text)) left.push('the login name in a path');
-  if (localNames(raw).some((n) => n !== LOCAL_USER && new RegExp(String.raw`(?<![\w.\/\\-])${esc(jsonOf(n))}(?![\w.-])`, 'i').test(text))) left.push('a local user name'); // a whole token, as ids are
   const short = me.host.split('.')[0]!, hosts: string[] = [];
   if (me.host.includes('.') && me.host.length >= 3) hosts.push(String.raw`(?<![\w-])${esc(me.host)}(?![\w-])`);
   if (short.length >= 3) hosts.push(String.raw`(?<![\w-])${esc(short)}(?=\.local\b)`, String.raw`(?:(?<=[\w.-])[@＠]|\\\\\\\\|\/\/)${esc(short)}(?![\w.-])`); // user@host, not @scope/pkg
   if (hosts.length && new RegExp(hosts.join('|'), 'i').test(json)) left.push('the host name');
   return left;
 }
-// Every OS user name the raw page holds as a local rule's or note's author.
-function localNames(v: unknown, out: string[] = []): string[] {
-  if (Array.isArray(v)) for (const x of v) localNames(x, out);
-  else if (v && typeof v === 'object') {
-    if (isLocal(v)) for (const k of ['setBy', 'by']) { const n = (v as Record<string, unknown>)[k]; if (typeof n === 'string' && n) out.push(n); }
-    for (const x of Object.values(v)) localNames(x, out);
-  }
-  return out;
+// The backstop for local names, on the scrubbed page data only, at the two places one is written: a local author's setBy/by,
+// and "set by <name> (local, unverified)" in a gate reason. Each must read LOCAL_USER. Not a search for the name: a user
+// called "user" or "dev" would refuse every page that says the word, and the app bundle never holds one.
+export function localLeft(v: unknown): boolean {
+  if (typeof v === 'string') return [...v.matchAll(/\bset by ([^\x00-\x1f\x7f]{1,100}?) \(local, unverified\)/g)].some((m) => m[1] !== LOCAL_USER);
+  if (Array.isArray(v)) return v.some(localLeft);
+  if (!v || typeof v !== 'object') return false;
+  if (isLocal(v) && ['setBy', 'by'].some((k) => k in v && (v as Record<string, unknown>)[k] !== LOCAL_USER)) return true;
+  return Object.values(v).some(localLeft);
 }
 const DATA_TAG = /(<script type="application\/json" id="data">)([^<]*)(<\/script>)/;
 // GitHub, Anthropic and OpenAI key shapes, and an F ui URL with its token.
@@ -604,7 +605,7 @@ export function artifact(html = page({}, { sheet: true })) {
   if (d.ui) throw new Error('artifact: refusing to publish a page built for F ui');
   delete d.reload; // updates arrive by republish
   if (d.skills?.catalog) d.skills.catalog = { global: [], projects: {} }; // install paths; the Skills sheet can't save there anyway
-  const json = JSON.stringify(d), left = residue(json, raw);
+  const json = JSON.stringify(d), left = [...residue(json, raw), ...(localLeft(d) ? ['a local user name'] : [])];
   if (left.length) throw new Error(`artifact: refusing to publish: after scrubbing, the page still carries ${left.join(', ')}`);
   if (/"[^"]*token"\s*:/i.test(json)) throw new Error('artifact: refusing to publish a page that carries a token'); // a key ending in token; tokens/tokenCap are counts
   // The bundle itself (anyone can rebuild and commit app.html): the same residue check, and no credential-shaped value anywhere.

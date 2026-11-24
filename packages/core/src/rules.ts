@@ -87,9 +87,15 @@ export function rules(repo: string, cfg: SkillsConfig = readSkills(), now = Date
 }
 // The person changing a rule (or writing a note), never typed in: whoever gh is logged in as, or, with no gh login, the OS user
 // (via 'local'), so rules and notes still save on a machine without GitHub. at: for tests.
+// Only a missing gh or one with no login falls back: an offline or rate-limited gh must not record a logged-in user as local.
 export function whoami(doing = 'changing the rule', at = { user: () => os.userInfo().username }): { by: string; via: Via } {
   let login = '';
-  try { login = gh('api', 'user', '--jq', '.login').trim(); } catch { /* not installed or not logged in: the OS user */ }
+  try { login = gh('api', 'user', '--jq', '.login').trim(); } catch (e) {
+    const out = (x: unknown) => String((x as { stderr?: unknown })?.stderr ?? '') + String((x as { stdout?: unknown })?.stdout ?? '');
+    let noLogin = (e as { code?: string })?.code === 'ENOENT'; // gh not installed
+    if (!noLogin) try { gh('auth', 'status'); } catch (s) { noLogin = /not logged in/i.test(out(s)); } // exits 1 with no login, and on a failed check
+    if (!noLogin) throw new Error(`cannot tell who is ${doing}: gh is logged in but "gh api user" failed (${out(e).trim().split('\n')[0] || (e as Error)?.message}); try again`);
+  }
   if (LOGIN.test(login)) return { by: login, via: 'github' };
   let user = '';
   try { user = String(at.user()).trim(); } catch { /* no OS user (uid without a passwd entry): below */ }
@@ -97,9 +103,23 @@ export function whoami(doing = 'changing the rule', at = { user: () => os.userIn
   return { by: user, via: 'local' };
 }
 const stamp = (who: { by: string; via: Via }) => ({ setBy: who.by, ...(who.via === 'local' && { via: who.via }) }); // a GitHub login is stored as before: no via
-// A local (unverified) user can't replace or remove a rule a verified login set: that could only ever loosen it.
+// A local (unverified) user can't replace or remove a rule a verified login set: that could only ever loosen it. An expired
+// one no longer applies (rules()), so anyone may clear or replace it. The message never names the local user (DOMAIN\user).
+const live = (old: Rule | undefined): old is Rule => !!old && !isLocal(old) && !(old.until && old.until < dayOf());
 const guard = (who: { by: string; via: Via }, old: Rule | undefined, key: string) => {
-  if (who.via === 'local' && old && !isLocal(old)) throw new Error(`rule ${key} was set by ${old.setBy} (GitHub): changing it needs that verified login (gh auth login), not the local user ${who.by}`);
+  if (who.via === 'local' && live(old)) throw new Error(`rule ${key} was set by ${old.setBy} (GitHub): changing it needs that verified login (gh auth login), not a local user`);
+};
+// A project rule overrides the default one, so a local user may shadow a verified default only with a value at least as strict.
+const RANK: Record<string, string[]> = { ci: ['skip', 'advisory', 'required'], 'deploy.preview': ['off', 'advisory', 'required'] }; // least to most strict
+export function asStrict(key: string, value: unknown, old: unknown): boolean {
+  if (RANK[key]) return RANK[key].indexOf(String(value)) >= RANK[key].indexOf(String(old));
+  if (typeof value === 'number' && typeof old === 'number') return value <= old; // caps: diffCap, project.*
+  if (key === 'checks.commands') return Array.isArray(value) && Array.isArray(old) && old.every((c) => value.includes(c)); // every verified check still runs
+  return JSON.stringify(value) === JSON.stringify(old);
+}
+const guardShadow = (who: { by: string; via: Via }, scope: string, base: Rule | undefined, key: string, value: unknown) => {
+  if (who.via === 'local' && scope !== 'default' && live(base) && !asStrict(key, value, base.value))
+    throw new Error(`rule ${key}=${JSON.stringify(base.value)} on default was set by ${base.setBy} (GitHub): overriding it on ${scope} with a looser value needs that verified login (gh auth login), not a local user`);
 };
 // Rule changes (stage "rules") and notes (stage "note") are owned events in the log, written here outside record():
 // they never move a run, and F event refuses them.
@@ -122,7 +142,7 @@ export function setRule(scope: string, key: string, raw: unknown, { reason, unti
     if (until !== undefined && !(isDay(until) && until >= dayOf())) throw new Error('--until must be YYYY-MM-DD, today or later');
   }
   const who = whoami();
-  if (step === null) { guard(who, s.rules?.[key], key); s.rules = { ...s.rules, [key]: { value, reason, ...stamp(who), setAt: new Date().toISOString(), ...(until && { until }) } }; }
+  if (step === null) { guard(who, s.rules?.[key], key); guardShadow(who, scope, cfg.default?.rules?.[key], key, value); s.rules = { ...s.rules, [key]: { value, reason, ...stamp(who), setAt: new Date().toISOString(), ...(until && { until }) } }; }
   cfg[scope] = s;
   writeSkills(cfg); // validates the whole config first
   audit(scope, 'set', { key, value, ...(reason && { reason }), ...(until && { until }), ...stamp(who) });

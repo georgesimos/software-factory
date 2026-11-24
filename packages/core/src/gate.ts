@@ -60,7 +60,8 @@ export function decide(r: Run, f: Facts) {
   const by = (x: Rule) => `set by ${byText(x)} on ${String(x.setAt).slice(0, 10)}: ${x.reason}`;
   if (ci === 'required' && f.checks !== 'pass') why.push(`CI checks are "${f.checks ?? 'unknown'}"`);
   // A rule that relaxes CI counts only from a verified login: a local (OS user) one is recorded and shown, never merged on.
-  for (const [k, x] of [[`ci=${ci}`, ci !== 'required' && pol.ci], ['checks.commands', ci !== 'required' && cmds && pol['checks.commands']]] as const)
+  // Only when the merge relies on it: with GitHub CI green, the relaxation changes nothing.
+  if (f.checks !== 'pass') for (const [k, x] of [[`ci=${ci}`, ci !== 'required' && pol.ci], ['checks.commands', ci !== 'required' && cmds && pol['checks.commands']]] as const)
     if (x && isLocal(x)) why.push(`rule ${k} was set by ${byText(x)}: a rule that relaxes CI needs a verified login (gh auth login) before the factory merges on its own`);
   const ruleNote = ci === 'required' ? null : `CI not required by rule ci=${ci}, ${by(pol.ci as Rule)}${ci === 'advisory' ? ` (CI is "${f.checks ?? 'unknown'}")` : ''}`;
   let local = null;
