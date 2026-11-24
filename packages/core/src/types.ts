@@ -66,6 +66,8 @@ export interface Run {
   humanMerge?: { by?: string | null; sha?: string | null; ts: string };
   reverted?: { pr?: string; reason?: string };
   deploys?: Deploy[]; notes?: Note[];
+  /** server.ts runsData(): the worktree path, the dashboard's "Open in Claude" cwd. */
+  worktree?: string;
   archived?: boolean; sessionEvents?: { ts: string; stage: string; status: string; sessionId: string }[];
 }
 
