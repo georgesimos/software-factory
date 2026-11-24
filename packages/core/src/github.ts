@@ -5,7 +5,7 @@ import { decide, localResult } from './gate.ts';
 import { ciBroken, ciChecks, ciOf } from './ci.ts';
 import { derive, getRun } from './derive.ts';
 import { exec } from './platform.ts';
-import { baseBranch, git, hostFn, hostOf, projects, requireGithub, trackerFn, trackerOf } from './workspace.ts';
+import { baseBranch, baseRef, git, hostFn, hostOf, projects, requireGithub, trackerFn, trackerOf } from './workspace.ts';
 import { io, read, readArchive, record, runDir } from './log.ts';
 import { shipTrack } from './ship.ts';
 import { rules } from './rules.ts';
@@ -64,16 +64,17 @@ export function intakeFixture(run: string, n: string) {
   return { ...meta, state: 'open', body: fx.issue.body, mentions: [], comments: fx.comments || [], ignoredComments: 0, dryRun: true };
 }
 export const adapterCtx = () => ({ gh, git }); // what host and tracker adapters get: the same stubbable gh and git
-/** The project's open change requests, from its host. */
-export function openPRs(repo: string) {
-  requireGithub(repo, 'listing open pull requests');
-  return hostFn(hostOf(repo), 'listChangeRequests', 'list change requests')(adapterCtx(), { repo });
+/** The project's open change requests, from its host (a git host reads the clone at path). */
+export function openPRs(repo: string, path = projects()[repo]?.path) {
+  const base = projects()[repo]?.base;
+  return hostFn(hostOf(repo), 'listChangeRequests', 'list change requests')(adapterCtx(), { repo, ...(path && { path }), ...(base && { base }) });
 }
-// Reads CI + diff facts from GitHub so the merge decision never depends on typed-in numbers.
+// Reads trust, CI and diff facts live (tracker, CI provider, host) so the merge decision never depends on typed-in numbers.
 export function facts(r: Run): Facts {
   const { repo, n } = parseRun(r.id);
-  requireGithub(repo, 'reading CI and the diff');
-  const association = trackerFn(trackerOf(repo), 'trust', 'tell who wrote the item')(adapterCtx(), { repo, id: n });
+  const host = hostOf(repo), onGit = host !== 'github', on = onGit ? { host } : {}; // GitHub's facts keep their keys
+  const ask = (() => { try { return trackerFn(trackerOf(repo), 'trust', 'tell who wrote an item'); } catch (e) { return (e as Error).message; } })();
+  const who = typeof ask === 'string' ? { trustBroken: `${ask}, so ${r.id}'s author is unknown and not trusted` } : { association: ask(adapterCtx(), { repo, id: n }) };
   const autoMerge = projects()[repo]?.autoMerge !== false;
   const policy = rules(repo).policy; // a broken config throws here, so decide/merge fail and the run escalates
   const pv = policy['deploy.preview']?.value, dep: { deploys?: Deploy[] } = {};
@@ -81,13 +82,22 @@ export function facts(r: Run): Facts {
     shipTrack([{ run: r.id, repo, sha: r.reviewedSha, path: projects()[repo]?.path }]);
     dep.deploys = derive(read())[r.id]?.deploys || [];
   }
-  if (!r.pr) return { association, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy, ...dep };
-  const diff: { additions: number; deletions: number; files: { path: string }[] } = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'additions,deletions,files'));
+  if (!(onGit ? r.reviewedSha : r.pr)) return { ...who, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy, ...dep, ...on };
+  const diff = onGit ? gitDiff(repo, r.reviewedSha as string) : JSON.parse(gh('pr', 'view', r.pr as string, '-R', repo, '--json', 'additions,deletions,files')) as ReturnType<typeof gitDiff>;
   // the project's CI provider on the reviewed commit; ci=skip doesn't read it, but a provider that can't answer still escalates
   const local = (sha?: string) => localResult(r.localChecks, policy['checks.commands']?.value, sha);
   const c = policy.ci?.value === 'skip' ? { ci: undefined, state: 'skipped', broken: ciBroken(repo) } : ciChecks(repo, { path: projects()[repo]?.path, sha: r.reviewedSha, changeRequest: r.pr }, local);
   const ci = { ...(c.ci && c.ci !== 'github-actions' && { ci: c.ci }), ...('detail' in c && c.detail && { ciDetail: c.detail }), ...(c.broken && { ciBroken: c.broken }) }; // GitHub's, as before: no extra keys
-  return { association, autoMerge, checks: c.state, ...ci, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), rules: policy, ...dep };
+  return { ...who, autoMerge, checks: c.state, ...ci, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), rules: policy, ...dep, ...on };
+}
+// A git project's diff: the reviewed commit against its fork point from the base (three dots), as GitHub counts a PR's.
+// numstat -z: "added<TAB>deleted<TAB>path<NUL>"; a binary file's "-" counts 0 lines, as on GitHub.
+function gitDiff(repo: string, sha: string) {
+  const at = projects()[repo]?.path;
+  if (!at) throw new Error(`no local clone registered for ${repo}`);
+  const rows = git('-C', at, 'diff', '--numstat', '-z', '--no-renames', `${baseRef(at, baseBranch(repo, at))}...${sha}`).split('\0').filter(Boolean).map((l) => l.split('\t'));
+  const lines = (i: number) => rows.reduce((t, x) => t + (Number(x[i]) || 0), 0);
+  return { additions: lines(0), deletions: lines(1), files: rows.map((x) => ({ path: x.slice(2).join('\t') })) };
 }
 // The only merge path: re-decides from live GitHub facts and merges exactly the reviewed commit.
 export function merge(run: string) {

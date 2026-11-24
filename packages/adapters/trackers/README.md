@@ -16,6 +16,16 @@ A tracker is where `F issues create` files a project's issue batch, and where `F
 
 3. Use it: `F new "<idea>" --tracker <id>`. No core change.
 
+Per-issue reads, optional (a project's tracker is `projects.json` `tracker`, else `github-issues` on a GitHub project and
+`local` (local-first 5b) on a git one). Core imports the trackers it reads these from by name (`builtin` in `index.ts`); a tracker without
+one is refused by name (`tracker "<id>" cannot …`), and `facts()` turns a missing `trust` into an escalation.
+
+| Function | Returns | Must |
+|---|---|---|
+| `getItem(ctx, {repo, id})` | `{id, title, url?, author, association, state, isChangeRequest, body}` | The item as written, never model-typed. `association` is the author's standing on the tracker. |
+| `comments(ctx, {repo, id})` | `[{author, association, created_at, body}]` | Every comment, oldest first. |
+| `trust(ctx, {repo, id})` | the author's association | Read again at merge time by `facts()`. |
+
 ## Test
 
 `node factory.mjs test` runs the shared `contract()` in `index.ts` against every tracker in this folder (with the fake `gh`), and against a fake tracker written as one file in a temp dir. The contract creates a, b (depends on a) and an epic, re-runs with `existing` and expects zero creates, then checks `listOpen` labels and `dependencies`.
@@ -35,4 +45,4 @@ would compile those, but F under Node fails on them, naming the file.
 
 ## Not yet on the adapter
 
-Per-issue intake (`F intake`, stage comments and labels) still calls `gh` directly. Moving it onto this adapter is a follow-up; until then a non-GitHub tracker covers `F issues create`, `F queue` and `F loop` only.
+`F intake`, spec approval and `facts()` read the item through `getItem`, `comments` and `trust`. Stage comments and labels still call `gh` directly (local-first PR 6).
