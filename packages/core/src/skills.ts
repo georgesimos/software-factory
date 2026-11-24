@@ -207,7 +207,7 @@ export const older = (v: unknown, min: string): boolean => {
   return i >= 0 && (a[i] ?? 0) < (b[i] ?? 0); // both have 3 parts
 };
 export type PlannedStep = StepRunner & { modelFallback?: { from?: string; reason: string } };
-export function availablePlan(plan: Record<string, StepRunner>, version: (h: Harness) => string | null | undefined = (h) => h.detect().version): Record<string, PlannedStep> {
+export function availablePlan(plan: Record<string, StepRunner> | StepRunner[], version: (h: Harness) => string | null | undefined = (h) => h.detect().version): Record<string, PlannedStep> {
   const seen = new Map<string, string | null | undefined>(), ver = (h: Harness) => (seen.has(h.id) ? seen.get(h.id) : seen.set(h.id, version(h)).get(h.id));
   return Object.fromEntries(Object.entries(plan).map(([k, r]): [string, PlannedStep] => {
     const h = r.model ? runsOn(r) : undefined;

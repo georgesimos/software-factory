@@ -67,10 +67,10 @@ export async function main(argv: string[]) {
         out({ status, findings: payload.findings }); break;
       }
       case 'skills': { // skills <owner/repo> | skills set|unset <owner/repo|default> <step> [json] | skills preset <name> [scope] | skills catalog [owner/repo]
-        if (run === 'catalog') { out(catalog(rest as Parameters<typeof catalog>[0])); break; } // skills.ts is still untyped
-        if (run === 'unset') { out(setSkill(rest[0], rest[1], undefined)); break; }
+        if (run === 'catalog') { out(catalog(rest)); break; }
+        if (run === 'unset') { out(setSkill(rest[0] as string, rest[1] as string, undefined)); break; } // argv boundary: setSkill's scope check refuses a missing scope
         if (run === 'preset') { out(applyPreset(rest[0], rest[1])); break; }
-        if (run !== 'set') { const k = skills(run || ''); out({ ...k, plan: availablePlan(k.plan), extra: Object.values(availablePlan({ ...k.extra })) }); break; }
+        if (run !== 'set') { const k = skills(run || ''); out({ ...k, plan: availablePlan(k.plan), extra: Object.values(availablePlan(k.extra)) }); break; }
         const [scope, key, spec] = rest;
         if (!scope || !key || !spec) throw new Error('usage: skills set <owner/repo|default> <step> <json runner>');
         out(setSkill(scope, key, json(spec))); break;
@@ -104,7 +104,7 @@ export async function main(argv: string[]) {
           files = git('-C', w.path, 'diff', '--name-only', range).split('\n').filter(Boolean);
         }
         const sha = w && fs.existsSync(w.path) ? git('-C', w.path, 'rev-parse', 'HEAD').trim() : undefined;
-        const axes = reviewAxes(r, files, skills(run.split(/[#:]/)[0]).extra);
+        const axes = reviewAxes(r, files, skills(run.split(/[#:]/)[0] as string).extra); // split always has a first part
         record(run, 'review', 'started', { axes, sha, range });
         out({ axes, range, files }); break;
       }
