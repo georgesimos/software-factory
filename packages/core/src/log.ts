@@ -6,7 +6,7 @@ import { cleanup, wtInfo } from './workspace.ts';
 import { runnerStamp } from './review.ts';
 import { withMeasured } from './burn.ts';
 import { derive, validateReview, validateUsage } from './derive.ts';
-import { harnesses } from '../../adapters/harnesses/index.mjs';
+import { harnesses } from '../../adapters/harnesses/index.ts';
 import type { FactoryEvent, Run } from './types.ts';
 
 // The dashboard renderer, registered by packages/server when it loads. Core alone (no server) skips the render.

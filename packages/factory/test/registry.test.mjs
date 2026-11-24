@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { stripTypeScriptTypes } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { importPlugin, loadDir, pluginFiles } from '../../adapters/registry.ts';
-import { load as loadHarnesses } from '../../adapters/harnesses/index.mjs';
+import { load as loadHarnesses } from '../../adapters/harnesses/index.ts';
 import { REQUIRED as HOST_FNS } from '../../adapters/hosts/index.ts';
 
 const ADAPTERS = path.join(import.meta.dirname, '..', '..', 'adapters');
@@ -26,7 +26,8 @@ test('a .ts beside its .mjs twin is one provider twice: refused, saying to remov
   const d = put(tmp(), { 'fake.mjs': HOST('fake').replaceAll(': string', '').replace(': { ok: boolean }', ''), 'fake.ts': HOST('fake') });
   assert.throws(() => pluginFiles(d), /fake\.mjs and fake\.ts are both provider "fake": remove one/);
   await assert.rejects(loadDir(d, HOST_FNS), /remove one/);
-  const h = put(tmp(), { 'codex.mjs': fs.readFileSync(path.join(ADAPTERS, 'harnesses', 'codex.mjs'), 'utf8'), 'codex.ts': fs.readFileSync(path.join(ADAPTERS, 'harnesses', 'codex.mjs'), 'utf8') });
+  const codex = fs.readFileSync(path.join(ADAPTERS, 'harnesses', 'codex.ts'), 'utf8');
+  const h = put(tmp(), { 'codex.mjs': stripTypeScriptTypes(codex), 'codex.ts': codex });
   await assert.rejects(loadHarnesses(h), /codex\.mjs and codex\.ts are both provider "codex": remove one/);
 });
 
@@ -41,9 +42,10 @@ test('a .ts host or tracker must export its file name as id, exactly as a .mjs m
 // FACTORY_HARNESSES replaces the harness folder (the self-test's registry). launchGate (host) and the codex sandbox
 // allow-list key on the ids, so a .ts copy must load as the very same harness, and a .ts can't claim another's id.
 test('FACTORY_HARNESSES: claude-code.ts and codex.ts load exactly as the .mjs files do; a mismatched id is refused alike', async () => {
-  const src = (f) => fs.readFileSync(path.join(ADAPTERS, 'harnesses', f), 'utf8');
-  const asMjs = await loadHarnesses(put(tmp(), { 'claude-code.mjs': src('claude-code.mjs'), 'codex.mjs': src('codex.mjs') }));
-  const asTs = await loadHarnesses(put(tmp(), { 'claude-code.ts': src('claude-code.mjs'), 'codex.ts': src('codex.mjs') }));
+  // the built-ins are .ts; their .mjs form is the same file type-stripped (as an .mjs harness outside the repo would be)
+  const ts = (id) => fs.readFileSync(path.join(ADAPTERS, 'harnesses', `${id}.ts`), 'utf8'), mjs = (id) => stripTypeScriptTypes(ts(id));
+  const asMjs = await loadHarnesses(put(tmp(), { 'claude-code.mjs': mjs('claude-code'), 'codex.mjs': mjs('codex') }));
+  const asTs = await loadHarnesses(put(tmp(), { 'claude-code.ts': ts('claude-code'), 'codex.ts': ts('codex') }));
   const shape = (h) => Object.fromEntries(Object.entries(h).map(([k, v]) => [k, typeof v === 'function' ? String(v) : v]));
   assert.deepEqual(asTs.map(shape), asMjs.map(shape));
   assert.deepEqual(asTs.map((h) => [h.id, !!h.host]), [['claude-code', true], ['codex', false]]); // launchGate: only claude-code drives a run
@@ -51,7 +53,7 @@ test('FACTORY_HARNESSES: claude-code.ts and codex.ts load exactly as the .mjs fi
     assert.deepEqual(h.launch(opts), asMjs[i].launch(opts), `${h.id} ${JSON.stringify(opts)}`); // codex: the same sandbox argv
   }
   for (const ext of ['mjs', 'ts']) { // a file claiming the host's id under another name
-    await assert.rejects(loadHarnesses(put(tmp(), { [`mine.${ext}`]: src('claude-code.mjs') })), new RegExp(`harnesses/mine\\.${ext}: id must be lowercase and equal the file name`));
+    await assert.rejects(loadHarnesses(put(tmp(), { [`mine.${ext}`]: ext === 'ts' ? ts('claude-code') : mjs('claude-code') })), new RegExp(`harnesses/mine\\.${ext}: id must be lowercase and equal the file name`));
   }
 });
 

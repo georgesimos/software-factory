@@ -7,7 +7,7 @@ import { CAP, COST_CAP, TERMINAL, TOKEN_CAP } from '../../core/src/constants.ts'
 import { hooks, loadShipList } from '../../core/src/ship.ts';
 import { LOGIN, rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
 import { budget, budgetWhy, derive } from '../../core/src/derive.ts';
-import { harnesses } from '../../adapters/harnesses/index.mjs';
+import { harnesses } from '../../adapters/harnesses/index.ts';
 import { ideas, startIdea } from '../../core/src/project.ts';
 import { metrics } from '../../core/src/gate.ts';
 import { fCmd, onboardConfig, onboardState, readOnboard, setShip } from '../../core/src/onboard.ts';
@@ -21,9 +21,9 @@ import { logMetrics } from '../../core/src/metrics.ts';
 import { open } from '../../core/src/platform.ts';
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { AddressInfo } from 'node:net';
-import { childEnv, getSession, killTree, listSessions, resolveSpec, startSession, stopAll, subscribe } from '../../adapters/sessions.mjs';
+import { childEnv, getSession, killTree, listSessions, resolveSpec, startSession, stopAll, subscribe } from '../../adapters/sessions.ts';
 import { claimedElsewhere, claimLive, procStart, readClaim, refuseClaimed, running, takeClaim, withClaim } from '../../core/src/claim.ts';
-import type { Session, SessionInfo } from '../../adapters/sessions.mjs';
+import type { Session, SessionInfo } from '../../adapters/sessions.ts';
 import type { FactoryEvent, Run } from '../../core/src/types.ts';
 
 // A request as uiHandle() reads it. Node joins a repeated header into one string (set-cookie aside), so each is a string.

@@ -1,4 +1,4 @@
-import { harnesses } from '../../adapters/harnesses/index.mjs';
+import { harnesses } from '../../adapters/harnesses/index.ts';
 import type { Finding } from './types.ts';
 
 export const CAP = 3;          // max build iterations before escalating

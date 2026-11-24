@@ -7,7 +7,7 @@
   "type": "module",
   "engines": { "node": ">=24.12" },
   "exports": {
-    "./harnesses": "./harnesses/index.mjs",
+    "./harnesses": "./harnesses/index.ts",
     "./hosts": "./hosts/index.ts",
     "./trackers": "./trackers/index.ts"
   },

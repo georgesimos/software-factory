@@ -13,8 +13,8 @@ import { archive, io, read, record, runDir } from '../../core/src/log.ts';
 import { derive } from '../../core/src/derive.ts';
 import { projects, saveProject, wtFile } from '../../core/src/workspace.ts';
 import { command, opener } from '../../core/src/platform.ts';
-import { harnesses } from '../../adapters/harnesses/index.mjs';
-import { MAX_BYTES, codexBinary, killTree, listSessions, resolveSpec, startSession, subscribe, getSession } from '../../adapters/sessions.mjs';
+import { harnesses } from '../../adapters/harnesses/index.ts';
+import { MAX_BYTES, codexBinary, killTree, listSessions, resolveSpec, startSession, subscribe, getSession } from '../../adapters/sessions.ts';
 import { artifact, budgetLeft, harnessReady, launchSession, openSession, page, resumable, resumeFor, serve, startRun, terminalSession, uiHandle } from '../../server/src/server.ts';
 import { procStart, readClaim, statTicks, takeClaim, unclaim } from '../../core/src/claim.ts';
 

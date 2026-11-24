@@ -3,16 +3,17 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
+import type { Harness, ProviderTool } from './index.ts';
 
 // What to spawn for `name args`. On Windows only a file found on PATH (quoted entries unquoted), never the bare name, which
 // Windows looks up in the current folder (maybe an untrusted clone) first: an .exe directly, an npm .cmd shim through
 // cmd.exe /d /s /c like sessions do, only with plain args (no cmd.exe quoting is attempted). The shim runs a bare `node`, which
 // cmd.exe would look for in the current folder first: run it from the shim's own folder with that lookup off. Relative PATH
 // entries never count. null: not installed, or not runnable safely. Kept in this file: a harness is one file with node: builtins only.
-const isFile = (f) => { try { return fs.statSync(f).isFile(); } catch { return false; } };
+const isFile = (f: string) => { try { return fs.statSync(f).isFile(); } catch { return false; } };
 const PLAIN = /^[\w\-.,:/\\=@+~]+$/; // what cmd.exe passes as is: core/src/platform.ts command()'s rule
-export function spawnFor(name, args, platform = process.platform, env = process.env, exists = isFile) {
+export function spawnFor(name: string, args: string[], platform: string = process.platform, env: Record<string, string | undefined> = process.env, exists = isFile): [string, string[], SpawnSyncOptions] | null {
   if (platform !== 'win32') return [name, args, {}];
   for (const d of String(env.PATH ?? env.Path ?? '').split(';').map((x) => x.trim().replace(/^"(.*)"$/, '$1')).filter((x) => path.win32.isAbsolute(x))) {
     for (const ext of ['.exe', '.cmd']) {
@@ -27,16 +28,16 @@ export function spawnFor(name, args, platform = process.platform, env = process.
   return null;
 }
 // Both streams: some CLIs print status to stderr. No shell, argv only, bounded by a timeout.
-const run = (args) => {
+const run = (args: string[]) => {
   const s = spawnFor('codex', args);
-  const r = s ? spawnSync(s[0], s[1], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000, ...s[2] }) : { error: true };
+  const r: { error?: unknown; status?: number | null; stdout?: string | Buffer; stderr?: string | Buffer } = s ? spawnSync(s[0], s[1], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000, ...s[2] }) : { error: true };
   return { code: r.error ? -1 : r.status ?? -1, out: `${r.stdout || ''}${r.stderr || ''}` };
 };
 const SESSION_ID = /^\w[\w-]{0,99}$/; // a thread id as a positional argument: plain, and never a flag (no leading '-')
 const ID = /^[\w-]{1,100}$/; // a session id read from its output: a malformed one is skipped, so a later valid one counts
-const found = (files, ok = fs.existsSync) => { const f = files.find((x) => x && ok(x)); return f ? { installed: true, path: f } : { installed: false }; };
-const codexBundle = (app) => { try { return fs.readFileSync(path.join(app, 'Contents', 'Info.plist'), 'latin1').includes('com.openai.codex'); } catch { return false; } }; // XML or binary plist: the id is plain text in both
-const slug = (url) => /[:/]([^/:]+\/[^/]+?)(?:\.git)?\/?$/.exec(url || '')?.[1].toLowerCase(); // owner/repo from any remote URL form
+const found = (files: (string | undefined)[], ok: (f: string) => boolean = fs.existsSync) => { const f = files.find((x) => x && ok(x)); return f ? { installed: true, path: f } : { installed: false }; };
+const codexBundle = (app: string) => { try { return fs.readFileSync(path.join(app, 'Contents', 'Info.plist'), 'latin1').includes('com.openai.codex'); } catch { return false; } }; // XML or binary plist: the id is plain text in both
+const slug = (url?: string) => /[:/]([^/:]+\/[^/]+?)(?:\.git)?\/?$/.exec(url || '')?.[1]!.toLowerCase(); // owner/repo from any remote URL form
 
 const adapter = {
   id: 'codex',
@@ -50,11 +51,11 @@ const adapter = {
   login() {
     const r = run(['login', 'status']);
     const ok = r.code === 0 && /logged in/i.test(r.out) && !/not logged in/i.test(r.out);
-    return { ok, hint: ok ? r.out.trim().split('\n').pop().replace(/^logged in\s*/i, '') || 'signed in' : 'codex login' };
+    return { ok, hint: ok ? r.out.trim().split('\n').pop()!.replace(/^logged in\s*/i, '') || 'signed in' : 'codex login' };
   },
   headless: () => ({ cmd: 'codex', args: ['exec', '-C', '<worktree>', '-s', 'read-only', '--output-schema', '<review.schema.json>', '-o', '<out.json>', '<prompt>'],
     note: 'Build uses -s workspace-write. Never pass --dangerously-bypass-approvals-and-sandbox.' }),
-  // launch() only says what to run; packages/adapters/sessions.mjs runs it. headless: `codex exec --json`, one JSONL event per
+  // launch() only says what to run; packages/adapters/sessions.ts runs it. headless: `codex exec --json`, one JSONL event per
   // line, the prompt on stdin (`-`). The sandbox is always named, on a resume too: read-only unless `write` (build), which gets
   // workspace-write. Never danger-full-access or --dangerously-bypass-approvals-and-sandbox (or its --yolo alias).
   // Codex has no spend or turn cap of its own (no --max-budget-usd or --max-turns): a spent budget refuses, any other runs
@@ -85,9 +86,9 @@ const adapter = {
   },
   // A headless run's events (F start's log, a session's stdout): its thread id comes first (thread.started), and it ended
   // cleanly when its last event is turn.completed; turn.failed, error or any other last event means it was cut short.
-  sessionOf: (e) => (e?.type === 'thread.started' && typeof e.thread_id === 'string' && ID.test(e.thread_id) ? e.thread_id : undefined),
-  exitOf: (e) => (e?.type === 'turn.completed' ? 0 : null),
-  providerTools: () => (adapter.detect().installed ? [
+  sessionOf: (e: { type?: string; thread_id?: unknown } | null | undefined) => (e?.type === 'thread.started' && typeof e.thread_id === 'string' && ID.test(e.thread_id) ? e.thread_id : undefined),
+  exitOf: (e: { type?: string } | null | undefined) => (e?.type === 'turn.completed' ? 0 : null),
+  providerTools: (): ProviderTool[] => (adapter.detect().installed ? [
     { name: 'codex exec', desc: 'Runs Codex headless in the run worktree with the step\'s brief; reviews return the JSON contract via --output-schema.' },
     { name: 'codex review', tool: 'review', desc: 'Codex\'s own reviewer against the base branch. Replies in prose, so the adapter brief converts it.' },
   ] : []),
@@ -102,12 +103,12 @@ const adapter = {
     return found([path.join(root, 'usr', 'share', 'applications'), path.join(home, '.local', 'share', 'applications')].map((d) => path.join(d, 'codex.desktop')));
   },
   sessions(repoPath, remoteUrl) {
-    const root = path.join(os.homedir(), '.codex', 'sessions'), want = slug(remoteUrl), out = [];
-    let files = [];
+    const root = path.join(os.homedir(), '.codex', 'sessions'), want = slug(remoteUrl), out: { branch: string; id: string; cwd?: string; last: string }[] = [];
+    let files: (string | Buffer)[] = [];
     try { files = fs.readdirSync(root, { recursive: true }); } catch { return out; }
     for (const f of files.map(String).filter((f) => f.endsWith('.jsonl'))) {
       const file = path.join(root, f), fd = fs.openSync(file, 'r'), buf = Buffer.alloc(8192);
-      const first = buf.subarray(0, fs.readSync(fd, buf, 0, buf.length, 0)).toString('utf8').split('\n')[0];
+      const first = buf.subarray(0, fs.readSync(fd, buf, 0, buf.length, 0)).toString('utf8').split('\n')[0]!;
       fs.closeSync(fd);
       try {
         const meta = JSON.parse(first).payload, g = meta?.git;
@@ -116,5 +117,5 @@ const adapter = {
     }
     return out;
   },
-};
+} satisfies Harness;
 export default adapter;

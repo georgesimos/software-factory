@@ -1,6 +1,6 @@
 # Add an AI harness in 4 steps
 
-A harness (Gemini CLI, Cursor agent, Aider, ...) is **one file plus its stub binary**. The registry (`harnesses/index.mjs`)
+A harness (Gemini CLI, Cursor agent, Aider, ...) is **one file plus its stub binary**. The registry (`harnesses/index.ts`)
 loads every `harnesses/<id>.mjs` (or `<id>.ts`) by itself. The runner validation, the Skills catalog, session import in `F sync`, the event
 stamp, the sensitive paths, `F onboard` and the setup wizard all read it, so nothing else in the repo changes.
 
@@ -13,7 +13,8 @@ Node only strips types, it compiles nothing: a `.ts` file must use erasable synt
 parameter properties or other TypeScript that emits code; type-only imports as `import type`). The desktop build
 would compile those, but F under Node fails on them, naming the file.
 
-1. **Copy the template.** `cp harnesses/_template.mjs harnesses/<id>.mjs`. The `id` must equal the file name without its extension.
+1. **Copy the template.** `cp harnesses/_template.ts harnesses/<id>.ts` (its types come from `index.ts`); for a harness kept outside
+   this repo, copy it to `<id>.mjs` and delete the type annotations, the `import type` line and `satisfies Harness`. The `id` must equal the file name without its extension.
    Files starting with `_` are never loaded. Import only `node:` builtins, never `factory.mjs`.
 2. **Fill in the contract.** Run the CLI only through `spawnSync` with an argv array and a timeout, on Windows only through the template's `spawnFor()` (an `.exe` or npm `.cmd` shim found on PATH, never a bare name that Windows looks up in the current folder first), and read both streams,
    since some CLIs print status to stderr. `detect()` and `login()` must never throw.
@@ -28,7 +29,7 @@ would compile those, but F under Node fails on them, naming the file.
    | `headless()` | no | `{cmd, args, note}`: how the orchestrator runs it unattended (display only) |
    | `headlessArgs(opts)` | no | the host harness only: pinned unattended flags `F headless-args` prints (`{schema, budget, write, model, effort, fallback}`) |
 | `providerTools()` | no | `[{name, desc, tool?}]` for the runner picker. The core builds the runner, so a harness can only offer itself. Return `[]` when not installed |
-   | `modes`, `launch({mode, prompt, resume, budget, write})` | no | the modes it can start (`headless`, `terminal`, `sdk`) and, for one, `{cmd, args, stdin?}` (`headless`, `terminal`) or `{module, prompt, options}` (`sdk`: the SDK package and its `query()` options). Put a prompt in `stdin`, never in `args`: on Windows a `.cmd` shim can't take an argument with a space or `#`. `terminal` takes no prompt; a person types it. It only describes what to run; `packages/adapters/sessions.mjs` runs it, behind `POST /api/sessions` |
+   | `modes`, `launch({mode, prompt, resume, budget, write})` | no | the modes it can start (`headless`, `terminal`, `sdk`) and, for one, `{cmd, args, stdin?}` (`headless`, `terminal`) or `{module, prompt, options}` (`sdk`: the SDK package and its `query()` options). Put a prompt in `stdin`, never in `args`: on Windows a `.cmd` shim can't take an argument with a space or `#`. `terminal` takes no prompt; a person types it. It only describes what to run; `packages/adapters/sessions.ts` runs it, behind `POST /api/sessions` |
    | `openDesktop(id)` | no | a link that opens one of its sessions in its desktop app, or `null` (callers fall back to resuming in a terminal) |
    | `sessions(repoPath, remoteUrl)` | no | `[{branch, id, cwd, last}]` from its local logs, so `F sync` imports work in flight. Branch names and times only, never prompt text |
    | `notes()` | no | `[{label, ok: true/false/null, hint}]`: extra setup checks for the wizard (Claude Code's `claude-cli://` handler) |

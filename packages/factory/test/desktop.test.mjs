@@ -4,8 +4,8 @@ import { test } from 'node:test';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import claude from '../../adapters/harnesses/claude-code.mjs';
-import codex from '../../adapters/harnesses/codex.mjs';
+import claude from '../../adapters/harnesses/claude-code.ts';
+import codex from '../../adapters/harnesses/codex.ts';
 
 const tmp = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'factory-desktop-app-')));
 const put = (f, text = '') => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, text); return f; };
