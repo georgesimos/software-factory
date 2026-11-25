@@ -245,6 +245,7 @@ export function onboardTest(cli) {
     assert.match(err('/onboard/rule', { scope: '__proto__', key: 'ci', value: 'skip', reason: 'x' }), /scope "__proto__"/);
     assert.match(err('/onboard/rule', { scope: 'acme/app', key: 'trusted', value: '[]', reason: 'x' }), /unknown rule/);
     assert.match(err('/onboard/automerge', { repo: 'acme/app', on: false }), /not attached/);
+    assert.match(err('/onboard/automerge', { repo: 'acme/app', on: true }), /turning auto-merge on is confirmed at your own terminal: run F automerge acme\/app on/);
     assert.deepEqual([fs.existsSync(path.join(io.dir, 'skills.json')), fs.existsSync(path.join(io.dir, 'onboard.json')), read().length], [false, false, 0]);
     // The wizard's happy path, then the same again.
     const run = () => {

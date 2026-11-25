@@ -3,6 +3,7 @@
 // What it stops is the run's own agent approving its own spec by mistake or by following an item's text. It is a speed bump, not a
 // security boundary: an agent determined to get past it can (see ttyAsk). F approve RUN --merge (local-first PR 7) uses the same
 // bump, and on the git host a merge does rest on it: nobody there is verified (D4), so the user's typed approval is all there is.
+// F automerge on and a relaxing F project set ask through ttyAsk too: the same bump in front of what an agent must not loosen.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,7 +26,7 @@ const needsF = (run: string) => { try { return !ownChannel(parseRun(run).repo); 
 export const clean = (s: string) => s.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, ''); // and bidi, zero-width, soft-hyphen and line/paragraph separator marks, which can reorder or hide what the spec says
 
 /** One line of the merge prompt: a title, file name or reason can't start a line of its own (a fake "Type … to approve"). */
-const line = (s: unknown) => clean(String(s)).replace(/\s+/g, ' ').trim();
+export const line = (s: unknown) => clean(String(s)).replace(/\s+/g, ' ').trim();
 
 /** The spec put to the user: all of DIR/spec.md, a plain file, never empty. */
 function specOf(run: string) {
@@ -87,7 +88,7 @@ export function specCleared(run: string, doing: string) {
 export function ttyAsk(prompt: string) {
   const [inp, out] = process.platform === 'win32' ? ['CONIN$', 'CONOUT$'] : ['/dev/tty', '/dev/tty'];
   let i: number, o: number;
-  try { i = fs.openSync(inp, 'r'); o = fs.openSync(out, 'w'); } catch { throw new Error('approval needs your terminal, and this process has none: run F approve in your own terminal, not from an agent or a script'); }
+  try { i = fs.openSync(inp, 'r'); o = fs.openSync(out, 'w'); } catch { throw new Error('this needs your terminal, and this process has none: run the F command in your own terminal, not from an agent or a script'); }
   try {
     fs.writeSync(o, prompt);
     let line = '';
