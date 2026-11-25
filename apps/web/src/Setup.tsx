@@ -266,7 +266,7 @@ function Flow({ data, live, F, scope, scopePicker, token, S, setStatus, onSkills
 function Rules({ data, ob, live, F, scope, scopePicker, write, fail, setStatus, setDirty, S }: StepCtx) {
   const pol: Policy = (live ? ob?.rules?.[scope] : data.rules?.[scope])?.policy ?? {};
   const own = (k: string) => (pol[k]?.scope === scope ? pol[k] : undefined), proj = scope !== 'default';
-  const am = proj && (live ? ob?.projects?.[scope]?.autoMerge : data.autoMerge?.[scope]) !== false;
+  const am = proj && (live ? ob?.projects?.[scope]?.autoMerge : data.autoMerge?.[scope]) === true; // D1: off unless turned on
   const ciNow = String(pol.ci?.value ?? 'required'), checksNow = Array.isArray(pol['checks.commands']?.value) ? pol['checks.commands']!.value as string[] : [];
   const guideNow = String(((S.config?.[scope] as { guide?: Record<string, string> } | undefined)?.guide ?? {})['*'] ?? ''); // raw: resolved guidance folds "*" into every step
   const [f, setF] = useState({ ci: ciNow, checks: checksNow.join('\n'), merge: am, guide: guideNow, reason: '', until: '' });

@@ -13,6 +13,10 @@ export interface Facts {
   /** The CI provider that gave checks (absent: github-actions, as before providers); ciDetail: its one-line why; ciBroken: it
    *  couldn't answer (unknown, wrong host, threw), which escalates under every ci rule; host: the project's (absent: github). */
   ci?: string; ciDetail?: string; ciBroken?: string; host?: string; trustBroken?: string;
+  /** trustBroken only because the item's tracker has no verifiable author (a git project's local tracker): approvable (D4). */
+  unverifiable?: boolean;
+  /** F merge's look at the change request: not open, not the run's own branch, or its head isn't the reviewed commit. */
+  headBroken?: string;
 }
 
 /** F's own checks (F checks) on sha against the checks.commands rule: pass only on that commit, with that command list, every
@@ -57,15 +61,18 @@ export function gate(r: Run) {
   if (b.over) return { status: 'failed', next: 'approve', reasons: [...reasons, `budget reached ${budgetWhy(b)}`] };
   return { status: 'failed', next: route, reasons };
 }
-// Default is escalate: merge only when every condition holds.
+// Default is escalate: merge only when every condition holds. await-approval (local-first §0 D4): every reason left is one that
+// F approve RUN --merge may clear, auto-merge off (D1) or, on a host with no verified identities, an author nobody can verify;
+// it merges only with that approval of exactly the reviewed commit (on GitHub, by a verified login). Every other reason escalates.
 export function decide(r: Run, f: Facts) {
   if (r.imported) return { action: 'escalate', reasons: [`imported ${r.source || ''} run: the factory did not spec or build it`] };
-  const why = [];
+  const why: string[] = [], asks: string[] = [], git = (f.host ?? 'github') !== 'github';
   const assoc = Object.hasOwn(f, 'association') ? f.association : r.association; // facts() reads it live from the tracker; its null is never intake's
-  if (f.trustBroken) why.push(f.trustBroken); // the tracker can't say: never intake's recorded association instead
-  else if (!TRUSTED.includes(assoc)) why.push(`author association "${assoc || 'unknown'}" is not trusted`);
-  if (r.originAssociation && !TRUSTED.includes(r.originAssociation)) why.push(`split from ${r.origin}, whose author "${r.originAssociation}" is not trusted`);
-  if (f.autoMerge === false) why.push('auto-merge is turned off for this project');
+  if (f.trustBroken) (git && f.unverifiable ? asks : why).push(f.trustBroken); // the tracker can't say: never intake's recorded association instead
+  else if (!TRUSTED.includes(assoc)) (git ? asks : why).push(`author association "${assoc || 'unknown'}" is not trusted`);
+  if (r.originAssociation && !TRUSTED.includes(r.originAssociation)) (git ? asks : why).push(`split from ${r.origin}, whose author "${r.originAssociation}" is not trusted`);
+  if (f.autoMerge === false) asks.push('auto-merge is turned off for this project: it merges once you approve the reviewed commit (F approve RUN --merge)');
+  if (f.headBroken) why.push(f.headBroken);
   const expected = r.axes?.[r.iteration] || [];
   const rev = r.reviews[r.iteration] || {};
   const notPassed = expected.filter((a) => rev[a]?.verdict !== 'passed');
@@ -110,10 +117,12 @@ export function decide(r: Run, f: Facts) {
     const line = hit ? `preview ready: ${hit.url} (${hit.connector})` : `no ready preview deploy for the reviewed commit ${String(sha || 'none').slice(0, 7)} (rule deploy.preview=${pv}, ${by(pol['deploy.preview'] as Rule)})`;
     (!hit && pv === 'required' ? why : notes).push(line); // advisory: shown, never blocking
   }
-  return why.length
-    ? { action: 'escalate', reasons: [...why, ...notes] }
-    : ciLine ? { action: 'merge', reasons: [`trusted author, all axes passed, tests changed, ${lines}-line diff, no sensitive paths`, ...(ci === 'required' ? ['CI green'] : []), ciLine, ...notes] }
-    : { action: 'merge', reasons: [`trusted author, all axes passed, CI green, tests changed, ${lines}-line diff, no sensitive paths`, ...notes] };
+  if (why.length) return { action: 'escalate', reasons: [...why, ...asks, ...notes] };
+  const yes = r.reviewedSha && r.events?.findLast((e) => e.stage === 'approve' && e.status === 'passed' && e.sha === r.reviewedSha && (git || e.via === 'github'));
+  if (asks.length && !yes) return { action: 'await-approval', reasons: [...asks, ...notes] };
+  const ok = asks.length && yes ? [`merge approved by ${byText(yes)} for ${String(r.reviewedSha).slice(0, 7)}: ${asks.join('; ')}`] : [];
+  return ciLine ? { action: 'merge', reasons: [`trusted author, all axes passed, tests changed, ${lines}-line diff, no sensitive paths`, ...(ci === 'required' ? ['CI green'] : []), ciLine, ...ok, ...notes] }
+    : { action: 'merge', reasons: [`trusted author, all axes passed, CI green, tests changed, ${lines}-line diff, no sensitive paths`, ...ok, ...notes] };
 }
 // Before building: untrusted authors and sensitive planned files need a human to approve the spec.
 export function risk(r: Run, plannedFiles: string[]) {

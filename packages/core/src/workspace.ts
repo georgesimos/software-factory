@@ -24,6 +24,9 @@ export const saveProject = (repo: string, p: string) => { fs.mkdirSync(stateDir(
 /** The project's host: set at attach (sync), never read from the id's shape, except that a local/ id is never GitHub. A legacy
  *  entry, or none, is GitHub. stored: the host to use instead of projects.json's (attach, before it writes). */
 export const hostOf = (repo: string, stored = projects()[repo]?.host) => repo.startsWith('local/') ? 'git' : stored ?? 'github';
+/** D1: a project merges on the gates alone only when it turned auto-merge on (autoMerge: true); a missing setting asks. The git
+ *  host always asks (D4): nobody there is verified. */
+export const autoMergeOn = (repo: string) => hostOf(repo) === 'github' && projects()[repo]?.autoMerge === true;
 /** Refuses a GitHub call for a git-hosted project, before anything runs, with what was being done. */
 export function requireGithub(repo: string, doing: string) {
   if (hostOf(repo) !== 'github') throw new Error(`${repo} is a git project, not on GitHub: ${doing} works only for GitHub projects for now`);

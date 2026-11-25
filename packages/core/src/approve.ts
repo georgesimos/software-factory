@@ -1,18 +1,20 @@
 // F approve (docs/plans/local-first.md §2.2, D4): a local item has no verifiable author, so its spec passes only once a person
 // approves exactly that spec, from their own terminal. GitHub Issues keeps its own channel, a trusted "/factory approve" comment.
 // What it stops is the run's own agent approving its own spec by mistake or by following an item's text. It is a speed bump, not a
-// security boundary: an agent determined to get past it can (see ttyAsk), so a local item's merge never rests on it (always trustBroken).
+// security boundary: an agent determined to get past it can (see ttyAsk). F approve RUN --merge (local-first PR 7) uses the same
+// bump, and on the git host a merge does rest on it: nobody there is verified (D4), so the user's typed approval is all there is.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { derive } from './derive.ts';
 import { read, record, runDir } from './log.ts';
-import { parseRun } from './github.ts';
-import { trackerOf } from './workspace.ts';
+import { merge, parseRun } from './github.ts';
+import { hostOf, trackerOf } from './workspace.ts';
 import { humanOnly } from './projectset.ts';
 import { LOCAL_BY, whoami } from './rules.ts';
 import type { FactoryEvent, Run } from './types.ts';
+import type { Facts } from './gate.ts';
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 /** GitHub Issues approves through its trusted comments; every other tracker (or a broken config) needs F approve. */
@@ -77,7 +79,7 @@ export function specCleared(run: string, doing: string) {
  *  for Claude Code in the desktop app (opening /dev/tty fails with ENXIO).
  *  shortcut: a speed bump, not a security boundary. An agent can get a terminal (script -q /dev/null gives it a pty) and clear the
  *  session variables humanOnly reads, or append a "spec decided" line to events.jsonl itself; the 5c dialog won't stop either.
- *  Merges stay safe because a local item is always trustBroken. The claude CLI started from a terminal, and codex, are unchecked.
+ *  On the git host a merge rests on it too (F approve RUN --merge): that is D4's choice, the user being all there is. The claude CLI started from a terminal, and codex, are unchecked.
  *  Upgrade when approval has to hold against the agent: a channel it can't reach (a signed record, or the desktop app's own store). */
 export function ttyAsk(prompt: string) {
   const [inp, out] = process.platform === 'win32' ? ['CONIN$', 'CONOUT$'] : ['/dev/tty', '/dev/tty'];
@@ -130,4 +132,20 @@ export function approveSpecDesktop(run: string, sha: string, user = () => os.use
   // via 'local' as whoami's OS user: unverified everywhere, and scrubbed from a published page (isLocal); channel says where.
   record(run, 'spec', 'decided', { decision: 'approve', by, via: 'local', channel: 'desktop', specSha: sha });
   return { run, decision: 'approve', by, via: 'local', channel: 'desktop' };
+}
+
+/** F approve RUN --merge (local-first §3): yours only, typed at your terminal, for the reviewed commit a run's merge waits on (F merge
+ *  said await-approval), then F merge in the same command, which merges only if decide() now says merge. On GitHub, a verified login. */
+export function approveMerge(run: string, ask: (prompt: string) => string = ttyAsk) {
+  humanOnly('approving a merge');
+  const r = derive(read())[run], sha = r?.reviewedSha;
+  if (r?.decision?.action !== 'await-approval' || !sha) throw new Error(`${run} is not waiting for a merge approval: F merge ${run} says where it stands`);
+  const who = whoami('approving a merge');
+  if (hostOf(parseRun(run).repo) === 'github' && who.via !== 'github') throw new Error('approving a merge on a GitHub project needs a verified login (gh auth login)');
+  const f = (r.events.findLast((e) => e.stage === 'approve' && e.status === 'decided')?.facts ?? {}) as Facts, files = (f.files ?? []).map((x) => clean(String(x)));
+  const code = sha.slice(0, 7);
+  const typed = ask(`${run}: ${clean(r.title ?? '')}\n\nReviewed commit ${sha}: +${f.additions ?? '?'} -${f.deletions ?? '?'} in ${files.length} file(s)\n${files.slice(0, 40).join('\n')}${files.length > 40 ? `\n... and ${files.length - 40} more` : ''}\n\nWhy it waits: ${(r.decision.reasons ?? []).map((x) => clean(String(x))).join('; ')}\n\nType ${code} to approve merging exactly this commit (anything else cancels): `);
+  if (typed.trim() !== code) throw new Error('not approved: what you typed did not match');
+  record(run, 'approve', 'passed', { by: who.by, via: who.via, sha });
+  return merge(run);
 }

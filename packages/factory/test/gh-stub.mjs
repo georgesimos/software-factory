@@ -77,7 +77,7 @@ else if (args[0] === 'api' && args[1] === 'graphql') {
 else if (args[0] === 'pr' && args[1] === 'view' && a.includes('--json state,mergedAt,mergedBy,mergeCommit,headRefName,isCrossRepository')) { // sync's human-merge check (#21): OPEN unless STUB_PR_STATE
   if (process.env.STUB_PR_VIEW_FAIL) { process.stderr.write('HTTP 502: Bad Gateway'); process.exit(1); }
   const merged = process.env.STUB_PR_STATE === 'MERGED';
-  out({ state: process.env.STUB_PR_STATE || 'OPEN', isCrossRepository: !!process.env.STUB_FORK, headRefName: `factory/issue-${args[2]}`, mergedAt: merged ? process.env.STUB_MERGED_AT || '2999-01-01T00:00:00Z' : null,
+  out({ state: process.env.STUB_PR_STATE || 'OPEN', isCrossRepository: !!process.env.STUB_FORK, headRefName: process.env.STUB_PR_BRANCH || `factory/issue-${args[2]}`, headRefOid: process.env.STUB_PR_HEAD || 'abc123', mergedAt: merged ? process.env.STUB_MERGED_AT || '2999-01-01T00:00:00Z' : null,
     mergedBy: merged ? { login: 'octo' } : null, mergeCommit: merged ? { oid: 'f'.repeat(40) } : null });
 }
 else if (args[0] === 'pr' && args[1] === 'view' && a.includes('--json state')) out({ state: 'MERGED' });

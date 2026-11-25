@@ -210,5 +210,7 @@ export function sync(repo: string, repoPath?: string) {
   const head = new Map(prs.filter((p) => p.url).map((p) => [p.url, p.headSha])); // a git change request has no url // deploy state of each in-progress run's PR head (finished runs aren't polled)
   const ship = shipTrack(Object.values(derive(read())).filter((r) => r.id.startsWith(repo + '#') && r.outcome === 'in-progress' && head.get(r.pr as string)).map((r) => ({ run: r.id, repo, sha: head.get(r.pr as string), path: repoPath })));
   dashboard.render();
-  return { repo, path: repoPath, added, attached, closed, humanMerged, ...(humanMergeErrors.length && { humanMergeErrors }), ...(ship && { ship }), ...(note && { note }) };
+  // D1 (local-first PR 7): a missing autoMerge used to mean on and now asks; said on every sync until the project sets it either way
+  const automerge = onGithub && projects()[repo]?.autoMerge === undefined ? `auto-merge is now off by default; F automerge ${repo} on keeps it` : undefined;
+  return { repo, path: repoPath, added, attached, closed, humanMerged, ...(humanMergeErrors.length && { humanMergeErrors }), ...(ship && { ship }), ...(note && { note }), ...(automerge && { automerge }) };
 }
