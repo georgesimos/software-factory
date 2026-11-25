@@ -187,8 +187,9 @@ export function merge(ctx: Ctx, { repo, path, id, sha, base }: { repo: string; p
     const url = (...push: string[]) => tryGit(git, '-C', path, 'remote', 'get-url', ...push, '--all', 'origin');
     if (!url() || url() !== url('--push') || url()!.includes('\n')) return no(`origin pushes to a different URL than it fetches from (remote.origin.pushurl or url.*.pushInsteadOf), so the factory can't check the ${base} it would push to: merge ${branch} yourself, then F close RUN --merged <sha>`);
     // A plain push refuses only a non-fast-forward: origin's base reset to an ancestor of seen, or deleted, would take it.
-    // So origin's base must still be exactly seen. shortcut: a reset or delete between this check and the push still
-    // lands (docs/plans/local-first.md, 4b known limits); closing it needs a lease on the exact sha, which the no-force rule forbids for now.
+    // So origin's base must still be exactly seen. shortcut: a reset or delete between this check and the push still lands
+    // (docs/plans/local-first.md, 4b known limits). The owner accepted that race over a guarded push (PR 7); closing it is this
+    // push with --force-with-lease=refs/heads/<base>:<seen>, and narrowing test/githost.test.mjs's force grep to that one form.
     const now = tryGit(git, '-C', path, 'ls-remote', 'origin', `refs/heads/${base}`);
     if (now === null) return no(`cannot read ${base} on origin: merge again`);
     const at = now.split('\n').find((l) => l.endsWith(`\trefs/heads/${base}`))?.split('\t')[0];
@@ -202,7 +203,8 @@ export function merge(ctx: Ctx, { repo, path, id, sha, base }: { repo: string; p
   // No remote: compare-and-swap the base. Where it is checked out (once at most), the checkout must be there and clean, a dry
   // run must show its files can follow, and no ignored file may be in the way; after the swap the checkouts are listed again
   // and that one's HEAD re-read, and any change undoes the swap. shortcut: a checkout switched between that re-check and
-  // read-tree still gets the squash staged; git has no lock spanning both. Upgrade if it is ever seen in practice.
+  // read-tree still gets the squash staged; git has no lock spanning both. So does a checkout of the base made between the
+  // swap and the re-list: the undo moves the ref back under it. Upgrade if either is ever seen in practice.
   const before = checkouts(git, path, ref);
   if (before.length > 1) return no(`${base} is checked out in ${before.length} worktrees (${before.map((w) => w.dir).join(', ')}): leave one, then merge again`);
   const wt = before[0];

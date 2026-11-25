@@ -529,10 +529,11 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
        `comment` waits for PR 6.
    - Known limits of 4b's git host:
      - **The `ls-remote` race.** Origin's base reset backwards or deleted between the `ls-remote` check and the plain
-       push still lands, and a reset re-publishes the removed commit. Only a lease on the exact seen sha closes it, and
-       the no-force rule forbids that until the owner decides.
+       push still lands, and a reset re-publishes the removed commit. Only a lease on the exact seen sha closes it; the
+       owner chose to accept the race (PR 7), so no force flag is used.
      - **Checkout races.** A checkout switched between the post-swap re-check and `read-tree` still gets the squash
-       staged.
+       staged. So does a checkout of the base made between the swap and the re-list: the undo moves the ref back under
+       it (#137; documented, not fixed).
      - **A crash between the ref move and the checkout update** leaves the base at the squash with stale files. They
        show as staged reverse changes. In that checkout, `git read-tree -m -u HEAD~1 HEAD` (the squash's parent is the base
        seen) finishes the update.
@@ -691,6 +692,41 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
      `on: true`, and `F project set merge auto`. It refuses inside a harness session, and it refuses an unverified
      local login on a verified-host project. The Setup toggle may still turn auto-merge off freely. (2b left `merge`
      out because a missing key already means auto, so guarding the "on" direction then would close no gap.)
+   - Landed as (with #137's gate for git-host merging):
+     - **D1.** The stored key stays `autoMerge`: `true` merges on the gates alone, `false` or missing asks. No `merge` key
+       and no `F project set merge`: `F automerge` stays the only writer. `autoMergeOn()` is the one reader (facts, the
+       server's page data, `F onboard`; Setup reads `=== true`). The git host always asks (D4). `F sync` returns
+       `automerge: "auto-merge is now off by default; F automerge owner/repo on keeps it"` while a GitHub project has no
+       setting. Turning it on (`setAutoMerge`, so the CLI and the POST alike) refuses a git project, an agent session
+       (`humanOnly`), and a login that isn't a verified gh one.
+     - **`decide()`'s `await-approval`.** Approvable reasons are tagged when pushed, never matched on text: auto-merge off,
+       and on a non-GitHub host an author nobody can verify (facts' `unverifiable`, set only when the `local` tracker has
+       no `trust`; a broken tracker config still escalates), an untrusted association, or a split parent's. Anything
+       else escalates, with the approvable reasons listed after. The approval is the latest `approve passed` whose `sha`
+       is the reviewed commit (on GitHub, `via: 'github'` only); it adds "merge approved by …" to the reasons.
+     - **`F approve RUN --merge`** (`approveMerge`): `humanOnly`, only on a run whose latest decision is `await-approval`,
+       a verified login on GitHub, typed at the terminal (`ttyAsk`): the reviewed sha, the diff stats and files from the
+       recorded facts, why it waits, and the code (the sha's first 7). It records `approve passed {by, via, sha}`
+       (F-owned: `F event` refuses it) and runs `F merge` in the same command. On the git host the merge then rests on
+       this speed bump: that is D4.
+     - **Core `merge()`.** No `requireGithub`. Before deciding it reads the change request (`host.changeRequest`) and
+       escalates unless it is open, from `factory/issue-N`, not a fork (GitHub's `isCrossRepository`; missing counts as
+       one), with its head the reviewed commit. That covers a legacy log's typed PR from another branch. GitHub's
+       `changeRequest` now asks for `headRefOid`. A git project merges into the project's own base (`baseBranch`, so
+       `F project set base`), and `merged: false` records a second `decided escalate` with the host's detail, never
+       `merged`. `approve merged` carries the git host's squash `sha`; only GitHub relabels.
+     - **`postmerge()`** on a git project reads that `sha`. CI provider `none` (any host) is a definite `skipped`.
+     - **#137's gate.** `ignoredInTheWay` folds case under `core.ignorecase`. `merge` refuses an origin whose push URL
+       isn't its one fetch URL. `worktree()` and `revert()` fetch `+refs/heads/<base>:refs/remotes/origin/<base>`
+       (`fetchBase`), and `worktree()` the run's branch as `refs/heads/…`. A git project's `-` numstat row whose blobs
+       have no NUL in their first 8000 bytes (git's own test) counts every line of both versions: `.git/info/attributes`
+       can mark any file `-diff`, and neither `--attr-source` nor `--text` overrides it. A real binary still counts 0.
+       One git minimum (`GIT_MIN`, 2.40) was already in 5b; `F merge` on an old git refuses naming it, tested end to end.
+     - **The push-time race** (4b's `ls-remote` race): accepted by the owner. No force flag is added; a lease later is the
+       one push line plus narrowing the force grep (`hosts/git.ts` says how).
+     - Also: sync's human-merge check compares the PR's repo case-insensitively.
+     - Not here: the desktop dialog's "approve and merge" (5c's dialog approves specs only), and a revert on the git host
+       (`F revert` still needs GitHub; with CI `local` or `none` a git project's postmerge is `skipped`, so it never asks for one).
 8. **Docs only.** A plugin guide for hosts, trackers and CI: how to write Bitbucket, GitLab, Jenkins or Jira as one file
    each against the contract tests, and why the factory doesn't ship them (nobody can test them).
 

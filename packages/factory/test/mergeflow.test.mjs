@@ -110,6 +110,9 @@ test('D1: facts() says auto-merge is off unless the project turned it on; a git 
   assert.equal(facts(R).autoMerge, false);
   project('local/d1', { autoMerge: true });
   assert.equal(facts(R).autoMerge, false, 'the git host asks whatever the setting');
+  assert.equal(facts(R).unverifiable, true, 'the local tracker: no author to verify (D4), so approvable');
+  project('local/d1', { tracker: 'github-issues' }); // a broken config: never approvable
+  assert.deepEqual([!!facts(R).trustBroken, facts(R).unverifiable], [true, undefined]);
   const prev = io.gh; io.gh = STUB;
   try {
     const G = { id: 'acme/app#33', events: [] };
@@ -197,4 +200,13 @@ test('D1: F sync says once per sync that a GitHub project with no auto-merge set
     project('acme/notice', { autoMerge: true }); assert.equal(sync('acme/notice', d).automerge, undefined);
     const l = repo('notice-git'); assert.equal(sync('local/notice-git', l).automerge, undefined, 'a git project always asks: nothing changed for it');
   } finally { io.gh = prev; }
+});
+test('F approve RUN --merge on GitHub needs a verified login, and F event can\'t type its record', () => {
+  const R = 'acme/app#71';
+  record(R, 'intake', 'started', { title: 't', association: 'OWNER' });
+  record(R, 'review', 'started', { axes: ['code'], sha: SHA });
+  record(R, 'approve', 'decided', { action: 'await-approval', reasons: ['auto-merge is turned off for this project'] });
+  assert.throws(() => approveMerge(R, typeCode), /approving a merge on a GitHub project needs a verified login \(gh auth login\)/);
+  assert.throws(() => F('event', R, 'approve', 'passed'), /"approve passed" is recorded by "approve --merge", not by hand/);
+  assert.equal(read().some((e) => e.run === R && e.status === 'passed' && e.stage === 'approve'), false);
 });

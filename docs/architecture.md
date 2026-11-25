@@ -224,7 +224,7 @@ The CLI never rewrites the log, with one exception: `archive` rewrites it by wri
 
 | File | Written by | Contents |
 |---|---|---|
-| `projects.json` | `sync`, `worktree`, `automerge` | `{ "owner/repo": { path, synced, autoMerge? } }`, mapping each attached project to its local clone |
+| `projects.json` | `sync`, `worktree`, `automerge` | `{ "owner/repo": { path, synced, autoMerge? } }`, mapping each attached project to its local clone. `autoMerge: true` merges on the gates alone; missing or `false` waits for `F approve RUN --merge` (local-first D1) |
 | `skills.json` | `skills set`, `rules set/unset`, or by hand | `{ "default": {step: runner}, "owner/repo": {step: runner, "axes.extra": [...], "rules": {key: {value, reason, setBy, via?, setAt, until?}}, "guide": {step: text}} }`. Validated on every read. See [§5.1](#51-runners) and [§5.2](#52-rules). |
 | `onboard.json` | `onboard ship`, the setup wizard | `{ "default" \| "owner/repo": { ship: ["web", "mobile", "desktop"] } }`: what a project ships. The choice only; connectors come from `packages/ship`. A stored `"database"` (no longer offered) is dropped on read |
 | `sessions.json` | `sync` | `{ runId: [ {agent, id, cwd, last} ×≤5 ] }`, linking runs to local Claude Code and Codex sessions by branch |
