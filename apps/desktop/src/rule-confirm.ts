@@ -1,4 +1,4 @@
-import { ruleChange, setRule, shownNow, shownRule as shown, unsetRule, type RuleRequest } from '../../../packages/core/src/rules.ts';
+import { routesText, ruleChange, setRule, shownNow, shownRule as shown, unsetRule, type RuleRequest } from '../../../packages/core/src/rules.ts';
 import type { ShowBox } from './approve-menu.ts';
 
 // A guarded rule write the page requested (docs/plans/pipelines.md §5: turning a step off, raising a cap), confirmed in a native
@@ -12,6 +12,9 @@ const WORDS: Record<string, [message: (scope: string) => string, button: string,
     'The factory stops running these reviews on this project from its next review. Code and security reviews always run. It is audited, and F rules unset turns them back on.'],
   'run.loops': [(s) => `Raise a cap for ${s}?`, 'Raise it', 'Runs on this project may loop back more times before they escalate to you. It is audited.'],
   'run.budgetUsd': [(s) => `Raise a cap for ${s}?`, 'Raise it', 'Runs on this project may spend more before they escalate to you. It is audited.'],
+  // routing (§7.3): asked only while two pipelines differ in what a run gets; the routes above it are F's reading of the result
+  pipelines: [(s) => `Change how issues are routed for ${s}?`, 'Change routing', 'Issues may go to a pipeline that runs fewer reviews or has other caps, from their next review. It is audited.'],
+  match: [(s) => `Change how issues are routed for ${s.split('@')[0]}?`, 'Change routing', 'Issues may go to a pipeline that runs fewer reviews or has other caps, from their next review. It is audited.'],
 };
 const clean = (s: unknown) => String(s ?? '').replace(/[\x00-\x1f\x7f-\x9f​-‏‪-‮⁦-⁩]/g, ' ').slice(0, 200);
 
@@ -29,10 +32,10 @@ export async function confirmRule(req: RuleRequest, show: ShowBox) {
     const c = ruleChange(req.scope, req.key, raw, at), w = WORDS[c.key];
     if (!c.doing || !w) throw new Error(`${c.key} needs no confirmation: nothing to do here`); // the route only requests what loosens
     const ok = (await show({ type: 'warning', title: 'Confirm a rule change', message: w[0](c.scope),
-      detail: `Project: ${c.scope}\nRule: ${c.key}\n${c.key === 'steps.off' ? 'Now off' : 'Now'}: ${shownNow(c.key, c.stored === undefined ? undefined : { value: c.stored, until: c.storedUntil })}\nAfter: ${shown(c.key, c.value)}${c.until ? `\nUntil: ${c.until}` : ''}\n\n${w[2]}${req.unset ? '' : `\n\nReason, as typed on the page: ${clean(req.reason)}`}`,
+      detail: `Project: ${c.scope}\nRule: ${c.key}\n${c.key === 'steps.off' ? 'Now off' : 'Now'}: ${shownNow(c.key, c.stored === undefined ? undefined : { value: c.stored, until: c.storedUntil })}\nAfter: ${shown(c.key, c.value)}${c.until ? `\nUntil: ${c.until}` : ''}\n\n${c.routes.length ? `${routesText(c.routes)}\n` : ''}${w[2]}${req.unset ? '' : `\n\nReason, as typed on the page: ${clean(req.reason)}`}`,
       buttons: ['Cancel', w[1]], defaultId: 0, cancelId: 0, noLink: true })).response === 1;
     if (!ok) return null;
-    const was = (x: typeof c) => JSON.stringify([x.stored, x.storedUntil]);
+    const was = (x: typeof c) => JSON.stringify([x.stored, x.storedUntil, x.routes]); // the routes shown are part of what was confirmed
     if (was(ruleChange(req.scope, req.key, raw, at)) !== was(c)) throw new Error('the rule changed while the dialog was open: nothing was written. Request it again to see the new value.');
     const ask = () => c.scope; // the dialog was the confirmation: core's typed one would need a terminal the app has none of
     return req.unset ? unsetRule(c.scope, c.key, { reason: req.reason, ask }) : setRule(c.scope, c.key, req.raw, { ...at, ask });

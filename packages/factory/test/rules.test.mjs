@@ -41,8 +41,8 @@ test('setBy, setAt, runner names, brief paths and scopes must be strings', () =>
     assert.throws(() => checkRunner(r, 'r', [], 'darwin'), /expected \{"use":"default"\}/, JSON.stringify(r));
   }
   checkScope('acme/shop');
-  assert.throws(() => checkScope(['acme/shop']), /must be "default" or owner\/repo/);
+  assert.throws(() => checkScope(['acme/shop']), /must be "default", owner\/repo or owner\/repo@<pipeline id>/);
   const before = JSON.stringify(readSkills());
-  assert.throws(() => setSkill(['acme/shop'], 'build', { use: 'default' }), /must be "default" or owner\/repo/);
+  assert.throws(() => setSkill(['acme/shop'], 'build', { use: 'default' }), /must be "default", owner\/repo or owner\/repo@<pipeline id>/);
   assert.equal(JSON.stringify(readSkills()), before);
 });

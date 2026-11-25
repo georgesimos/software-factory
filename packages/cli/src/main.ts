@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { COST_CAP, isLocal } from '../../core/src/constants.ts';
-import { adapterCtx, approval, facts, intake, merge, postmerge, revert } from '../../core/src/github.ts';
+import { adapterCtx, approval, facts, intake, merge, postmerge, prDiffLines, revert } from '../../core/src/github.ts';
 import { approveMerge, approveSpec } from '../../core/src/approve.ts';
 import { newItem } from '../../adapters/trackers/local.ts';
 import { closeMerged, setProject } from '../../core/src/projectset.ts';
@@ -21,7 +21,8 @@ import { loadShip, loadShipList, ship } from '../../core/src/ship.ts';
 import { claudeDir, onboardState, onboardText, setShip } from '../../core/src/onboard.ts';
 import { artifact, openSession, parseRun, render, startRun, ui } from '../../server/src/server.ts';
 import { refuseClaimed, unclaim } from '../../core/src/claim.ts';
-import { rules, runCaps, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
+import { rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
+import { pick, pickedThisIteration, routeOf, routeText, runCapsOf, runGets, runLabels } from '../../core/src/route.ts';
 import { note, takeNotes } from '../../core/src/notes.ts';
 import { ciStatus, escalate, openPr } from '../../core/src/changes.ts';
 import { comment, label, labels, similar, split } from '../../core/src/items.ts';
@@ -49,13 +50,14 @@ export async function main(argv: string[]) {
         const [stage, status] = rest as [string, string], p = json(rest[2]); // as argv above: record() checks them
         const owned: Record<string, string> = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:passed': 'approve --merge', 'spec:decided': 'approve', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'build:opened': 'pr', 'intake:split': 'split', 'intake:decided': 'split', 'approve:closed': 'sync', 'idea:retired': 'retire' };
         const owner = owned[`${stage}:${status}`] || ({ gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop', ship: 'ship' } as Record<string, string>)[stage];
+        if (status === 'routed') throw new Error('"routed" is recorded by "axes", not by hand'); // on any stage: the pick is F's (pipelines §7.6)
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
         const ender = ({ merged: '"merge" and "sync"', closed: '"sync"', reverted: '"revert"' } as Record<string, string>)[status];
         if (ender) throw new Error(`"${status}" is recorded by ${ender}, not by hand`); // on any stage: they end a run (derive, thisRun)
         if (stage === 'review' && p.role !== 'verifier') throw new Error('axis verdicts are recorded by "review", not by hand; "event" only takes the verifier usage record ({"role":"verifier",…})');
         if (stage === 'note') throw new Error('"note" is recorded by "note" and "notes", not by hand');
         const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'hostSessionId', 'cwd', 'runner', 'localChecks', 'mergedBy',
-          'pr', 'branch', 'children', 'postedSha', 'title', 'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // pr, branch: F pr and sync; children: F split; postedSha: F comment; title: the tracker, at intake; the last row: ship connectors only
+          'pr', 'branch', 'children', 'postedSha', 'title', 'labels', 'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // pr, branch: F pr and sync; children: F split; postedSha: F comment; title: the tracker, at intake; the last row: ship connectors only
         if (typed.length) throw new Error(`these fields come from GitHub, git, F pr, the environment or a ship connector, not from a payload: ${typed.join(', ')}`);
         record(run, stage, status, p, { fallback }); break;
       }
@@ -89,7 +91,7 @@ export async function main(argv: string[]) {
         if (run === 'set' && scope && key && value !== undefined) out(setRule(scope, key, value, { reason, until }));
         else if (run === 'unset' && scope && key) out(unsetRule(scope, key, { reason }));
         else if (run && run !== 'set' && run !== 'unset') out(rules(run));
-        else throw new Error('usage: rules <owner/repo|default> | rules set <owner/repo|default> <ci|checks.commands|diffCap|deploy.preview|artifact|project.budgetUsd|project.maxIssuesPerSession|steps.off|run.loops|run.budgetUsd|guide.<step>> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <owner/repo|default> <key> [--reason "…"]');
+        else throw new Error('usage: rules <owner/repo|default> | rules set <owner/repo|owner/repo@id|default> <ci|checks.commands|diffCap|deploy.preview|artifact|project.budgetUsd|project.maxIssuesPerSession|steps.off|run.loops|run.budgetUsd|pipelines|match|guide.<step>> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <owner/repo|default> <key> [--reason "…"]');
         break;
       }
       case 'checks': out(localChecks(run)); break;
@@ -111,21 +113,30 @@ export async function main(argv: string[]) {
           files = git('-C', w.path, 'diff', '--name-only', range).split('\n').filter(Boolean);
         }
         const sha = w && fs.existsSync(w.path) ? git('-C', w.path, 'rev-parse', 'HEAD').trim() : undefined;
-        const repo = run.split(/[#:]/)[0] as string, extra = skills(repo).extra, rule = rules(repo).policy['steps.off']; // split always has a first part
-        // steps.off (pipelines §6): the run's first review fixes its list; later ones turn off only what is in it and still in the
-        // live rule. A run whose first review predates the rule has nothing off. This attempt only, as derive() and decide() read it.
-        const mine = thisRun(r.events);
-        const first = mine.find((e) => e.stage === 'review' && e.status === 'started'), live = (rule?.value as string[] | undefined) ?? [];
-        const off = first ? live.filter((k) => Array.isArray(first.off) && first.off.includes(k)) : live;
+        const repo = run.split(/[#:@]/)[0] as string, extra = skills(repo).extra; // split always has a first part
+        // The pick (pipelines §7.4): once per iteration, here, after build and before review, from the labels intake recorded, the
+        // files under review and the PR's size. Recorded as review routed, which F event refuses; a second F axes reuses it.
+        let mine = thisRun(r.events);
+        if (!pickedThisIteration(mine)) {
+          const fx = { labels: runLabels(mine), files: files.slice(0, 200), diffLines: prDiffLines(r) }, p = pick(repo, fx);
+          record(run, 'review', 'routed', { pipeline: p.pipeline, ...(p.name && { name: p.name }), set: p.set, ...(p.text && { text: p.text }), iteration: r.iteration, facts: fx, off: p.off, caps: p.caps, ...(p.local && { local: true }) });
+          mine = thisRun(getRun(run).events);
+        }
+        // The meet (§7.4, §6): the current pipeline's live steps.off, kept only where every pick of this run turned it off, and the
+        // run's first review's list too (a run whose first review predates the rule has nothing off). It only ever shrinks.
+        const route = routeOf(mine)!, cur = runGets(repo, route.pipeline === 'default' ? null : route.pipeline), rule = cur.offRule;
+        const first = mine.find((e) => e.stage === 'review' && e.status === 'started');
+        const off = ((rule?.value as string[] | undefined) ?? []).filter((k) => route.off.includes(k) && (!first || (Array.isArray(first.off) && first.off.includes(k))));
         const all = reviewAxes(r, files, extra), axes = reviewAxes(r, files, extra, off), dropped = all.filter((a) => !axes.includes(a)).map((a) => `review.${a}`);
-        const offRule = dropped.length && rule ? { offRule: { reason: rule.reason, by: isLocal(rule) ? 'a local user (unverified)' : rule.setBy, ...(isLocal(rule) && { local: true }) } } : {};
+        const named = route.pipeline !== 'default' ? { scope: `${repo}@${route.pipeline}`, route: routeText(route) } : {};
+        const offRule = dropped.length && rule ? { offRule: { reason: rule.reason, by: isLocal(rule) ? 'a local user (unverified)' : rule.setBy, ...(isLocal(rule) && { local: true }), ...named } } : {};
         record(run, 'review', 'started', { axes, sha, range, off, ...(dropped.length && { dropped }), ...offRule });
         out({ axes, range, files }); break;
       }
       case 'worktree': out(worktree(run, rest[0])); break;
       case 'deps': console.log(deps(run)); break;
       case 'gc': out(gc()); break;
-      case 'gate': { const { status, ...p } = gate(getRun(run), runCaps(rules(run.split(/[#:]/)[0] as string).policy)); record(run, 'gate', status, p, { fallback }); out({ status, ...p }); break; }
+      case 'gate': { const g = getRun(run); const { status, ...p } = gate(g, runCapsOf(g)); record(run, 'gate', status, p, { fallback }); out({ status, ...p }); break; }
       case 'intake': out(intake(run)); break;
       case 'sync': { // `sync` alone re-syncs every attached project
         const list: [string, string | undefined][] = run ? [[run, rest[0]]] : Object.entries(projects()).map(([k, v]) => [k, v.path]);
@@ -274,7 +285,7 @@ export async function main(argv: string[]) {
   start  <owner/repo#N>                   start the factory on an issue: a detached headless claude in the attached clone, logging to the run's folder; prints {pid, log}
   unclaim <owner/repo#N> [--force]        clear a run's claim.json when the process it names is gone (refused while it may live, unless --force)
   rules  <owner/repo>                     print the policy rules, warnings and per-step guidance that apply
-  rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, deploy.preview required|advisory|off, artifact https://claude.ai/artifact/<id> (owner/repo only), project.budgetUsd x, project.maxIssuesPerSession n, steps.off '["review.seo",…]' and run.loops n, run.budgetUsd x (owner/repo only; turning a step off or raising a cap is yours alone, typed at your terminal: it asks for the project's name), guide.<step> "text"
+  rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, deploy.preview required|advisory|off, artifact https://claude.ai/artifact/<id> (owner/repo only), project.budgetUsd x, project.maxIssuesPerSession n, steps.off '["review.seo",…]' and run.loops n, run.budgetUsd x (owner/repo only; turning a step off or raising a cap is yours alone, typed at your terminal: it asks for the project's name), pipelines '["hotfix",…]' (owner/repo: named pipelines in match order; the default is last), match '[{"labels":[…]},{"files":[…],"maxDiffLines":n}]' (owner/repo@id: a named pipeline, which holds match, steps.off, run.loops and run.budgetUsd; routing is typed at your terminal while two pipelines differ), guide.<step> "text"
   rules unset <owner/repo|default> <key> [--reason "…"]  remove one (back to the global rule, or the built-in)
   checks <run>                            run the checks.commands rule in the worktree on its HEAD commit (the CI stand-in)
   note   <run> <step|next> -              record the user's one-shot note for a step (text on stdin; only from the user's own chat message)

@@ -13,6 +13,7 @@ import { prNumber } from '../../adapters/hosts/github.ts';
 import { current, pending } from './approve.ts';
 import { createHash } from 'node:crypto';
 import { rules } from './rules.ts';
+import { runCapsOf } from './route.ts';
 import type { Facts } from './gate.ts';
 import type { Comment } from '../../adapters/trackers/index.ts';
 import type { Host } from '../../adapters/hosts/index.ts';
@@ -49,7 +50,7 @@ export function intake(run: string) {
   // Advisory only: PRs naming the issue in their title without a formal closing link.
   const mentions = prs.filter((p) => p.branch !== `factory/issue-${n}` && new RegExp(`(^|[^\\w])#${n}(?!\\d)`).test(p.title)).map((p) => ({ url: p.url, title: p.title }));
   const comments = trackerFn(t, 'comments', 'read comments')(ctx, where);
-  const meta: { title: string; url?: string | undefined; author: string; association: string; origin?: string; originAssociation?: string | undefined; itemSha?: string } = { title: i.title, url: i.url, author: i.author, association: i.association };
+  const meta: { title: string; url?: string | undefined; author: string; association: string; labels: string[]; origin?: string; originAssociation?: string | undefined; itemSha?: string } = { title: i.title, url: i.url, author: i.author, association: i.association, labels: (i.labels ?? []).slice(0, 50).map((l) => String(l).slice(0, 100)) }; // labels: what a pipeline matches on (§7.2)
   if (t !== 'github-issues') { // D3: a record of what intake read, for the user; informational only: nothing reads item.md or itemSha back, and a re-intake overwrites them
     const snap = `# ${i.title}\n\n${i.body ?? ''}\n`;
     fs.mkdirSync(runDir(run), { recursive: true });
@@ -72,8 +73,8 @@ export function intake(run: string) {
   };
 }
 export function intakeFixture(run: string, n: string) {
-  const fx: { issue: { title: string; author: string; association: string; body?: string }; comments?: unknown[] } = JSON.parse(fs.readFileSync(path.join(process.env.FACTORY_FIXTURES as string, `${n}.json`), 'utf8')); // intake() calls it only when set
-  const meta = { title: fx.issue.title, url: `https://github.com/eval/golden/issues/${n}`, author: fx.issue.author, association: fx.issue.association };
+  const fx: { issue: { title: string; author: string; association: string; body?: string; labels?: string[] }; comments?: unknown[] } = JSON.parse(fs.readFileSync(path.join(process.env.FACTORY_FIXTURES as string, `${n}.json`), 'utf8')); // intake() calls it only when set
+  const meta = { title: fx.issue.title, url: `https://github.com/eval/golden/issues/${n}`, author: fx.issue.author, association: fx.issue.association, labels: fx.issue.labels ?? [] };
   record(run, 'intake', 'started', meta);
   return { ...meta, state: 'open', body: fx.issue.body, mentions: [], comments: fx.comments || [], ignoredComments: 0, dryRun: true };
 }
@@ -85,6 +86,14 @@ export function openPRs(repo: string, path = projects()[repo]?.path) {
   return hostFn(hostOf(repo), 'listChangeRequests', 'list change requests')(adapterCtx(), { repo, ...(path && { path }), ...(base && { base }) });
 }
 // Reads trust, CI and diff facts live (tracker, CI provider, host) so the merge decision never depends on typed-in numbers.
+/** The change's size for a pick (pipelines §7.2): additions + deletions of the run's PR, from the same gh call facts() makes.
+ *  null when there is no PR yet, the project isn't on GitHub, or gh can't say: then maxDiffLines never holds. */
+export function prDiffLines(r: Run): number | null {
+  const { repo } = parseRun(r.id);
+  if (!r.pr || hostOf(repo) !== 'github') return null;
+  try { const d = JSON.parse(gh('pr', 'view', prNumber(repo, r.pr), '-R', repo, '--json', 'additions,deletions')) as { additions?: unknown; deletions?: unknown }; return Number.isInteger(d.additions) && Number.isInteger(d.deletions) ? (d.additions as number) + (d.deletions as number) : null; }
+  catch { return null; }
+}
 export function facts(r: Run): Facts {
   const { repo, n } = parseRun(r.id);
   const host = hostOf(repo), onGit = host !== 'github', on = onGit ? { host } : {}; // GitHub's facts keep their keys
@@ -101,13 +110,13 @@ export function facts(r: Run): Facts {
     shipTrack([{ run: r.id, repo, sha: r.reviewedSha, path: projects()[repo]?.path }]);
     dep.deploys = derive(read())[r.id]?.deploys || [];
   }
-  if (!(onGit ? r.reviewedSha : r.pr)) return { ...who, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy, ...dep, ...on };
+  if (!(onGit ? r.reviewedSha : r.pr)) return { ...who, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy, ...(r.route && { pipelineCaps: runCapsOf(r) }), ...dep, ...on };
   const diff = onGit ? gitDiff(repo, r.reviewedSha as string) : JSON.parse(gh('pr', 'view', prNumber(repo, r.pr as string), '-R', repo, '--json', 'additions,deletions,files')) as ReturnType<typeof gitDiff>;
   // the project's CI provider on the reviewed commit; ci=skip doesn't read it, but a provider that can't answer still escalates
   const local = (sha?: string) => localResult(r.localChecks, policy['checks.commands']?.value, sha);
   const c = policy.ci?.value === 'skip' ? { ci: undefined, state: 'skipped', broken: ciBroken(repo) } : ciChecks(repo, { path: projects()[repo]?.path, sha: r.reviewedSha, changeRequest: r.pr }, local);
   const ci = { ...(c.ci && c.ci !== 'github-actions' && { ci: c.ci }), ...('detail' in c && c.detail && { ciDetail: c.detail }), ...(c.broken && { ciBroken: c.broken }) }; // GitHub's, as before: no extra keys
-  return { ...who, autoMerge, checks: c.state, ...ci, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), rules: policy, ...dep, ...on };
+  return { ...who, autoMerge, checks: c.state, ...ci, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), rules: policy, ...(r.route && { pipelineCaps: runCapsOf(r) }), ...dep, ...on }; // a routed run: its pipeline's live caps
 }
 // A git project's diff: the reviewed commit against its fork point from the base (three dots), as GitHub counts a PR's.
 // numstat -z: "added<TAB>deleted<TAB>path<NUL>"; a binary file's "-" counts 0 lines, as on GitHub.

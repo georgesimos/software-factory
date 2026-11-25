@@ -68,3 +68,16 @@ describe('RunDetail cost', () => {
     expect(t).not.toMatch(/cap/);
   });
 });
+
+describe('RunDetail route (pipelines §7.4)', () => {
+  const route = { pipeline: 'ui', name: 'UI first', set: 0, text: 'files web/**', facts: { labels: ['hotfix'], files: ['web/a.tsx', 'web/b.css'], diffLines: 12 }, off: [], caps: { loops: 1, budgetUsd: 2 }, local: false,
+    picks: [{ pipeline: 'ui', set: 0, iteration: 1 }, { pipeline: 'default', set: null, iteration: 2 }, { pipeline: 'ui', set: 0, iteration: 3 }] };
+  it('names the pipeline and the set, what the pick read, every pick when it moved, and the meet\'s caps', () => {
+    render(<RunDetail run={{ id: 'acme/app#2', title: 'Two', stage: 'review', iteration: 1, route } as Run} cap={3} costCap={5} />);
+    expect(screen.getByText(/^Pipeline/, { selector: 'p' }).textContent).toBe('Pipeline UI first · set 1: files web/** · read label hotfix · 2 files · 12 lines · picked ui → default → ui: it keeps the strictest, nothing off');
+    expect(screen.getByText('1 / 1')).toBeInTheDocument(); // run.loops: the meet's 1, not the project's 3
+    cleanup();
+    render(<RunDetail run={{ id: 'acme/app#3', title: 'Three', stage: 'review', route: { ...route, pipeline: 'default', name: null, set: null, text: null, facts: { labels: [], files: ['a.ts'], diffLines: null }, picks: [route.picks[1]] } } as Run} cap={3} costCap={5} />);
+    expect(screen.getByText(/^Default pipeline/).textContent).toBe('Default pipeline · read no labels · 1 file');
+  });
+});

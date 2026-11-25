@@ -71,6 +71,13 @@ export interface Run {
   /** server.ts runsData(): the worktree path, the dashboard's "Open in Claude" cwd. */
   worktree?: string;
   archived?: boolean; sessionEvents?: { ts: string; stage: string; status: string; sessionId: string }[];
+  /** derive(): the pipeline this attempt was routed to (pipelines §7.4) and the meet of its picks: off the intersection, caps the minimum. */
+  pipeline?: string; route?: RunRoute;
+}
+export interface RunRoute {
+  pipeline: string; name: string | null; set: number | null; text: string | null;
+  facts: { labels: string[]; files: string[]; diffLines: number | null };
+  off: string[]; caps: { loops: number; budgetUsd: number }; local: boolean; picks: { pipeline: string; set: number | null; iteration: number }[];
 }
 
 /** gate.ts metrics(): the board's numbers over a list of runs. */

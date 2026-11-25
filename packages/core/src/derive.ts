@@ -2,6 +2,7 @@ import { COST_CAP, FINDING_KEYS, OUTCOMES, REVIEW_KEYS, SEVERITIES, TOKEN_CAP, U
 import { PROJECT_EVENTS } from './project.ts';
 import { read, readArchive } from './log.ts';
 import { withMeasured } from './burn.ts';
+import { routeOf } from './route.ts';
 import type { Burn, BurnCell, Deploy, FactoryEvent, Outcome, Run, Session } from './types.ts';
 
 // A run while derive() builds it: deploys keyed by connector/env until the end, and the clock fields set by its first event.
@@ -87,6 +88,7 @@ export function derive(events: FactoryEvent[]): Record<string, Run> {
     }
     const r = (runs[e.run] ??= { id: e.run, iteration: 0, reviews: {}, loopbacks: [], events: [], outcome: 'in-progress' });
     r.events.push(e);
+    if (e.status === 'routed') continue; // the pick (pipelines §7.4): on the timeline, never moves the run's stage, clock or outcome; route is read below
     Object.assign(r, { stage: e.stage, status: e.status, updated: e.ts });
     r.started ??= e.ts;
     if (e.stage === 'intake' && e.status === 'started' && (r.reverted || r.outcome === 'merged' || r.outcome === 'closed')) { delete r.pr; delete r.branch; } // a new run: never the old, finished change request
@@ -125,6 +127,8 @@ export function derive(events: FactoryEvent[]): Record<string, Run> {
     r.durationMs = Date.parse(r.updated as string) - Date.parse(r.started as string); // set by every run's first event
     if (r.burn) finishBurn(r.burn);
     if (r.deploys) r.deploys = Object.values(r.deploys);
+    const route = routeOf(thisRun(r.events));
+    if (route) { r.route = route; r.pipeline = route.pipeline; } // this attempt's pipeline and the meet of its picks
     for (const c of r.children || []) if (runs[c]) (runs[c] as Draft).parent = r.id;
   }
   return runs as Record<string, Run>; // every draft now has its clock fields and a deploys list

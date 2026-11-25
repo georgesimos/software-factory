@@ -2,6 +2,10 @@ import { repoOf, type Burn, type BurnCell, type Deploy, type Metrics, type Pipel
 export type { Pipeline, StepRunner }; // the design system declares them: its pipeline graph draws F's shape
 
 export interface Rule { key?: string; value?: unknown; scope?: string; setBy?: string; via?: string; setAt?: string; reason?: string; until?: string }
+/** A named pipeline's match (pipelines §7.2): a set holds when all its terms do; the pipeline matches when any set holds. */
+export interface MatchSet { labels?: string[]; files?: string[]; maxDiffLines?: number }
+/** skills(repo).pipelines: a named pipeline (owner/repo@id), drawn like the default; listed ones in match order, then drafts. */
+export type NamedPipeline = Pipeline & { id: string; name: string; listed: boolean; match: MatchSet[] | null; matchBy?: string; matchReason?: string };
 export interface RuleChange { ts?: string; run?: string; status?: string; key?: string; value?: unknown; setBy?: string; via?: string; reason?: string; until?: string }
 /** Who set a rule: a GitHub login, or the OS user marked as unverified (core's byText). */
 export const setByText = (x: { setBy?: string; via?: string }) => `${x.setBy ?? '?'}${x.via === 'local' ? ' (local, unverified)' : ''}`;
@@ -19,7 +23,7 @@ export interface CatalogEntry { source: string; group: string; name: string; kin
 export interface SkillsData {
   error?: string; steps?: string[]; required?: string[]; scopes?: string[];
   config?: Record<string, Record<string, StepRunner | StepRunner[] | unknown>>;
-  plans?: Record<string, { plan?: Record<string, StepRunner>; extra?: StepRunner[]; pipeline?: Pipeline }>;
+  plans?: Record<string, { plan?: Record<string, StepRunner>; extra?: StepRunner[]; pipeline?: Pipeline; pipelines?: NamedPipeline[] }>;
   catalog?: { global?: CatalogEntry[]; projects?: Record<string, CatalogEntry[]> };
   models?: string[]; efforts?: string[]; preset?: string; presets?: Record<string, Record<string, [string, string]>>;
   applied?: string[]; skipped?: string[]; inherited?: string[];

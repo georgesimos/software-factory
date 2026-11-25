@@ -109,3 +109,20 @@ test('a tightening request opens no confirmation; an expired rule reads as expir
   assert.match(s.seen.at(-1).detail, /the rule changed while the dialog was open/);
   assert.deepEqual(rules('acme/app').policy['steps.off'].value, ['review.seo']);
 });
+
+test('a routing request reads as routing and shows how runs are then routed; a route changed while open is refused', async () => {
+  for (const k of ['steps.off', 'run.loops']) { try { unsetRule('acme/app', k, { ask: () => 'acme/app' }); } catch {} }
+  setRule('acme/app@hot', 'match', '[{"labels":["hotfix"]}]', { reason: 'urgent ones', ask: () => 'acme/app@hot' });
+  setRule('acme/app@hot', 'steps.off', '["review.ux"]', { reason: 'urgent', ask: () => 'acme/app@hot' });
+  const s = stub([1]);
+  await confirmRule({ scope: 'acme/app', key: 'pipelines', raw: '["hot"]', unset: false, reason: 'hotfixes skip ux' }, s.show);
+  assert.deepEqual([s.seen[0].message, s.seen[0].buttons[1]], ['Change how issues are routed for acme/app?', 'Change routing']);
+  assert.match(s.seen[0].detail, /^Project: acme\/app\nRule: pipelines\nNow: nothing\nAfter: hot\n\nRuns are then routed:\n  1\. hot: label hotfix; off review\.ux; loops \d+, \$\d+\n  then the default: every other issue; nothing off; loops \d+, \$\d+\n\nIssues may go to a pipeline/);
+  assert.deepEqual(rules('acme/app').policy.pipelines.value, ['hot']);
+  // the routes are part of what was confirmed: hot turning more off while the dialog is open refuses the write
+  const r = stub([1]);
+  const show = async (box) => { if (box.type === 'warning') setRule('acme/app@hot', 'steps.off', '["review.ux","review.ui"]', { reason: 'more', ask: () => 'acme/app@hot' }); return r.show(box); };
+  assert.equal(await confirmRule({ scope: 'acme/app@hot', key: 'match', raw: '[{"labels":["hotfix"]},{"files":["docs/**"]}]', unset: false, reason: 'docs too' }, show), null);
+  assert.match(r.seen.at(-1).detail, /the rule changed while the dialog was open/);
+  assert.equal(rules('acme/app@hot').policy.match.value.length, 1, 'nothing written');
+});

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { hostOf, ls, projects, trackerOf } from './workspace.ts';
 import { audit, checkGuide, checkRules, checkScope, pipelinePass, rules, runCaps, whoami } from './rules.ts';
+import { NAME_OK, PIPELINE_KEYS, PIPELINE_RULES, isPipelineScope, pipelinesOf, runGets } from './route.ts';
 import { harnesses, type Harness } from '../../adapters/harnesses/index.ts';
 import { stateDir } from './log.ts';
 import type { ExtraAxis } from './gate.ts';
@@ -26,7 +27,7 @@ export const AXIS_WHEN: Record<BuiltinAxis, 'always' | 'ui' | 'seo' | 'docs'> = 
 /** The pipeline's structure for the Pipelines page (docs/plans/pipelines.md §6). custom stays empty until slice 5. */
 export function pipeline(repo: string, extra: ExtraAxis[] = [], rl: { policy: Record<string, Rule>; warnings: string[] } = { policy: {}, warnings: [] }) {
   const attached = !!projects()[repo], host = attached ? hostOf(repo) : null;
-  const warnings: string[] = rl.warnings.filter((w) => /\.rules\.(steps\.off|run\.)/.test(w)); // pipelinePass's, about this pipeline
+  const warnings: string[] = rl.warnings.filter((w) => /\.rules\.(steps\.off|run\.|match|pipelines)|@|\.name is ignored/.test(w)); // pipelinePass's, about pipelines
   const o = rl.policy['steps.off'], offBy = o && (isLocal(o) ? 'a local user (unverified)' : o.setBy); // never the OS user (§6)
   let tracker: string | null = null;
   if (host) try { const t = trackerOf(repo); tracker = t === 'local' ? null : t; } catch (e) { warnings.push((e as Error).message); } // local: no tracker yet (5b)
@@ -35,7 +36,7 @@ export function pipeline(repo: string, extra: ExtraAxis[] = [], rl: { policy: Re
     steps: ['intake', 'spec', 'build', 'review', 'verifier', 'gate', 'merge', 'watch'],
     intake: ['pass', 'split', 'needs-info', 'reject'], loops: ['spec', 'build'], // intake's outcomes; where the gate loops back to
     axes: [...BUILTIN_AXES.map((axis) => ({ axis, when: AXIS_WHEN[axis] as string | string[] })), ...extra.map((x) => ({ axis: x.axis, when: x.when }))],
-    off: o ? (o.value as string[]).map((step) => ({ step, scope: o.scope as string, reason: o.reason, by: offBy as string, ...(o.until && { until: o.until }) })) : [],
+    off: o ? (o.value as string[]).map((step) => ({ step, scope: (o.scope ?? repo) as string, reason: o.reason, by: offBy as string, ...(o.until && { until: o.until }) })) : [],
     caps: runCaps(rl.policy), custom: { 'spec.after': [], 'build.after': [] }, warnings,
   };
 }
@@ -114,9 +115,20 @@ export function checkStep(key: string, v: unknown, at: string): void {
 export function checkSkills(cfg: unknown): asserts cfg is SkillsConfig {
   if (!isObj(cfg)) throw new Error('skills.json must be a JSON object');
   for (const [scope, steps] of Object.entries(cfg)) {
-    if (scope !== 'default' && !/^[\w.-]+\/[\w.-]+$/.test(scope)) throw new Error(`skills.json: scope "${scope}" must be "default" or owner/repo`);
+    const pipe = isPipelineScope(scope);
+    if (scope !== 'default' && !/^[\w.-]+\/[\w.-]+$/.test(scope) && !pipe) throw new Error(`skills.json: scope "${scope}" must be "default", owner/repo or owner/repo@<pipeline id>`);
     if (!isObj(steps)) throw new Error(`skills.json: ${scope} must be an object`);
-    for (const [k, v] of Object.entries(steps)) checkStep(k, v, `skills.json ${scope}.${k}`);
+    for (const [k, v] of Object.entries(steps)) {
+      const at = `skills.json ${scope}.${k}`;
+      if (k === 'name') { if (!pipe) throw new Error(`${at}: only a pipeline (owner/repo@id) has a name`); if (!NAME_OK(v)) throw new Error(`${at}: a name is 1-60 characters of text`); continue; }
+      if (pipe && !PIPELINE_KEYS.includes(k)) throw new Error(k === 'steps.custom' && Array.isArray(v) && v.some((x) => isObj(x) && x.slot === 'spec.after')
+        ? `${at}: spec.after custom steps are the project's only: a pipeline is picked after build (docs/plans/pipelines.md §7.4)`
+        : `${at}: a pipeline holds name and rules (match, steps.off, run.loops, run.budgetUsd); runners, guidance and extra axes are the project's`);
+      checkStep(k, v, at);
+      if (k === 'rules' && isObj(v)) for (const key of Object.keys(v)) { // where each rule may live (§7.1)
+        if (pipe ? !PIPELINE_RULES.includes(key) : key === 'match' || (scope === 'default' && key === 'pipelines')) throw new Error(`${at}.${key}: ${pipe ? `${key} is the project's rule` : key === 'match' ? 'match is a pipeline\'s rule' : 'pipelines is a per-project rule'}`);
+      }
+    }
   }
 }
 // On read, a model, effort or fallback the harness no longer offers is dropped with a warning instead of failing every
@@ -177,7 +189,10 @@ export function skills(repo: string, cfg: SkillsConfig = readSkills()) {
   const all = [...(g['axes.extra'] || []), ...(p['axes.extra'] || [])];
   const extra = all.filter((x, i) => all.findLastIndex((y) => y.axis === x.axis) === i);
   const rl = rules(repo, cfg);
-  return { repo, plan, extra, required: REQUIRED_AXES, guide: rl.guide, pipeline: pipeline(repo, extra, rl) };
+  // §7.1: the project's named pipelines, listed ones in match order then drafts, each drawn like the default (which is `pipeline`)
+  const pipelines = repo ? pipelinesOf(repo, cfg).map((p) => ({ id: p.id, name: p.name, listed: p.listed, match: p.match, ...(p.matchRule && { matchBy: p.matchRule.setBy, matchReason: p.matchRule.reason }),
+    ...pipeline(repo, extra, rules(p.scope, cfg)), caps: runGets(repo, p.id, cfg).caps })) : [];
+  return { repo, plan, extra, required: REQUIRED_AXES, guide: rl.guide, pipeline: pipeline(repo, extra, rl), pipelines };
 }
 export function writeSkills(cfg: unknown): asserts cfg is SkillsConfig {
   checkSkills(cfg);
@@ -191,7 +206,7 @@ export function setSkill(scope: string, key: string, value: unknown): ScopeConfi
   checkScope(scope); // a string: POST bodies pass scope through
   const cfg: Record<string, Record<string, unknown>> = readSkills(), next: Record<string, unknown> = { ...cfg[scope], [key]: value }; // unchecked until writeSkills
   cfg[scope] = next;
-  if (value === undefined) { if (!isStepKey(key) && key !== 'axes.extra') throw new Error(`unknown step "${key}"`); delete next[key]; }
+  if (value === undefined) { if (!isStepKey(key) && key !== 'axes.extra' && key !== 'name') throw new Error(`unknown step "${key}"`); delete next[key]; }
   if (!Object.keys(next).length) delete cfg[scope];
   writeSkills(cfg);
   return cfg[scope] || {};
@@ -318,7 +333,7 @@ export function catalog(repos: string[] = []) {
 export function skillsData(repos: string[] = []) {
   try {
     const cfg = readSkills();
-    const scopes = [...new Set([...Object.keys(projects()), ...repos, ...Object.keys(cfg)])].filter((s) => s !== 'default').sort();
+    const scopes = [...new Set([...Object.keys(projects()), ...repos, ...Object.keys(cfg)])].filter((s) => s !== 'default' && !isPipelineScope(s)).sort(); // a pipeline is its project's (skills().pipelines)
     return { steps: STEP_KEYS, required: REQUIRED_AXES, config: cfg, scopes,
       plans: Object.fromEntries(['default', ...scopes].map((s) => [s, skills(s === 'default' ? '' : s, cfg)])), catalog: catalog(scopes),
       models: (harnesses.find((h) => h.host)?.models?.() || []).map((m) => m.alias), efforts: harnesses.find((h) => h.host)?.efforts || [], preset: DEFAULT_PRESET, presets: PRESETS };

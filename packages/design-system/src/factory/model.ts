@@ -128,7 +128,7 @@ export const costText = (c: BurnCell) => (c.costUsd == null ? '—' : formatMone
 
 /** The latest passed preview deploy with an https URL. */
 export const previewOf = (r: Run) => r.deploys?.find((d) => d.env === 'preview' && d.status === 'passed' && /^https:\/\//.test(d.url ?? ''));
-export const repoOf = (id: string) => id.split(/[#:]/)[0] ?? id;
+export const repoOf = (id: string) => id.split(/[#:@]/)[0] ?? id;
 export const shortId = (id: string) => id.replace(/^[^/#:]*\//, '');
 
 /** Counts for the onboarding progress row. Session-backed PRs attached to existing runs count as sessions. */

@@ -1,6 +1,6 @@
 import { Badge, Tooltip, formatClock, shortId } from '@software-factory/design-system';
 import { useLayoutEffect, useRef, useState } from 'react';
-import { setByText, type FactoryData } from './data.ts';
+import { setByText, type FactoryData, type RuleChange } from './data.ts';
 
 // Policy rules in force for the shown project(s), from `F rules set`. Quiet unless expired or ending within 3 days.
 const LABEL: Record<string, (v: unknown) => string> = {
@@ -76,8 +76,8 @@ export function RuleChips({ data, project, today = new Date().toISOString().slic
 }
 
 /** Who changed which rule, when and why: the audit trail from `F rules set|unset`, newest first. */
-export function RuleLog({ data, project }: { data: FactoryData; project: string }) {
-  const h = (data.ruleHistory ?? []).filter((e) => !project || e.run === project || e.run === 'default').slice(-8).reverse();
+export function RuleLog({ data, project, keep }: { data: FactoryData; project: string; keep?: (e: RuleChange) => boolean }) {
+  const h = (data.ruleHistory ?? []).filter(keep ?? ((e) => !project || e.run === project || e.run === 'default')).slice(-8).reverse();
   if (!h.length) return null;
   return (
     <section className="web-rlog" aria-label="Rule changes">

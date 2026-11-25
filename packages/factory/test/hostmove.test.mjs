@@ -35,7 +35,7 @@ test('the GitHub host makes exactly the gh calls core made before the move', () 
 test('the GitHub tracker makes exactly the gh calls core made before the move', () => {
   const issue = { number: 3, pull_request: undefined, state: 'open', title: 'T', html_url: 'https://github.com/acme/app/issues/3', user: { login: 'rep' }, author_association: 'NONE', body: null };
   const g = logged([['api repos/acme/app/issues/3', issue]]);
-  assert.deepEqual(issues.getItem({ gh: g.gh }, { repo: 'acme/app', id: '3' }), { id: '3', title: 'T', url: issue.html_url, author: 'rep', association: 'NONE', state: 'open', isChangeRequest: false, body: null });
+  assert.deepEqual(issues.getItem({ gh: g.gh }, { repo: 'acme/app', id: '3' }), { id: '3', title: 'T', url: issue.html_url, author: 'rep', association: 'NONE', state: 'open', isChangeRequest: false, body: null, labels: [] }); // labels: what a pipeline matches on (pipelines §7.2)
   assert.equal(issues.getItem({ gh: logged([['api', { ...issue, pull_request: {} }]]).gh }, { repo: 'acme/app', id: '3' }).isChangeRequest, true);
   assert.deepEqual(g.calls, [['api', 'repos/acme/app/issues/3']]);
   const raw = [{ user: { login: 'rep' }, author_association: 'NONE', created_at: '2026-11-20T00:00:00Z', body: 'more', id: 9 }, { user: { login: 'o' }, author_association: 'OWNER', created_at: '2026-11-21T00:00:00Z', body: null }];
