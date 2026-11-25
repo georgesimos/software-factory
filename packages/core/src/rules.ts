@@ -192,14 +192,17 @@ export function ruleChange(scope: string, key: string, raw: unknown, { reason, u
     checkRules({ [key]: { value, reason, setBy: 'x', setAt: new Date().toISOString(), ...(until && { until }) } }, `rules ${scope}`); // the value and the reason, as writeSkills would
   }
   const old = cfg[scope]?.rules?.[key];
-  return { scope, key, stored: old?.value, ...(old?.until && { storedUntil: old.until, expired: old.until < dayOf() }), value, ...(until && { until }), doing: loosens(scope, key, value, cfg, until), command: ruleCommand(scope, key, value, until) };
+  return { scope, key, stored: old?.value, ...(old?.until && { storedUntil: old.until }), value, ...(until && { until }), doing: loosens(scope, key, value, cfg, until), command: ruleCommand(scope, key, value, until) };
 }
 /** A rule's value as a person reads it: an unset cap is the built-in one. */
 export const shownRule = (key: string, v: unknown) => v === undefined ? (Object.hasOwn(RUN_CAPS, key) ? `the built-in (${RUN_CAPS[key]})` : 'nothing') : Array.isArray(v) ? v.join(', ') : String(v);
 type Ask = (prompt: string) => string;
 // a loosening is typed at your terminal, as F automerge on and a relaxing F project set: a speed bump, not a boundary (humanOnly is the refusal)
-function typed(ask: Ask, scope: string, key: string, doing: string, from: unknown, to: unknown, until?: string, reason?: string) {
-  if (ask(`${scope}: ${doing}\n${key}: ${shownRule(key, from)} -> ${shownRule(key, to)}${until ? ` until ${until}` : ''}${reason ? ` (${line(reason)})` : ''}\n\nThis relaxes what the factory checks before it merges.\n\nType ${scope} to confirm (anything else cancels): `).trim() !== scope)
+/** What a rule reads as now, for a prompt or the dialog: an expired one says so, and what applies instead. */
+export const shownNow = (key: string, old?: { value: unknown; until?: string }) =>
+  old?.until && old.until < dayOf() ? `${shownRule(key, undefined)} (${shownRule(key, old.value)} expired on ${old.until})` : shownRule(key, old?.value);
+function typed(ask: Ask, scope: string, key: string, doing: string, old: Rule | undefined, to: unknown, until?: string, reason?: string) {
+  if (ask(`${scope}: ${doing}\n${key}: ${shownNow(key, old)} -> ${shownRule(key, to)}${until ? ` until ${until}` : ''}${reason ? ` (${line(reason)})` : ''}\n\nThis relaxes what the factory checks before it merges.\n\nType ${scope} to confirm (anything else cancels): `).trim() !== scope)
     throw new Error(`${scope}'s ${key} stays as it is: what you typed did not match`);
 }
 // page: the write comes from the dashboard's route, which may only request a guarded write (§5); core refuses it here too.
@@ -216,7 +219,7 @@ export function setRule(scope: string, key: string, raw: unknown, { reason, unti
   }
   const who = whoami();
   if (step === null) { guard(who, s.rules?.[key], key); guardShadow(who, scope, cfg.default?.rules?.[key], key, value); const rule = { value, reason, ...stamp(who), setAt: new Date().toISOString(), ...(until && { until }) };
-    if (doing) { checkRules({ [key]: rule }, `rules ${scope}`); typed(ask, scope, key, doing, s.rules?.[key]?.value, value, until, reason); } // checked first: never ask about a write that would fail
+    if (doing) { checkRules({ [key]: rule }, `rules ${scope}`); typed(ask, scope, key, doing, s.rules?.[key], value, until, reason); } // checked first: never ask about a write that would fail
     s.rules = { ...s.rules, [key]: rule }; }
   cfg[scope] = s;
   writeSkills(cfg); // validates the whole config first
@@ -233,7 +236,7 @@ export function unsetRule(scope: string, key: string, { reason, page, ask = ttyA
   if (doing) humanOnly(doing);
   const who = whoami();
   if (bag === 'rules') guard(who, cur[k] as Rule, k);
-  if (doing) typed(ask, scope, k, doing, (cur[k] as Rule).value, undefined, undefined, reason);
+  if (doing) typed(ask, scope, k, doing, cur[k] as Rule, undefined, undefined, reason);
   const without = <T,>(m: Record<string, T> = {}) => { const { [k]: _gone, ...left } = m; return left; }; // a copy without k
   if (bag === 'guide') s.guide = without(s.guide); else s.rules = without(s.rules);
   if (!Object.keys(s[bag] ?? {}).length) delete s[bag];

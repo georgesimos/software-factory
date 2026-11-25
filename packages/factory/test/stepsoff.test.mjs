@@ -279,6 +279,12 @@ test('a loosening F rules set is typed at the terminal (the project\'s name), as
   unsetRule('acme/so', 'run.loops', { ask: (p) => { shown = p; return 'acme/so'; } });
   assert.match(shown, /^acme\/so: raising a cap\nrun\.loops: 1 -> the built-in \(3\)/);
   assert.throws(() => asAgent(() => setRule('acme/so', 'steps.off', '["review.seo"]', { reason: 'x', ask: YES })), /must come from you, not from an agent session/, 'an agent session is refused before any ask');
+  setRule('acme/so', 'steps.off', '["review.seo"]', { reason: 'no pages', ask: YES });
+  const cfg = JSON.parse(fs.readFileSync(skillsFile(), 'utf8')); cfg['acme/so'].rules['steps.off'].until = '2020-01-01'; // expired, by hand
+  fs.writeFileSync(skillsFile(), JSON.stringify(cfg));
+  setRule('acme/so', 'steps.off', '["review.docs"]', { reason: 'docs', ask: (p) => { shown = p; return 'acme/so'; } });
+  assert.match(shown, /\nsteps\.off: nothing \(review\.seo expired on 2020-01-01\) -> review\.docs \(docs\)\n/, 'an expired rule reads as expired, as in the dialog');
+  unsetRule('acme/so', 'steps.off');
 });
 
 // Unix only, as #150's: a detached child has no controlling terminal there, so /dev/tty fails at once.

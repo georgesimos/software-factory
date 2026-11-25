@@ -123,6 +123,17 @@ describe('Pipelines sheet: a step’s panel writes as the Skills sheet does; a r
     expect(status).toHaveTextContent('Turning a review off needs your confirmation outside the page, and this is plain F ui. Command copied: run it in your own terminal:');
     expect(status.querySelector('code')!.textContent).toBe(cmd);
   });
+  it('steps off while the app\'s dialog is already open: the refusal is shown as is; nothing is copied and the page does not wait', async () => {
+    const writeText = vi.fn(async () => {}), refresh = vi.fn();
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'a confirmation is already open in the desktop app: answer it, then ask again' }), { status: 400 })));
+    render(<PipelinesSheet open onClose={() => {}} data={{ ...data, token: 'tok' }} project="acme/shop" onSaved={() => {}} refresh={refresh} />);
+    await userEvent.click(screen.getByRole('button', { name: /^Docs review/ }));
+    await userEvent.type(screen.getByRole('textbox', { name: 'Why turn Docs review off' }), 'no docs');
+    await userEvent.click(screen.getByRole('button', { name: 'Turn off' }));
+    expect(await screen.findByRole('status')).toHaveTextContent(/^a confirmation is already open in the desktop app: answer it, then ask again$/);
+    expect([writeText.mock.calls.length, refresh.mock.calls.length]).toEqual([0, 0]);
+  });
   it('steps off on a read-only page copies the command; turning the last one back on unsets the rule, which only tightens', async () => {
     const writeText = vi.fn(async () => {});
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });

@@ -1,4 +1,4 @@
-import { ruleChange, setRule, shownRule as shown, unsetRule, type RuleRequest } from '../../../packages/core/src/rules.ts';
+import { ruleChange, setRule, shownNow, shownRule as shown, unsetRule, type RuleRequest } from '../../../packages/core/src/rules.ts';
 import type { ShowBox } from './approve-menu.ts';
 
 // A guarded rule write the page requested (docs/plans/pipelines.md §5: turning a step off, raising a cap), confirmed in a native
@@ -29,7 +29,7 @@ export async function confirmRule(req: RuleRequest, show: ShowBox) {
     const c = ruleChange(req.scope, req.key, raw, at), w = WORDS[c.key];
     if (!c.doing || !w) throw new Error(`${c.key} needs no confirmation: nothing to do here`); // the route only requests what loosens
     const ok = (await show({ type: 'warning', title: 'Confirm a rule change', message: w[0](c.scope),
-      detail: `Project: ${c.scope}\nRule: ${c.key}\n${c.key === 'steps.off' ? 'Now off' : 'Now'}: ${c.expired ? `${shown(c.key, undefined)} (${shown(c.key, c.stored)} expired on ${c.storedUntil})` : shown(c.key, c.stored)}\nAfter: ${shown(c.key, c.value)}${c.until ? `\nUntil: ${c.until}` : ''}\n\n${w[2]}${req.unset ? '' : `\n\nReason, as typed on the page: ${clean(req.reason)}`}`,
+      detail: `Project: ${c.scope}\nRule: ${c.key}\n${c.key === 'steps.off' ? 'Now off' : 'Now'}: ${shownNow(c.key, c.stored === undefined ? undefined : { value: c.stored, until: c.storedUntil })}\nAfter: ${shown(c.key, c.value)}${c.until ? `\nUntil: ${c.until}` : ''}\n\n${w[2]}${req.unset ? '' : `\n\nReason, as typed on the page: ${clean(req.reason)}`}`,
       buttons: ['Cancel', w[1]], defaultId: 0, cancelId: 0, noLink: true })).response === 1;
     if (!ok) return null;
     const was = (x: typeof c) => JSON.stringify([x.stored, x.storedUntil]);
