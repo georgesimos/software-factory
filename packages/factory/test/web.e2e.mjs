@@ -97,7 +97,7 @@ try {
     await next();
     await wiz.getByRole('combobox', { name: 'CI' }).selectOption('skip');
     await wiz.getByRole('textbox', { name: /^Local check/ }).fill('pnpm test\npnpm lint');
-    await wiz.getByRole('checkbox', { name: /auto-merge/ }).uncheck();
+    assert.equal(await wiz.getByRole('checkbox', { name: /auto-merge/ }).isChecked(), false); // D1: off unless turned on
     await wiz.getByRole('button', { name: /Review and start/ }).click();
     await status.filter({ hasText: 'Unsaved rule changes' }).waitFor(); // leaving by the rail doesn't drop typed rules silently
     await at('Rules');
@@ -119,7 +119,7 @@ try {
     await wiz.waitFor({ state: 'hidden' });
     await ctx.close();
   }
-  assert.equal(json('projects.json')['acme/app'].autoMerge, false);
+  assert.equal(json('projects.json')['acme/app'].autoMerge, undefined, 'left off: nothing written, and a missing setting is off (D1)');
   assert.deepEqual(json('onboard.json')['acme/app'].ship, ['web', 'desktop']);
   assert.deepEqual(skills()['acme/app'].build, { use: 'provider', harness: 'codex' });
   assert.deepEqual(skills()['acme/app'].rules['checks.commands'].value, ['pnpm test', 'pnpm lint']);
@@ -220,7 +220,7 @@ try {
     F(['render', '--artifact', out]);
     fs.writeFileSync(wrapped, `<!doctype html><html><head><meta charset="utf-8"></head><body>${fs.readFileSync(out, 'utf8')}</body></html>`);
     await page.goto(pathToFileURL(wrapped).href);
-    await page.getByText('Arrived after the page loaded').first().waitFor();
+    await page.getByText('app#77').first().waitFor();
     assert.ok(!(await page.content()).includes(HOME), 'no local path in the published page');
     await ctx.close();
   }
