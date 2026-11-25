@@ -189,7 +189,7 @@ export function merge(ctx: Ctx, { repo, path, id, sha, base }: { repo: string; p
     // A plain push refuses only a non-fast-forward: origin's base reset to an ancestor of seen, or deleted, would take it.
     // So origin's base must still be exactly seen. shortcut: a reset or delete between this check and the push still lands
     // (docs/plans/local-first.md, 4b known limits). The owner accepted that race over a guarded push (PR 7); closing it is this
-    // push with --force-with-lease=refs/heads/<base>:<seen>, and narrowing test/githost.test.mjs's force grep to that one form.
+    // push with git's lease on refs/heads/<base> at seen (hosts/README.md has the exact form), and that grep allowing only it.
     const now = tryGit(git, '-C', path, 'ls-remote', 'origin', `refs/heads/${base}`);
     if (now === null) return no(`cannot read ${base} on origin: merge again`);
     const at = now.split('\n').find((l) => l.endsWith(`\trefs/heads/${base}`))?.split('\t')[0];
