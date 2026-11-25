@@ -10,7 +10,7 @@ A tracker is where `F issues create` files a project's issue batch, and where `F
 
 | Function | Returns | Must |
 |---|---|---|
-| `createIssues(ctx, {repo, items, existing, onCreated})` | `[{key, id, url, created}]` in item order | Items arrive in dependency order, the epic last. Skip keys in `existing` and keys already in the tracker (store the key somewhere stable; GitHub uses a hidden `<!-- factory-key: k -->` marker). Call `onCreated` right after each create so a crash mid-batch loses nothing. Label every non-epic issue `factory:ready`. ids are strings. |
+| `createIssues(ctx, {repo, items, existing, onCreated, ready})` | `[{key, id, url, created}]` in item order | Items arrive in dependency order, the epic last. Skip keys in `existing` and keys already in the tracker (store the key somewhere stable; GitHub uses a hidden `<!-- factory-key: k -->` marker). Call `onCreated` right after each create so a crash mid-batch loses nothing. Label every non-epic issue `factory:ready`. ids are strings. With `ready: false` (`F split` for an untrusted parent), no `factory:ready` at all, never one added and removed. |
 | `listOpen(ctx, {repo})` | `[{id, title, labels, key, …}]` | Open issues only, with label names. |
 | `dependencies(item)` | `[id]` | The ids an item from `listOpen` waits on. |
 
@@ -25,6 +25,9 @@ one is refused by name (`tracker "<id>" cannot …`), and `facts()` turns a miss
 | `getItem(ctx, {repo, id})` | `{id, title, url?, author, association, state, isChangeRequest, body}` | The item as written, never model-typed. `association` is the author's standing on the tracker. |
 | `comments(ctx, {repo, id})` | `[{author, association, created_at, body}]` | Every comment, oldest first. |
 | `trust(ctx, {repo, id})` | the author's association | Read again at merge time by `facts()`. |
+| `ensureLabels(ctx, {repo})` | `[name]` | For `F labels`: create the factory's labels where they must exist first. |
+| `label(ctx, {repo, id, add?, remove?})` | `{labelled, detail?}` | For `F label`, on the run's own item. Removing a label it doesn't have is fine; any other failure throws. |
+| `comment(ctx, {repo, id, body})` | `{posted, detail?}` | For `F comment`. A tracker with no comments returns `posted: false` and says why. |
 
 ## Test
 
@@ -55,6 +58,11 @@ the next free N with an exclusive create, so two `F` processes never share one. 
 the user's own terminal and `facts()` escalates. That approval is a speed bump, not a security boundary (local-first
 5b); merges don't rest on it.
 
-## Not yet on the adapter
+`label` rewrites the item's front matter (title, state, labels) and keeps its body; `comment` returns `posted: false`, since
+an item has no comments, and `ensureLabels` has nothing to create.
 
-`F intake`, spec approval and `facts()` read the item through `getItem`, `comments` and `trust`. Stage comments and labels still call `gh` directly (local-first PR 6).
+## Through the adapter
+
+`F intake`, spec approval and `facts()` read the item through `getItem`, `comments` and `trust`. Intake's writes go
+through the rest (local-first PR 6b): `F labels`, `F label` (a closed list), `F comment` (the recorded reason or
+questions), `F split` (`createIssues` with `ready` from the parent's recorded trust) and `F similar` (`listOpen`).

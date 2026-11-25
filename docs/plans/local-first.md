@@ -659,10 +659,26 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
      - `pr`, `ci` and `escalate` refuse a run another launcher holds, as the other run commands do.
      - A git run with a recorded change request still escalates: a local item is never trusted.
      - `F event` refuses a typed `pr` or `branch` (the review): `F pr` and sync record them.
-   - **6b, the tracker side**, next: `F label` (a closed allow-list of the factory's labels, `factory:ready` only from
-     `F split`), `F split` (children through `tracker.createIssues`, "Part of #N" written by F, `factory:ready` only for a
-     trusted parent, from the association intake recorded), the reject and needs-info comments from the recorded
-     `reason` and `questions`, the duplicate check through `listOpen`, and a test that SKILL.md names no `gh`.
+   - **6b, the tracker side.** Landed as `packages/core/src/items.ts`, through the tracker adapter. The target is always
+     the run's own item, and the text is F's or the recorded event's, through 6a's scrub, `unmention` and cut:
+     - `F labels OWNER/REPO`: the tracker's `ensureLabels` (GitHub: every factory label; `local`: nothing to create).
+     - `F label RUN add|remove LABEL`: only `factory:in-progress`, `needs-info`, `rejected` and `needs-approval`. Every
+       other factory label names the command that adds it (`ready`: `F split`; `merged`: `F merge` and `F sync`;
+       `needs-human`: `F escalate` and `F revert`; `epic`: `F issues create`). A remove of a label that isn't there is
+       fine; any other failure throws. `local` rewrites the item's front matter.
+     - `F comment RUN`: from the latest intake or spec event, the rejection `reason`, the numbered needs-info
+       `questions`, or a spec awaiting approval (`DIR/spec.md`, which F hashed then, and how a maintainer answers).
+       `local` posts nothing (`posted: false`).
+     - `F split RUN -`: 2 to 10 children `{title, body, acceptance}`, through `createIssues`, with F's "Part of #N" and a
+       key per child (`split-N-i`), so a re-run finds them. `factory:ready` only when the parent's recorded association,
+       and its origin's, are trusted. `createIssues` takes `ready: false`, so an untrusted parent's children never carry
+       it, not even for a moment (`F queue` could pick them up). F records `intake split {children}`, which `F event`
+       refuses, as it refuses a typed `children`: a child's trust comes from its parent's list. `--dry-run` records nothing.
+     - `F similar RUN WORD…`: the duplicate check through `listOpen`, best match first. It sees open items only; the old
+       `gh issue list --state all` also saw closed ones.
+     - A test that SKILL.md and `references/*.md` name no `gh`, except the user's own `gh auth login`.
+     - Not here: `F escalate` recording `approve escalated` itself (many tests type that event), and the sweep's "open one
+       issue each", which still has no F command.
 7. **Merge flow (§3) with D1.** (~400 lines)
    - `decide()`'s `await-approval`, `merge: auto|ask` with the legacy `autoMerge` mapping, and `F approve RUN --merge`
      (CLI and desktop dialog) as the ask confirmation.

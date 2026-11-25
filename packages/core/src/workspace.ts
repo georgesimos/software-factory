@@ -44,7 +44,7 @@ export const trackerOf = (repo: string) => {
   return t;
 };
 /** The tracker's function, or a refusal naming the tracker and what it can't do. */
-export function trackerFn<K extends 'getItem' | 'comments' | 'trust'>(id: string, fn: K, verb: string): NonNullable<Tracker[K]> {
+export function trackerFn<K extends 'getItem' | 'comments' | 'trust' | 'createIssues' | 'listOpen' | 'ensureLabels' | 'label' | 'comment'>(id: string, fn: K, verb: string): NonNullable<Tracker[K]> {
   const f = Object.hasOwn(builtinTrackers, id) ? (builtinTrackers as Record<string, Tracker>)[id]![fn] : undefined;
   if (!f) throw new Error(`tracker "${id}" cannot ${verb}`);
   return f as NonNullable<Tracker[K]>;
