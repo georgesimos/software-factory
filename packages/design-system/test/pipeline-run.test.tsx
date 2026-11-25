@@ -1,4 +1,6 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { PipelineGraph, pipelineGraph, runOverlay, type Pipeline, type Run, type RunEvent } from '../src/index.ts';
 
@@ -90,7 +92,7 @@ describe('PipelineGraph run overlay', () => {
     fireEvent.change(pick, { target: { value: 'acme/shop#7' } });
     const graph = screen.getByRole('list', { name: 'acme/shop pipeline' });
     expect(within(graph).getByRole('listitem', { name: /^UI review/ })).toHaveAttribute('data-status', 'passed');
-    expect(screen.getByRole('button', { name: 'Gate' })).toHaveAccessibleDescription('Passed'); // the status is read out, not only coloured
+    expect(screen.getByRole('button', { name: /^Gate/ })).toHaveAccessibleName(/Passed/); // the status is read out, not only coloured
     expect(within(graph).getByRole('listitem', { name: /^Docs review/ })).toHaveTextContent('Skipped');
     expect(within(graph).getByRole('listitem', { name: /^Watch main/ })).toHaveTextContent('Not reached');
     expect(screen.getByText('×1')).toBeInTheDocument(); // on the gate → build loop-back
@@ -108,7 +110,7 @@ describe('the step panel', () => {
 
   it('opens on a node: label, locked, its runner without the path, and the model and effort the dashboard lists', () => {
     graph();
-    fireEvent.click(screen.getByRole('button', { name: 'Build' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Build/ }));
     const panel = screen.getByRole('complementary', { name: 'Build step' });
     expect(panel).toHaveTextContent('Locked');
     expect(panel).toHaveTextContent('careful-build.md');
@@ -126,12 +128,12 @@ describe('the step panel', () => {
   });
   it('an optional axis shows its condition and harness; the gate is F’s own, read-only', () => {
     graph();
-    fireEvent.click(screen.getByRole('button', { name: 'UI review' }));
+    fireEvent.click(screen.getByRole('button', { name: /^UI review/ }));
     const ui = screen.getByRole('complementary', { name: 'UI review step' });
     expect(ui).toHaveTextContent('Optional');
     expect(ui).toHaveTextContent('when UI files change');
     expect(ui).toHaveTextContent('codex');
-    fireEvent.click(screen.getByRole('button', { name: 'Gate' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Gate/ }));
     const gate = screen.getByRole('complementary', { name: 'Gate step' });
     expect(within(gate).queryByRole('combobox')).toBeNull();
     expect(within(gate).queryByRole('button', { name: 'Change runner' })).toBeNull();
@@ -139,7 +141,7 @@ describe('the step panel', () => {
   });
   it('Escape closes it and focus goes back to the node; the pipeline’s own panel returns', () => {
     graph();
-    const node = screen.getByRole('button', { name: 'Spec' });
+    const node = screen.getByRole('button', { name: /^Spec/ });
     fireEvent.click(node);
     const panel = screen.getByRole('complementary', { name: 'Spec step' });
     expect(panel.contains(document.activeElement)).toBe(true);
@@ -151,7 +153,7 @@ describe('the step panel', () => {
   it('with a run shown, the step’s result for it: verdict, findings, tokens and time, read-only', () => {
     graph({ runs: [run('acme/shop#7', LOOP.slice(0, LOOP.findIndex((x) => x.stage === 'gate') + 1), { outcome: 'in-progress' })] });
     fireEvent.change(screen.getByRole('combobox', { name: 'Show a run' }), { target: { value: 'acme/shop#7' } });
-    fireEvent.click(screen.getByRole('button', { name: 'UI review' }));
+    fireEvent.click(screen.getByRole('button', { name: /^UI review/ }));
     const panel = screen.getByRole('complementary', { name: 'UI review step' });
     expect(panel).toHaveTextContent('In #7');
     expect(panel).toHaveTextContent('Failed');
@@ -174,7 +176,7 @@ describe('moving around the canvas (n8n’s patterns: drag to pan, a map of the 
     fireEvent.pointerMove(scroll, { clientX: 0, clientY: 0, pointerId: 1, buttons: 1 });
     expect(scroll.scrollLeft).toBe(40);
     fireEvent.pointerUp(scroll, { pointerId: 1 });
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Gate' }), { clientX: 300, clientY: 200, button: 0, pointerType: 'mouse', pointerId: 2 });
+    fireEvent.pointerDown(screen.getByRole('button', { name: /^Gate/ }), { clientX: 300, clientY: 200, button: 0, pointerType: 'mouse', pointerId: 2 });
     fireEvent.pointerMove(scroll, { clientX: 200, clientY: 100, pointerId: 2, buttons: 1 });
     fireEvent.pointerUp(scroll, { pointerId: 2 });
     fireEvent.pointerDown(scroll, { clientX: 300, clientY: 200, button: 0, pointerType: 'touch', pointerId: 3 }); // the platform scrolls a touch
@@ -192,5 +194,79 @@ describe('moving around the canvas (n8n’s patterns: drag to pan, a map of the 
     fireEvent.pointerMove(map, { clientX: 40, clientY: 10, pointerId: 4 });
     expect(scroll.scrollLeft).toBeCloseTo((40 / mw) * gw!, 0);
     fireEvent.pointerUp(map, { pointerId: 4 });
+  });
+});
+
+describe('the overlay shows only what F recorded', () => {
+  const start = [e('intake', 'started'), e('intake', 'passed'), e('spec', 'passed')];
+  it('build opened is running while CI is pending, never passed', () => {
+    const o = runOverlay(G, [...start, e('build', 'started'), e('build', 'opened', { pr: '12' })]);
+    expect(o.steps.build).toMatchObject({ status: 'running', note: 'change request open, CI pending' });
+  });
+  it('spec decided is a person’s approval, not a pass', () => {
+    const o = runOverlay(G, [e('intake', 'started'), e('intake', 'passed'), e('spec', 'awaiting-approval'), e('spec', 'decided', { decision: 'approve' })]);
+    expect(o.steps.spec).toMatchObject({ status: 'running', note: 'approved by a person' });
+  });
+  it('the verifier passes only on passed', () => {
+    const before = LOOP.slice(0, LOOP.findIndex((x) => x.role === 'verifier'));
+    expect(runOverlay(G, [...before, e('review', 'failed', { role: 'verifier' })]).steps.verifier!.status).toBe('failed');
+    expect(runOverlay(G, [...before, e('review', 'started', { role: 'verifier' })]).steps.verifier!.status).toBe('running');
+  });
+  it('an unknown status never shows as passed', () => {
+    expect(runOverlay(G, [...start, e('build', 'started'), e('build', 'paused')]).steps.build).toMatchObject({ status: 'running', note: 'paused' });
+  });
+  it('a run resumed after needs-info, or reopened after a reject, runs again', () => {
+    const asked = runOverlay(G, [e('intake', 'started'), e('intake', 'needs-info'), e('intake', 'started'), e('intake', 'passed'), e('spec', 'started')]);
+    expect(status(asked)).toMatchObject({ intake: 'passed', spec: 'running' });
+    const reopened = runOverlay(G, [e('intake', 'started'), e('intake', 'rejected'), e('intake', 'started'), e('intake', 'passed'), e('spec', 'started')]);
+    expect(status(reopened)).toMatchObject({ intake: 'passed', spec: 'running' });
+  });
+  it('a rejected run: intake failed, with its outcome as the note', () => {
+    expect(runOverlay(G, [e('intake', 'started'), e('intake', 'rejected')]).steps.intake).toMatchObject({ status: 'failed', note: 'rejected' });
+  });
+  it('build recorded twice (its checks, then its PR) adds up its tokens', () => {
+    expect(runOverlay(G, [...start, e('build', 'started'), e('build', 'passed', { tokens: 100 }), e('build', 'passed', { tokens: 50 })]).steps.build!.tokens).toBe(150);
+  });
+  it('the gate sending a run back to spec resets build and every step after it', () => {
+    const o = runOverlay(G, [...LOOP.slice(0, LOOP.findIndex((x) => x.stage === 'gate')), e('gate', 'failed', { next: 'spec' })]);
+    expect(status(o)).toMatchObject({ spec: 'running', build: 'pending', 'review.ui': 'pending', verifier: 'pending', gate: 'pending' });
+    expect(o.loops).toEqual({ spec: 1 });
+  });
+  it('archived runs (only their last events kept) are not offered; the footer counts F’s loop-backs and says when spend is unpriced', () => {
+    render(<PipelineGraph name="acme/shop" pipeline={P} cap={3} costCap={5} runs={[
+      run('acme/shop#7', LOOP, { loopbacks: [{ iteration: 1, ts: 'x' }, { iteration: 2, ts: 'y' }] }), run('acme/shop#5', LOOP.slice(-5), { archived: true })]} />);
+    const pick = screen.getByRole('combobox', { name: 'Show a run' });
+    expect(within(pick).getAllByRole('option').map((o) => o.textContent)).toEqual(['Show a run…', '#7 · Fix the footer · Merged']);
+    fireEvent.change(pick, { target: { value: 'acme/shop#7' } });
+    expect(screen.getByText('#7 · Merged · unpriced · cap $5 · 2 of 3 loops')).toBeInTheDocument();
+  });
+});
+
+describe('the graph’s accessibility and ids', () => {
+  it('a step button is named by everything on it: its label, “Locked”, its status and its runner', () => {
+    render(<PipelineGraph name="acme/shop" pipeline={P} cap={3} costCap={5} plan={{ build: { use: 'skill', name: 'fast-build', model: 'sonnet' } }} runs={[run('acme/shop#7', LOOP)]} />);
+    fireEvent.change(screen.getByRole('combobox', { name: 'Show a run' }), { target: { value: 'acme/shop#7' } });
+    expect(screen.getByRole('button', { name: /^Build/ })).toHaveAccessibleName('Build Locked Passed fast-build · sonnet');
+  });
+  it('two graphs on one page share no ids', () => {
+    const { container } = render(<><PipelineGraph name="a" pipeline={P} cap={3} costCap={5} /><PipelineGraph name="b" pipeline={P} cap={3} costCap={5} /></>);
+    const ids = [...container.querySelectorAll('[id]')].map((x) => x.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    fireEvent.click(within(screen.getByRole('list', { name: 'a pipeline' })).getByRole('button', { name: /^Gate/ }));
+    fireEvent.click(within(screen.getByRole('list', { name: 'b pipeline' })).getByRole('button', { name: /^Gate/ }));
+    const panels = screen.getAllByRole('complementary', { name: 'Gate step' });
+    expect(panels[0]!.id).not.toBe(panels[1]!.id);
+  });
+  it('opening a step tells the host, so it can clear the last save’s status', () => {
+    const onOpen = vi.fn();
+    render(<PipelineGraph name="acme/shop" pipeline={P} cap={3} costCap={5} edit={{ for: () => null, onModel: vi.fn(), onEffort: vi.fn(), onRunner: vi.fn(), onOpen }} />);
+    fireEvent.click(screen.getByRole('button', { name: /^Gate/ }));
+    expect(onOpen).toHaveBeenCalledWith('gate');
+  });
+  it('a step not reached or skipped keeps full-contrast text: dashed, never faded', () => {
+    const css = fs.readFileSync(path.join(__dirname, '..', 'src', 'factory', 'PipelineGraph.css'), 'utf8');
+    const rule = css.split('\n').find((l) => l.includes('li[data-status="pending"]'))!;
+    expect(rule).toContain('dashed');
+    expect(rule).not.toMatch(/opacity/);
   });
 });

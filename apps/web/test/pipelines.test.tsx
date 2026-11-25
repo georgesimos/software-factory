@@ -87,7 +87,7 @@ describe('Pipelines sheet: a step’s panel writes as the Skills sheet does; a r
     vi.stubGlobal('fetch', fetch);
     const onSaved = vi.fn();
     sheet({ ...data, token: 'tok' }, onSaved);
-    await userEvent.click(screen.getByRole('button', { name: 'Build' }));
+    await userEvent.click(screen.getByRole('button', { name: /^Build/ }));
     const panel = screen.getByRole('complementary', { name: 'Build step' });
     expect(panel).toHaveTextContent('set for this project');
     await userEvent.selectOptions(within(panel).getByRole('combobox', { name: 'Model for Build' }), 'opus');
@@ -100,17 +100,26 @@ describe('Pipelines sheet: a step’s panel writes as the Skills sheet does; a r
     vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
     const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
     sheet();
-    await userEvent.click(screen.getByRole('button', { name: 'Build' }));
+    await userEvent.click(screen.getByRole('button', { name: /^Build/ }));
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Effort for Build' }), 'max');
     expect(writeText).toHaveBeenCalledWith(`${F} skills set 'acme/shop' 'build' '{"use":"default","model":"sonnet","effort":"max"}'`);
     expect(fetch).not.toHaveBeenCalled();
     expect(screen.getByRole('status')).toHaveTextContent('Command copied.');
   });
+  it('opening another step clears the last save’s status, which was about the step before', async () => {
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText: vi.fn(async () => {}) } });
+    sheet();
+    await userEvent.click(screen.getByRole('button', { name: /^Build/ }));
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Effort for Build' }), 'max');
+    expect(screen.getByRole('status')).toHaveTextContent('Command copied.');
+    await userEvent.click(screen.getByRole('button', { name: /^Spec/ }));
+    expect(screen.queryByRole('status')).toBeNull();
+  });
   it('Change runner opens the Skills picker, and the pick keeps the step’s model', async () => {
     const fetch = vi.fn(async () => new Response(JSON.stringify(data.skills), { status: 200 }));
     vi.stubGlobal('fetch', fetch);
     sheet({ ...data, token: 'tok' });
-    await userEvent.click(screen.getByRole('button', { name: 'Build' }));
+    await userEvent.click(screen.getByRole('button', { name: /^Build/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Change runner' }));
     const pick = screen.getByRole('dialog', { name: 'Runner for Build' });
     await userEvent.type(within(pick).getByRole('textbox', { name: 'Skill name' }), 'fast-build');
@@ -119,9 +128,9 @@ describe('Pipelines sheet: a step’s panel writes as the Skills sheet does; a r
   });
   it('the gate is F’s own and an extra axis changes in Skills: both read-only here', async () => {
     sheet();
-    await userEvent.click(screen.getByRole('button', { name: 'Gate' }));
+    await userEvent.click(screen.getByRole('button', { name: /^Gate/ }));
     expect(within(screen.getByRole('complementary', { name: 'Gate step' })).queryByRole('combobox')).toBeNull();
-    await userEvent.click(screen.getByRole('button', { name: 'A11y review' }));
+    await userEvent.click(screen.getByRole('button', { name: /^A11y review/ }));
     const a11y = screen.getByRole('complementary', { name: 'A11y review step' });
     expect(a11y).toHaveTextContent('when **/*.tsx change');
     expect(a11y).toHaveTextContent('Who runs it changes in Skills.');

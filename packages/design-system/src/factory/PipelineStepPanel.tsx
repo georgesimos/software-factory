@@ -18,11 +18,15 @@ export interface StepEditing {
   onModel: (step: string, model: string) => void;
   onEffort: (step: string, effort: string) => void;
   onRunner: (step: string) => void;
+  /** A step's panel opened: the host clears the last change's status, which was about another step. */
+  onOpen?: (step: string) => void;
   /** The last change's result: saved, the command to run, or why it failed. */
   status?: { text: ReactNode; bad?: boolean };
 }
 export interface PipelineStepPanelProps {
   node: PipelineNode;
+  /** The panel's id, unique on the page (the graph's step buttons point at it). */
+  id: string;
   /** The runner's display name; a brief is only ever named by its file. */
   runnerName: (r: StepRunner) => string;
   edit?: StepEditing;
@@ -38,11 +42,11 @@ const KIND: Record<string, string> = { default: 'built-in brief', skill: 'skill'
 const file = (p?: string) => (p ?? '').split(/[\\/]/).pop();
 
 /** One step of a pipeline, beside the graph (n8n's node panel, in this design system): what it is, who runs it, and its result in a run. */
-export const PipelineStepPanel = forwardRef<HTMLHeadingElement, PipelineStepPanelProps>(function PipelineStepPanel({ node: n, runnerName, edit, result, runLabel, outcomes, onClose }, head) {
+export const PipelineStepPanel = forwardRef<HTMLHeadingElement, PipelineStepPanelProps>(function PipelineStepPanel({ node: n, id, runnerName, edit, result, runLabel, outcomes, onClose }, head) {
   const r = n.runner, e = edit?.for(n.id) ?? null, label = n.label;
   const row = (k: string, v: ReactNode) => (v ? <><dt>{k}</dt><dd>{v}</dd></> : null);
   return (
-    <aside className="sf-pl-side sf-pl-panel" aria-label={`${label} step`} id="sf-pl-panel"
+    <aside className="sf-pl-side sf-pl-panel" aria-label={`${label} step`} id={id}
       onKeyDown={(x) => { if (x.key === 'Escape') { x.preventDefault(); x.stopPropagation(); onClose(); } }}>
       <div className="sf-pl-panel-head">
         <h3 ref={head} tabIndex={-1}>{label}</h3>

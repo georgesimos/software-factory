@@ -119,7 +119,7 @@ describe('PipelineGraph draws and opens the user’s steps', () => {
     render(<PipelineGraph name="acme/shop" pipeline={U} cap={3} costCap={5} />);
     const graph = screen.getByRole('list', { name: 'acme/shop pipeline' });
     expect(within(graph).getByRole('listitem', { name: 'Escalate to you' })).toBeInTheDocument();
-    fireEvent.click(within(graph).getByRole('button', { name: 'Lint' }));
+    fireEvent.click(within(graph).getByRole('button', { name: /^Lint/ }));
     const panel = screen.getByRole('complementary', { name: 'Lint step' });
     expect(panel).toHaveTextContent('Yours');
     expect(within(panel).getByText('shell check')).toBeInTheDocument();

@@ -33,6 +33,7 @@ export function PipelinesSheet({ open, onClose, data, project, onSaved = () => {
     onModel: (step, v) => save(scope, step, editStep(S, scope, step, 'model', v)),
     onEffort: (step, v) => save(scope, step, editStep(S, scope, step, 'effort', v)),
     onRunner: (step) => setPick(runnerPick(S, scope, step, (st, r) => save(scope, st, r))),
+    onOpen: () => setStatus({ text: '' }), // the last save was about another step
     status,
   };
   return (

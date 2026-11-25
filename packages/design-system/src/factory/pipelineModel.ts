@@ -170,7 +170,11 @@ export interface StepEvent { ts?: string; stage?: string; status?: string; axis?
 export interface RunOverlay { steps: Record<string, StepResult>; taken: string[]; loops: Record<string, number>; back: Record<string, number> }
 
 const OUTCOME_NODE: Record<string, string> = { split: 'children', 'needs-info': 'ask', rejected: 'close' };
-const BAD = new Set(['failed', 'rejected']);
+const GOOD = new Set(['passed', 'approved']); // a user step's outcomes that let the run go on
+const WAITING: Record<string, string> = { 'awaiting-approval': 'waiting for approval', decided: 'approved by a person', 'needs-info': 'waiting for answers' };
+/** Only `passed` is passed: a failure or a refusal is failed, and anything else F records leaves the step running, named. */
+const recorded = (status: string): [StepStatus, Omit<StepResult, 'status'>] =>
+  status === 'passed' ? ['passed', {}] : ['failed', 'rejected', 'closed'].includes(status) ? ['failed', status === 'failed' ? {} : { note: status }] : ['running', { note: status }];
 const ENDED = new Set(['merged', 'escalated', 'rejected', 'closed', 'split']);
 const blocks = (f: { severity?: string; dismissed?: unknown }) => (f.severity === 'high' || f.severity === 'medium') && !f.dismissed;
 
@@ -195,6 +199,7 @@ export function runOverlay({ nodes, edges }: { nodes: PipelineNode[]; edges: Pip
     const ms = a.ts && e.ts ? Date.parse(e.ts) - Date.parse(a.ts) : NaN;
     put(id, status, { ...(a.tokens && { tokens: a.tokens }), ...(Number.isFinite(ms) && { ms }), ...x });
   };
+  const reset = (xs: Iterable<string>) => { for (const id of xs) { delete steps[id]; delete since[id]; } };
   let ended = false, blocking = 0; // blocking: this iteration's undismissed high and medium findings, so the verifier had work
   for (const e of events) {
     const { stage, status = '' } = e;
@@ -202,21 +207,27 @@ export function runOverlay({ nodes, edges }: { nodes: PipelineNode[]; edges: Pip
     if (!steps.ready) put('ready', 'passed');
     ended = (stage !== 'step' && ENDED.has(status)) || (ended && !(stage === 'intake' && status === 'started')); // a person's step may end "rejected"
     const loop = (from: string, to: string, by: string) => {
+      if (to === 'spec') reset([...after, 'build']); // back before build: build and everything after it run again
       loops[to] = (loops[to] ?? 0) + 1; back[`${from}>${to}`] = (back[`${from}>${to}`] ?? 0) + 1;
       put(to, 'running', { note: `sent back by ${by}` }); delete since[to];
     };
     if (stage === 'intake' || stage === 'spec') {
       if (status === 'started') begin(stage, e);
-      else if (status === 'awaiting-approval') put(stage, 'running', { note: 'waiting for approval' });
-      else end(stage, e, status === 'failed' ? 'failed' : 'passed', OUTCOME_NODE[status] || status === 'closed' ? { note: status } : {});
+      else if (WAITING[status]) put(stage, 'running', { note: WAITING[status] });
+      else if (status === 'split') end(stage, e, 'passed', { note: status }); // intake's own decision: the child issues carry the work
+      else end(stage, e, ...recorded(status));
       if (OUTCOME_NODE[status]) put(OUTCOME_NODE[status]!, 'passed');
     } else if (stage === 'build') {
-      if (status === 'started') { for (const id of after) { delete steps[id]; delete since[id]; } blocking = 0; begin('build', e); }
-      else end('build', e, status === 'failed' ? 'failed' : 'passed');
+      if (status === 'started') { reset(after); blocking = 0; begin('build', e); }
+      else if (status === 'opened') end('build', e, 'running', { note: 'change request open, CI pending' });
+      else end('build', e, ...recorded(status));
+    } else if (stage === 'review' && e.role === 'verifier') {
+      if (status === 'started') begin('verifier', e); else end('verifier', e, ...recorded(status));
     } else if (stage === 'step' && e.step) { // provisional: a user step's events are {stage: 'step', step: id, status: started | its outcome}
       const id = userNode(e.step), n = byId.get(id), t = n?.step?.next[status];
       if (status === 'started') { begin(id, e); continue; }
-      end(id, e, BAD.has(status) ? 'failed' : 'passed', status === 'passed' || status === 'failed' ? {} : { note: status });
+      const [st, x]: [StepStatus, Omit<StepResult, 'status'>] = GOOD.has(status) ? ['passed', status === 'passed' ? {} : { note: status }] : recorded(status);
+      end(id, e, st, x);
       if (!n?.slot || !t) continue;
       if (t === 'escalate') { put('escalate', 'passed'); chose.add(`${id}>escalate`); }
       else if (t === SLOTS[n.slot]) for (const x of edges) { if (x.from === id && !x.loop && byId.get(x.to)?.kind !== 'user' && x.to !== 'escalate') chose.add(`${id}>${x.to}`); }
@@ -228,8 +239,7 @@ export function runOverlay({ nodes, edges }: { nodes: PipelineNode[]; edges: Pip
       const fs = e.findings ?? [], n = fs.filter(blocks).length, verdict = n ? 'failed' : 'passed';
       blocking += n;
       end(`review.${e.axis}`, e, verdict, { review: { verdict, findings: fs.length, blocking: n, dismissed: fs.filter((f) => f.dismissed).length } });
-    } else if (stage === 'review' && e.role === 'verifier') end('verifier', e, 'passed');
-    else if (stage === 'gate') {
+    } else if (stage === 'gate') {
       if (!steps.verifier && ids.has('verifier')) { put('verifier', 'skipped', { note: blocking ? 'no record' : 'nothing blocking to verify' }); reached.add('verifier'); } // the run went through it
       const to = e.next === 'spec' || e.next === 'build' ? e.next : '';
       put('gate', status === 'passed' ? 'passed' : 'failed', status === 'passed' ? {} : { note: to ? `back to ${to}` : 'to you' });

@@ -54,7 +54,7 @@ button.sf-pl-node:focus-visible { outline: 2px solid var(--sf-color-accent); out
 .sf-pl-canvas li[data-status="passed"] { border-color: var(--sf-color-ok); }
 .sf-pl-canvas li[data-status="failed"] { border-color: var(--sf-color-bad); }
 .sf-pl-canvas li[data-status="running"] { border-color: var(--sf-color-accent); }
-.sf-pl-canvas li[data-status="pending"], .sf-pl-canvas li[data-status="skipped"] { border-style: dashed; box-shadow: none; opacity: 0.7; }
+.sf-pl-canvas li[data-status="pending"], .sf-pl-canvas li[data-status="skipped"] { border-style: dashed; box-shadow: none; } /* never faded: ink-3 text must keep its contrast */
 .sf-pl-canvas li[data-status="passed"]::before, .sf-pl-canvas li[data-status="passed"]::after { border-color: var(--sf-color-ok); }
 .sf-pl-st { display: flex; align-items: center; gap: var(--sf-space-1); font-size: var(--sf-text-xs); color: var(--sf-color-ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sf-pl-dot { display: inline-block; flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--sf-color-idle); }
@@ -66,7 +66,10 @@ button.sf-pl-node:focus-visible { outline: 2px solid var(--sf-color-accent); out
 .sf-pl-canvas svg[data-overlay] path[data-on] { opacity: 1; stroke: var(--sf-color-accent); stroke-width: 2; }
 .sf-pl-pill rect { fill: var(--sf-color-accent); }
 .sf-pl-canvas .sf-pl-pill text { fill: var(--sf-color-surface); font-weight: var(--sf-weight-medium); }
-.sf-pl-run { position: absolute; top: var(--sf-space-3); left: var(--sf-space-3); z-index: 1; width: auto; max-width: calc(100% - 2 * var(--sf-space-3)); box-shadow: 0 2px 8px rgb(0 0 0 / 0.08); }
+/* The run picker sits in a bar above the canvas, so it never covers a step. */
+.sf-pl-bar { padding: var(--sf-space-2) var(--sf-space-3); border-bottom: 1px solid var(--sf-color-line); background: var(--sf-color-surface); }
+.sf-pl-run { width: auto; max-width: 100%; }
+.sf-pl-bar + .sf-pl-scroll { height: calc(100dvh - 290px); }
 /* The map: the whole graph small, the part in view outlined; click or drag it to move there. */
 .sf-pl-map { display: block; cursor: pointer; touch-action: none; }
 .sf-pl-mapbox { position: absolute; right: var(--sf-space-3); bottom: var(--sf-space-3); z-index: 1; padding: 6px;
@@ -107,7 +110,7 @@ button.sf-pl-node:focus-visible { outline: 2px solid var(--sf-color-accent); out
 .sf-pl-result { display: grid; gap: var(--sf-space-1); padding-top: var(--sf-space-3); border-top: 1px solid var(--sf-color-line); }
 .sf-pl-result p { display: flex; align-items: center; gap: var(--sf-space-1); }
 @media (max-width: 1000px) { .sf-pl-cols { grid-template-columns: minmax(0, 1fr); } .sf-pl-list { grid-auto-flow: column; grid-auto-columns: minmax(160px, 1fr); overflow-x: auto; } }
-@media (max-width: 600px) { .sf-pl-scroll { height: 55dvh; min-height: 280px; } .sf-pl-pct { display: none; } .sf-pl-map { width: 112px; height: auto; } } /* a phone: the graph scrolls in a window under the list, and the page still scrolls past it */
+@media (max-width: 600px) { .sf-pl-scroll, .sf-pl-bar + .sf-pl-scroll { height: 55dvh; min-height: 280px; } .sf-pl-pct { display: none; } .sf-pl-map { width: 112px; height: auto; } } /* a phone: the graph scrolls in a window under the list, and the page still scrolls past it */
 /* n8n's "+" on a connection: where one of the user's own steps can go. */
 .sf-pl-add { position: absolute; z-index: 1; width: 20px; height: 20px; padding: 0; border: 1.5px solid var(--sf-color-line-2); border-radius: 6px;
   background: var(--sf-color-surface); color: var(--sf-color-ink-2); font: inherit; font-size: 14px; line-height: 1; cursor: pointer; }
@@ -118,3 +121,4 @@ button.sf-pl-node:focus-visible { outline: 2px solid var(--sf-color-accent); out
 .sf-pl-insert legend { padding: 0; margin-bottom: var(--sf-space-1); color: var(--sf-color-ink-3); font-size: var(--sf-text-sm); }
 .sf-pl-insert > label { display: grid; gap: var(--sf-space-1); font-size: var(--sf-text-sm); color: var(--sf-color-ink-2); }
 .sf-pl-problems { margin: 0; padding-left: 1.1em; color: var(--sf-color-bad); font-size: var(--sf-text-sm); }
+.sf-pl-main > .sf-pl-status { padding: var(--sf-space-2) var(--sf-space-3) 0; } /* the "+" result, under the canvas */
