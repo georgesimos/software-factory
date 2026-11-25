@@ -39,6 +39,7 @@ export function slotProblems(p: Pipeline): string[] {
     if (!ids.has(sl.first)) out.push(`${name}: the first step “${sl.first}” isn’t one of its steps`);
     for (const st of sl.steps) {
       if (!USER_ID.test(st.id)) out.push(`${name}: “${st.id}” must be lowercase letters, digits and dashes`);
+      else if (p.steps.includes(st.id) || st.id === 'escalate') out.push(`${name}: “${st.id}” is a name F uses`); // next could not tell them apart
       if (seen.has(st.id)) out.push(`${name}: “${st.id}” is used twice`);
       seen.add(st.id);
       if (st.kind === 'check' && !st.run?.trim()) out.push(`${name}: the check “${st.id}” has no command`);
@@ -134,6 +135,27 @@ export function pipelineGraph(p: Pipeline, plan: Record<string, StepRunner> = {}
   const rows: Record<number, number> = {};
   const placed: PipelineNode[] = nodes.map((n) => { const c = col[n.id] ?? 0; return { ...n, col: c, row: (rows[c] = (rows[c] ?? -1) + 1) }; });
   return { nodes: placed, edges };
+}
+
+/** Where a step goes in when added on a connection: its slot, the user step before it (none: it becomes the slot's first)
+ *  and what it goes in front of (a user step's id, or the stage). Null where nothing can go: a loop-back, an exit, or
+ *  between two of F's steps with no slot (review to verifier). Review's axes share one point, on the first axis. */
+export function insertPoint(nodes: PipelineNode[], e: PipelineEdge): { slot: SlotName; after?: string; before: string } | null {
+  const to = nodes.find((n) => n.id === e.to), from = nodes.find((n) => n.id === e.from);
+  if (e.loop || !to || !from) return null;
+  const firstAxis = nodes.find((n) => n.kind === 'review')?.id;
+  const slot = to.kind === 'user' ? to.slot : to.kind === 'review' ? (to.id === firstAxis ? 'beforeReview' : undefined) : SLOT_OF[to.id];
+  if (!slot) return null;
+  const before = to.kind === 'user' ? to.step!.id : SLOTS[slot], after = from.kind === 'user' && from.slot === slot ? from.step!.id : undefined;
+  return { slot, before, ...(after && { after }) };
+}
+/** The slots with `st` put in at `at`: the step before it now leads to it, or it becomes the slot's first. */
+export function insertStep(p: Pipeline, at: { slot: SlotName; after?: string; before: string }, st: UserStep): Pick<Pipeline, SlotName> {
+  const slots = Object.fromEntries((Object.keys(SLOTS) as SlotName[]).filter((k) => p[k]).map((k) => [k, p[k]])) as Pick<Pipeline, SlotName>;
+  const sl = p[at.slot] ?? { first: st.id, steps: [] };
+  const steps = sl.steps.map((x) => x.id !== at.after ? x : { ...x, next: Object.fromEntries(Object.entries(x.next).map(([o, t]) => [o, t === at.before ? st.id : t])) });
+  const i = at.after ? steps.findIndex((x) => x.id === at.after) + 1 : 0;
+  return { ...slots, [at.slot]: { first: at.after ? sl.first : st.id, steps: [...steps.slice(0, i), st, ...steps.slice(i)] } };
 }
 
 // ---- a run drawn on its pipeline ----

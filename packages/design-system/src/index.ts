@@ -31,7 +31,8 @@ export { SessionLink, SessionList, SessionsChip, resumeCommand, shq, type AgentS
 export { CommandMenu, filterCommands, type Command, type CommandMenuProps } from './factory/CommandMenu.tsx';
 export { PipelineGraph, PipelineList, type PipelineGraphProps, type PipelineListItem } from './factory/PipelineGraph.tsx';
 export { PipelineStepPanel, type PipelineStepPanelProps, type StepEdit, type StepEditing } from './factory/PipelineStepPanel.tsx';
-export { SLOTS, STEP_OUTCOMES, STEP_STATUS, USER_KIND, nodeLabel, pipelineGraph, runOverlay, slotLabel, slotProblems, slotTargets, trackerName, userNode, whenText, type Pipeline, type PipelineEdge, type PipelineNode, type RunOverlay, type SlotName, type StepEvent, type StepResult, type StepRunner, type StepSlot, type StepStatus, type UserStep, type UserStepKind } from './factory/pipelineModel.ts';
+export { PipelineInsert, type InsertAt, type UserStepEditing } from './factory/PipelineInsert.tsx';
+export { SLOTS, STEP_OUTCOMES, STEP_STATUS, USER_KIND, nodeLabel, insertPoint, insertStep, pipelineGraph, runOverlay, slotLabel, slotProblems, slotTargets, trackerName, userNode, whenText, type Pipeline, type PipelineEdge, type PipelineNode, type RunOverlay, type SlotName, type StepEvent, type StepResult, type StepRunner, type StepSlot, type StepStatus, type UserStep, type UserStepKind } from './factory/pipelineModel.ts';
 
 export { ProjectPicker, type ProjectPickerProps } from './onboarding/ProjectPicker.tsx';
 export { IngestProgress, type IngestItem, type IngestStatus } from './onboarding/IngestProgress.tsx';

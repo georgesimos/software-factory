@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
-import { PipelineGraph, pipelineGraph, runOverlay, slotProblems, type Pipeline, type RunEvent } from '../src/index.ts';
+import { describe, expect, it, vi } from 'vitest';
+import { PipelineGraph, insertPoint, insertStep, pipelineGraph, runOverlay, slotProblems, type Pipeline, type RunEvent } from '../src/index.ts';
 import BASELINE from './pipeline-graph.baseline.json';
 
 // The user's own steps (a design not in docs/plans/pipelines.md yet): slots before spec, build, review and merge; a step
@@ -67,6 +67,7 @@ describe('slotProblems', () => {
     expect(one('beforeBuild', { id: 'a', kind: 'human', next: { approved: 'build' } })).toEqual(['Before build: “a” has nowhere to go when rejected']);
     expect(one('beforeBuild', { id: 'a', kind: 'check', next: { passed: 'build', failed: 'spec' } })).toEqual(['Before build: the check “a” has no command']);
     expect(one('beforeBuild', { id: 'A b', kind: 'step', next: { passed: 'build', failed: 'escalate' } })).toEqual(['Before build: “A b” must be lowercase letters, digits and dashes']);
+    expect(one('beforeBuild', { id: 'spec', kind: 'step', next: { passed: 'build', failed: 'escalate' } })).toEqual(['Before build: “spec” is a name F uses']);
     expect(slotProblems({ ...P, beforeSpec: { first: 'x', steps: [] } })).toEqual(['Before spec: the first step “x” isn’t one of its steps']);
     expect(slotProblems({ ...U, beforeSpec: { first: 'lint', steps: [{ id: 'lint', kind: 'step', next: { passed: 'spec', failed: 'spec' } }] } })).toEqual(['Before review: “lint” is used twice']);
     expect(one('beforeBuild', { id: 'a', kind: 'step', next: { passed: 'b', failed: 'escalate' } }, { id: 'b', kind: 'step', next: { passed: 'a', failed: 'build' } }))
@@ -131,5 +132,72 @@ describe('PipelineGraph draws and opens the user’s steps', () => {
     expect(screen.getByText('Your steps: 4')).toBeInTheDocument();
     expect(screen.getByText('Before spec: the first step “x” isn’t one of its steps')).toBeInTheDocument();
     expect(screen.getByText(/^1 warning ·/)).toBeInTheDocument();
+  });
+});
+
+describe('adding a step on a connection', () => {
+  const at = (g: ReturnType<typeof pipelineGraph>, from: string, to: string) => insertPoint(g.nodes, g.edges.find((x) => x.from === from && x.to === to)!);
+  it('insertPoint: the slot, the step before and what it goes in front of; nothing on a loop-back, an exit or between F’s own steps', () => {
+    const plain = pipelineGraph(P);
+    expect(at(plain, 'intake', 'spec')).toEqual({ slot: 'beforeSpec', before: 'spec' });
+    expect(at(plain, 'gate', 'merge')).toEqual({ slot: 'beforeMerge', before: 'merge' });
+    expect(at(plain, 'build', 'review.code')).toEqual({ slot: 'beforeReview', before: 'review' });
+    expect(at(plain, 'build', 'review.ui')).toBeNull(); // review's axes share one point
+    expect(at(plain, 'review.code', 'verifier')).toBeNull();
+    expect(at(G, 'spec', 'user:plan')).toEqual({ slot: 'beforeBuild', before: 'plan' });
+    expect(at(G, 'user:plan', 'build')).toEqual({ slot: 'beforeBuild', after: 'plan', before: 'build' });
+    expect(at(G, 'user:lint', 'user:types')).toEqual({ slot: 'beforeReview', after: 'lint', before: 'types' });
+    expect(at(G, 'user:types', 'review.code')).toEqual({ slot: 'beforeReview', after: 'types', before: 'review' });
+    expect(at(G, 'user:lint', 'build')).toBeNull();
+    expect(at(G, 'user:oncall', 'escalate')).toBeNull();
+  });
+  it('insertStep: the step before now leads to it, or it becomes the first; the other slots are kept', () => {
+    const x = { id: 'x', kind: 'step' as const, next: { passed: 'types', failed: 'escalate' } };
+    const mid = insertStep(U, { slot: 'beforeReview', after: 'lint', before: 'types' }, x);
+    expect(mid.beforeReview!.first).toBe('lint');
+    expect(mid.beforeReview!.steps.map((s) => s.id)).toEqual(['lint', 'x', 'types']);
+    expect(mid.beforeReview!.steps[0]!.next).toEqual({ passed: 'x', failed: 'build' });
+    expect(mid.beforeBuild).toEqual(U.beforeBuild);
+    expect(mid.beforeMerge).toEqual(U.beforeMerge);
+    expect(insertStep(U, { slot: 'beforeReview', before: 'lint' }, { ...x, next: { passed: 'lint', failed: 'escalate' } }).beforeReview!.first).toBe('x');
+    expect(insertStep(P, { slot: 'beforeSpec', before: 'spec' }, x)).toEqual({ beforeSpec: { first: 'x', steps: [x] } });
+  });
+  it('a “+” on a connection adds a step there: its kind, a name, and where each outcome goes; the host gets the new slots', () => {
+    const save = vi.fn();
+    render(<PipelineGraph name="acme/shop" pipeline={P} cap={3} costCap={5} steps={{ save }} />);
+    expect(screen.queryByRole('button', { name: 'Add a step between Review and Verifier' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Add a step between Spec and Build' }));
+    const d = screen.getByRole('dialog', { name: 'Add a step before build' });
+    fireEvent.change(within(d).getByLabelText('Name'), { target: { value: 'Write a plan' } });
+    expect(within(d).getByLabelText('When passed')).toHaveDisplayValue('Build');
+    expect(within(d).getByLabelText('When failed')).toHaveDisplayValue('Escalate to you');
+    fireEvent.change(within(d).getByLabelText('When failed'), { target: { value: 'spec' } });
+    fireEvent.click(within(d).getByRole('button', { name: 'Add step' }));
+    expect(save).toHaveBeenCalledWith({ beforeBuild: { first: 'write-a-plan', steps: [{ id: 'write-a-plan', kind: 'step', label: 'Write a plan', next: { passed: 'build', failed: 'spec' } }] } });
+  });
+  it('a shell check says it is human-only, needs a command, and is refused without one', () => {
+    const save = vi.fn();
+    render(<PipelineGraph name="acme/shop" pipeline={U} cap={3} costCap={5} steps={{ save, status: { text: 'Command copied.' } }} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Command copied.');
+    fireEvent.click(screen.getByRole('button', { name: 'Add a step between Lint and Typecheck' }));
+    const d = screen.getByRole('dialog', { name: 'Add a step before review' });
+    fireEvent.click(within(d).getByRole('radio', { name: 'Shell check' }));
+    expect(d).toHaveTextContent(/human-only/);
+    fireEvent.change(within(d).getByLabelText('Name'), { target: { value: 'Format' } });
+    expect(within(d).getByLabelText('When passed')).toHaveDisplayValue('Typecheck');
+    fireEvent.click(within(d).getByRole('button', { name: 'Add step' }));
+    expect(save).not.toHaveBeenCalled();
+    expect(within(d).getByRole('alert')).toHaveTextContent('Before review: the check “format” has no command');
+    fireEvent.change(within(d).getByLabelText('Command'), { target: { value: 'pnpm format --check' } });
+    fireEvent.change(within(d).getByLabelText('Name'), { target: { value: 'Lint' } });
+    fireEvent.click(within(d).getByRole('button', { name: 'Add step' }));
+    expect(within(d).getByRole('alert')).toHaveTextContent('“lint” is used twice');
+    fireEvent.change(within(d).getByLabelText('Name'), { target: { value: 'Format' } });
+    fireEvent.click(within(d).getByRole('button', { name: 'Add step' }));
+    expect(save.mock.calls[0]![0].beforeReview.steps.map((s: { id: string }) => s.id)).toEqual(['lint', 'format', 'types']);
+  });
+  it('draws no “+” without a host to save', () => {
+    render(<PipelineGraph name="acme/shop" pipeline={P} cap={3} costCap={5} />);
+    expect(screen.queryByRole('button', { name: /^Add a step/ })).toBeNull();
   });
 });

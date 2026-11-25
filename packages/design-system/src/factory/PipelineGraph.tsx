@@ -3,7 +3,8 @@ import { Button } from '../components/Button.tsx';
 import { LockIcon } from '../components/icons.tsx';
 import { Select } from '../components/Input.tsx';
 import { OUTCOME_LABEL, formatMoney, outcomeOf, type Run } from './model.ts';
-import { SLOTS, STEP_STATUS, nodeLabel, pipelineGraph, runOverlay, slotProblems, trackerName, userNode, type Pipeline, type PipelineEdge, type PipelineNode, type RunOverlay, type StepRunner } from './pipelineModel.ts';
+import { SLOTS, STEP_STATUS, insertPoint, nodeLabel, pipelineGraph, runOverlay, slotProblems, trackerName, userNode, type Pipeline, type PipelineEdge, type PipelineNode, type RunOverlay, type StepRunner } from './pipelineModel.ts';
+import { PipelineInsert, type InsertAt, type UserStepEditing } from './PipelineInsert.tsx';
 import { PipelineStepPanel, type StepEditing } from './PipelineStepPanel.tsx';
 
 // One pipeline as a node graph, with its checks beside it. Presentational: it takes F's pipeline as props and draws only that.
@@ -25,14 +26,17 @@ export interface PipelineGraphProps {
   edit?: StepEditing;
   /** This pipeline's runs, for "Show a run…". */
   runs?: Run[];
+  /** Adding the user's own steps with a "+" on a connection; without it there is no "+". */
+  steps?: UserStepEditing;
 }
 const runName = (id: string) => id.replace(/^[^#:]*/, '') || id; // #7: the project is the page's
 const ownName = (r: StepRunner) => (!r.use || r.use === 'default' ? 'Factory default' : r.name ?? r.use);
 
-export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownName, cap, costCap, edit, runs = [] }: PipelineGraphProps) {
+export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownName, cap, costCap, edit, runs = [], steps }: PipelineGraphProps) {
   const g = pipelineGraph(p, plan), { nodes, edges } = g, uid = useId();
   const [picked, setPicked] = useState(''), [open, setOpen] = useState(''), buttons = useRef<Record<string, HTMLButtonElement | null>>({});
   const run = runs.find((r) => r.id === picked), o = run ? runOverlay(g, run.events ?? []) : null, sel = nodes.find((n) => n.id === open);
+  const [adding, setAdding] = useState<InsertAt | null>(null), label = (id: string) => { const n = nodes.find((x) => x.id === id)!; return n.kind === 'review' ? 'Review' : n.label; };
   const head = useRef<HTMLHeadingElement>(null), close = () => { setOpen(''); buttons.current[open]?.focus(); };
   useEffect(() => { if (open) head.current?.focus(); }, [open]); // into the panel; on a phone that scrolls it into view under the graph
   const cols = Math.max(...nodes.map((n) => n.col)) + 1, per = (c: number) => nodes.filter((n) => n.col === c).length;
@@ -123,6 +127,12 @@ export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownNa
               );
             })}
           </ol>
+          {steps ? edges.map((e) => { // a "+" halfway along each connection a step can go on: a real button, so the keyboard reaches it
+            const where = insertPoint(nodes, e), a = at.get(e.from), b = at.get(e.to);
+            if (!where || !a || !b) return null;
+            return <button key={`${e.from}>${e.to}`} type="button" className="sf-pl-add" aria-label={`Add a step between ${label(e.from)} and ${label(e.to)}`}
+              style={{ left: (a.x + W + b.x) / 2 - 10, top: (a.y + b.y + H) / 2 - 10 }} onClick={() => setAdding(where)}>+</button>;
+          }) : null}
         </div></div></div>
         <div className="sf-pl-zoom" role="group" aria-label="Zoom">
           <Button size="sm" variant="ghost" aria-label="Zoom out" onClick={() => z(zoom - 0.1)}>−</Button>
@@ -132,6 +142,7 @@ export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownNa
         </div>
         <MiniMap nodes={nodes} at={at} w={w} h={h} view={view} o={o} open={open} onMove={centre} />
         </div>
+        {steps?.status?.text ? <p className="sf-pl-status" role="status" data-bad={steps.status.bad || undefined}>{steps.status.text}</p> : null}
         <p className="sf-pl-foot"><span>{warn ? `${warn} warning${warn === 1 ? '' : 's'}` : 'Valid'} · {nodes.length} steps · {edges.length} connections</span>
           <span>{run && o ? runFoot(run, o, cap, costCap) : `loops ≤ ${cap} · $${costCap} / run`}</span></p>
       </div>
@@ -139,6 +150,7 @@ export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownNa
           outcomes={sel.step && sel.slot ? Object.entries(sel.step.next).map(([k, t]) => [k, t === 'escalate' ? 'escalate to you'
             : nodes.find((x) => x.id === userNode(t))?.label ?? (t === SLOTS[sel.slot!] ? nodeLabel(t) : `back to ${nodeLabel(t)}`)]) : undefined} />
         : <About name={name} p={p} warnings={warnings} cap={cap} costCap={costCap} />}
+      {adding && steps ? <PipelineInsert p={p} at={adding} onClose={() => setAdding(null)} onSave={steps.save} /> : null}
     </>
   );
 }

@@ -108,3 +108,13 @@ button.sf-pl-node:focus-visible { outline: 2px solid var(--sf-color-accent); out
 .sf-pl-result p { display: flex; align-items: center; gap: var(--sf-space-1); }
 @media (max-width: 1000px) { .sf-pl-cols { grid-template-columns: minmax(0, 1fr); } .sf-pl-list { grid-auto-flow: column; grid-auto-columns: minmax(160px, 1fr); overflow-x: auto; } }
 @media (max-width: 600px) { .sf-pl-scroll { height: 55dvh; min-height: 280px; } .sf-pl-pct { display: none; } .sf-pl-map { width: 112px; height: auto; } } /* a phone: the graph scrolls in a window under the list, and the page still scrolls past it */
+/* n8n's "+" on a connection: where one of the user's own steps can go. */
+.sf-pl-add { position: absolute; z-index: 1; width: 20px; height: 20px; padding: 0; border: 1.5px solid var(--sf-color-line-2); border-radius: 6px;
+  background: var(--sf-color-surface); color: var(--sf-color-ink-2); font: inherit; font-size: 14px; line-height: 1; cursor: pointer; }
+.sf-pl-add:hover { border-color: var(--sf-color-accent); color: var(--sf-color-accent); }
+.sf-pl-add:focus-visible { outline: 2px solid var(--sf-color-accent); outline-offset: 1px; }
+.sf-pl-insert { display: grid; gap: var(--sf-space-3); }
+.sf-pl-insert fieldset { display: flex; flex-wrap: wrap; gap: var(--sf-space-3); margin: 0; padding: 0; border: 0; }
+.sf-pl-insert legend { padding: 0; margin-bottom: var(--sf-space-1); color: var(--sf-color-ink-3); font-size: var(--sf-text-sm); }
+.sf-pl-insert > label { display: grid; gap: var(--sf-space-1); font-size: var(--sf-text-sm); color: var(--sf-color-ink-2); }
+.sf-pl-problems { margin: 0; padding-left: 1.1em; color: var(--sf-color-bad); font-size: var(--sf-text-sm); }

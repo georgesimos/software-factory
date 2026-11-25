@@ -138,4 +138,17 @@ describe('Pipelines sheet: a step’s panel writes as the Skills sheet does; a r
     expect(within(graph).getByRole('listitem', { name: /^Docs review/ })).toHaveTextContent('Skipped');
     expect(screen.getByText('#43 · Merged · $3.84 of $5 · 2 of 3 loops')).toBeInTheDocument();
   });
+  it('a “+” adds a step of the user’s own: never written over HTTP, even under F ui; the F pipelines set command is copied', async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    sheet({ ...data, token: 'tok' });
+    await userEvent.click(screen.getByRole('button', { name: 'Add a step between Spec and Build' }));
+    const d = screen.getByRole('dialog', { name: 'Add a step before build' });
+    await userEvent.type(within(d).getByLabelText('Name'), 'Write a plan');
+    await userEvent.click(within(d).getByRole('button', { name: 'Add step' }));
+    expect(writeText).toHaveBeenCalledWith(`${F} pipelines set 'acme/shop' '{"beforeBuild":{"first":"write-a-plan","steps":[{"id":"write-a-plan","kind":"step","label":"Write a plan","next":{"passed":"build","failed":"escalate"}}]}}'`);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await screen.findByRole('status')).toHaveTextContent(/Command copied\. F has no pipelines set yet/);
+  });
 });

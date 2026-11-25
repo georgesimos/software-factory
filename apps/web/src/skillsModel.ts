@@ -59,6 +59,8 @@ export function stepChoices(S: SkillsData, scope: string, step: string, r: StepR
 export const skillCommand = (scope: string, step: string, runner: unknown, f = F_CMD) => runner === null
   ? `${f} skills unset ${shq(scope)} ${shq(step)}`
   : `${f} skills set ${shq(scope)} ${shq(step)} ${shq(JSON.stringify(runner))}`;
+/** The user's own steps for a project (provisional: core has no `pipelines set` yet, so the page only ever copies this). */
+export const pipelineCommand = (scope: string, slots: unknown, f = F_CMD) => `${f} pipelines set ${shq(scope)} ${shq(JSON.stringify(slots))}`;
 export const presetCommand = (name: string, scope: string, f = F_CMD) => `${f} skills preset ${shq(name)} ${shq(scope)}`;
 
 /**
