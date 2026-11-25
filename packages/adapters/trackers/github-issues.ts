@@ -6,6 +6,8 @@ import type { Comment, Created, Item, OpenIssue, TrackerItem } from './index.ts'
 export const id = 'github-issues';
 
 const MARK = /<!-- factory-key: ([a-z0-9][a-z0-9-]*) -->/;
+/** Why a found item can't stand for key k, or '': F split's child (split-N-M) starts with F's own "Part of #N" line. */
+export const misfit = (k: string, body: string) => { const p = /^split-(\d+)-\d+$/.exec(k)?.[1]; return p && !body.startsWith(`Part of #${p}\n`) ? `it doesn't start "Part of #${p}"` : ''; };
 const LABELS: [string, string][] = [['factory:ready', 'BFD4F2'], ['factory:epic', 'D4C5F9']];
 const STAGES = ['factory:in-progress', 'factory:needs-info', 'factory:rejected', 'factory:needs-human', 'factory:merged', 'factory:needs-approval'];
 
@@ -23,10 +25,14 @@ export function render(it: Item, ids: Record<string, string>, titles: Record<str
 
 export function createIssues({ gh }: Ctx, { repo, items, existing = {}, onCreated = () => {}, ready = true }: { repo: string; items: Item[]; existing?: Record<string, { id: string; url?: string | undefined }>; onCreated?: (r: Created) => void; ready?: boolean }): Created[] {
   for (const [name, color] of LABELS) gh('label', 'create', name, '-R', repo, '--force', '--color', color);
-  const found: Record<string, { id: string; url: string }> = {};
-  for (const i of JSON.parse(gh('issue', 'list', '-R', repo, '--state', 'all', '--limit', '500', '--json', 'number,body,url')) as { number: number; body?: string; url: string }[]) {
+  const found: Record<string, { id: string; url: string }> = {}, me = gh('api', 'user', '--jq', '.login').trim().toLowerCase();
+  if (!me) throw new Error('gh api user printed no login: F adopts only the issues it wrote, so it needs to know whose they are');
+  for (const i of JSON.parse(gh('issue', 'list', '-R', repo, '--state', 'all', '--limit', '500', '--json', 'number,body,url,author')) as { number: number; body?: string; url: string; author?: { login?: string } | null }[]) {
     const k = MARK.exec(i.body || '')?.[1];
-    if (k && !found[k]) found[k] = { id: String(i.number), url: i.url };
+    if (!k || found[k]) continue;
+    const why = (i.author?.login || '').toLowerCase() !== me ? "F's own account didn't write it" : misfit(k, i.body || ''); // anyone can write the marker
+    if (why) console.error(`ignoring #${i.number}: it carries key ${k}, but ${why}`);
+    else found[k] = { id: String(i.number), url: i.url };
   }
   const ids: Record<string, string> = {}, titles = Object.fromEntries(items.map((it) => [it.key, it.title]));
   return items.map((it) => {

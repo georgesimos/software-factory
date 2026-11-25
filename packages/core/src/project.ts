@@ -95,6 +95,9 @@ export function validatePlan(text: unknown) {
   return { vision, milestonesText: sec.milestones! };
 }
 
+/** A planted "<!-- factory-key: … -->" would let a re-run adopt the wrong item: F writes the markers itself. */
+export const NO_MARK = 'no "<!--" in the title, body or acceptance: F writes the item\'s markers itself';
+export const marked = (texts: unknown[]) => texts.some((t) => typeof t === 'string' && t.includes('<!--'));
 const ISSUE_FIELDS = ['key', 'title', 'body', 'acceptance', 'dependsOn', 'milestone', 'files'];
 const relPath = (f: unknown) => typeof f === 'string' && f.length <= 200 && !f.startsWith('/') && !f.includes('\\') && !/^[A-Za-z]:/.test(f) && !f.split('/').includes('..') && !/[\0-\x1f]/.test(f);
 
@@ -107,6 +110,7 @@ export function validateIssues(doc: any, milestonesText?: string): { epic?: { ti
   if (doc.epic !== undefined) {
     const bad = Object.keys(doc.epic || {}).filter((k) => !['title', 'body'].includes(k));
     if (!doc.epic || bad.length || !oneLine(doc.epic.title, 120) || (doc.epic.body !== undefined && (typeof doc.epic.body !== 'string' || doc.epic.body.length > 4000))) throw new Error('epic must be {title: one line, at most 120 characters, body?: text}');
+    if (marked([doc.epic.title, doc.epic.body])) throw new Error(`epic: ${NO_MARK}`);
   }
   if (!Array.isArray(doc.issues) || !doc.issues.length || doc.issues.length > 40) throw new Error('issues must be an array of 1-40 issues');
   const keys = new Set<string>();
@@ -117,10 +121,12 @@ export function validateIssues(doc: any, milestonesText?: string): { epic?: { ti
     if (bad.length) throw new Error(`${at}: unknown fields ${bad.join(', ')} (${ISSUE_FIELDS.join('|')})`);
     if (!KEY.test(i.key || '') || i.key === 'epic') throw new Error(`${at}: key must be lowercase-with-dashes, at most 41 characters, and not "epic"`);
     if (keys.has(i.key)) throw new Error(`${at}: duplicate key`);
+    if (i.key.startsWith('split-')) throw new Error(`${at}: key "${i.key}": split-N-M keys are F split's`);
     keys.add(i.key);
     if (!oneLine(i.title, 120)) throw new Error(`${at}: title must be one line, at most 120 characters`);
     if (typeof i.body !== 'string' || i.body.length > 4000) throw new Error(`${at}: body must be text, at most 4000 characters`);
     if (!Array.isArray(i.acceptance) || !i.acceptance.length || i.acceptance.length > 10 || !i.acceptance.every((a: unknown) => oneLine(a, 300))) throw new Error(`${at}: acceptance must be 1-10 one-line criteria`);
+    if (marked([i.title, i.body, ...i.acceptance])) throw new Error(`${at}: ${NO_MARK}`);
     if (i.dependsOn !== undefined && !(Array.isArray(i.dependsOn) && i.dependsOn.every((k: unknown) => typeof k === 'string'))) throw new Error(`${at}: dependsOn must be an array of keys`);
     if (!oneLine(i.milestone, 80)) throw new Error(`${at}: milestone must be one line`);
     if (milestonesText !== undefined && !milestonesText.toLowerCase().includes(i.milestone.toLowerCase())) throw new Error(`${at}: milestone "${i.milestone}" is not in PLAN.md's Milestones section`);

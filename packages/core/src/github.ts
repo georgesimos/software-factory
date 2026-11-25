@@ -10,7 +10,7 @@ import { io, read, readArchive, record, runDir } from './log.ts';
 import { shipTrack } from './ship.ts';
 import { gitTooOld } from '../../adapters/hosts/git.ts';
 import { prNumber } from '../../adapters/hosts/github.ts';
-import { pending } from './approve.ts';
+import { current, pending } from './approve.ts';
 import { createHash } from 'node:crypto';
 import { rules } from './rules.ts';
 import type { Facts } from './gate.ts';
@@ -56,8 +56,11 @@ export function intake(run: string) {
     meta.itemSha = createHash('sha256').update(snap).digest('hex');
   }
   // A split child is authored by whoever ran the split; it inherits its parent's (possibly untrusted) author.
-  const parent = [...Object.values(derive(read())), ...readArchive()].find((r) => (r.children || []).includes(run));
-  if (parent) Object.assign(meta, { origin: parent.id, originAssociation: parent.originAssociation || parent.association });
+  // Listed by more than one parent (live or archived): the least trusted wins, and a missing association is NONE, never unchecked.
+  const trust = (p: Run) => [p.association || 'NONE', ...(p.origin ? [p.originAssociation || 'NONE'] : [])];
+  const parents = [...Object.values(derive(read())), ...readArchive()].filter((r) => (r.children || []).includes(run));
+  const worst = parents.find((p) => trust(p).some((a) => !TRUSTED.includes(a))) || parents[0];
+  if (worst) Object.assign(meta, { origin: worst.id, originAssociation: trust(worst).find((a) => !TRUSTED.includes(a)) || trust(worst).at(-1) });
   record(run, 'intake', 'started', meta);
   // Only the reporter and repo insiders may shape requirements; others could steer a trusted issue into auto-merge.
   const counts = (c: Comment) => (!!c.author && c.author === meta.author) || TRUSTED.includes(c.association); // a deleted account ('') is nobody's
@@ -154,9 +157,11 @@ export function approval(run: string) {
     return said ? { decision: said.decision, by: said.by } : { decision: 'waiting', next: `the user runs F approve ${run} in their own terminal` };
   }
   requireGithub(repo, 'reading spec approval');
-  const since = [...r.events].reverse().find((e) => e.status === 'awaiting-approval')?.ts;
-  if (!since) throw new Error(`${run} is not awaiting approval`);
-  return approvalVote(trackerFn(t, 'comments', 'read comments')(adapterCtx(), { repo, id: n }), since);
+  const asked = r.events.findLast((e) => e.status === 'awaiting-approval');
+  if (!asked) throw new Error(`${run} is not awaiting approval`);
+  if (!asked.postedSha) throw new Error(`${run}'s spec was never posted: F comment ${run} posts it, and a maintainer answers there`); // a vote is for the spec on the issue
+  if (current(run) !== asked.postedSha) throw new Error(`${run}'s spec.md changed after it was posted: post it again (F comment ${run})`);
+  return approvalVote(trackerFn(t, 'comments', 'read comments')(adapterCtx(), { repo, id: n }), asked.ts);
 }
 // The latest trusted "/factory approve|reject" posted after `since`. GitHub stamps comments to the whole second and F to the
 // millisecond, so only a comment from a later second counts: one in the same second may predate the spec it would approve.

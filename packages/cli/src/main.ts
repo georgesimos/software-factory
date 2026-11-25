@@ -47,13 +47,13 @@ export async function main(argv: string[]) {
     switch (cmd) {
       case 'event': {
         const [stage, status] = rest as [string, string], p = json(rest[2]); // as argv above: record() checks them
-        const owned: Record<string, string> = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'spec:decided': 'approve', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'build:opened': 'pr', 'intake:split': 'split', 'approve:closed': 'sync', 'idea:retired': 'retire' };
+        const owned: Record<string, string> = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'spec:decided': 'approve', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'build:opened': 'pr', 'intake:split': 'split', 'intake:decided': 'split', 'approve:closed': 'sync', 'idea:retired': 'retire' };
         const owner = owned[`${stage}:${status}`] || ({ gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop', ship: 'ship' } as Record<string, string>)[stage];
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
         if (stage === 'review' && p.role !== 'verifier') throw new Error('axis verdicts are recorded by "review", not by hand; "event" only takes the verifier usage record ({"role":"verifier",…})');
         if (stage === 'note') throw new Error('"note" is recorded by "note" and "notes", not by hand');
         const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'hostSessionId', 'cwd', 'runner', 'localChecks', 'mergedBy',
-          'pr', 'branch', 'children', 'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // pr, branch: F pr and sync; children: F split; the last row: ship connectors only
+          'pr', 'branch', 'children', 'postedSha', 'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // pr, branch: F pr and sync; children: F split; postedSha: F comment; the last row: ship connectors only
         if (typed.length) throw new Error(`these fields come from GitHub, git, F pr, the environment or a ship connector, not from a payload: ${typed.join(', ')}`);
         record(run, stage, status, p, { fallback }); break;
       }

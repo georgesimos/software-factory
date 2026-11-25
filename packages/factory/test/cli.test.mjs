@@ -1,6 +1,7 @@
 // @ts-nocheck
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { COST_CAP } from '../../core/src/constants.ts';
@@ -802,7 +803,11 @@ export function syncTest(cli) {
   assert.deepEqual([ghost.author, ghost.comments, ghost.ignoredComments], ['', [], 1]);
   // Spec approval: only a trusted "/factory approve" after the wait started counts.
   record('acme/app#21', 'intake', 'started', { title: 't', association: 'NONE' });
-  cli(['event', 'acme/app#21', 'spec', 'awaiting-approval'], '', env);
+  cli(['event', 'acme/app#21', 'spec', 'awaiting-approval', '-'], '{"spec":"s"}', env);
+  assert.throws(() => cli(['approval', 'acme/app#21'], '', env), /spec was never posted: F comment acme\/app#21 posts it/); // a vote is for the spec on the issue
+  fs.mkdirSync(runDir('acme/app#21'), { recursive: true });
+  fs.writeFileSync(path.join(runDir('acme/app#21'), 'spec.md'), '# Goal\n');
+  record('acme/app#21', 'spec', 'awaiting-approval', { spec: 's', postedSha: createHash('sha256').update('# Goal\n').digest('hex') }); // what F comment records (items.test posts it)
   assert.deepEqual(JSON.parse(cli(['approval', 'acme/app#21'], '', env)), { decision: 'approve', by: 'acme' });
   cli(['event', 'acme/app#21', 'spec', 'passed', '-'], '{"approvedBy":"acme"}', env);
   assert.equal(derive(read())['acme/app#21'].outcome, 'in-progress');

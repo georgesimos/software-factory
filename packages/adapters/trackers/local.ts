@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Ctx } from '../hosts/index.ts';
 import type { Comment, Created, Item, OpenIssue, TrackerItem } from './index.ts';
-import { dependencies as fromBody, render } from './github-issues.ts';
+import { dependencies as fromBody, misfit, render } from './github-issues.ts';
 
 export const id = 'local';
 
@@ -69,7 +69,7 @@ export function newItem(ctx: Ctx, { path: at, title, body = '', labels = ['facto
 
 export function createIssues(ctx: Ctx, { path: at, items, existing = {}, onCreated = () => {}, ready = true }: { repo: string; path?: string; items: Item[]; existing?: Record<string, { id: string; url?: string | undefined }>; onCreated?: (r: Created) => void; ready?: boolean }): Created[] {
   const found: Record<string, string> = {};
-  for (const i of all(dirOf(ctx, at))) { const k = MARK.exec(i.body)?.[1]; if (k && !found[k]) found[k] = i.id; }
+  for (const i of all(dirOf(ctx, at))) { const k = MARK.exec(i.body)?.[1]; if (k && !found[k] && !misfit(k, i.body)) found[k] = i.id; } // local items have no author: all are untrusted anyway
   const ids: Record<string, string> = {}, titles = Object.fromEntries(items.map((it) => [it.key, it.title]));
   return items.map((it) => {
     const have = existing[it.key]?.id ?? found[it.key];

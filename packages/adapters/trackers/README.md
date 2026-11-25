@@ -10,7 +10,7 @@ A tracker is where `F issues create` files a project's issue batch, and where `F
 
 | Function | Returns | Must |
 |---|---|---|
-| `createIssues(ctx, {repo, items, existing, onCreated, ready})` | `[{key, id, url, created}]` in item order | Items arrive in dependency order, the epic last. Skip keys in `existing` and keys already in the tracker (store the key somewhere stable; GitHub uses a hidden `<!-- factory-key: k -->` marker). Call `onCreated` right after each create so a crash mid-batch loses nothing. Label every non-epic issue `factory:ready`. ids are strings. With `ready: false` (`F split` for an untrusted parent), no `factory:ready` at all, never one added and removed. |
+| `createIssues(ctx, {repo, items, existing, onCreated, ready})` | `[{key, id, url, created}]` in item order | Items arrive in dependency order, the epic last. Skip keys in `existing` and keys already in the tracker (store the key somewhere stable; GitHub uses a hidden `<!-- factory-key: k -->` marker). Anyone can write a marker, so GitHub adopts only an issue its own account (`gh api user`) wrote, and a `split-N-M` key only from a body that starts `Part of #N`. Call `onCreated` right after each create so a crash mid-batch loses nothing. Label every non-epic issue `factory:ready`. ids are strings. With `ready: false` (`F split` for an untrusted parent), no `factory:ready` at all, never one added and removed. |
 | `listOpen(ctx, {repo})` | `[{id, title, labels, key, …}]` | Open issues only, with label names. |
 | `dependencies(item)` | `[id]` | The ids an item from `listOpen` waits on. |
 
