@@ -273,8 +273,9 @@ The `ci` rule stays (`required|advisory|skip`), and its meaning is kept:
    - A trusted author.
    - A spec approval for an item from a tracker that has its own approval channel (GitHub issues: the trusted
      `/factory approve` comment, as today).
-   - On a GitHub project, the `merge: ask` confirmation (`F approve RUN --merge`). It needs a verified gh login, and an
-     unverified local user is refused with "log in with gh auth login to confirm this merge".
+   - A merge confirmation on a GitHub project. `F approve RUN --merge` refuses every GitHub project, even from a
+     verified gh login (the agent's own token, so no barrier): with auto-merge off the run escalates, and the human
+     merges in GitHub (PR 7's review).
 
 ### 2.2 Who may approve, and who may change a project's providers
 
