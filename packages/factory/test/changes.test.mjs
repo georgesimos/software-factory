@@ -236,12 +236,26 @@ test('a new run after a revert has no PR; F pr reuses a recorded one only while 
     Object.assign(process.env, env);
     try { assert.throws(() => openPr(r), why); } finally { for (const k of Object.keys(env)) delete process.env[k]; }
   };
-  refuse({ STUB_PR_STATE: 'MERGED' }, /acme\/cr#15's recorded change request https:\/\/github\.com\/acme\/cr\/pull\/15 is merged, not open from factory\/issue-15: start a new run \(F intake acme\/cr#15\)/);
-  refuse({ STUB_PR_STATE: 'CLOSED' }, /is closed, not open from factory\/issue-15/);
-  refuse({ STUB_HEAD: 'someone/else' }, /is open from someone\/else, not open from factory\/issue-15/);
-  refuse({ STUB_FORK: '1' }, /is open from a fork's factory\/issue-15, not open from factory\/issue-15/);
+  refuse({ STUB_PR_STATE: 'MERGED' }, /acme\/cr#15's recorded change request https:\/\/github\.com\/acme\/cr\/pull\/15 was merged: run F sync acme\/cr, which records a merge done outside the factory, then F intake acme\/cr#15 starts a new run without it/);
+  refuse({ STUB_HEAD: 'someone/else' }, /is open from someone\/else, not from factory\/issue-15: a human must close it on the host, then F pr acme\/cr#15 opens a fresh draft from factory\/issue-15/);
+  refuse({ STUB_FORK: '1' }, /is open from a fork's factory\/issue-15, not from factory\/issue-15: a human must close it on the host/);
+  refuse({ STUB_PR_STATE: 'WEIRD' }, /acme\/cr#15's recorded change request https:\/\/github\.com\/acme\/cr\/pull\/15: the host can't tell its state; a human needs to check it/);
   assert.equal(openPr(r).existing, true);
   assert.ok(!calls().some((x) => x.a.startsWith('pr create')), 'never a second PR');
+  // escalated, then a human closed the PR unmerged: a fresh draft from the run's own branch replaces it
+  record(r, 'approve', 'decided', { action: 'escalate', reasons: ['x'] });
+  record(r, 'approve', 'escalated');
+  record(r, 'intake', 'started', { title: 'Issue 15, again' });
+  assert.equal(getRun(r).pr, 'https://github.com/acme/cr/pull/15', 'an escalated run keeps its PR');
+  reset();
+  Object.assign(process.env, { STUB_PR_STATE: 'CLOSED', STUB_FORK: '1', STUB_NEW_PR: 'https://github.com/acme/cr/pull/16' });
+  try { assert.deepEqual(openPr(r), { pr: 'https://github.com/acme/cr/pull/16', branch: 'factory/issue-15', url: 'https://github.com/acme/cr/pull/16', replaced: 'https://github.com/acme/cr/pull/15' }); }
+  finally { for (const k of ['STUB_PR_STATE', 'STUB_FORK', 'STUB_NEW_PR']) delete process.env[k]; }
+  assert.deepEqual(calls().map((x) => x.a.split(' ').slice(0, 2).join(' ')), ['pr view', 'pr create']);
+  assert.match(calls()[1].a, / --head factory\/issue-15 /, 'from the run\'s own branch, never the closed one\'s');
+  const e = read().filter((x) => x.run === r).at(-1);
+  assert.deepEqual([e.stage, e.status, e.pr, e.branch], ['build', 'opened', 'https://github.com/acme/cr/pull/16', 'factory/issue-15']);
+  assert.equal(getRun(r).pr, 'https://github.com/acme/cr/pull/16');
 });
 
 test('F escalate with no decision still hands the PR to a human, saying F merge failed; a merge decision says why it escalates', () => {
