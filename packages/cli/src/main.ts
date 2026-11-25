@@ -23,11 +23,12 @@ import { artifact, openSession, parseRun, render, startRun, ui } from '../../ser
 import { refuseClaimed, unclaim } from '../../core/src/claim.ts';
 import { rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
 import { note, takeNotes } from '../../core/src/notes.ts';
+import { ciStatus, escalate, openPr } from '../../core/src/changes.ts';
 import { withMeasured } from '../../core/src/burn.ts';
 import { installCli, linkSkill, open } from '../../core/src/platform.ts';
 import { pathToFileURL } from 'node:url';
 
-const GATED = new Set(['event', 'review', 'checks', 'notes', 'axes', 'worktree', 'deps', 'gate', 'intake', 'decide', 'merge', 'approval', 'postmerge', 'revert', 'close']);
+const GATED = new Set(['event', 'review', 'checks', 'notes', 'axes', 'worktree', 'deps', 'gate', 'intake', 'decide', 'merge', 'approval', 'postmerge', 'revert', 'close', 'pr', 'ci', 'escalate']);
 export async function main(argv: string[]) {
   // shortcut: the words are typed as present; a missing one is undefined at run time, and the command's own check (or its
   // callee's) reports it, as before typing. Index into rest the same way (rest[i]!).
@@ -45,14 +46,14 @@ export async function main(argv: string[]) {
     switch (cmd) {
       case 'event': {
         const [stage, status] = rest as [string, string], p = json(rest[2]); // as argv above: record() checks them
-        const owned: Record<string, string> = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'spec:decided': 'approve', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'approve:closed': 'sync', 'idea:retired': 'retire' };
+        const owned: Record<string, string> = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'spec:decided': 'approve', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'build:opened': 'pr', 'approve:closed': 'sync', 'idea:retired': 'retire' };
         const owner = owned[`${stage}:${status}`] || ({ gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop', ship: 'ship' } as Record<string, string>)[stage];
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
         if (stage === 'review' && p.role !== 'verifier') throw new Error('axis verdicts are recorded by "review", not by hand; "event" only takes the verifier usage record ({"role":"verifier",…})');
         if (stage === 'note') throw new Error('"note" is recorded by "note" and "notes", not by hand');
         const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'hostSessionId', 'cwd', 'runner', 'localChecks', 'mergedBy',
-          'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // the last row: set by ship connectors only
-        if (typed.length) throw new Error(`these fields come from GitHub, git, the environment or a ship connector, not from a payload: ${typed.join(', ')}`);
+          'pr', 'branch', 'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // pr, branch: F pr and sync; the last row: ship connectors only
+        if (typed.length) throw new Error(`these fields come from GitHub, git, F pr, the environment or a ship connector, not from a payload: ${typed.join(', ')}`);
         record(run, stage, status, p, { fallback }); break;
       }
       case 'review': { // raw reviewer output on stdin, from any runner; invalid output is recorded as a failed review
@@ -134,6 +135,13 @@ export async function main(argv: string[]) {
       case 'discover': out(discover([run, ...rest].filter(Boolean))); break;
       case 'decide': { const r = getRun(run); const f = r.imported ? {} : facts(r); const d = decide(r, f); record(run, 'approve', 'decided', { ...d, facts: f }); out({ ...d, facts: f }); break; }
       case 'merge': out(merge(run)); break;
+      case 'pr': out(openPr(run)); break; // pr <run>: the run's draft change request from its branch, opened once and recorded
+      case 'ci': out(ciStatus(run, { watch: rest.includes('--watch') })); break; // ci <run> [--watch]: CI on the worktree head; a failure carries its log's tail
+      case 'escalate': { // escalate <run> [--error TEXT]: ready, factory:needs-human and one comment from the decision (cosmetic)
+        const i = rest.indexOf('--error');
+        if (i >= 0 && !rest[i + 1]) throw new Error('--error needs the text of F merge\'s error');
+        out(escalate(run, i >= 0 ? { error: rest[i + 1] } : {})); break;
+      }
       case 'risk': out(risk(getRun(run), rest)); break;
       case 'approval': out(approval(run)); break;
       case 'approve': // approve <owner/repo#N>: you approve a local item's spec at your own terminal; never an agent, the page or HTTP
@@ -260,6 +268,9 @@ export async function main(argv: string[]) {
   gate   <run>                            compute + record gate verdict
   decide <run>                            fetch CI + diff, compute + record merge/escalate
   merge  <run>                            re-decide, then merge the reviewed commit (the only merge path)
+  pr <run>                                open the run's draft change request from its branch (once; recorded)
+  ci <run> [--watch]                      CI on the run's head; a failure carries the failed log's last 80 lines
+  escalate <run> [--error TEXT]           mark the change request (or issue) for a human, with why as a comment
   risk   <run> <planned files...>         does the spec need human approval before building?
   approval <run>                          spec approved since waiting? (GitHub: a trusted "/factory approve|reject" comment; local items: F approve)
   approve <run>                           approve a local item's spec at your own terminal (type the code it shows); meant for you, refused inside agent sessions

@@ -319,7 +319,7 @@ test('#105: every F command that changes a run refuses one another live launcher
   const id = 'eval/golden#4';
   const f = (args, extra = {}) => spawnSync(process.execPath, [path.join(HERE, 'factory.mjs'), ...args], { env: { ...stubEnv, FACTORY_DIR: io.dir, FACTORY_FIXTURES: path.join(HERE, 'evals', 'golden'), ...extra }, encoding: 'utf8' });
   const cl = takeClaim(id, 'start'); // an F start between its claim and its harness's first event
-  for (const [args, tok] of [[['intake', id]], [['approval', id]], [['worktree', id]], [['merge', id]], [['event', id, 'spec', 'passed', '{}']], [['intake', id], 'another-token'], [['intake', 'Eval/Golden#4']]]) {
+  for (const [args, tok] of [[['intake', id]], [['approval', id]], [['worktree', id]], [['merge', id]], [['pr', id]], [['ci', id]], [['escalate', id]], [['event', id, 'spec', 'passed', '{}']], [['intake', id], 'another-token'], [['intake', 'Eval/Golden#4']]]) {
     const r = f(args, tok ? { FACTORY_CLAIM: tok } : {});
     assert.match(r.stderr, /olden#4 already has a running session \(start, not started yet\)\. If nothing is starting it .*F unclaim .*olden#4 --force/, `${args.join(' ')} ${tok ?? ''}`);
     assert.notEqual(r.status, 0);

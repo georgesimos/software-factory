@@ -44,7 +44,7 @@ In the commands below:
   - At the start of every step (intake, spec, build, each review axis, verifier, postmerge, including the ones you do yourself), run `F notes RUN <every step key starting now>`, for example all review axes in one call. It prints each step's pending notes and marks them applied, so they are never handed out twice, even to steps started at the same moment. It prints `{}` when nothing is pending, including for a new issue before intake.
   - Put them under "User instructions", right after that step's `guide` texts. They have the same limits as guidance: they can make a step stricter or add detail, and never override these ground rules or `F`'s decisions.
   - A note for a step that already ran is refused for intake (unless it is waiting on needs-info) and postmerge, which won't run again. For spec, build, a review axis or the verifier it is kept with a `warning`: it is handed out only if a gate loops back to that step, so it may never be used. Tell the user, and suggest `next` instead. `next` goes to the next steps that start. A `review.<axis>` note needs a built-in axis or one in `axes.extra`.
-- **Merge only through `F merge`.** Never run `gh pr merge` yourself. `F merge` re-checks the decision against live GitHub data and merges only the exact commit that was reviewed.
+- **Merge only through `F merge`.** Never merge at the host yourself. `F merge` re-checks the decision against live GitHub data and merges only the exact commit that was reviewed.
 - **Never** push to the default branch, close an issue, or build, push to or merge an `imported` run. The one exception is `F new --yes`, whose host pushes the scaffold commit to `main` of the repo that same project just created; it refuses a repo it did not create.
 - **Mechanical decisions are final.** `F axes`, `F gate`, `F decide`, `F merge` and `F risk` decide; do not override them.
 - **Keep the context small:**
@@ -72,10 +72,10 @@ In the commands below:
 | `merged`, `escalated`, `rejected`, `closed` or `split` | Report the outcome and links, then stop. Redo it only if the user explicitly asks. |
 | `needs-info` | Redo intake. `F intake` returns the new comments. |
 | `awaiting-approval` | Run `F approval RUN`. **approve**: record `F event RUN spec passed -` with `{"approvedBy":"…"}`, then go to Build. **reject**: record `intake rejected` with the reason. **waiting**: tell the user, then stop. A local item (a git project) waits for the user to approve it in the desktop app (Run → Approve…) or with `F approve RUN` in their own terminal: tell them that, and never run it yourself (it refuses an agent session anyway). |
-| A PR exists and `gh pr checks` is red, and `policy.ci` is unset or `required` | Go to Build with the failing log. Use `gh run view <id> --log-failed \| tail -n 80`. Under `advisory` or `skip`, red CI is not a reason to rebuild. |
+| A PR exists, `F ci RUN` says `"state":"fail"`, and `policy.ci` is unset or `required` | Go to Build with its `log` (the failed checks' last 80 lines). Under `advisory` or `skip`, red CI is not a reason to rebuild. |
 | Otherwise | Continue from the recorded stage, using the last gate's `next`. |
 
-A start refused with `already has a running session (…)` means another launcher (`F start`, the app, a terminal) holds the run's claim. Every `F` command that changes the run (`intake`, `approval`, `worktree`, `deps`, `event`, `review`, `axes`, `checks`, `notes`, `gate`, `decide`, `merge`, `postmerge`, `revert`) refuses the same way. `F queue` and `F loop` never pick such a run; `F queue` lists it under `claimed`. The harness a launcher started passes its own claim. On that refusal, report it to the user and stop: never work the run alongside the holder. Leave it while that pid runs. Once it is gone (crashed, rebooted) and the claim still blocks, tell the user to run `F unclaim RUN`; it refuses while the pid looks alive, and `--force` is the user's call, never yours.
+A start refused with `already has a running session (…)` means another launcher (`F start`, the app, a terminal) holds the run's claim. Every `F` command that changes the run (`intake`, `approval`, `worktree`, `deps`, `event`, `review`, `axes`, `checks`, `notes`, `gate`, `decide`, `merge`, `pr`, `ci`, `escalate`, `postmerge`, `revert`) refuses the same way. `F queue` and `F loop` never pick such a run; `F queue` lists it under `claimed`. The harness a launcher started passes its own claim. On that refusal, report it to the user and stop: never work the run alongside the holder. Leave it while that pid runs. Once it is gone (crashed, rebooted) and the claim still blocks, tell the user to run `F unclaim RUN`; it refuses while the pid looks alive, and `--force` is the user's call, never yours.
 
 ## 1. Intake: is it worth building?
 
@@ -84,7 +84,7 @@ A start refused with `already has a running session (…)` means another launche
    - **`notAnIssue`:** the number is a PR, or the issue is closed. Tell the user and stop.
    - **`mentions` is non-empty:** open PRs name `#N` in their title. Show them to the user and ask before continuing.
 2. Read the repo's rules first: `CLAUDE.md`, `AGENTS.md`, `REVIEW.md`, `SECURITY.md` and `CONTRIBUTING.md`, whichever exist. Then read only enough code to judge the issue. Check for duplicates with `gh issue list -R OWNER/REPO --search "<keywords>" --state all --json number,title --jq '.[] | "\(.number) \(.title)"'`.
-3. Decide. With `--dry-run`, record the event but skip every `gh` write.
+3. Decide. With `--dry-run`, record the event but skip every write to the host or tracker (`F pr`, `F escalate`, labels and comments).
 
 | Outcome | When | Do |
 |---|---|---|
@@ -136,18 +136,19 @@ Then run `F risk RUN <files to touch…>`.
    - When the build runs as a [headless Claude Code step](#headless-claude-code-runs), bound it with a goal, such as `/goal "<the project's test command> exits 0, lint is clean, only files from the spec changed, or stop after 20 turns"`. The goal's judge runs no commands, so the condition must be visible in the output. The factory's gate still decides.
 5. Commit and push: `git -C WT push -u origin factory/issue-N`.
    - **If `policy["checks.commands"]` is set,** run `F checks RUN` after every push. `F` runs those commands itself in WT on the committed HEAD and records the result; it refuses a dirty tree. On `"state":"fail"`, fix it from the printed `tail`, commit, push and run it again. Still failing after 2 fixes: record `F event RUN build failed -` with `{"reasons":[…]}` and go to Approve, which escalates.
-6. On the first iteration, open the PR: `gh pr create -R OWNER/REPO --draft --base BASE --head factory/issue-N --title "<issue title>" --body-file <file containing "Closes #N" plus the spec>`.
+6. On the first iteration, open the PR: `F pr RUN`. It opens a draft from `factory/issue-N` onto the base, titled from the issue, with "Closes #N" and `DIR/spec.md` as its body, and records it. Later iterations get the same one back.
 7. **Wait for CI before paying for review,** following `policy.ci`:
-   - **`required` (or unset):** run `gh pr checks <pr> -R OWNER/REPO --watch --fail-fast`.
-     - **Red:** fix it here from `gh run view --log-failed | tail -n 80`, push, and wait again.
+   - **`required` (or unset):** run `F ci RUN --watch`. It waits while CI is `pending`, for at most 20 minutes, and then answers with the state.
+     - **`fail`:** fix it here from its `log`, push, and run it again.
+     - **Still `pending`:** run it again once; still pending, record `F event RUN build failed -` with `{"reasons":["CI never finished"]}` and go to Approve.
      - **Still red after 2 fixes:** record `F event RUN build failed -` with `{"reasons":[…]}`, then go to Approve, which escalates.
-   - **`advisory`:** run `gh pr checks <pr> -R OWNER/REPO` once and mention its state in the PR comment, but don't wait on it or fix for it. `F checks` from step 5 is what counts.
-   - **`skip`:** don't run `gh pr checks` at all. `F checks` from step 5 is what counts. With no `checks.commands` rule, nothing stands in for CI, so the run will escalate: tell the user how to add one (see [Rules](#rules-ci-off-local-checks-and-guidance)).
+   - **`advisory`:** run `F ci RUN` once and tell the user its state, but don't wait on it or fix for it. `F checks` from step 5 is what counts.
+   - **`skip`:** don't run `F ci` at all. `F checks` from step 5 is what counts. With no `checks.commands` rule, nothing stands in for CI, so the run will escalate: tell the user how to add one (see [Rules](#rules-ci-off-local-checks-and-guidance)).
    - **Then the preview, following `policy["deploy.preview"]`:**
      - **`required`:** poll `F ship status OWNER/REPO $(git -C WT rev-parse HEAD)` about every 30 seconds, for at most 15 minutes, until a row has `"env":"preview"` and `"state":"ready"`. On `"state":"error"`, fix it like red CI if the `detail` shows why, push and wait again; otherwise go on, and Approve will escalate. `F ship status` only reads: `F decide` and `F merge` look the preview up again and record it.
      - **`advisory`:** run `F ship status` once and mention the preview URL or its state in the PR comment.
      - **`off` or unset:** skip it.
-8. `F event RUN build passed -` with `{"pr":"<url>","branch":"factory/issue-N"}`. Include `pr` and `branch` on the first iteration only.
+8. `F event RUN build passed -` with `{}`. `F pr` already recorded the PR and the branch.
 
 ## 4. Review: parallel, independent, and only what changed
 
@@ -194,19 +195,15 @@ Run `F gate RUN`. Its `next` decides where the run goes:
    
    If they hold, it marks the PR ready, squash-merges it and labels the issue.
 2. **`merged: false`, or `F merge` fails with an error:** escalate. Never retry the merge by hand.
-   1. `gh pr ready <pr>`.
-   2. Add `factory:needs-human` to the PR: `gh api -X POST repos/OWNER/REPO/issues/<pr number>/labels -f 'labels[]=factory:needs-human'`, where `<pr number>` is the number at the end of the PR URL.
-   3. `gh pr comment <pr>` with the reasons and the open findings.
-   4. `F event RUN approve escalated`.
-   
-   If there is no PR, do the comment and label on the issue instead (same endpoint, with the issue number).
+   1. `F escalate RUN`, or `F escalate RUN --error "<the first line of F merge's error>"` when it failed. It marks the PR ready, adds `factory:needs-human`, and comments why (the decision's reasons, or that `F merge` failed) and the open findings, on the issue when there is no PR. Its writes are cosmetic: on `"posted":false` (a git project has no comments) or a `detail`, tell the user, and go on.
+   2. `F event RUN approve escalated`.
 3. Once the run is `merged` or `escalated`, [publish](#publish-to-the-artifact) before watching main.
 
 ## 7. Watch main after a merge
 
 1. Run `F postmerge RUN` and act on its `state`:
    - `skipped`: main's CI isn't watched (rule `ci=skip`, or CI provider `local`, which doesn't check main after a merge). Don't poll. Tell the user, with its `reason`.
-   - `unknown`: the CI provider can't answer (`reason` says why: an unknown provider, gh failing, …). Stop polling. Tell the user, add `factory:needs-human` to the PR and `gh pr comment <pr>` with the reason, as in step 6.
+   - `unknown`: the CI provider can't answer (`reason` says why: an unknown provider, the host's CLI failing, …). Stop polling. Tell the user, and run `F escalate RUN`, which adds `factory:needs-human` to the PR and comments that reason.
    - `no-pr` or `not-merged`: there is nothing to watch. Tell the user.
    - `pending` or `none` (no CI on the merge commit yet): poll about every 2 minutes, for at most 20 minutes, then tell the user it never finished.
    - `pass`: done. If `plan.postmerge` isn't default, run it now, on the base branch at the merge commit. It can only add a failure, never clear one.

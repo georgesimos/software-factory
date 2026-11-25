@@ -9,6 +9,7 @@ import { baseBranch, baseRef, git, hostFn, hostOf, projects, requireGithub, trac
 import { io, read, readArchive, record, runDir } from './log.ts';
 import { shipTrack } from './ship.ts';
 import { gitTooOld } from '../../adapters/hosts/git.ts';
+import { prNumber } from '../../adapters/hosts/github.ts';
 import { pending } from './approve.ts';
 import { createHash } from 'node:crypto';
 import { rules } from './rules.ts';
@@ -72,7 +73,8 @@ export function intakeFixture(run: string, n: string) {
   record(run, 'intake', 'started', meta);
   return { ...meta, state: 'open', body: fx.issue.body, mentions: [], comments: fx.comments || [], ignoredComments: 0, dryRun: true };
 }
-export const adapterCtx = () => ({ gh, git }); // what host and tracker adapters get: the same stubbable gh and git
+export const ghInput = (input: string, ...args: string[]): string => exec(io.gh, args, { encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'] });
+export const adapterCtx = () => ({ gh, git, ghInput }); // what host and tracker adapters get: the same stubbable gh and git
 /** The project's open change requests, from its host (a git host reads the clone at path). */
 export function openPRs(repo: string, path = projects()[repo]?.path) {
   const base = projects()[repo]?.base;
@@ -96,7 +98,7 @@ export function facts(r: Run): Facts {
     dep.deploys = derive(read())[r.id]?.deploys || [];
   }
   if (!(onGit ? r.reviewedSha : r.pr)) return { ...who, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy, ...dep, ...on };
-  const diff = onGit ? gitDiff(repo, r.reviewedSha as string) : JSON.parse(gh('pr', 'view', r.pr as string, '-R', repo, '--json', 'additions,deletions,files')) as ReturnType<typeof gitDiff>;
+  const diff = onGit ? gitDiff(repo, r.reviewedSha as string) : JSON.parse(gh('pr', 'view', prNumber(repo, r.pr as string), '-R', repo, '--json', 'additions,deletions,files')) as ReturnType<typeof gitDiff>;
   // the project's CI provider on the reviewed commit; ci=skip doesn't read it, but a provider that can't answer still escalates
   const local = (sha?: string) => localResult(r.localChecks, policy['checks.commands']?.value, sha);
   const c = policy.ci?.value === 'skip' ? { ci: undefined, state: 'skipped', broken: ciBroken(repo) } : ciChecks(repo, { path: projects()[repo]?.path, sha: r.reviewedSha, changeRequest: r.pr }, local);
@@ -171,7 +173,7 @@ export function postmerge(run: string): PostMerge {
   const { repo } = parseRun(run);
   requireGithub(repo, 'post-merge CI');
   if (!r.pr) return { state: 'no-pr', reason: 'no PR recorded for this run' }; // never `gh pr view undefined`
-  const sha: string | undefined = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'mergeCommit')).mergeCommit?.oid;
+  const sha: string | undefined = JSON.parse(gh('pr', 'view', prNumber(repo, r.pr), '-R', repo, '--json', 'mergeCommit')).mergeCommit?.oid;
   if (!sha) return { state: 'not-merged' };
   const ship = shipTrack([{ run, repo, sha, path: projects()[repo]?.path }]), deploys = ship?.recorded.length ? { deploys: ship.recorded } : {}; // production deploy of the merge commit, when a connector reports one
   const policy = rules(repo).policy, ci = policy.ci?.value, broken = ciBroken(repo);

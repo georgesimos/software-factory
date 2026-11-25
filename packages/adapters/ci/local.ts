@@ -8,3 +8,5 @@ export function checks({ local }: Ctx, { sha }: { repo: string; sha?: string }) 
   const r = local(sha);
   return { state: r.state, detail: r.text };
 }
+// F checks' own output on sha, with its tail of each failed command.
+export const logTail = ({ local }: Ctx, { sha }: { repo: string; sha: string }) => local(sha).text;
