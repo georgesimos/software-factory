@@ -18,6 +18,7 @@ fs.mkdirSync(home);
 const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', FACTORY_DIR: path.join(tmp, 'state'), HOME: home, USERPROFILE: home };
 const run = (args) => {
   const r = spawnSync(exe, args, { env, encoding: 'utf8', timeout: 60_000 });
+  process.stderr.write(`--- ${args[0]} status ${r.status} ${r.error?.message ?? ''}\nstdout: ${r.stdout}\nstderr: ${r.stderr}\n`); // DIAG
   assert.equal(r.status, 0, `${args[0]}: ${r.stderr || r.error?.message}`);
   return JSON.parse(r.stdout.trim().split('\n').at(-1));
 };
