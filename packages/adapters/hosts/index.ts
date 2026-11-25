@@ -7,7 +7,7 @@ import * as github from './github.ts';
 import * as gitHost from './git.ts';
 
 // README.md is the contract; loadDir() checks the required functions at load time.
-export type Ctx = { gh: (...args: string[]) => string; git: (...args: string[]) => string };
+export type Ctx = { gh: (...args: string[]) => string; git: (...args: string[]) => string; /** gh with input on stdin (JSON for --input -). */ ghInput?: (input: string, ...args: string[]) => string };
 export interface Host {
   id: string;
   authStatus(ctx: Ctx): { ok: boolean; login?: string; detail?: string };
@@ -25,7 +25,9 @@ export interface Host {
   /** Merges exactly sha into the base; merged:false (or a throw) when the host refuses. */
   merge?(ctx: Ctx, opts: { repo: string; path?: string; id: string; sha: string; base?: string }): { merged: boolean; sha?: string; detail?: string };
   /** Opens a change request from a branch already pushed. */
-  openChangeRequest?(ctx: Ctx, opts: { repo: string; path?: string; branch: string; base: string; title: string; body: string; labels?: string[] }): { id: string; url?: string };
+  openChangeRequest?(ctx: Ctx, opts: { repo: string; path?: string; branch: string; base: string; title: string; body: string; labels?: string[]; draft?: boolean }): { id: string; url?: string };
+  /** Hands a change request (or, with no id, the issue) to a human: marked ready, labelled needs-human, one comment. posted:false where the host has no comments. */
+  escalate?(ctx: Ctx, opts: { repo: string; path?: string; id?: string; issue: string; body: string }): { posted: boolean; labelled: boolean; ready: boolean; detail?: string };
   /** What the published page's scrub removes, and the host's token shapes for its leak check (server.ts). */
   publicUrl?: RegExp;
   secretPatterns?: RegExp[];

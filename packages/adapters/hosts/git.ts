@@ -219,3 +219,6 @@ export function merge(ctx: Ctx, { repo, path, id, sha, base }: { repo: string; p
   if (wt) try { git('-C', wt.dir, 'read-tree', '-m', '-u', seen, mergeSha); } catch (e) { return undo(`cannot update ${base}'s files in ${wt.dir} (${firstLine(e)})`); }
   return { merged: true, sha: mergeSha };
 }
+
+// No server: nothing to comment on or label. The escalation is the run's own record (D2), shown on the dashboard.
+export const escalate = () => ({ posted: false, labelled: false, ready: false, detail: 'host git has no comments or labels: the escalation is in the dashboard and the run\'s events' });

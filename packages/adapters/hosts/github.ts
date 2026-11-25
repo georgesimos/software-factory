@@ -79,9 +79,21 @@ export function merge({ gh }: Ctx, { repo, id, sha }: { repo: string; id: string
   return { merged: true };
 }
 // Opens a PR from an already pushed branch; labels must exist (sync creates the factory's).
-export function openChangeRequest({ gh }: Ctx, { repo, branch, base, title, body, labels = [] }: { repo: string; branch: string; base: string; title: string; body: string; labels?: string[] }) {
-  const url = gh('pr', 'create', '-R', repo, '--base', base, '--head', branch, '--title', title, '--body', body, ...labels.flatMap((l) => ['--label', l])).trim();
+export function openChangeRequest({ gh }: Ctx, { repo, branch, base, title, body, labels = [], draft = false }: { repo: string; branch: string; base: string; title: string; body: string; labels?: string[]; draft?: boolean }) {
+  const url = gh('pr', 'create', '-R', repo, '--base', base, '--head', branch, '--title', title, '--body', body, ...labels.flatMap((l) => ['--label', l]), ...(draft ? ['--draft'] : [])).trim();
   return { id: url, url };
+}
+// A PR (id: its URL) or, with none, the issue: ready, factory:needs-human and the comment, through the REST issues endpoints
+// with JSON on stdin (a Windows gh.cmd shim can't pass labels[] brackets). Each step is cosmetic: a failure is reported, never thrown.
+export function escalate({ gh, ghInput }: Ctx, { repo, id, issue, body }: { repo: string; id?: string; issue: string; body: string }) {
+  const n = id ? /\/pull\/(\d+)$/.exec(id)?.[1] : issue;
+  if (!n) return { posted: false, labelled: false, ready: false, detail: `"${id}" is not a pull request URL on ${repo}` };
+  const ok = (f: () => unknown) => { try { f(); return true; } catch { return false; } };
+  if (!ghInput) throw new Error('github escalate needs ctx.ghInput (gh with stdin)');
+  const api = (what: string, input: object) => ghInput(JSON.stringify(input), 'api', '-X', 'POST', `repos/${repo}/issues/${n}/${what}`, '--input', '-');
+  const ready = !!id && ok(() => gh('pr', 'ready', n, '-R', repo));
+  const labelled = ok(() => api('labels', { labels: ['factory:needs-human'] })), posted = ok(() => api('comments', { body }));
+  return { posted, labelled, ready, ...(!(posted && labelled && (ready || !id)) && { detail: `some of ready, label and comment failed on ${repo}#${n}` }) };
 }
 // What the published page's scrub removes (any GitHub URL), and GitHub's token shapes for its leak check.
 export const publicUrl = /(?:https?:\/\/)?(?:www\.)?github\.com[/:][^\s"\\,]*/gi; // JSON text: \n is two characters, so stop at '\' too

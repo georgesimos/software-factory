@@ -17,6 +17,8 @@ export interface Ci {
   id: string;
   /** changeRequest: the PR (or other change request) whose head is sha; absent for a commit on the base branch. */
   checks(ctx: Ctx, opts: { repo: string; path?: string; sha?: string; changeRequest?: string }): CiResult;
+  /** The failed checks' log on sha, for F ci RUN to show (its last lines); '' when there is none. Read only. */
+  logTail?(ctx: Ctx, opts: { repo: string; path?: string; sha: string }): string;
 }
 
 export const REQUIRED = ['checks'];
@@ -34,4 +36,5 @@ export function contract(p: Ci, { ctx, repo, path: at, sha }: { ctx: Ctx; repo: 
     assert.ok(r.failed === undefined || (Array.isArray(r.failed) && r.failed.every((x) => typeof x === 'string')), `${p.id}: failed is a list of strings`);
     assert.deepEqual(p.checks(ctx, opts), r, `${p.id}: asking twice gives the same answer`);
   }
+  if (p.logTail) assert.equal(typeof p.logTail(ctx, { repo, path: at, sha }), 'string', `${p.id}: logTail returns text`);
 }

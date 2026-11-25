@@ -72,7 +72,8 @@ export function intakeFixture(run: string, n: string) {
   record(run, 'intake', 'started', meta);
   return { ...meta, state: 'open', body: fx.issue.body, mentions: [], comments: fx.comments || [], ignoredComments: 0, dryRun: true };
 }
-export const adapterCtx = () => ({ gh, git }); // what host and tracker adapters get: the same stubbable gh and git
+export const ghInput = (input: string, ...args: string[]): string => exec(io.gh, args, { encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'] });
+export const adapterCtx = () => ({ gh, git, ghInput }); // what host and tracker adapters get: the same stubbable gh and git
 /** The project's open change requests, from its host (a git host reads the clone at path). */
 export function openPRs(repo: string, path = projects()[repo]?.path) {
   const base = projects()[repo]?.base;

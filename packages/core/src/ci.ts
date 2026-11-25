@@ -29,3 +29,7 @@ export function ciChecks(repo: string, opts: { path?: string; sha?: string; chan
     return { ci, state: 'unknown', broken: `CI provider ${ci} failed: ${out}` };
   }
 }
+// The provider's failed-check log on sha, its last 80 lines; '' when it has none or can't read it (the state already says so).
+export function ciLog(repo: string, opts: { path?: string; sha: string }, local: Ctx['local']) {
+  try { return (builtin[ciOf(repo)]?.logTail?.({ gh, git, local }, { repo, ...opts }) ?? '').trimEnd().split('\n').slice(-80).join('\n'); } catch { return ''; }
+}

@@ -477,7 +477,7 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
    - `adapters/ci/` registry, template, README, `contract()`, `github-actions`, `local`, `none`.
    - `facts()` and `postmerge()` call the provider.
    - The local-checks helper is pulled out, and `decide()` keeps calling it.
-   - `F ci RUN [--watch]` and `logTail` (not in PR 3; they follow with PR 6, which replaces SKILL.md's gh calls).
+   - `F ci RUN [--watch]` and `logTail` (not in PR 3; they landed with PR 6a, which replaces SKILL.md's gh calls).
    - Landed as:
      - A project's provider is `projects.json` `ci`, else `github-actions` on GitHub and `local` on `git` (core's `ciOf`).
        Core imports the three providers by name, as the hosts are; a new one (Jenkins) is a file plus one line, documented
@@ -628,10 +628,35 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
        desktop approval, an over-long spec, invisible characters); the e2e checks the menu, that neither `ipcMain` nor the
        window's `webContents.ipc` has a channel beyond Electron's own (listed by name), that no preload exists, and that
        `/api/approve` is a 404.
-6. **SKILL.md stops naming gh.** (~300 lines)
+6. **SKILL.md stops naming gh.** (~300 lines) Cut in two, by side, since one PR came out well over the size limit.
    - New commands: `F label`, `F split` (→ `tracker.createIssues`), `F escalate RUN` (→ `host.comment`), `F pr RUN`
      (→ `openChangeRequest`).
    - The skill text uses only these commands.
+   - **6a, the change-request side.** Landed as:
+     - `packages/core/src/changes.ts`. Every target is the run's own (its worktree branch and base, its recorded change
+       request, its issue), and every text is F's, never typed:
+       - `F pr RUN`: a draft change request from the run's branch, titled from intake, with "Closes #N" (a local item:
+         "Factory item #N") and `DIR/spec.md` as the body. F records it as `build opened {pr, branch}`, which `F event`
+         refuses. A later call returns the recorded one. It refuses an imported run, and one with no worktree or no spec.
+       - `F ci RUN [--watch]`: the project's CI provider on the worktree head and the change request. `--watch` polls
+         while `pending`, every 30 s for at most 20 minutes, and then answers `pending`: it never hangs. On `fail` it adds
+         the provider's `logTail`, its last 80 lines.
+       - `F escalate RUN`: the host's `escalate`. On GitHub: `gh pr ready`, `factory:needs-human` and one comment, through
+         the REST issues endpoints with JSON on stdin, or on the issue when there is no PR. The comment is the decision's
+         reasons (after a merge, `F postmerge`'s reason) and the open blocking findings. It is cosmetic: a failure is
+         reported. `F event RUN approve escalated` still records the escalation.
+     - The comment goes through `core/src/scrub.ts`, now shared with the published page: the OS user name in "set by
+       <name> (local, unverified)" and local paths never reach the host.
+     - Adapters: `openChangeRequest` takes `draft`; `escalate` is new on hosts (`git`: `posted: false`, since it has
+       nothing to comment on); CI providers gain an optional `logTail` (`github-actions`: `gh run view --log-failed` of
+       the first failed run; `local`: `F checks`' output). `adapterCtx` gains `ghInput` (gh with stdin).
+     - `pr`, `ci` and `escalate` refuse a run another launcher holds, as the other run commands do.
+     - A git run with a recorded change request still escalates: a local item is never trusted.
+     - Not here, left for 6b or later: `F event` still accepts a typed `pr` and `branch`; the skill no longer types them.
+   - **6b, the tracker side**, next: `F label` (a closed allow-list of the factory's labels, `factory:ready` only from
+     `F split`), `F split` (children through `tracker.createIssues`, "Part of #N" written by F, `factory:ready` only for a
+     trusted parent, from the association intake recorded), the reject and needs-info comments from the recorded
+     `reason` and `questions`, the duplicate check through `listOpen`, and a test that SKILL.md names no `gh`.
 7. **Merge flow (§3) with D1.** (~400 lines)
    - `decide()`'s `await-approval`, `merge: auto|ask` with the legacy `autoMerge` mapping, and `F approve RUN --merge`
      (CLI and desktop dialog) as the ask confirmation.

@@ -33,7 +33,8 @@ Change requests (PRs on GitHub), all optional too:
 | `listChangeRequests(ctx, {repo, path, base?})` | `{base, open: [{id, url, title, branch, headSha, closes, author, association}], doneBranches}` | The default branch, the open change requests, and the branches of recently merged or closed ones. |
 | `changeRequest(ctx, {repo, path, id, base?, sha?})` | `{state: open\|merged\|closed\|unknown, detail?, approval, branch, fork, mergedAt, mergedBy, mergeSha}` | One change request. Throw when the host can't be read: the caller reports it. |
 | `merge(ctx, {repo, path, id, sha, base})` | `{merged, sha?, detail?}` | Merge exactly `sha`. Never force anything. |
-| `openChangeRequest(ctx, {repo, path, branch, base, title, body, labels})` | `{id, url?}` | Open one from a branch already pushed. |
+| `openChangeRequest(ctx, {repo, path, branch, base, title, body, labels, draft})` | `{id, url?}` | Open one from a branch already pushed; `draft` (from `F pr`) until a human or `F merge` marks it ready. |
+| `escalate(ctx, {repo, path, id?, issue, body})` | `{posted, labelled, ready, detail?}` | For `F escalate`: mark the change request `id` ready and `factory:needs-human`, with `body` as one comment; with no `id`, label and comment on the issue. Cosmetic: report what failed, don't throw. A host with no comments returns `posted: false` and says why. |
 | `publicUrl`, `secretPatterns` | regexes | The host's public URLs (scrubbed from the published page) and token shapes (refused in it). |
 
 An attached project's `host` can be `github` or `git` only: core imports those two by name, so this folder's other files
@@ -43,7 +44,8 @@ host; `whoami` here says what a host vouches for.
 `git.ts` is the host for a clone not on GitHub. It has no server, so its `authStatus` fails and `F new` never uses it; the
 repo `contract()` runs only against hosts that can create a repo.
 
-Its change request is the branch itself, with id `<branch>@<sha7>`. `openChangeRequest` pushes the branch to origin, if
+Its change request is the branch itself, with id `<branch>@<sha7>` (`draft` means nothing there). It has nothing to
+comment on or label, so `escalate` returns `posted: false`: the escalation is the run's own record. `openChangeRequest` pushes the branch to origin, if
 there is one, with a plain push. It refuses a branch with nothing beyond the base. `merge` squashes exactly the reviewed
 sha onto the base it just fetched (`merge-tree --write-tree` and `commit-tree -p <seen>`, with no checkout). It then
 moves the base only by:

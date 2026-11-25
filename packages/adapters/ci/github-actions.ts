@@ -17,3 +17,9 @@ export function checks({ gh }: Ctx, { repo, sha, changeRequest }: { repo: string
   const failed = runs.filter((x) => ['failure', 'cancelled', 'timed_out'].includes(x.conclusion)).map((x) => x.url);
   return { state: !runs.length ? 'none' as const : failed.length ? 'fail' as const : runs.some((x) => x.status !== 'completed') ? 'pending' as const : 'pass' as const, failed };
 }
+// The first failed workflow run on sha: gh's own failed-steps log.
+export function logTail({ gh }: Ctx, { repo, sha }: { repo: string; sha: string }) {
+  const runs: { databaseId: number; conclusion: string }[] = JSON.parse(gh('run', 'list', '-R', repo, '--commit', sha, '--json', 'databaseId,conclusion'));
+  const bad = runs.find((x) => ['failure', 'cancelled', 'timed_out'].includes(x.conclusion));
+  return bad ? gh('run', 'view', String(bad.databaseId), '-R', repo, '--log-failed') : '';
+}

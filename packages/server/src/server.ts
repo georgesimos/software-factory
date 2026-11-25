@@ -4,6 +4,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { CAP, COST_CAP, TERMINAL, TOKEN_CAP, isLocal } from '../../core/src/constants.ts';
+import { LOCAL_PATH, LOCAL_USER, scrubText } from '../../core/src/scrub.ts';
 import { hooks, loadShipList } from '../../core/src/ship.ts';
 import { LOGIN, rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
 import { budget, budgetWhy, derive } from '../../core/src/derive.ts';
@@ -525,23 +526,7 @@ export function page(extra: object = {}, opts?: { sheet?: boolean; publish?: boo
 // Support", "Bob Smith"): over-redacting prose is the safe side. Web URLs survive: their slashes follow a word
 // character or '/'. Whatever the patterns miss, the residue check in artifact() refuses.
 const PATH_ONLY = new Set(['worktree', 'cwd', 'installPath', 'projectPath', 'fCmd', 'hostId', 'hostSessionId']); // fCmd: the page falls back to the ~ form; hostId: a desktop session on this machine
-const STOP = String.raw`\n\r"'\x60<>|(){}\[\];,&*?`;
-const BODY = String.raw`(?:(?:(?!\s+https?:\/\/)[^${STOP}])*[^\s${STOP}])?`;
-const ROOTS = 'Users|home|Volumes|srv|private|var|tmp|opt|mnt|media|root|usr|etc|Library|Applications|nix|workspaces?';
-const LOCAL_PATH = new RegExp([
-  String.raw`\b(?:[\w.+-]+:\/\/(?:\/|file\/)|(?:vscode|cursor|windsurf)[\w.+-]*:\/\/)[^\s"'\x60<>]*`, // file:///…, vscode://file/…, vscode-remote://…
-  String.raw`(?<![\w\\])\\\\[\w.$-]+\\${BODY}`, // \\server\share…, \\wsl.localhost\…
-  String.raw`(?<![A-Za-z0-9])[A-Za-z]:[\\/]${BODY}`, // C:\…, C:/…, D:\
-  String.raw`(?<!\w)~[\\/]${BODY}`,
-  String.raw`(?<!\w)\/(?:${ROOTS})(?![\w.-])${BODY}`, // also after ':' or '=' (PATH=/a:/Users/…, cwd:/Users/…)
-  String.raw`(?<![\w.\/~-])\/(?!api\/)[^\s\/${STOP}]+\/${BODY}`, // any other path with 2+ segments (cwd:/data/x); "/factory approve" and /api/… routes stay
-].join('|'), 'g');
-// A local (unverified) author is the OS user, which may be DOMAIN\user: never published. Its setBy/by becomes LOCAL_USER, and so
-// does the name in "set by <name> (local, unverified)" (gate.ts reasons); residue() refuses any that is left.
-const LOCAL_USER = 'a local user';
-// The name part is what LOCAL_BY allows (1-100 characters, no control character), quotes included.
-const LOCAL_BY_TEXT = /\bset by [^\x00-\x1f\x7f]{1,100}? \(local, unverified\)/g;
-const scrub = (v: unknown, under = ''): unknown => typeof v === 'string' ? v.replace(LOCAL_BY_TEXT, `set by ${LOCAL_USER} (local, unverified)`).replace(LOCAL_PATH, '[local path]')
+const scrub = (v: unknown, under = ''): unknown => typeof v === 'string' ? scrubText(v)
   : Array.isArray(v) ? v.map((x) => scrub(x))
   : v && typeof v === 'object' ? scrubKeys(v, under) : v;
 // Keys too: a burn cell's models map is keyed by model id, which a provider runner may give as a file path. Counts that land on
