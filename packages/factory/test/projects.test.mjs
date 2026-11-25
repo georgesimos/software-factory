@@ -114,8 +114,9 @@ test('a git project never calls gh: every GitHub path refuses by name, and its w
     assert.deepEqual([facts({ id: run, events: [] }).host, facts({ id: run, events: [] }).trustBroken], ['git', 'tracker "local" cannot tell who wrote an item, so local/notes#1\'s author is unknown and not trusted']);
     assert.throws(() => intake(run), /no item 1 in \.factory\/issues: write one with F item new/, 'intake reads the local tracker (5b), never gh');
     assert.throws(() => approval(run), /local\/notes#1 is not awaiting approval/, 'approval reads F approve\'s record, never gh');
-    for (const [name, f] of [['merge', () => merge(run)], ['relabelMerged', () => relabelMerged(run)], ['postmerge', () => postmerge(run)], ['revert', () => revert(run, 'red')]])
+    for (const [name, f] of [['relabelMerged', () => relabelMerged(run)], ['revert', () => revert(run, 'red')]])
       assert.throws(f, /local\/notes is a git project, not on GitHub: .* works only for GitHub projects/, name);
+    assert.deepEqual([merge(run).action, postmerge(run).state], ['escalate', 'not-merged'], 'PR 7: a git project merges through its host, never gh');
     passSpec(run);
     const w = worktree(run);
     assert.deepEqual([w.base, w.branch], ['main', 'factory/issue-1']);

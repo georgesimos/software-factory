@@ -5,7 +5,7 @@ import { decide, localResult } from './gate.ts';
 import { ciBroken, ciChecks, ciOf } from './ci.ts';
 import { derive, getRun } from './derive.ts';
 import { exec } from './platform.ts';
-import { baseBranch, baseRef, git, hostFn, hostOf, projects, requireGithub, trackerFn, trackerOf } from './workspace.ts';
+import { autoMergeOn, baseBranch, baseRef, fetchBase, git, hostFn, hostOf, projects, requireGithub, trackerFn, trackerOf } from './workspace.ts';
 import { io, read, readArchive, record, runDir } from './log.ts';
 import { shipTrack } from './ship.ts';
 import { gitTooOld } from '../../adapters/hosts/git.ts';
@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto';
 import { rules } from './rules.ts';
 import type { Facts } from './gate.ts';
 import type { Comment } from '../../adapters/trackers/index.ts';
+import type { Host } from '../../adapters/hosts/index.ts';
 import type { Deploy, Run } from './types.ts';
 
 /** postmerge(): CI on the merge commit, and its production deploys. */
@@ -90,10 +91,10 @@ export function facts(r: Run): Facts {
   const t = (() => { try { return trackerOf(repo); } catch (e) { return { why: (e as Error).message }; } })();
   const ask = typeof t !== 'string' ? t.why : (() => { try { return trackerFn(t, 'trust', 'tell who wrote an item'); } catch (e) { return (e as Error).message; } })();
   const said = typeof ask === 'string' ? undefined : ask(adapterCtx(), { repo, id: n }) as unknown;
-  const who = typeof ask === 'string' ? { trustBroken: `${ask}, so ${r.id}'s author is unknown and not trusted` }
+  const who = typeof ask === 'string' ? { trustBroken: `${ask}, so ${r.id}'s author is unknown and not trusted`, ...(t === 'local' && onGit && { unverifiable: true }) } // D4: a file has no author to verify
     : typeof said === 'string' && said && said !== 'null' ? { association: said } // no answer is never trusted, and never intake's recorded association instead
     : { trustBroken: `tracker "${t as string}" gave no author association for ${r.id}, so its author is unknown and not trusted` };
-  const autoMerge = projects()[repo]?.autoMerge !== false;
+  const autoMerge = autoMergeOn(repo); // D1: only when the project turned it on; never on the git host (D4)
   const policy = rules(repo).policy; // a broken config throws here, so decide/merge fail and the run escalates
   const pv = policy['deploy.preview']?.value, dep: { deploys?: Deploy[] } = {};
   if (pv && pv !== 'off') { // live, like CI: record the reviewed commit's deploy state now, then decide on what the log says
@@ -117,24 +118,54 @@ function gitDiff(repo: string, sha: string) {
   if (!at) throw new Error(`no local clone registered for ${repo}`);
   const old = gitTooOld(git);
   if (old) throw new Error(old);
-  const empty = git('-C', at, 'rev-parse', '--show-object-format').trim() === 'sha256' ? EMPTY_TREE.sha256 : EMPTY_TREE.sha1;
-  const rows = git('-C', at, `--attr-source=${empty}`, 'diff', '--numstat', '-z', '--no-renames', `${baseRef(at, baseBranch(repo, at))}...${sha}`).split('\0').filter(Boolean).map((l) => l.split('\t'));
+  const empty = git('-C', at, 'rev-parse', '--show-object-format').trim() === 'sha256' ? EMPTY_TREE.sha256 : EMPTY_TREE.sha1, ref = baseRef(at, baseBranch(repo, at));
+  const rows = git('-C', at, `--attr-source=${empty}`, 'diff', '--numstat', '-z', '--no-renames', `${ref}...${sha}`).split('\0').filter(Boolean).map((l) => l.split('\t'));
+  // .git/info/attributes (a run's worktree shares it; --attr-source doesn't replace it, and --text doesn't beat its -diff) can make
+  // any file "-". So a "-" file with no NUL in its first 8000 bytes (git's own binary test) counts every line of both versions.
+  let fork: string | undefined;
+  const count = (c: string, p: string) => { // fails closed: a blob git can't read throws, never counts 0
+    if (!git('-C', at, '--literal-pathspecs', 'ls-tree', c, '--', p).trim()) return 0; // added or deleted: no blob on this side. Literal: a name like ":(top)x" is no pathspec magic
+    const b = exec(io.git, ['-C', at, 'cat-file', 'blob', `${c}:${p}`], { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: Infinity }) as Buffer; // any size: the default 1 MB threw
+    return b.subarray(0, 8000).includes(0) ? 0 : b.reduce((n, x) => n + (x === 10 ? 1 : 0), 0) + (b.length && b[b.length - 1] !== 10 ? 1 : 0);
+  };
+  for (const x of rows) if (x[0] === '-') { const p = x.slice(2).join('\t'); fork ??= git('-C', at, 'merge-base', ref, sha).trim(); [x[0], x[1]] = [String(count(sha, p)), String(count(fork, p))]; }
   const lines = (i: number) => rows.reduce((t, x) => t + (Number(x[i]) || 0), 0);
   return { additions: lines(0), deletions: lines(1), files: rows.map((x) => ({ path: x.slice(2).join('\t') })) };
 }
-// The only merge path: re-decides from live GitHub facts and merges exactly the reviewed commit.
+const firstLine = (e: unknown) => String((e as { stderr?: unknown })?.stderr || (e as Error)?.message || e).trim().split('\n')[0];
+// The change request as its host sees it now: open, from the run's own branch (never a fork's, which a legacy log's typed PR can
+// be), its head the reviewed commit. Anything else, or a host that can't say, escalates: F merges only what was reviewed.
+function headCheck(r: Run, repo: string, n: string, host: string, path?: string, base?: string): Pick<Facts, 'headBroken'> {
+  if (!r.pr || !r.reviewedSha) return {}; // decide() escalates on either
+  let p: ReturnType<NonNullable<Host['changeRequest']>>;
+  try { p = hostFn(host, 'changeRequest', 'look up a change request')(adapterCtx(), { repo, id: r.pr, ...(path && { path }), ...(base && { base }), sha: r.reviewedSha }); }
+  catch (e) { return { headBroken: `cannot read change request ${r.pr}: ${firstLine(e)}` }; }
+  const want = `factory/issue-${n}`;
+  const why = p.state !== 'open' ? `change request ${r.pr} is ${p.state}${p.detail ? ` (${p.detail})` : ''}, not open`
+    : p.fork ?? host === 'github' ? `change request ${r.pr} is from a fork` // GitHub always says; no answer counts as one
+    : p.branch !== want ? `change request ${r.pr} is from ${p.branch}, not the run's branch ${want}`
+    : p.headSha !== r.reviewedSha ? `change request head is ${String(p.headSha ?? 'unknown').slice(0, 7)}, not the reviewed commit ${r.reviewedSha.slice(0, 7)}` : '';
+  return why ? { headBroken: why } : {};
+}
+// The only merge path: re-decides from live facts, checks the change request, and merges exactly the reviewed commit into the
+// project's base. The host's answer decides what is recorded: merged:false escalates with its detail, never retried.
 export function merge(run: string) {
   const r = getRun(run);
-  const { repo, n } = parseRun(run);
-  requireGithub(repo, 'merging');
-  const f = r.imported ? {} : facts(r);
+  const { repo, n } = parseRun(run), host = hostOf(repo), at = projects()[repo]?.path;
+  const base = host !== 'github' && !r.imported && at ? baseBranch(repo, at) : undefined; // the project's own (F project set base), as worktree() used
+  const f: Facts = r.imported ? {} : { ...facts(r), ...headCheck(r, repo, n, host, at, base) };
   const d = decide(r, f);
   record(run, 'approve', 'decided', { ...d, facts: f });
   if (d.action !== 'merge') return { merged: false, ...d };
   if (!r.reviewedSha) throw new Error('no reviewed commit recorded; refusing to merge');
-  hostFn(hostOf(repo), 'merge', 'merge')(adapterCtx(), { repo, id: r.pr as string, sha: r.reviewedSha }); // decide() escalates a run with no PR
-  record(run, 'approve', 'merged');
-  relabelMerged(run);
+  const m = hostFn(host, 'merge', 'merge')(adapterCtx(), { repo, id: r.pr as string, sha: r.reviewedSha, ...(base && { path: at, base }) }); // decide() escalates a run with no PR
+  if (m?.merged !== true) { // fail closed: only an explicit true is a merge
+    const no = { action: 'escalate', reasons: [`the host refused the merge: ${m?.detail || 'it gave no reason'}`] };
+    record(run, 'approve', 'decided', { ...no, facts: f });
+    return { merged: false, ...no };
+  }
+  record(run, 'approve', 'merged', { ...(m.sha && { sha: m.sha }) }); // the git host's squash; GitHub's comes from the PR (postmerge)
+  if (host === 'github') relabelMerged(run);
   return { merged: true, ...d };
 }
 // After a merge the issue gets factory:merged and loses factory:in-progress, through the REST labels endpoint with the body on stdin:
@@ -175,10 +206,10 @@ export function approvalVote(comments: Comment[], since: string) {
 // After a merge: CI on the merge commit of the base branch.
 export function postmerge(run: string): PostMerge {
   const r = getRun(run);
-  const { repo } = parseRun(run);
-  requireGithub(repo, 'post-merge CI');
-  if (!r.pr) return { state: 'no-pr', reason: 'no PR recorded for this run' }; // never `gh pr view undefined`
-  const sha: string | undefined = JSON.parse(gh('pr', 'view', prNumber(repo, r.pr), '-R', repo, '--json', 'mergeCommit')).mergeCommit?.oid;
+  const { repo } = parseRun(run), onGithub = hostOf(repo) === 'github';
+  if (onGithub && !r.pr) return { state: 'no-pr', reason: 'no PR recorded for this run' }; // never `gh pr view undefined`
+  const sha: string | undefined = onGithub ? JSON.parse(gh('pr', 'view', prNumber(repo, r.pr as string), '-R', repo, '--json', 'mergeCommit')).mergeCommit?.oid
+    : r.events.findLast((e) => e.stage === 'approve' && e.status === 'merged')?.sha as string | undefined; // the git host's squash, as F merge recorded it
   if (!sha) return { state: 'not-merged' };
   const ship = shipTrack([{ run, repo, sha, path: projects()[repo]?.path }]), deploys = ship?.recorded.length ? { deploys: ship.recorded } : {}; // production deploy of the merge commit, when a connector reports one
   const policy = rules(repo).policy, ci = policy.ci?.value, broken = ciBroken(repo);
@@ -186,10 +217,10 @@ export function postmerge(run: string): PostMerge {
   if (ci === 'skip') return { sha, state: 'skipped', reason: 'rule ci=skip: CI on the base branch is not watched, so it never triggers a revert', ...deploys };
   // shortcut: F checks runs only in a run's worktree, never on the merge commit, so local CI can't watch the base after a merge;
   // run checks.commands in a fresh worktree of the merge commit here once that is wanted. Until then a definite skipped, never a state that can't change.
-  if (ciOf(repo) === 'local') {
+  if (['local', 'none'].includes(ciOf(repo))) {
     let base = 'the base branch';
     try { base = baseBranch(repo, projects()[repo]?.path ?? ''); } catch { /* the reason still says what to do */ }
-    return { sha, state: 'skipped', reason: `CI provider local: ${base} after the merge is not checked, so it never triggers a revert; run the checks.commands on ${base} yourself`, ...deploys };
+    return { sha, state: 'skipped', reason: ciOf(repo) === 'none' ? `CI provider none: ${base} after the merge is not watched, so it never triggers a revert` : `CI provider local: ${base} after the merge is not checked, so it never triggers a revert; run the checks.commands on ${base} yourself`, ...deploys };
   }
   const c = ciChecks(repo, { path: projects()[repo]?.path, sha }, (s) => localResult(r.localChecks, policy['checks.commands']?.value, s));
   const why = c.broken ?? (c.state !== 'pass' && c.ci !== 'github-actions' ? c.detail : undefined);
@@ -206,7 +237,7 @@ export function revert(run: string, reason: string) {
   if (!repoPath) throw new Error(`no local clone registered for ${repo}`);
   const base = baseBranch(repo, repoPath);
   const branch = `factory/revert-${n}`, wt = path.join(runDir(run), 'revert');
-  git('-C', repoPath, 'fetch', '-q', 'origin', base);
+  fetchBase(repoPath, base);
   git('-C', repoPath, 'worktree', 'add', '-q', '-B', branch, wt, `refs/remotes/origin/${base}`); // a full ref: see baseRef
   try {
     git('-C', wt, 'revert', '--no-edit', pm.sha);

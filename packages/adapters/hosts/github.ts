@@ -72,13 +72,12 @@ export function prNumber(repo: string, id: string) {
   if (!m || m[1]!.toLowerCase() !== repo.toLowerCase()) throw new Error(`${id} is not a pull request on ${repo}: refusing to act on it`);
   return m[2]!;
 }
-// One PR by number, as sync's human-merge check (#21) reads it. Throws when gh fails: the caller reports it.
-// shortcut: no headSha (headRefOid) yet, so the gh call is the one sync always made; add it when a caller reads it.
+// One PR by number, as sync's human-merge check (#21) and F merge's head check read it. Throws when gh fails: the caller reports it.
 export function changeRequest({ gh }: Ctx, { repo, id }: { repo: string; id: string }) {
-  const p: { state: string; mergedAt: string | null; mergedBy?: { login: string } | null; mergeCommit?: { oid: string } | null; headRefName: string; isCrossRepository?: boolean } =
-    JSON.parse(gh('pr', 'view', prNumber(repo, id), '-R', repo, '--json', 'state,mergedAt,mergedBy,mergeCommit,headRefName,isCrossRepository'));
+  const p: { state: string; mergedAt: string | null; mergedBy?: { login: string } | null; mergeCommit?: { oid: string } | null; headRefName: string; headRefOid?: string; isCrossRepository?: boolean } =
+    JSON.parse(gh('pr', 'view', prNumber(repo, id), '-R', repo, '--json', 'state,mergedAt,mergedBy,mergeCommit,headRefName,isCrossRepository,headRefOid'));
   const state = ({ OPEN: 'open', MERGED: 'merged', CLOSED: 'closed' } as const)[p.state as 'OPEN'] ?? 'unknown';
-  return { state, approval: null, branch: p.headRefName, fork: p.isCrossRepository, mergedAt: p.mergedAt, mergedBy: p.mergedBy?.login, mergeSha: p.mergeCommit?.oid }; // approval: GitHub merges on the gates alone (D2)
+  return { state, approval: null, branch: p.headRefName, headSha: p.headRefOid, fork: p.isCrossRepository, mergedAt: p.mergedAt, mergedBy: p.mergedBy?.login, mergeSha: p.mergeCommit?.oid }; // approval: GitHub merges on the gates alone (D2)
 }
 // Marks the PR ready, then squash-merges exactly sha (--match-head-commit). A refusal throws, as it always has.
 export function merge({ gh }: Ctx, { repo, id, sha }: { repo: string; id: string; sha: string }) {

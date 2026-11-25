@@ -40,7 +40,7 @@ export function record(run: string, stage: string, status: string, payload: Part
   if (!STAGES.includes(stage)) throw new Error(`unknown stage "${stage}" (${STAGES.join('|')})`);
   if (!STATUSES.includes(status)) throw new Error(`unknown status "${status}" (${STATUSES.join('|')})`);
   const prior = status === 'merged' ? derive(read())[run] : undefined; // sync records a human's merge of an escalated run (#21); F event owns neither
-  if (status === 'merged' && prior?.decision?.action !== 'merge' && !(stage === 'approve' && payload.by === 'human' && prior?.outcome === 'escalated')) throw new Error('refusing "merged": the recorded decision is not merge');
+  if (status === 'merged' && prior?.decision?.action !== 'merge' && !(stage === 'approve' && payload.by === 'human' && (prior?.outcome === 'escalated' || prior?.outcome === 'in-progress' && prior.decision?.action === 'escalate'))) throw new Error('refusing "merged": the recorded decision is not merge');
   if (stage === 'review' && payload.axis !== undefined) validateReview(run, payload, status);
   if (stage === 'spec' && status === 'passed') specApproved(run, payload); // a local item's spec: only after F approve
   if (stage === 'spec' && status === 'awaiting-approval') payload = specAsked(run, payload); // and F hashes what is asked

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { COST_CAP } from '../../core/src/constants.ts';
 import { adapterCtx, approval, facts, intake, merge, postmerge, revert } from '../../core/src/github.ts';
-import { approveSpec } from '../../core/src/approve.ts';
+import { approveMerge, approveSpec } from '../../core/src/approve.ts';
 import { newItem } from '../../adapters/trackers/local.ts';
 import { closeMerged, setProject } from '../../core/src/projectset.ts';
 import { archive, io, read, record, runDir } from '../../core/src/log.ts';
@@ -47,13 +47,14 @@ export async function main(argv: string[]) {
     switch (cmd) {
       case 'event': {
         const [stage, status] = rest as [string, string], p = json(rest[2]); // as argv above: record() checks them
-        const owned: Record<string, string> = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'spec:decided': 'approve', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'build:opened': 'pr', 'intake:split': 'split', 'intake:decided': 'split', 'approve:closed': 'sync', 'idea:retired': 'retire' };
+        const owned: Record<string, string> = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:passed': 'approve --merge', 'spec:decided': 'approve', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'build:opened': 'pr', 'intake:split': 'split', 'intake:decided': 'split', 'approve:closed': 'sync', 'idea:retired': 'retire' };
         const owner = owned[`${stage}:${status}`] || ({ gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop', ship: 'ship' } as Record<string, string>)[stage];
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
+        if (status === 'merged') throw new Error('"merged" is recorded by "merge" and "sync", not by hand'); // on any stage: derive() reads it as the run's outcome
         if (stage === 'review' && p.role !== 'verifier') throw new Error('axis verdicts are recorded by "review", not by hand; "event" only takes the verifier usage record ({"role":"verifier",…})');
         if (stage === 'note') throw new Error('"note" is recorded by "note" and "notes", not by hand');
         const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'hostSessionId', 'cwd', 'runner', 'localChecks', 'mergedBy',
-          'pr', 'branch', 'children', 'postedSha', 'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // pr, branch: F pr and sync; children: F split; postedSha: F comment; the last row: ship connectors only
+          'pr', 'branch', 'children', 'postedSha', 'title', 'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // pr, branch: F pr and sync; children: F split; postedSha: F comment; title: the tracker, at intake; the last row: ship connectors only
         if (typed.length) throw new Error(`these fields come from GitHub, git, F pr, the environment or a ship connector, not from a payload: ${typed.join(', ')}`);
         record(run, stage, status, p, { fallback }); break;
       }
@@ -96,7 +97,7 @@ export async function main(argv: string[]) {
         out(note(run, rest[0]!, fs.readFileSync(0, 'utf8'))); break;
       }
       case 'notes': out(takeNotes(run, rest)); break; // notes <run> <step…>: pending notes for the steps starting now, handed out once
-      case 'automerge': { // per-project switch; decide() escalates everything when off
+      case 'automerge': { // per-project switch (D1: off unless turned on); when off, a GitHub run escalates and the human merges it in GitHub
         if (!['on', 'off'].includes(rest[0]!)) throw new Error('usage: automerge <owner/repo> on|off');
         out(setAutoMerge(run, rest[0] === 'on')); break;
       }
@@ -150,9 +151,9 @@ export async function main(argv: string[]) {
       case 'similar': out(similar(run, rest)); break; // similar <run> <word...>: open items that may be duplicates
       case 'risk': out(risk(getRun(run), rest)); break;
       case 'approval': out(approval(run)); break;
-      case 'approve': // approve <owner/repo#N>: you approve a local item's spec at your own terminal; never an agent, the page or HTTP
-        if (!run || rest.length) throw new Error('usage: approve <owner/repo#N>');
-        out(approveSpec(run)); break;
+      case 'approve': // approve <owner/repo#N> [--merge]: you approve a local item's spec, or a waiting merge, at your own terminal; never an agent, the page or HTTP
+        if (!run || rest.length > 1 || (rest.length && rest[0] !== '--merge')) throw new Error('usage: approve <owner/repo#N> [--merge]');
+        out(rest.length ? approveMerge(run) : approveSpec(run)); break;
       case 'item': { // item new <owner/repo> "<title>" [-]: a local item in the clone's untracked .factory/issues (- reads its body from stdin)
         if (run !== 'new' || !rest[0] || !rest[1] || rest.length > 3 || (rest[2] !== undefined && rest[2] !== '-')) throw new Error('usage: item new <owner/repo> "<title>" [-]');
         const [repo, title] = rest as [string, string], t = trackerOf(repo), at = projects()[repo]?.path;
@@ -285,6 +286,7 @@ export async function main(argv: string[]) {
   risk   <run> <planned files...>         does the spec need human approval before building?
   approval <run>                          spec approved since waiting? (GitHub: a trusted "/factory approve|reject" comment; local items: F approve)
   approve <run>                           approve a local item's spec at your own terminal (type the code it shows); meant for you, refused inside agent sessions
+  approve <run> --merge                   approve merging the reviewed commit of a git project's run F merge left waiting (await-approval), then merge it; yours only, as above
   item new <owner/repo> "<title>" [-]     write a local item in the clone's untracked .factory/issues (- reads its body from stdin)
   postmerge <run>                         CI state of the merge commit on the base branch
   revert <run> [reason]                   open a revert PR (never merged by the factory)
@@ -297,7 +299,7 @@ export async function main(argv: string[]) {
   project set <owner/repo> host|ci|base <value>|--unset [--reason "…"]  a project's host (github|git), CI provider (github-actions|local|none) or base branch (git hosts; on origin when it has one; --unset: the host's own); yours only, never an agent's; a relaxing change needs --reason, and a verified login on a GitHub project
   retire <owner/repo> --reason "<why>"     hide an idea that never got a repo (a leaked fixture) with a recorded event; the log is never rewritten
   loop   <owner/repo>                     next issue to build, or stop (first escalation, project budget, session cap, empty queue)
-  automerge <owner/repo> on|off           allow or forbid auto-merge for a project
+  automerge <owner/repo> on|off           merge on the gates alone, or escalate for you to merge in GitHub (the default; a git project always asks); on is yours only, and on GitHub a verified login's
   archive [days=14]                       compact finished runs older than N days
   eval   [fixture]                        score intake on evals/golden with headless claude (costs tokens)
   state  <run>                            print derived run state
