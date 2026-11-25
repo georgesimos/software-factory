@@ -159,8 +159,8 @@ export function insertStep(p: Pipeline, at: { slot: SlotName; after?: string; be
 }
 
 // ---- a run drawn on its pipeline ----
-export type StepStatus = 'passed' | 'failed' | 'skipped' | 'pending' | 'running';
-export const STEP_STATUS: Record<StepStatus, string> = { passed: 'Passed', failed: 'Failed', skipped: 'Skipped', pending: 'Not reached', running: 'Running' };
+export type StepStatus = 'passed' | 'failed' | 'skipped' | 'pending' | 'running' | 'stopped';
+export const STEP_STATUS: Record<StepStatus, string> = { passed: 'Passed', failed: 'Failed', skipped: 'Skipped', pending: 'Not reached', running: 'Running', stopped: 'Stopped' };
 /** One step's latest result in a run. `review`: a review axis's verdict, with findings outranking the status word as in F. */
 export interface StepResult { status: StepStatus; note?: string; tokens?: number; ms?: number; review?: { verdict: 'passed' | 'failed'; findings: number; blocking: number; dismissed: number } }
 /** The few event fields the overlay reads (core's FactoryEvent): nothing else of an event reaches the page. */
@@ -254,7 +254,8 @@ export function runOverlay({ nodes, edges }: { nodes: PipelineNode[]; edges: Pip
   }
   for (const n of nodes) {
     const s = steps[n.id];
-    if (!s || (ended && s.status === 'running')) steps[n.id] = { status: 'pending' }; // a finished run has nothing running
+    if (!s) steps[n.id] = { status: 'pending' };
+    else if (ended && s.status === 'running') steps[n.id] = { ...s, status: 'stopped' }; // the run ended while it waited: say where it stopped, never "not reached"
   }
   const took = (x: PipelineEdge) => !x.loop && reached.has(x.from) && reached.has(x.to) && (byId.get(x.from)?.kind !== 'user' || chose.has(`${x.from}>${x.to}`)); // a user step: only the branch its outcome took
   return { steps, taken: edges.filter(took).map((x) => `${x.from}>${x.to}`), loops, back };
