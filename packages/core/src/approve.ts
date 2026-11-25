@@ -20,7 +20,7 @@ const ownChannel = (repo: string) => { try { return trackerOf(repo) === 'github-
 /** A tracker item's run (owner/repo#N) off GitHub Issues; F sync's imports of branches (owner/repo:branch) are not specced. */
 const needsF = (run: string) => { try { return !ownChannel(parseRun(run).repo); } catch { return false; } };
 /** Control characters (C0 and C1, keeping tab and newline) out of what goes to the terminal: an item's title or spec can't move the cursor or retitle the window. */
-export const clean = (s: string) => s.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, ''); // and bidi and zero-width marks, which can reorder or hide what the spec says
+export const clean = (s: string) => s.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, ''); // and bidi, zero-width, soft-hyphen and line/paragraph separator marks, which can reorder or hide what the spec says
 
 /** The spec put to the user: all of DIR/spec.md, a plain file, never empty. */
 function specOf(run: string) {
@@ -126,6 +126,7 @@ export function approveSpecDesktop(run: string, sha: string, user = () => os.use
   if (p.sha !== sha) throw new Error(`${run}'s spec changed while the dialog was open: nothing was approved`);
   const by = user();
   if (!LOCAL_BY.test(by)) throw new Error('cannot tell who is approving a spec: there is no OS user name');
-  record(run, 'spec', 'decided', { decision: 'approve', by, via: 'desktop', verified: false, specSha: sha });
-  return { run, decision: 'approve', by, via: 'desktop' };
+  // via 'local' as whoami's OS user: unverified everywhere, and scrubbed from a published page (isLocal); channel says where.
+  record(run, 'spec', 'decided', { decision: 'approve', by, via: 'local', channel: 'desktop', specSha: sha });
+  return { run, decision: 'approve', by, via: 'local', channel: 'desktop' };
 }

@@ -19,9 +19,10 @@ export async function approveFromMenu(show: ShowBox) {
       buttons: ['Cancel', ...list.map((w) => w.run)], defaultId: 0, cancelId: 0, noLink: true })).response;
     if (!pick) return null;
     const p = specPending(list[pick - 1]!.run);
-    const spec = p.spec.length > MAX_SPEC ? `${p.spec.slice(0, MAX_SPEC)}\n… (cut here: read all of DIR/spec.md, or run ${CMD})` : p.spec;
+    // The approval covers the whole file, so the dialog approves only a spec it can show in full.
+    if (p.spec.length > MAX_SPEC) throw new Error(`this spec is too long to approve here: run F approve ${p.run} in your terminal`);
     const ok = (await show({ type: 'warning', title: 'Approve the spec', message: `Approve the spec for ${p.run}?`,
-      detail: `${p.title}\n\nWhy it waits: ${p.reasons.join('; ') || '-'}\n\nSpec ${p.code} (DIR/spec.md):\n${spec}\n\nApproving lets the run go on to build this spec. It doesn't merge anything.`,
+      detail: `${p.title}\n\nWhy it waits: ${p.reasons.join('; ') || '-'}\n\nSpec ${p.code} (DIR/spec.md):\n${p.spec}\n\nApproving lets the run go on to build this spec. It doesn't merge anything.`,
       buttons: ['Cancel', 'Approve the spec'], defaultId: 0, cancelId: 0, noLink: true })).response === 1;
     return ok ? approveSpecDesktop(p.run, p.sha) : null;
   } catch (e) {

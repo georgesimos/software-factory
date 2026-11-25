@@ -298,7 +298,8 @@ Telling the agent not to (in the skill text) isn't enough. Even so, it is a spee
      through core directly.
    - Picking one opens a native `dialog.showMessageBox` naming the run, its title, the sha, the diff stats and what
      the approval does ("approve the spec" / "approve and merge"). Cancel is the default button.
-   - On confirm, main writes the same approve event as the CLI, with `{by: OS user, via: 'desktop', verified: false}`.
+   - On confirm, main writes the same approve event as the CLI, with `{by: OS user, via: 'local', channel: 'desktop'}`:
+     a local, unverified identity, scrubbed from a published page like any other.
    - Nothing the page or HTTP can reach opens this dialog: no IPC channel, no preload function, no server route. The
      menu and the dialog belong to main alone.
    - The page shows "Approve from the app menu (Run → Approve…) or run `F approve RUN`" and nothing more.
@@ -613,16 +614,20 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
      - Core: `specPending(run)` holds `F approve`'s checks (human only, a local item, awaiting approval, `DIR/spec.md`
        unchanged since it was put to you, not already approved) and returns the cleaned title, spec, reasons and sha;
        `awaitingSpecs()` lists the local runs it would accept. `approveSpec` (terminal) and `approveSpecDesktop` both start
-       from it and write the same `spec decided` record; the desktop one has `via: 'desktop'`, `verified: false`, the OS
-       user as `by`, and runs the checks again with the sha the dialog showed, so a spec changed while it was open is refused.
+       from it and write the same `spec decided` record; the desktop one has the OS user as `by` with `via: 'local'` (so
+       it is labelled unverified and scrubbed from a published page, as whoami's OS user is) and `channel: 'desktop'`, and runs the checks again with the sha the dialog showed, so a spec changed while it was open is refused.
      - `apps/desktop/src/approve-menu.ts`: Run → Approve… picks a run (up to 8), then shows its title, why it waits, the
-       spec's short sha and the spec (cut at 3000 characters). Cancel is the default and the Escape answer in both boxes.
+       spec's short sha and the whole spec. A spec over 3000 characters is refused there with the `F approve RUN` command,
+       since the approval covers the whole file and the dialog would show only part of it. Cancel is the default and the Escape answer in both boxes.
        Spec approvals only: the dialog has no diff stats or merge; "approve and merge" comes with PR 7.
+     - `clean()`, shared by both paths, also strips U+00AD, U+061C, U+2028/2029, U+2060–2064 and U+FEFF.
      - The page says where to approve (the app menu or `F approve RUN` for a local item, a `/factory approve` comment for a
        GitHub issue), with no button.
      - Tests: `apps/desktop/test/approve.test.mjs` (the dialog stubbed, real core on a temp `FACTORY_DIR`: nothing waiting,
-       the record, cancel at either box, a spec changed while the dialog was open, an agent session); the e2e checks the
-       menu, that no app IPC channel or preload exists, and that `/api/approve` is a 404.
+       the record, cancel at either box, a spec changed while the dialog was open, an agent session, a published page with a
+       desktop approval, an over-long spec, invisible characters); the e2e checks the menu, that neither `ipcMain` nor the
+       window's `webContents.ipc` has a channel beyond Electron's own (listed by name), that no preload exists, and that
+       `/api/approve` is a 404.
 6. **SKILL.md stops naming gh.** (~300 lines)
    - New commands: `F label`, `F split` (→ `tracker.createIssues`), `F escalate RUN` (→ `host.comment`), `F pr RUN`
      (→ `openChangeRequest`).
