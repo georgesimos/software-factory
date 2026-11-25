@@ -7,20 +7,43 @@ import { PipelineGraph, PipelineList, pipelineGraph, type Pipeline } from '../sr
 const P: Pipeline = {
   host: 'git', tracker: 'local', locked: ['intake', 'spec', 'build', 'review.code', 'review.security', 'verifier', 'gate', 'merge', 'watch'],
   optional: ['review.ui'], steps: ['intake', 'spec', 'build', 'review', 'verifier', 'gate', 'merge', 'watch'], intake: ['pass', 'reject'], loops: ['build'],
-  axes: [{ axis: 'code', when: 'always' }, { axis: 'security', when: 'always' }, { axis: 'ui', when: 'ui' }], off: ['review.ui'], custom: {}, warnings: [],
+  axes: [{ axis: 'code', when: 'always' }, { axis: 'security', when: 'always' }, { axis: 'ui', when: 'ui' }], off: [{ step: 'review.ui', scope: 'acme/shop', reason: 'a CLI tool', by: 'acme' }], custom: {}, warnings: [],
 };
 
 describe('PipelineGraph (the dashboard and the playground draw the same one)', () => {
-  it('draws a pipeline from props alone: its tracker, its locked steps, an axis it turned off left out, and its own caps', () => {
+  it('draws a pipeline from props alone: its tracker, its locked steps, an axis it turned off greyed in place, and its own caps', () => {
     render(<PipelineGraph name="acme/shop · Hotfix" pipeline={P} plan={{ build: { use: 'skill', name: 'fast-build', model: 'sonnet' } }} cap={1} costCap={2} />);
     const graph = screen.getByRole('list', { name: 'acme/shop · Hotfix pipeline' });
     expect(within(graph).getByRole('listitem', { name: /Issue ready/ })).toHaveTextContent('Local');
     expect(within(graph).getByRole('listitem', { name: /^Gate/ })).toHaveTextContent('Locked');
     expect(within(graph).getByRole('listitem', { name: /^Build/ })).toHaveTextContent('fast-build · sonnet');
-    expect(within(graph).queryByRole('listitem', { name: /^UI review/ })).toBeNull();
+    const ui = within(graph).getByRole('listitem', { name: 'UI review, turned off' });
+    expect([ui.getAttribute('data-off'), ui.textContent]).toEqual(['true', 'UI review Off · by acme']);
+    expect(screen.getByText('Steps off: UI review (by acme: a CLI tool)')).toBeInTheDocument();
     const g = pipelineGraph(P);
     expect(screen.getByText(`Valid · ${g.nodes.length} steps · ${g.edges.length} connections`)).toBeInTheDocument();
     expect(screen.getByText('loops ≤ 1 · $2 / run')).toBeInTheDocument();
+  });
+  it('an optional step turns off or back on from its panel, with a reason; a locked one can’t; the host only gets the request', () => {
+    const onOff = vi.fn(), edit = { for: () => null, onModel: vi.fn(), onEffort: vi.fn(), onRunner: vi.fn(), onOff };
+    const Q: Pipeline = { ...P, optional: ['review.ui', 'review.docs'], axes: [...P.axes, { axis: 'docs', when: 'docs' }] };
+    render(<PipelineGraph name="acme/shop" pipeline={Q} cap={3} costCap={5} edit={edit} />);
+    fireEvent.click(screen.getByRole('button', { name: /^UI review/ }));
+    let panel = screen.getByRole('complementary', { name: 'UI review step' });
+    expect(panel).toHaveTextContent('Turned off by rule steps.off, set by acme: a CLI tool');
+    fireEvent.click(within(panel).getByRole('button', { name: 'Turn back on' }));
+    expect(onOff).toHaveBeenLastCalledWith('review.ui', false, '');
+    fireEvent.click(screen.getByRole('button', { name: /^Docs review/ }));
+    panel = screen.getByRole('complementary', { name: 'Docs review step' });
+    const turn = within(panel).getByRole('button', { name: 'Turn off' });
+    expect(turn).toBeDisabled();
+    fireEvent.change(within(panel).getByRole('textbox', { name: 'Why turn Docs review off' }), { target: { value: 'no docs here' } });
+    fireEvent.click(turn);
+    expect(onOff).toHaveBeenLastCalledWith('review.docs', true, 'no docs here');
+    expect(panel).toHaveTextContent('Turning a review off is yours alone: the desktop app asks you to confirm it');
+    fireEvent.click(screen.getByRole('button', { name: /^Security review/ }));
+    expect(within(screen.getByRole('complementary', { name: 'Security review step' })).queryByRole('button', { name: /Turn/ })).toBeNull();
+    expect(onOff).toHaveBeenCalledTimes(2);
   });
   it('PipelineList marks the current pipeline and reports a pick', () => {
     const onPick = vi.fn();

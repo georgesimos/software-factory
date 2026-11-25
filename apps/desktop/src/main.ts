@@ -1,9 +1,10 @@
 import { app, BrowserWindow, dialog, Menu, session, shell, type MenuItemConstructorOptions } from 'electron';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import { APP_HTML, hostModules, serve } from '@software-factory/server';
+import { APP_HTML, guarded, hostModules, serve } from '@software-factory/server';
 import { loginPath } from './login-path.ts';
-import { approveFromMenu } from './approve-menu.ts';
+import { approveFromMenu, type ShowBox } from './approve-menu.ts';
+import { confirmRule } from './rule-confirm.ts';
 
 // F ui in this process, in one window (#56). The page is the same app.html F ui serves, loaded from the loopback server
 // with its token, so it can save settings and start sessions. Sandboxed, no preload, no Node in the page; nothing loads
@@ -37,12 +38,14 @@ async function host() {
   }
 }
 
+const showBox: ShowBox = (box) => (win ? dialog.showMessageBox(win, box) : dialog.showMessageBox(box));
+
 // The app menu: the platform's own menus, plus Run → Approve…, which only the main process can open (approve-menu.ts).
 function menu() {
   const template: MenuItemConstructorOptions[] = [
     ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
     { role: 'fileMenu' }, { role: 'editMenu' }, { role: 'viewMenu' },
-    { label: 'Run', submenu: [{ label: 'Approve…', click: () => void approveFromMenu((box) => (win ? dialog.showMessageBox(win, box) : dialog.showMessageBox(box))) }] },
+    { label: 'Run', submenu: [{ label: 'Approve…', click: () => void approveFromMenu(showBox) }] },
     { role: 'windowMenu' },
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
@@ -53,6 +56,7 @@ async function start() {
   const PATH = loginPath(); // before anything looks a harness up
   if (PATH) process.env.PATH = PATH;
   await host();
+  guarded.request = (req) => void confirmRule(req, showBox); // a guarded rule write the page requested (rule-confirm.ts); in-process, no IPC
   const s = await serve(0); // listen first: the window has nothing to load before this
   close = s.close;
   const origin = new URL(s.url).origin, policy = csp();

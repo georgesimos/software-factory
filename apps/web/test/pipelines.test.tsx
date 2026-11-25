@@ -24,9 +24,9 @@ describe('pipeline graph (generated from F’s pipeline, never drawn by hand)', 
     expect(Object.fromEntries(g.nodes.map((n) => [n.id, n.col]))).toMatchObject({ ready: 0, intake: 1, spec: 2, close: 2, build: 3, 'review.a11y': 4, verifier: 5, watch: 8 });
   });
   it('follows F, not a list of its own: another locked set, an axis off, an outcome it doesn’t know', () => {
-    const g = pipelineGraph({ ...P, locked: ['intake', 'gate'], off: ['review.seo'], intake: ['pass', 'defer'] }, plan);
+    const g = pipelineGraph({ ...P, locked: ['intake', 'gate'], off: [{ step: 'review.seo' }], intake: ['pass', 'defer'] }, plan);
     expect(g.nodes.filter((n) => n.locked).map((n) => n.id)).toEqual(['intake', 'gate']);
-    expect(g.nodes.some((n) => n.id === 'review.seo')).toBe(false);
+    expect(g.nodes.find((n) => n.id === 'review.seo')?.off).toEqual({ step: 'review.seo' }); // in place, marked off
     expect(g.nodes.find((n) => n.id === 'defer')).toMatchObject({ label: 'defer', kind: 'outcome' });
   });
 });
@@ -94,6 +94,56 @@ describe('Pipelines sheet: a step’s panel writes as the Skills sheet does; a r
     expect(fetch).toHaveBeenCalledWith('/api/skills', expect.objectContaining({ method: 'POST', body: JSON.stringify({ scope: 'acme/shop', step: 'build', runner: { use: 'default', model: 'opus' } }) }));
     expect(await within(panel).findByRole('status')).toHaveTextContent('Saved.');
     expect(onSaved).toHaveBeenCalledWith(data.skills);
+  });
+  it('steps off (slice 3): under the desktop app a review is only requested off, and the page waits for the dialog', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ skills: data.skills, requested: 'turning a pipeline step off' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    const onSaved = vi.fn(), refresh = vi.fn();
+    render(<PipelinesSheet open onClose={() => {}} data={{ ...data, token: 'tok' }} project="acme/shop" onSaved={onSaved} refresh={refresh} />);
+    await userEvent.click(screen.getByRole('button', { name: /^Docs review/ }));
+    const panel = screen.getByRole('complementary', { name: 'Docs review step' });
+    await userEvent.type(within(panel).getByRole('textbox', { name: 'Why turn Docs review off' }), 'no docs here');
+    await userEvent.click(within(panel).getByRole('button', { name: 'Turn off' }));
+    expect(fetch).toHaveBeenCalledWith('/api/onboard/rule', expect.objectContaining({ method: 'POST', body: JSON.stringify({ scope: 'acme/shop', key: 'steps.off', value: ['review.docs'], reason: 'no docs here' }) }));
+    expect(await within(panel).findByRole('status')).toHaveTextContent('Confirm it in the app’s dialog: nothing changes until you do.');
+    expect(onSaved).toHaveBeenCalledWith(data.skills);
+    expect(refresh).toHaveBeenCalled(); // then again every few seconds, until the dialog's answer shows
+  });
+  it('steps off under plain F ui: refused, and the command to run in a terminal is copied, reason and all', async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'turning a pipeline step off needs your confirmation outside the page: confirm it in the desktop app, or run in your own terminal: F rules set acme/shop steps.off \'["review.docs"]\' --reason "…"' }), { status: 400 })));
+    sheet({ ...data, token: 'tok' });
+    await userEvent.click(screen.getByRole('button', { name: /^Docs review/ }));
+    await userEvent.type(screen.getByRole('textbox', { name: 'Why turn Docs review off' }), "it's a CLI");
+    await userEvent.click(screen.getByRole('button', { name: 'Turn off' }));
+    const cmd = `${F} rules set 'acme/shop' 'steps.off' '["review.docs"]' --reason 'it'\\''s a CLI'`;
+    expect(writeText).toHaveBeenCalledWith(cmd);
+    const status = await screen.findByRole('status');
+    expect(status).toHaveTextContent('Turning a review off needs your confirmation outside the page, and this is plain F ui. Command copied: run it in your own terminal:');
+    expect(status.querySelector('code')!.textContent).toBe(cmd);
+  });
+  it('steps off on a read-only page copies the command; turning the last one back on unsets the rule, which only tightens', async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    const withOff = (d: FactoryData, off: Pipeline['off']) => ({ ...d, skills: { ...d.skills, plans: { ...d.skills!.plans, 'acme/shop': { ...d.skills!.plans!['acme/shop'], pipeline: { ...P, off } } } } });
+    const one = withOff(data, [{ step: 'review.seo', scope: 'acme/shop', reason: 'no pages', by: 'acme' }]);
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    const { unmount } = sheet(one);
+    expect(screen.getByRole('listitem', { name: 'SEO review, turned off' })).toHaveTextContent('Off · by acme');
+    await userEvent.click(screen.getByRole('button', { name: /^Docs review/ }));
+    await userEvent.type(screen.getByRole('textbox', { name: 'Why turn Docs review off' }), 'no docs');
+    await userEvent.click(screen.getByRole('button', { name: 'Turn off' }));
+    expect(writeText).toHaveBeenLastCalledWith(`${F} rules set 'acme/shop' 'steps.off' '["review.seo","review.docs"]' --reason 'no docs'`);
+    expect(fetch).not.toHaveBeenCalled();
+    unmount();
+    const ok = vi.fn(async () => new Response(JSON.stringify({ skills: data.skills }), { status: 200 }));
+    vi.stubGlobal('fetch', ok);
+    sheet({ ...one, token: 'tok' });
+    await userEvent.click(screen.getByRole('button', { name: /^SEO review/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Turn back on' }));
+    expect(ok).toHaveBeenCalledWith('/api/onboard/rule', expect.objectContaining({ body: JSON.stringify({ scope: 'acme/shop', key: 'steps.off', unset: true }) }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Saved.');
   });
   it('read-only page: an effort change copies the CLI command instead', async () => {
     const writeText = vi.fn(async () => {});

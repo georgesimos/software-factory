@@ -138,11 +138,11 @@ export const getRun = (run: string): Run => {
   return r;
 };
 // Measured dollars, when known, are the whole budget; otherwise the old rule on reported dollars and non-cache-read tokens.
-export function budget(r: Run) {
+export function budget(r: Run, cap = COST_CAP) { // cap: the run.budgetUsd rule's, when lower (gate.ts)
   const m = r.burn?.measured ? r.burn.total : null;
   const priced = m?.costUsd != null;
   const usd = priced ? ((m as BurnCell).costUsd as number) : r.costUsd || 0; // priced: m is set and its costUsd a number
   const tokens = m ? m.tokens - m.cacheRead : r.tokens || 0;
-  return { over: usd > COST_CAP || (!priced && tokens > TOKEN_CAP), usd: +usd.toFixed(2), tokens, source: m ? 'measured' : 'reported' };
+  return { over: usd > cap || (!priced && tokens > TOKEN_CAP), usd: +usd.toFixed(2), tokens, source: m ? 'measured' : 'reported' };
 }
 export const budgetWhy = (b: { usd: number; tokens: number; source: string }) => `($${b.usd}, ${b.tokens} tokens, ${b.source})`;

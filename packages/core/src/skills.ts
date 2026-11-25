@@ -2,10 +2,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { hostOf, ls, projects, trackerOf } from './workspace.ts';
-import { audit, checkGuide, checkRules, checkScope, rules, whoami } from './rules.ts';
+import { audit, checkGuide, checkRules, checkScope, pipelinePass, rules, runCaps, whoami } from './rules.ts';
 import { harnesses, type Harness } from '../../adapters/harnesses/index.ts';
 import { stateDir } from './log.ts';
 import type { ExtraAxis } from './gate.ts';
+import { isLocal } from './constants.ts';
 import type { Rule } from './types.ts';
 
 // Who does each step: the built-in brief, the user's own skill or brief, or a harness's tool.
@@ -22,10 +23,11 @@ export const OPTIONAL_STEPS = BUILTIN_AXES.filter((a) => !REQUIRED_AXES.includes
 // When axesFor (gate.ts) selects each built-in axis: always, or when a UI, SEO or docs file changes. axesFor reads this table,
 // so the Pipelines page and the engine can't disagree.
 export const AXIS_WHEN: Record<BuiltinAxis, 'always' | 'ui' | 'seo' | 'docs'> = { code: 'always', security: 'always', ux: 'ui', ui: 'ui', seo: 'seo', docs: 'docs' };
-/** The pipeline's structure for the Pipelines page (docs/plans/pipelines.md §6). Read-only: off and custom stay empty until slices 3 and 4. */
-export function pipeline(repo: string, extra: ExtraAxis[] = []) {
+/** The pipeline's structure for the Pipelines page (docs/plans/pipelines.md §6). custom stays empty until slice 5. */
+export function pipeline(repo: string, extra: ExtraAxis[] = [], rl: { policy: Record<string, Rule>; warnings: string[] } = { policy: {}, warnings: [] }) {
   const attached = !!projects()[repo], host = attached ? hostOf(repo) : null;
-  const warnings: string[] = [];
+  const warnings: string[] = rl.warnings.filter((w) => /\.rules\.(steps\.off|run\.)/.test(w)); // pipelinePass's, about this pipeline
+  const o = rl.policy['steps.off'], offBy = o && (isLocal(o) ? 'a local user (unverified)' : o.setBy); // never the OS user (§6)
   let tracker: string | null = null;
   if (host) try { const t = trackerOf(repo); tracker = t === 'local' ? null : t; } catch (e) { warnings.push((e as Error).message); } // local: no tracker yet (5b)
   return {
@@ -33,7 +35,8 @@ export function pipeline(repo: string, extra: ExtraAxis[] = []) {
     steps: ['intake', 'spec', 'build', 'review', 'verifier', 'gate', 'merge', 'watch'],
     intake: ['pass', 'split', 'needs-info', 'reject'], loops: ['spec', 'build'], // intake's outcomes; where the gate loops back to
     axes: [...BUILTIN_AXES.map((axis) => ({ axis, when: AXIS_WHEN[axis] as string | string[] })), ...extra.map((x) => ({ axis: x.axis, when: x.when }))],
-    off: [] as string[], custom: { 'spec.after': [], 'build.after': [] }, warnings,
+    off: o ? (o.value as string[]).map((step) => ({ step, scope: o.scope as string, reason: o.reason, by: offBy as string, ...(o.until && { until: o.until }) })) : [],
+    caps: runCaps(rl.policy), custom: { 'spec.after': [], 'build.after': [] }, warnings,
   };
 }
 export const isBuiltinAxis = (a: unknown): a is BuiltinAxis => BUILTIN_AXES.some((x) => x === a);
@@ -147,7 +150,7 @@ export function dropUnknownModels(cfg: unknown): unknown {
 }
 export function readSkills(): SkillsConfig {
   try {
-    const cfg = dropUnknownModels(JSON.parse(fs.readFileSync(skillsFile(), 'utf8')));
+    const cfg = pipelinePass(dropUnknownModels(JSON.parse(fs.readFileSync(skillsFile(), 'utf8'))));
     checkSkills(cfg);
     return cfg;
   } catch (e) {
@@ -173,7 +176,8 @@ export function skills(repo: string, cfg: SkillsConfig = readSkills()) {
   const plan = Object.fromEntries(STEP_KEYS.map((k) => [k, fill(k, p[k] || g[k] || { use: 'default' })]));
   const all = [...(g['axes.extra'] || []), ...(p['axes.extra'] || [])];
   const extra = all.filter((x, i) => all.findLastIndex((y) => y.axis === x.axis) === i);
-  return { repo, plan, extra, required: REQUIRED_AXES, guide: rules(repo, cfg).guide, pipeline: pipeline(repo, extra) };
+  const rl = rules(repo, cfg);
+  return { repo, plan, extra, required: REQUIRED_AXES, guide: rl.guide, pipeline: pipeline(repo, extra, rl) };
 }
 export function writeSkills(cfg: unknown): asserts cfg is SkillsConfig {
   checkSkills(cfg);
