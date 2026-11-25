@@ -93,7 +93,7 @@ export function runOverlay({ nodes, edges }: { nodes: PipelineNode[]; edges: Pip
     const ms = a.ts && e.ts ? Date.parse(e.ts) - Date.parse(a.ts) : NaN;
     put(id, status, { ...(a.tokens && { tokens: a.tokens }), ...(Number.isFinite(ms) && { ms }), ...x });
   };
-  let ended = false;
+  let ended = false, blocking = 0; // blocking: this iteration's undismissed high and medium findings, so the verifier had work
   for (const e of events) {
     const { stage, status = '' } = e;
     if (!['intake', 'spec', 'build', 'review', 'gate', 'approve'].includes(stage ?? '')) continue; // notes, deploys, rules: not steps
@@ -105,16 +105,17 @@ export function runOverlay({ nodes, edges }: { nodes: PipelineNode[]; edges: Pip
       else end(stage, e, status === 'failed' ? 'failed' : 'passed', OUTCOME_NODE[status] || status === 'closed' ? { note: status } : {});
       if (OUTCOME_NODE[status]) put(OUTCOME_NODE[status]!, 'passed');
     } else if (stage === 'build') {
-      if (status === 'started') { for (const id of after) { delete steps[id]; delete since[id]; } begin('build', e); }
+      if (status === 'started') { for (const id of after) { delete steps[id]; delete since[id]; } blocking = 0; begin('build', e); }
       else end('build', e, status === 'failed' ? 'failed' : 'passed');
     } else if (stage === 'review' && status === 'started') {
       for (const n of nodes) if (n.kind === 'review') (e.axes ?? []).includes(n.id.slice(7)) ? begin(n.id, e) : put(n.id, 'skipped');
     } else if (stage === 'review' && e.axis) {
-      const fs = e.findings ?? [], blocking = fs.filter(blocks).length, verdict = blocking ? 'failed' : 'passed';
-      end(`review.${e.axis}`, e, verdict, { review: { verdict, findings: fs.length, blocking, dismissed: fs.filter((f) => f.dismissed).length } });
+      const fs = e.findings ?? [], n = fs.filter(blocks).length, verdict = n ? 'failed' : 'passed';
+      blocking += n;
+      end(`review.${e.axis}`, e, verdict, { review: { verdict, findings: fs.length, blocking: n, dismissed: fs.filter((f) => f.dismissed).length } });
     } else if (stage === 'review' && e.role === 'verifier') end('verifier', e, 'passed');
     else if (stage === 'gate') {
-      if (!steps.verifier && ids.has('verifier')) { put('verifier', 'skipped', { note: 'nothing blocking to verify' }); reached.add('verifier'); } // the run went through it
+      if (!steps.verifier && ids.has('verifier')) { put('verifier', 'skipped', { note: blocking ? 'no record' : 'nothing blocking to verify' }); reached.add('verifier'); } // the run went through it
       const back = e.next === 'spec' || e.next === 'build' ? e.next : '';
       put('gate', status === 'passed' ? 'passed' : 'failed', status === 'passed' ? {} : { note: back ? `back to ${back}` : 'to you' });
       if (back) { loops[back] = (loops[back] ?? 0) + 1; put(back, 'running', { note: 'sent back by the gate' }); delete since[back]; }

@@ -64,6 +64,7 @@ describe('runOverlay (a run drawn on its pipeline, from its events only)', () =>
     expect(status(o)).toMatchObject({ 'review.security': 'failed', 'review.code': 'passed', 'review.ui': 'skipped', gate: 'failed', merge: 'failed', watch: 'pending' });
     expect(o.steps.gate!.note).toBe('to you');
     expect(o.steps.merge!.note).toBe('escalated to you');
+    expect(o.steps.verifier).toMatchObject({ status: 'skipped', note: 'no record' }); // a blocking finding and no verifier record: never "nothing blocking"
     expect(o.taken).toContain('gate>merge');
     expect(Object.values(o.steps).some((s) => s.status === 'running')).toBe(false); // a finished run has nothing running
   });
@@ -89,6 +90,7 @@ describe('PipelineGraph run overlay', () => {
     fireEvent.change(pick, { target: { value: 'acme/shop#7' } });
     const graph = screen.getByRole('list', { name: 'acme/shop pipeline' });
     expect(within(graph).getByRole('listitem', { name: /^UI review/ })).toHaveAttribute('data-status', 'passed');
+    expect(screen.getByRole('button', { name: 'Gate' })).toHaveAccessibleDescription('Passed'); // the status is read out, not only coloured
     expect(within(graph).getByRole('listitem', { name: /^Docs review/ })).toHaveTextContent('Skipped');
     expect(within(graph).getByRole('listitem', { name: /^Watch main/ })).toHaveTextContent('Not reached');
     expect(screen.getByText('×1')).toBeInTheDocument(); // on the gate → build loop-back
@@ -166,16 +168,17 @@ describe('moving around the canvas (n8n’s patterns: drag to pan, a map of the 
     expect(scroll.scrollTop).toBeGreaterThan(0); // it opens centred on the start, not on the top of the tall review column
     scroll.scrollTop = 0;
     fireEvent.pointerDown(scroll, { clientX: 300, clientY: 200, button: 0, pointerType: 'mouse', pointerId: 1 });
-    fireEvent.pointerMove(scroll, { clientX: 260, clientY: 170, pointerId: 1 });
-    fireEvent.pointerUp(scroll, { pointerId: 1 });
+    fireEvent.pointerMove(scroll, { clientX: 260, clientY: 170, pointerId: 1, buttons: 1 });
     expect([scroll.scrollLeft, scroll.scrollTop]).toEqual([40, 30]);
-    fireEvent.pointerMove(scroll, { clientX: 0, clientY: 0, pointerId: 1 }); // released: no more panning
+    fireEvent.pointerMove(scroll, { clientX: 0, clientY: 0, pointerId: 1, buttons: 0 }); // the button came up where no pointerup reached us: the drag ends
+    fireEvent.pointerMove(scroll, { clientX: 0, clientY: 0, pointerId: 1, buttons: 1 });
     expect(scroll.scrollLeft).toBe(40);
+    fireEvent.pointerUp(scroll, { pointerId: 1 });
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Gate' }), { clientX: 300, clientY: 200, button: 0, pointerType: 'mouse', pointerId: 2 });
-    fireEvent.pointerMove(scroll, { clientX: 200, clientY: 100, pointerId: 2 });
+    fireEvent.pointerMove(scroll, { clientX: 200, clientY: 100, pointerId: 2, buttons: 1 });
     fireEvent.pointerUp(scroll, { pointerId: 2 });
     fireEvent.pointerDown(scroll, { clientX: 300, clientY: 200, button: 0, pointerType: 'touch', pointerId: 3 }); // the platform scrolls a touch
-    fireEvent.pointerMove(scroll, { clientX: 200, clientY: 100, pointerId: 3 });
+    fireEvent.pointerMove(scroll, { clientX: 200, clientY: 100, pointerId: 3, buttons: 1 });
     expect(scroll.scrollLeft).toBe(40);
   });
   it('the map draws every step, in the run’s colours, and a click or drag on it moves the view there', () => {

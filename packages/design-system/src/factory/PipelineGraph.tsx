@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent as PE, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type PointerEvent as PE, type ReactNode } from 'react';
 import { Button } from '../components/Button.tsx';
 import { LockIcon } from '../components/icons.tsx';
 import { Select } from '../components/Input.tsx';
@@ -30,7 +30,7 @@ const runName = (id: string) => id.replace(/^[^#:]*/, '') || id; // #7: the proj
 const ownName = (r: StepRunner) => (!r.use || r.use === 'default' ? 'Factory default' : r.name ?? r.use);
 
 export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownName, cap, costCap, edit, runs = [] }: PipelineGraphProps) {
-  const g = pipelineGraph(p, plan), { nodes, edges } = g;
+  const g = pipelineGraph(p, plan), { nodes, edges } = g, uid = useId();
   const [picked, setPicked] = useState(''), [open, setOpen] = useState(''), buttons = useRef<Record<string, HTMLButtonElement | null>>({});
   const run = runs.find((r) => r.id === picked), o = run ? runOverlay(g, run.events ?? []) : null, sel = nodes.find((n) => n.id === open);
   const head = useRef<HTMLHeadingElement>(null), close = () => { setOpen(''); buttons.current[open]?.focus(); };
@@ -47,8 +47,8 @@ export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownNa
   // What part of the graph is in view, in graph units, for the map. The canvas sits `pad` into the scroll area, then scales.
   const [view, setView] = useState({ x: 0, y: 0, w: 0, h: 0 });
   const sync = () => {
-    const s = main.current, pad = canvas.current?.offsetLeft ?? 0;
-    if (s) setView({ x: (s.scrollLeft - pad) / zoom, y: (s.scrollTop - pad) / zoom, w: s.clientWidth / zoom, h: s.clientHeight / zoom });
+    const s = main.current, left = canvas.current?.offsetLeft ?? 0, top = canvas.current?.offsetTop ?? 0;
+    if (s) setView({ x: (s.scrollLeft - left) / zoom, y: (s.scrollTop - top) / zoom, w: s.clientWidth / zoom, h: s.clientHeight / zoom });
   };
   useEffect(() => { // open on the start, vertically: the tall review column would otherwise fill a phone's window with nothing
     const s = main.current, start = at.get('ready');
@@ -61,14 +61,16 @@ export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownNa
     return () => r.disconnect();
   }, [zoom, w, h]); // eslint-disable-line react-hooks/exhaustive-deps
   const centre = (gx: number, gy: number) => {
-    const s = main.current, pad = canvas.current?.offsetLeft ?? 0;
-    if (s) { s.scrollLeft = gx * zoom + pad - s.clientWidth / 2; s.scrollTop = gy * zoom + pad - s.clientHeight / 2; sync(); }
+    const s = main.current, left = canvas.current?.offsetLeft ?? 0, top = canvas.current?.offsetTop ?? 0;
+    if (s) { s.scrollLeft = gx * zoom + left - s.clientWidth / 2; s.scrollTop = gy * zoom + top - s.clientHeight / 2; sync(); }
   };
   // Drag the background to pan, with a mouse or pen; a touch scrolls natively, and a drag from a step or control is theirs.
   const drag = useRef<{ id: number; x: number; y: number; left: number; top: number } | null>(null), [grabbing, setGrabbing] = useState(false);
   const down = (e: PE<HTMLDivElement>) => {
     const s = main.current;
     if (!s || e.button !== 0 || e.pointerType === 'touch' || (e.target as Element).closest('button, select, a, input')) return;
+    const r = s.getBoundingClientRect();
+    if (s.clientWidth && (e.clientX - r.left >= s.clientWidth || e.clientY - r.top >= s.clientHeight)) return; // on a scrollbar: the platform's
     drag.current = { id: e.pointerId, x: e.clientX, y: e.clientY, left: s.scrollLeft, top: s.scrollTop };
     s.setPointerCapture?.(e.pointerId);
     setGrabbing(true);
@@ -76,6 +78,7 @@ export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownNa
   const move = (e: PE<HTMLDivElement>) => {
     const d = drag.current, s = main.current;
     if (!d || !s || d.id !== e.pointerId) return;
+    if (!(e.buttons & 1)) return up(); // released somewhere no pointerup reached us: never pan on a plain hover
     s.scrollLeft = d.left - (e.clientX - d.x); s.scrollTop = d.top - (e.clientY - d.y);
     sync();
   };
@@ -105,7 +108,7 @@ export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownNa
               const { x, y } = at.get(n.id)!, st = o?.steps[n.id];
               const body: ReactNode = <>
                 <span className="sf-pl-t"><span className="sf-pl-label">{n.label}</span>{n.locked ? <span className="sf-pl-lock" title="Locked: every run has it"><LockIcon aria-hidden="true" /><span className="sf-sr-only">Locked</span></span> : null}</span>
-                {st ? <span className="sf-pl-st"><span className="sf-pl-dot" data-status={st.status} aria-hidden="true" />{STEP_STATUS[st.status]}{st.note ? ` · ${st.note}` : ''}</span>
+                {st ? <span className="sf-pl-st" id={`${uid}-${n.id}`}><span className="sf-pl-dot" data-status={st.status} aria-hidden="true" />{STEP_STATUS[st.status]}{st.note ? ` · ${st.note}` : ''}</span>
                   : n.sub ? <span className="sf-pl-sub">{n.sub}</span> : null}
                 {n.runner ? <span className="sf-pl-who">{who(n.runner)}</span> : null}
               </>;
@@ -113,7 +116,7 @@ export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownNa
                 <li key={n.id} aria-label={n.label} data-kind={n.kind} data-locked={n.locked || undefined} data-status={st?.status} data-open={open === n.id || undefined}
                   style={{ left: x, top: y, width: W, height: H }}>
                   {n.kind === 'step' || n.kind === 'review' ? (
-                    <button type="button" className="sf-pl-node" aria-label={n.label} aria-expanded={open === n.id} aria-controls={open === n.id ? 'sf-pl-panel' : undefined}
+                    <button type="button" className="sf-pl-node" aria-label={n.label} aria-describedby={st ? `${uid}-${n.id}` : undefined} aria-expanded={open === n.id} aria-controls={open === n.id ? 'sf-pl-panel' : undefined}
                       ref={(b) => { buttons.current[n.id] = b; }} onClick={() => setOpen(open === n.id ? '' : n.id)}>{body}</button>
                   ) : <div className="sf-pl-node">{body}</div>}
                 </li>
