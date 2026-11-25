@@ -1,6 +1,6 @@
 # Pipelines editor
 
-A Pipelines page shows each project's pipeline: the steps an issue goes through. The owner can edit it in four ways:
+A Pipelines page shows each project's pipelines: the steps an issue goes through. The owner can edit them in four ways:
 - change who runs a step;
 - turn optional steps off;
 - add custom steps and reorder them within their slot;
@@ -9,10 +9,12 @@ A Pipelines page shows each project's pipeline: the steps an issue goes through.
 Code review, security review, the gate and the merge checks are locked.
 
 Scope decisions:
-- **One pipeline per project, edited in place.** There are no copies, and no label matching ("first match wins"). The owner chose direct editing.
+- **Several named pipelines per project, picked by structured match conditions** (§7). The first match wins. The project's own pipeline, the **default pipeline**, catches every other issue and is edited in place.
+- **Matching only chooses among configurations the owner has already approved, and a run can only get stricter** (§7.0).
+- **Caps only go down** (§7.5).
 - **The page names the project's real host and tracker.** It takes them from the adapter registry (`hostOf`, `trackerOf`: github, git, local…) and never hard-codes "GitHub".
 
-This note fixes what is stored, how F checks it, who may write it, and how the run reads it. The page itself comes in four slices (see [Slices](#slices)). Each slice is one PR.
+This note fixes what is stored, how F checks it, who may write it, and how the run reads it. §1 to §6 describe one pipeline, the default; §7 adds the named ones and §8 the page. The work comes in slices (see [Slices](#slices)). Each slice is one PR.
 
 ## 1. What is stored today
 
@@ -72,9 +74,9 @@ Turning a step off is a loosening, so it is a rule. That gives it, with no new m
 
 `asStrict('steps.off', next, old)` is true when `next ⊆ old`: turning fewer steps off is stricter.
 
-**Project scopes only, as `artifact` is.** A `default` entry is refused on write, and ignored with a warning on read.
+**Project scopes and pipeline (`owner/repo@id`, §7.1) scopes only, as `artifact` is project-only.** A `default` entry is refused on write, and ignored with a warning on read.
 - **Why:** `rules()` lets a project win key by key. If `default` could hold a list, `F rules unset <project> steps.off` would fall back to that list. Unsetting would then turn steps off with no human-only check.
-- **What it gives:** with this rule, unsetting always means "nothing off", which only tightens. It also matches "one pipeline per project".
+- **What it gives:** with this rule, unsetting always means "nothing off", which only tightens. A named pipeline's list is its own and is never inherited either (§7.1).
 
 ### Custom steps: the skills key `steps.custom`
 
@@ -107,7 +109,7 @@ Rules for custom steps:
   - **Before review:** `F axes` refuses in the same cases for `build.after`.
   - **At the gate:** `gate()` fails on a custom failure and routes it by slot (`spec.after` to spec, `build.after` to build). On a due step with no result it doesn't refuse: it fails with `next: approve`, as the loop cap does.
 - **Due stays due:** once `F steps` has recorded a step as due, it stays due for that iteration even if it is removed from config. Otherwise removing a failing step would clear its failure.
-- **A missing result escalates, never strands the run.** The session runs `F gate`, then `F merge` as for any gate result with `next: approve`. `decide()` then escalates with the reason "custom step <id> has no result". So a broken runner never leaves a run stuck. Slice 4 tests this.
+- **A missing result escalates, never strands the run.** The session runs `F gate`, then `F merge` as for any gate result with `next: approve`. `decide()` then escalates with the reason "custom step <id> has no result". So a broken runner never leaves a run stuck. Slice 5 tests this.
   - **Why the earlier refusals don't strand it:** `F event RUN build started` and `F axes` refuse only until something is recorded, and output outside the contract records a failure. So a broken runner's step is always recordable.
 - **`F step` has `F review`'s contract.** Output outside the contract records a failure, never a pass, and a runner never fixes up its own JSON.
 - **What a custom step can't do:** nothing it reports can mark a locked step passed.
@@ -193,29 +195,220 @@ The page draws its graph from this field, from `rules` and from `GET /api/state`
 - **Review:** §4 is unchanged. `F axes` already returns the axes minus the turned-off ones, and the gate checks only recorded axes.
 - **Ground rule:** "Run `F rules set … steps.off` only when the user asks in chat, with their reason". It is the existing rules ground rule, naming the new key.
 
-Slice 4 makes these changes, after PR 6 merges.
+Slice 5 makes these changes, after PR 6 merges.
+
+## 7. Several pipelines per project
+
+§1 to §6 carry over unless this section says otherwise: what is stored today, the locked list, custom steps' slots, `F steps`/`F step`, and `pipelinePass`.
+
+### 7.0 The idea under it
+
+The owner chose:
+- several named pipelines per project, each picked by structured match conditions;
+- the first match wins, and the default pipeline (the project scope) catches the rest and stays editable in place;
+- caps that only go down.
+
+**Matching only chooses among configurations the owner has already approved, and a run can only get stricter.** Labels, changed files and diff size are agent-influenced: the build agent shapes the files and the diff, and a local item's labels are a file anyone can edit. So nothing a match can do may loosen anything the owner didn't approve through the guarded, audited path, and a run never goes back to a looser pipeline once it has seen a stricter one.
+
+### 7.1 What a pipeline is, and where it's stored
+
+A named pipeline is **one more scope in skills.json**, addressed `owner/repo@id`, next to `default` and `owner/repo`. Same file, same per-scope shape, same `setRule`/`unsetRule`, the same audit event. There's no second store.
+
+```json
+"acme/shop": {
+  "rules": {
+    "pipelines": { "value": ["hotfix", "ui-first", "spike"], "reason": "…", "setBy": "acme", "setAt": "…" },
+    "steps.off": { "value": ["review.seo"], "reason": "…", "setBy": "acme", "setAt": "…" },
+    "run.loops": { "value": 2, "reason": "…", "setBy": "acme", "setAt": "…" }
+  }
+},
+"acme/shop@hotfix": {
+  "name": "Hotfix",
+  "rules": {
+    "match":     { "value": [{ "labels": ["hotfix"] }], "reason": "…", "setBy": "acme", "setAt": "…" },
+    "steps.off": { "value": ["review.ux", "review.ui", "review.seo", "review.docs"], "reason": "…", "setBy": "acme", "setAt": "…" },
+    "run.loops": { "value": 1, "reason": "…", "setBy": "acme", "setAt": "…" }
+  },
+  "steps.custom": [{ "id": "smoke", "slot": "build.after", "use": "brief", "path": "…" }]
+},
+"acme/shop@ui-first": {
+  "name": "UI first",
+  "rules": { "match": { "value": [{ "files": ["src/components/**", "*.css"] }], "reason": "…", "setBy": "acme", "setAt": "…" } },
+  "axes.on": ["review.ux", "review.ui"],
+  "axes.extra": [{ "axis": "a11y", "when": ["src/components/**"], "use": "skill", "name": "a11y-review" }]
+}
+```
+
+- **The order is a rule on the project scope:** `pipelines`, the ids in match order. The default pipeline is the project scope itself and is never listed: it is always last. A `@id` scope that isn't listed is ignored, with a warning, and never matches. Removing a pipeline means removing it from the list.
+- **What a pipeline scope may hold:**
+  - `name` (cosmetic);
+  - the rules `match`, `steps.off`, `run.loops` and `run.budgetUsd`;
+  - `steps.custom`;
+  - **added review steps:** `axes.on`, a list of optional built-in axes (`OPTIONAL_STEPS`) the pipeline always reviews, whatever the files; and `axes.extra`, extra axes of its own, in the existing `axes.extra` shape, each with its own runner.
+
+  Anything else is refused on write and dropped with a warning on read.
+- **Built-in steps' runners stay per project.** A pipeline changes which steps run and the caps, never who runs a built-in step. The `STEP_KEYS` runner keys and `guide` are refused in a `@id` scope. Only a pipeline's own extra axes carry a runner, because they are its own steps. "A cheaper model for hotfixes" can be a later key without changing anything here.
+- **How each part combines with the project scope:**
+  - `steps.off` is the pipeline's own list and is never inherited. The project's `steps.off` belongs to the default pipeline only. Unsetting a pipeline's `steps.off` therefore means "nothing off", which only tightens. This is the same reason `steps.off` is refused on `default` (§3).
+  - `steps.custom` is additive: a pipeline runs the project's custom steps, then its own. A pipeline can't drop a check the default runs.
+  - Added review steps are additive too. `axes.on` forces its axes on, and the pipeline's `axes.extra` runs next to the project's. An extra axis name must be new across the project and the pipeline: a pipeline can't replace the project's extra axis.
+  - `run.loops` and `run.budgetUsd` take the lowest of the pipeline, the project and the built-in value (§7.5).
+  - Built-in runners and `guide` come from the project scope, as today.
+- **Consequence:** compared with the default pipeline, a named pipeline can be looser **only through `steps.off`**. Its custom steps and its review steps are a superset, and its caps are at most the project's. Between two named pipelines, caps can differ too (Hotfix at 1 loop, another at 3). That keeps the "is this a loosening?" question in §7.3 down to `steps.off` and caps.
+- **What the design system shows:** `pipeline(repo)` returns `{ pipelines: [{id, name, match, …pipeline}], default: {…pipeline} }`, the same per-pipeline shape the graph already draws (`PipelineGraph`, PR A). Each named entry adds `match`.
+
+### 7.2 Match conditions: structured data
+
+`match` is a list of **condition sets**. A set matches when every term in it holds (AND). The pipeline matches when any set matches (OR). There are no parsed expression strings and no negation.
+
+```json
+[{ "labels": ["hotfix"] }, { "files": ["docs/**", "*.md"], "maxDiffLines": 40 }]
+```
+
+| Term | Holds when | Read from |
+|---|---|---|
+| `labels: [l…]` | the item has every listed label | the labels F intake read and recorded on `intake started` (below) |
+| `files: [glob…]` | **every** changed file matches at least one glob | the same diff `F axes` uses |
+| `maxDiffLines: n` | additions + deletions ≤ n | the same numstat `facts()` uses |
+
+- `files` means "every changed file", not "any file", on purpose (the owner's choice): a looser pipeline applies only when the whole change is in its scope. A change that touches `src/components/` and the payment code doesn't count as a UI change.
+- **Validation on write:**
+  - 1 to 5 sets;
+  - each set non-empty (an empty set would match everything);
+  - 1 to 10 labels, never a `factory:*` label (F writes those itself);
+  - 1 to 20 globs, checked with the same glob code `axes.extra` uses;
+  - `maxDiffLines` an integer from 1 to `MAX_DIFF`.
+
+  On read, an invalid `match` makes that pipeline never match, with a warning, so its runs fall through to a later pipeline or the default.
+- **Labels:** `TrackerItem` gains `labels`. F intake records the labels it read on `intake started`, the event it already writes itself with the author and association, so they are never typed by the agent. A label added later, even by the run's own session, doesn't count.
+- **Diff size on git projects:** until the #137 item is fixed, `maxDiffLines` is refused on write for a project whose host is `git`. On read, a set containing it is treated as no match, with a warning. That item is `.git/info/attributes` with `* -diff`, which makes numstat report `- -`, so the count reads zero and would match every change.
+
+### 7.3 Agent-influenced inputs, and which writes are guarded
+
+The inputs are not trusted, so the guard sits on the **configurations**, not on the match:
+- Every pipeline keeps the locked steps. `steps.off` refuses a locked key on write, and `axesFor` checks the locked list again on read. That is unchanged.
+- A pipeline's `steps.off` is the guarded, audited write: `humanOnly`, a reason, the rule audit event, the local-user guards, and over HTTP the desktop confirmation (§5). This is the same path as the default pipeline's `steps.off`.
+- **Routing is the same loosening.** Changing `match`, the `pipelines` order, or which pipelines exist decides which `steps.off` list and which caps a run gets. F doesn't compare glob sets, so it can't tell "this narrows" from "this widens".
+  - **Guarded:** every routing write, while any two pipelines of the project (the default included) differ in `steps.off` or in effective caps. That is `humanOnly`, a reason and the audit event, with the desktop confirmation over HTTP.
+  - **Unguarded:** a routing write when they all agree on both. Routing then can't change anything a run gets that could loosen it below the default, since custom steps and added review steps only add.
+  - In practice almost every real routing change is guarded. That's intended: it's an owner's decision, made in a terminal or the desktop app.
+- **Unguarded writes:**
+  - `name`;
+  - adding or reordering custom steps;
+  - adding review steps: an `axes.on` entry or a pipeline's own extra axis;
+  - lowering a cap;
+  - shrinking a `steps.off` list, or unsetting it.
+- **Guarded removals:** removing a custom step (§5) or an added review step (an `axes.on` entry, or a pipeline's extra axis) is `humanOnly`, as removing a custom step is.
+
+### 7.4 When the pipeline is picked, and how a run only tightens
+
+**One pick point per iteration: after build, before review.** That is the first of `F steps RUN build.after` and `F axes RUN` in an iteration. Only there do all three inputs exist: the labels (from intake), the changed files and the diff size.
+
+**Where labels come from.** On GitHub, labels come from the issue; setting one needs triage access to the repository. On a local item, labels are the item file's front matter, which anyone who can edit the file can change. Both are fine: matching only picks among configurations the owner already approved (§7.0), so a label can at most choose one of those.
+
+**Before the first pick** the run is under the default pipeline for everything that comes before review:
+- the project's `spec.after` custom steps;
+- the project's caps.
+
+A named pipeline can therefore add `build.after` custom steps and review steps, but never `spec.after` ones, which are project-level only. A `spec.after` entry in a `@id` scope is refused on write.
+
+**At each pick,** F evaluates the pipelines in order and takes the first match, or the default if none matches.
+
+**Within a run, the effective pipeline is the meet of every pipeline it has matched so far and the live config.** The meet is the strictest combination:
+- `off` is the intersection of every matched pipeline's `off`, intersected again with the current pipeline's live `steps.off` (so unsetting it mid-run turns steps back on, as in §6);
+- custom steps are the union (a step that has been due stays due, as before);
+- added review steps (`axes.on` and the pipelines' extra axes) are the union too: once due, they stay due;
+- caps are the minimum (§7.5).
+
+What this gives:
+- **A loop-back that changes the match** can only tighten. Say iteration 1 matched UI-first (SEO off), and iteration 2's diff also touches payment code, so it matches the default (nothing off). From then on SEO is reviewed again, and re-matching UI-first in iteration 3 can't turn it back off.
+- **A run never returns to a looser pipeline** once it has left it. This is §6's `steps.off` snapshot, extended across pipelines: the run's first `routed` event fixes its starting point, and each later one can only remove things from `off`.
+- **Labels can't move a run mid-way.** They are read once, at intake. A resume after needs-info re-reads them, and the meet still only tightens.
+
+### 7.5 Caps
+
+There are two new rule keys, `run.loops` and `run.budgetUsd`, on a project scope or a `@id` scope. `TOKEN_CAP` stays fixed.
+
+- **Validate on write:**
+  - `run.loops` is an integer, at least 1 and at most `CAP` (3);
+  - `run.budgetUsd` is a number above 0 and at most `COST_CAP` ($5).
+- **Clamp on read:** `min(stored, built-in)`, so a hand edit can't raise a cap. A value that isn't valid is dropped with a warning, and the built-in value applies.
+- **What a pipeline gets:** the minimum of the pipeline's, the project's and the built-in value.
+- **In a run:** the minimum of the run's snapshot (the lowest value any pick has seen, per §7.4) and the live value. Spend before the pick counts against the picked pipeline's budget: a run already over it at the pick escalates at the next gate, as the over-budget check does today.
+- **Raising is a loosening:**
+  - Setting a cap higher than the stored value, or unsetting a cap rule (which falls back to a higher value), is `humanOnly`, needs a reason, and is audited, with the desktop confirmation over HTTP.
+  - Lowering is free: `asStrict` already treats a smaller number as stricter.
+  - Note the asymmetry with `steps.off`. Unsetting `steps.off` tightens. Unsetting a cap loosens.
+
+### 7.6 F owns the choice
+
+- **The `routed` record.** At each pick F records `{stage: 'review', status: 'routed', pipeline, set, iteration, facts: {labels, files, diffLines}}`, where `set` is the index of the condition set that matched. It is written by whichever of `F steps` and `F axes` runs first.
+  - `F event` refuses it: the owned map gains `'review:routed': 'axes'`.
+  - `derive` keeps `r.pipeline` (the current id) and `r.route` (the meet's `off`, added review steps and caps). It doesn't let `routed` change the run's stage or status.
+- **`decide()` names it.** It names the pipeline and the set in its reasons, for example: "pipeline hotfix (set 1: labels hotfix): review.ux, review.ui off by rule steps.off on acme/shop@hotfix, set by …: …". Every turned-off axis therefore shows on the decision it shaped, as in §6.
+- **A local user's rule doesn't count toward an automatic merge.** On a GitHub project, §5's rule still holds: a `steps.off`, `match` or `pipelines` rule set by a local (unverified) user escalates any run it shaped.
+- **The run detail** shows the pipeline's name, the set that matched, and the facts it matched on, beside the stage track.
+
+## 8. The page
+
+- **Left column:**
+  - a project picker;
+  - that project's pipelines in match order, with the default last as "every other issue";
+  - each row shows its name, its match summary ("label hotfix", "files docs/** · ≤ 40 lines"), its run count and the step strip (PR A's `PipelineList`).
+- **Centre:** the graph for the selected pipeline (`PipelineGraph`), with the footer showing that pipeline's effective caps. Turned-off steps stay on the graph, greyed and struck through, and are toggled in place.
+- **Right panel:** its conditions as structured rows, its caps next to the built-in values, its `steps.off` with who set it and why, and its custom and added review steps.
+- **Editing:** what a slice allows. Guarded writes go through the desktop app's confirmation, or show the exact `F rules set …` command when there's no dialog (plain `F ui`), as §5 says.
+
+**Editor patterns borrowed from n8n.** These are the patterns only, not n8n's look or names:
+
+| Pattern | Slice |
+|---|---|
+| A **step panel**: a step's settings, and with "Show a run…" that step's input and output from a past run, read-only | 2 |
+| A **run overlay** on the graph: each step's status, the path the run took lit, loop counts, and spend against the cap | 2 |
+| **Turned-off steps** greyed and struck through, toggled in place on the graph | 3 |
+| **Templates** to start a pipeline from, its **history** from the rules audit trail, and a **match editor** | 4 |
+| An **insert "+"** on each valid slot of a connection, opening a searchable step picker | 5 |
+
+Not taken from n8n: re-running a single step, and pinned test data. Both would let a step's result come from somewhere other than a real run.
 
 ## Slices
 
-1. **This note, then a read-only page.**
-   - The core part is `pipeline(repo)`, `LOCKED_STEPS` and `OPTIONAL_STEPS`, read-only, with `off` and `custom` always empty until slices 3 and 4.
+1. **This note, then a read-only page** (#139).
+   - The core part is `pipeline(repo)`, `LOCKED_STEPS` and `OPTIONAL_STEPS`, read-only, with `off` and `custom` always empty until slices 3 and 5.
    - The page part is `apps/web` and the desktop bundle.
-2. **Change a step's runner from the graph,** through `POST /api/skills`.
-3. **Turn steps off** (waits for 5c's confirmation dialog):
+2. **A: the design-system move** (#141): `PipelineGraph`, `PipelineList` and `pipelineModel` in the design system, with playground fixtures.
+3. **5c: the desktop approval dialog** (local-first PR 5c, #142). Slices 3 to 5 need its confirmation for guarded writes over HTTP.
+4. **Slice 2: change a step's runner** from the graph, through `POST /api/skills`. No guard is needed, and nothing waits.
+   - The step panel and the run overlay (§8).
+   - Fixture fixes: the Hotfix fixture must not change `loops`, the graph's loop-backs to spec and build (locked structure; its lower loop cap is fine), and the Research spike fixture must not have a `spec.after` step (§7.4).
+5. **Slice 3: steps off**, for the default pipeline only:
    - the `steps.off` rule and its `asStrict` case;
    - `humanOnly` in `setRule`;
    - `pipelinePass` for `steps.off`;
    - the `axesFor` drop, the snapshot, and the `decide` reason;
-   - the HTTP confirmation, or the refusal that names the CLI command;
-   - the API.md line.
-4. **Custom steps:**
+   - the HTTP confirmation, or the refusal that names the CLI command. 5c's dialog opens only from the app menu, never from the page, so this slice settles how a request made on the page reaches it;
+   - the API.md line;
+   - the caps rules (§7.5), since raising one uses the same guard;
+   - turned-off steps greyed in place on the graph (§8).
+6. **Slice 4: matching.**
+   - The `@id` scopes, `match` and `pipelines`, and labels on `TrackerItem` and `intake started`.
+   - The pick and the `routed` record, the meet, `decide` naming the pipeline, and the run detail.
+   - The page's pipelines list with editing: templates, history from the rules audit trail, and the match editor (§8).
+   - This waits for slice 3, since a named pipeline's only looseness is `steps.off` and caps.
+7. **Slice 5: custom steps and added review steps**, after PR 6:
    - `steps.custom` with its validation and `pipelinePass`;
    - `decide` escalating on a dropped list, and on a due step with no result;
-   - `humanOnly` on a write that removes a custom step;
+   - `humanOnly` on a write that removes a custom step or an added review step;
    - `F steps` and `F step`, with the refusals in `F event build started`, `F axes` and `gate()`;
    - the loop-backs routed by slot;
+   - a pipeline's `axes.on` and its own `axes.extra` (§7.1), unioned in the meet (§7.4);
+   - the insert "+" with its searchable step picker (§8);
    - the SKILL.md wording.
 
-   This slice waits for PR 6.
+Every slice has a failing-first test for each behaviour change. Slice 4's tests include:
+- a loop-back whose match changes and only tightens;
+- `F event` refusing `routed`;
+- `maxDiffLines` refused on a git project;
+- a routing write refused inside an agent session while two pipelines differ.
 
-Every slice has a failing-first test for each behaviour change.
+Slice 5's include a removed `axes.on` entry refused inside an agent session, and an added axis that stays due after the run re-matches a pipeline without it.
