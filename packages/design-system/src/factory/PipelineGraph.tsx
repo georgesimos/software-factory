@@ -29,8 +29,9 @@ export interface PipelineGraphProps {
 const runName = (id: string) => id.replace(/^[^#:]*/, '') || id; // #7: the project is the page's
 const ownName = (r: StepRunner) => (!r.use || r.use === 'default' ? 'Factory default' : r.name ?? r.use);
 
-export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownName, cap, costCap, edit, runs = [] }: PipelineGraphProps) {
-  const g = pipelineGraph(p, plan), { nodes, edges } = g, uid = useId();
+export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownName, cap, costCap, edit, runs: all = [] }: PipelineGraphProps) {
+  const g = pipelineGraph(p, plan), { nodes, edges } = g, uid = useId().replace(/[^\w-]/g, ''), panelId = `${uid}-panel`;
+  const runs = all.filter((r) => !r.archived); // an archived run keeps only its last few events: its other steps would show as never reached
   const [picked, setPicked] = useState(''), [open, setOpen] = useState(''), buttons = useRef<Record<string, HTMLButtonElement | null>>({});
   const run = runs.find((r) => r.id === picked), o = run ? runOverlay(g, run.events ?? []) : null, sel = nodes.find((n) => n.id === open);
   const head = useRef<HTMLHeadingElement>(null), close = () => { setOpen(''); buttons.current[open]?.focus(); };
@@ -88,36 +89,36 @@ export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownNa
       <div className="sf-pl-main">
         <div className="sf-pl-stage">
         {runs.length ? (
-          <Select className="sf-pl-run" aria-label="Show a run" value={run ? picked : ''} onChange={(e) => setPicked(e.target.value)}>
+          <div className="sf-pl-bar"><Select className="sf-pl-run" aria-label="Show a run" value={run ? picked : ''} onChange={(e) => setPicked(e.target.value)}>
             <option value="">Show a run…</option>
             {runs.map((r) => <option key={r.id} value={r.id}>{[runName(r.id), r.title, OUTCOME_LABEL[outcomeOf(r)]].filter(Boolean).join(' · ')}</option>)}
-          </Select>
+          </Select></div>
         ) : null}
         <div className="sf-pl-scroll" ref={main} data-grabbing={grabbing || undefined} onScroll={sync}
           onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}><div className="sf-pl-size" style={{ width: w * zoom + 32, height: h * zoom + 32 }}>
         <div className="sf-pl-canvas" ref={canvas} style={{ width: w, height: h, transform: `scale(${zoom})` }}>
           <svg width={w} height={h} aria-hidden="true" data-overlay={o ? true : undefined}>
             <defs>
-              <marker id="sf-pl-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" /></marker>
-              <marker id="sf-pl-arrow-on" viewBox="0 0 8 8" refX="7" refY="4" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" data-on /></marker>
+              <marker id={`${uid}-arrow`} viewBox="0 0 8 8" refX="7" refY="4" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" /></marker>
+              <marker id={`${uid}-arrow-on`} viewBox="0 0 8 8" refX="7" refY="4" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" data-on /></marker>
             </defs>
-            {edges.map((e, i) => <Path key={i} e={e} at={at} o={o} />)}
+            {edges.map((e, i) => <Path key={i} e={e} at={at} o={o} arrow={`${uid}-arrow`} />)}
           </svg>
           <ol aria-label={`${name} pipeline`}>
             {nodes.map((n) => {
               const { x, y } = at.get(n.id)!, st = o?.steps[n.id];
               const body: ReactNode = <>
-                <span className="sf-pl-t"><span className="sf-pl-label">{n.label}</span>{n.locked ? <span className="sf-pl-lock" title="Locked: every run has it"><LockIcon aria-hidden="true" /><span className="sf-sr-only">Locked</span></span> : null}</span>
-                {st ? <span className="sf-pl-st" id={`${uid}-${n.id}`}><span className="sf-pl-dot" data-status={st.status} aria-hidden="true" />{STEP_STATUS[st.status]}{st.note ? ` · ${st.note}` : ''}</span>
+                <span className="sf-pl-t"><span className="sf-pl-label">{n.label}</span>{n.locked ? <>{' '}<span className="sf-pl-lock" title="Locked: every run has it"><LockIcon aria-hidden="true" /><span className="sf-sr-only">Locked</span></span></> : null}</span>
+                {' '}{st ? <span className="sf-pl-st"><span className="sf-pl-dot" data-status={st.status} aria-hidden="true" />{STEP_STATUS[st.status]}{st.note ? ` · ${st.note}` : ''}</span>
                   : n.sub ? <span className="sf-pl-sub">{n.sub}</span> : null}
-                {n.runner ? <span className="sf-pl-who">{who(n.runner)}</span> : null}
+                {n.runner ? <>{' '}<span className="sf-pl-who">{who(n.runner)}</span></> : null}
               </>;
               return (
                 <li key={n.id} aria-label={n.label} data-kind={n.kind} data-locked={n.locked || undefined} data-status={st?.status} data-open={open === n.id || undefined}
                   style={{ left: x, top: y, width: W, height: H }}>
                   {n.kind === 'step' || n.kind === 'review' ? (
-                    <button type="button" className="sf-pl-node" aria-label={n.label} aria-describedby={st ? `${uid}-${n.id}` : undefined} aria-expanded={open === n.id} aria-controls={open === n.id ? 'sf-pl-panel' : undefined}
-                      ref={(b) => { buttons.current[n.id] = b; }} onClick={() => setOpen(open === n.id ? '' : n.id)}>{body}</button>
+                    <button type="button" className="sf-pl-node" aria-expanded={open === n.id} aria-controls={open === n.id ? panelId : undefined}
+                      ref={(b) => { buttons.current[n.id] = b; }} onClick={() => { if (open !== n.id) edit?.onOpen?.(n.id); setOpen(open === n.id ? '' : n.id); }}>{body}</button>
                   ) : <div className="sf-pl-node">{body}</div>}
                 </li>
               );
@@ -135,7 +136,7 @@ export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownNa
         <p className="sf-pl-foot"><span>{warn ? `${warn} warning${warn === 1 ? '' : 's'}` : 'Valid'} · {nodes.length} steps · {edges.length} connections</span>
           <span>{run && o ? runFoot(run, o, cap, costCap) : `loops ≤ ${cap} · $${costCap} / run`}</span></p>
       </div>
-      {sel ? <PipelineStepPanel key={sel.id} ref={head} node={sel} runnerName={runnerName} edit={edit} result={o?.steps[sel.id]} runLabel={run && runName(run.id)} onClose={close} />
+      {sel ? <PipelineStepPanel key={sel.id} ref={head} id={panelId} node={sel} runnerName={runnerName} edit={edit} result={o?.steps[sel.id]} runLabel={run && runName(run.id)} onClose={close} />
         : <About name={name} p={p} cap={cap} costCap={costCap} />}
     </>
   );
@@ -160,9 +161,9 @@ function MiniMap({ nodes, at, w, h, view, o, open, onMove }: { nodes: PipelineNo
 }
 
 /** Spend as the run panel counts it (measured burn over reported numbers), against the per-run cap. */
-function runFoot(r: Run, o: RunOverlay, cap: number, costCap: number) {
-  const usd = r.burn?.total.costUsd ?? r.costUsd ?? 0, loops = Object.values(o.loops).reduce((a, b) => a + b, 0);
-  return `${runName(r.id)} · ${OUTCOME_LABEL[outcomeOf(r)]} · ${formatMoney(usd)} of $${costCap} · ${loops} of ${cap} loops`;
+function runFoot(r: Run, o: RunOverlay, cap: number, costCap: number) { // F's own loop-back count when it has one; no price is "unpriced", never $0
+  const usd = r.burn?.total.costUsd ?? r.costUsd, loops = r.loopbacks?.length ?? Object.values(o.loops).reduce((a, b) => a + b, 0);
+  return `${runName(r.id)} · ${OUTCOME_LABEL[outcomeOf(r)]} · ${usd == null ? `unpriced · cap $${costCap}` : `${formatMoney(usd)} of $${costCap}`} · ${loops} of ${cap} loops`;
 }
 
 function About({ name, p, cap, costCap }: { name: string; p: Pipeline; cap: number; costCap: number }) {
@@ -185,14 +186,14 @@ function About({ name, p, cap, costCap }: { name: string; p: Pipeline; cap: numb
   );
 }
 
-function Path({ e, at, o }: { e: PipelineEdge; at: Map<string, { x: number; y: number }>; o: RunOverlay | null }) {
+function Path({ e, at, o, arrow }: { e: PipelineEdge; at: Map<string, { x: number; y: number }>; o: RunOverlay | null; arrow: string }) {
   const a = at.get(e.from), b = at.get(e.to);
   if (!a || !b) return null;
   if (e.loop) { // over the top, from the gate back to an earlier step; with a run shown, how often it went back
     const x1 = a.x + W / 2, x2 = b.x + W / 2, top = Math.min(a.y, b.y) - 20 - (x1 - x2) / 40, n = o?.loops[e.to] ?? 0;
     return (
       <g>
-        <path d={`M${x1},${a.y} C${x1},${top} ${x2},${top} ${x2},${b.y}`} data-loop data-on={n ? true : undefined} markerEnd={`url(#sf-pl-arrow${n ? '-on' : ''})`} />
+        <path d={`M${x1},${a.y} C${x1},${top} ${x2},${top} ${x2},${b.y}`} data-loop data-on={n ? true : undefined} markerEnd={`url(#${arrow}${n ? '-on' : ''})`} />
         {n ? <g className="sf-pl-pill"><rect x={x2 + 6} y={b.y - 26} width={28} height={18} rx={9} /><text x={x2 + 20} y={b.y - 13} textAnchor="middle">×{n}</text></g> : null /* beside the step it went back to, clear of the nodes */}
       </g>
     );
@@ -200,7 +201,7 @@ function Path({ e, at, o }: { e: PipelineEdge; at: Map<string, { x: number; y: n
   const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x, y2 = b.y + H / 2, m = (x1 + x2) / 2, on = !!o?.taken.includes(`${e.from}>${e.to}`);
   return (
     <g>
-      <path d={`M${x1},${y1} C${m},${y1} ${m},${y2} ${x2 - 2},${y2}`} data-on={on || undefined} markerEnd={`url(#sf-pl-arrow${on ? '-on' : ''})`} />
+      <path d={`M${x1},${y1} C${m},${y1} ${m},${y2} ${x2 - 2},${y2}`} data-on={on || undefined} markerEnd={`url(#${arrow}${on ? '-on' : ''})`} />
       {e.label ? <text x={x2 - 6} y={y2 - 5} textAnchor="end">{e.label}</text> : null}
     </g>
   );
