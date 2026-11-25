@@ -1,4 +1,4 @@
-import { RUN_CAPS, ruleChange, setRule, unsetRule, type RuleRequest } from '../../../packages/core/src/rules.ts';
+import { ruleChange, setRule, shownRule as shown, unsetRule, type RuleRequest } from '../../../packages/core/src/rules.ts';
 import type { ShowBox } from './approve-menu.ts';
 
 // A guarded rule write the page requested (docs/plans/pipelines.md §5: turning a step off, raising a cap), confirmed in a native
@@ -13,7 +13,6 @@ const WORDS: Record<string, [message: (scope: string) => string, button: string,
   'run.loops': [(s) => `Raise a cap for ${s}?`, 'Raise it', 'Runs on this project may loop back more times before they escalate to you. It is audited.'],
   'run.budgetUsd': [(s) => `Raise a cap for ${s}?`, 'Raise it', 'Runs on this project may spend more before they escalate to you. It is audited.'],
 };
-const shown = (key: string, v: unknown) => v === undefined ? (Object.hasOwn(RUN_CAPS, key) ? `the built-in (${RUN_CAPS[key]})` : 'nothing') : Array.isArray(v) ? v.join(', ') : String(v);
 const clean = (s: unknown) => String(s ?? '').replace(/[\x00-\x1f\x7f-\x9f​-‏‪-‮⁦-⁩]/g, ' ').slice(0, 200);
 
 export async function confirmRule(req: RuleRequest, show: ShowBox) {
@@ -28,7 +27,8 @@ export async function confirmRule(req: RuleRequest, show: ShowBox) {
       buttons: ['Cancel', w[1]], defaultId: 0, cancelId: 0, noLink: true })).response === 1;
     if (!ok) return null;
     if (JSON.stringify(ruleChange(req.scope, req.key, raw, at).stored) !== JSON.stringify(c.stored)) throw new Error('the rule changed while the dialog was open: nothing was written. Request it again to see the new value.');
-    return req.unset ? unsetRule(c.scope, c.key, { reason: req.reason }) : setRule(c.scope, c.key, req.raw, at);
+    const ask = () => c.scope; // the dialog was the confirmation: core's typed one would need a terminal the app has none of
+    return req.unset ? unsetRule(c.scope, c.key, { reason: req.reason, ask }) : setRule(c.scope, c.key, req.raw, { ...at, ask });
   } catch (e) {
     await show({ type: 'error', title: 'Rule change', message: 'Nothing was changed.', detail: (e as Error).message, buttons: ['OK'] });
     return null;

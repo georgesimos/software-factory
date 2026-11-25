@@ -6,7 +6,7 @@ import { dashboard } from './log.ts';
 import { gh } from './github.ts';
 import { git, hostFn, hostOf, projects, projectsFile } from './workspace.ts';
 import { humanOnly } from './projectset.ts';
-import { ttyAsk } from './approve.ts';
+import { line, ttyAsk } from './approve.ts';
 import { log, stateDir } from './log.ts';
 import type { Rule } from './types.ts';
 
@@ -193,26 +193,36 @@ export function ruleChange(scope: string, key: string, raw: unknown, { reason, u
   }
   return { scope, key, stored: cfg[scope]?.rules?.[key]?.value, value, ...(until && { until }), doing: loosens(scope, key, value, cfg, until), command: ruleCommand(scope, key, value, until) };
 }
+/** A rule's value as a person reads it: an unset cap is the built-in one. */
+export const shownRule = (key: string, v: unknown) => v === undefined ? (Object.hasOwn(RUN_CAPS, key) ? `the built-in (${RUN_CAPS[key]})` : 'nothing') : Array.isArray(v) ? v.join(', ') : String(v);
+type Ask = (prompt: string) => string;
+// a loosening is typed at your terminal, as F automerge on and a relaxing F project set: a speed bump, not a boundary (humanOnly is the refusal)
+function typed(ask: Ask, scope: string, key: string, doing: string, from: unknown, to: unknown, until?: string, reason?: string) {
+  if (ask(`${scope}: ${doing}\n${key}: ${shownRule(key, from)} -> ${shownRule(key, to)}${until ? ` until ${until}` : ''}${reason ? ` (${line(reason)})` : ''}\n\nThis relaxes what the factory checks before it merges.\n\nType ${scope} to confirm (anything else cancels): `).trim() !== scope)
+    throw new Error(`${scope}'s ${key} stays as it is: what you typed did not match`);
+}
 // page: the write comes from the dashboard's route, which may only request a guarded write (§5); core refuses it here too.
-export function setRule(scope: string, key: string, raw: unknown, { reason, until, page }: { reason?: string; until?: string; page?: boolean } = {}) {
+export function setRule(scope: string, key: string, raw: unknown, { reason, until, page, ask = ttyAsk }: { reason?: string; until?: string; page?: boolean; ask?: Ask } = {}) {
   checkScope(scope);
   const cfg = readSkills(), s: ScopeConfig = { ...cfg[scope] }, step = key.startsWith('guide.') ? key.slice(6) : null;
-  let value: unknown = raw;
+  let value: unknown = raw, doing: string | null = null;
   if (step !== null) s.guide = { ...s.guide, [step]: String(raw ?? '') };
   else {
     value = prepare(scope, key, raw, until, cfg);
-    const doing = loosens(scope, key, value, cfg, until);
+    doing = loosens(scope, key, value, cfg, until);
     if (doing && page) throw pageRefusal(doing, ruleCommand(scope, key, value, until));
     if (doing) humanOnly(doing);
   }
   const who = whoami();
-  if (step === null) { guard(who, s.rules?.[key], key); guardShadow(who, scope, cfg.default?.rules?.[key], key, value); s.rules = { ...s.rules, [key]: { value, reason, ...stamp(who), setAt: new Date().toISOString(), ...(until && { until }) } }; }
+  if (step === null) { guard(who, s.rules?.[key], key); guardShadow(who, scope, cfg.default?.rules?.[key], key, value); const rule = { value, reason, ...stamp(who), setAt: new Date().toISOString(), ...(until && { until }) };
+    if (doing) { checkRules({ [key]: rule }, `rules ${scope}`); typed(ask, scope, key, doing, s.rules?.[key]?.value, value, until, reason); } // checked first: never ask about a write that would fail
+    s.rules = { ...s.rules, [key]: rule }; }
   cfg[scope] = s;
   writeSkills(cfg); // validates the whole config first
   audit(scope, 'set', { key, value, ...(reason && { reason }), ...(until && { until }), ...stamp(who) });
   return rules(scope);
 }
-export function unsetRule(scope: string, key: string, { reason, page }: { reason?: string; page?: boolean } = {}) {
+export function unsetRule(scope: string, key: string, { reason, page, ask = ttyAsk }: { reason?: string; page?: boolean; ask?: Ask } = {}) {
   checkScope(scope);
   const cfg = readSkills(), s: ScopeConfig = { ...cfg[scope] }, step = key.startsWith('guide.') ? key.slice(6) : null;
   const bag = step !== null ? 'guide' : 'rules', k = step ?? key, cur = s[bag];
@@ -222,6 +232,7 @@ export function unsetRule(scope: string, key: string, { reason, page }: { reason
   if (doing) humanOnly(doing);
   const who = whoami();
   if (bag === 'rules') guard(who, cur[k] as Rule, k);
+  if (doing) typed(ask, scope, k, doing, (cur[k] as Rule).value, undefined, undefined, reason);
   const without = <T,>(m: Record<string, T> = {}) => { const { [k]: _gone, ...left } = m; return left; }; // a copy without k
   if (bag === 'guide') s.guide = without(s.guide); else s.rules = without(s.rules);
   if (!Object.keys(s[bag] ?? {}).length) delete s[bag];

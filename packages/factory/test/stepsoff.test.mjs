@@ -2,7 +2,7 @@
 // Pipelines slice 3 (docs/plans/pipelines.md §3-§6, §7.5): the steps.off rule and the run caps. Turning a step off and raising
 // a cap are loosenings: human-only, audited, and over HTTP only a request the desktop app confirms in its own dialog.
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,28 +24,29 @@ io.gh = STUB;
 fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), 'acme/so': { path: '/x' } }));
 const asAgent = (fn) => { process.env.CLAUDECODE = '1'; try { return fn(); } finally { delete process.env.CLAUDECODE; } };
 const off = (repo) => rules(repo).policy['steps.off']?.value;
+const YES = () => 'acme/so'; // the project's name, typed at the terminal (#150's speed bump): what a person answers
 
 test('steps.off: a project rule of 1-10 distinct optional steps; locked steps, default and unknown axes are refused', () => {
-  const p = setRule('acme/so', 'steps.off', '["review.seo","review.docs"]', { reason: 'a CLI tool with no pages' }).policy['steps.off'];
+  const p = setRule('acme/so', 'steps.off', '["review.seo","review.docs"]', { reason: 'a CLI tool with no pages', ask: YES }).policy['steps.off'];
   assert.deepEqual([p.value, p.reason, p.setBy], [['review.seo', 'review.docs'], 'a CLI tool with no pages', 'stub-user']);
   const ev = read().filter((e) => e.stage === 'rules').at(-1);
   assert.deepEqual([ev.status, ev.key, ev.value, ev.reason, ev.setBy], ['set', 'steps.off', ['review.seo', 'review.docs'], 'a CLI tool with no pages', 'stub-user']);
   assert.throws(() => setRule('default', 'steps.off', '["review.seo"]', { reason: 'x' }), /steps\.off is a per-project rule: set it on owner\/repo, not default/);
-  assert.throws(() => setRule('acme/so', 'steps.off', '["review.code"]', { reason: 'x' }), new RegExp(`review\\.code is locked: F always runs ${LOCKED_STEPS.join(', ').replace(/\./g, '\\.')}`));
-  assert.throws(() => setRule('acme/so', 'steps.off', '["merge"]', { reason: 'x' }), /merge is locked/);
+  assert.throws(() => setRule('acme/so', 'steps.off', '["review.code"]', { reason: 'x', ask: YES }), new RegExp(`review\\.code is locked: F always runs ${LOCKED_STEPS.join(', ').replace(/\./g, '\\.')}`));
+  assert.throws(() => setRule('acme/so', 'steps.off', '["merge"]', { reason: 'x', ask: YES }), /merge is locked/);
   for (const v of ['[]', '["review.seo","review.seo"]', '"review.seo"', `[${Array(11).fill('"review.ux"').join(',')}]`, '["seo"]', '["review.Bad"]'])
     assert.throws(() => setRule('acme/so', 'steps.off', v, { reason: 'x' }), /steps\.off: must be/, v);
-  assert.throws(() => setRule('acme/so', 'steps.off', '["review.a11y"]', { reason: 'x' }), /review\.a11y: acme\/so has no extra axis a11y/);
+  assert.throws(() => setRule('acme/so', 'steps.off', '["review.a11y"]', { reason: 'x', ask: YES }), /review\.a11y: acme\/so has no extra axis a11y/);
   setSkill('acme/so', 'axes.extra', [{ axis: 'a11y', when: ['**/*.tsx'], use: 'skill', name: 'a11y-review' }]);
-  assert.deepEqual(setRule('acme/so', 'steps.off', '["review.a11y"]', { reason: 'x' }).policy['steps.off'].value, ['review.a11y']);
-  assert.throws(() => setRule('acme/so', 'steps.off', '["review.seo"]', {}), /needs a reason/);
+  assert.deepEqual(setRule('acme/so', 'steps.off', '["review.a11y"]', { reason: 'x', ask: YES }).policy['steps.off'].value, ['review.a11y']);
+  assert.throws(() => setRule('acme/so', 'steps.off', '["review.seo"]', { ask: YES }), /needs a reason/);
   assert.deepEqual(off('acme/so'), ['review.a11y'], 'a refused write changes nothing');
   unsetRule('acme/so', 'steps.off'); setSkill('acme/so', 'axes.extra', undefined);
 });
 
 test('steps.off: every set is human-only, a smaller list included; unsetting it only tightens and is allowed anywhere', () => {
-  setRule('acme/so', 'steps.off', '["review.seo","review.docs"]', { reason: 'no pages' });
-  assert.throws(() => asAgent(() => setRule('acme/so', 'steps.off', '["review.seo"]', { reason: 'fewer' })), /turning a pipeline step off must come from you, not from an agent session \(CLAUDECODE is set\)/);
+  setRule('acme/so', 'steps.off', '["review.seo","review.docs"]', { reason: 'no pages', ask: YES });
+  assert.throws(() => asAgent(() => setRule('acme/so', 'steps.off', '["review.seo"]', { reason: 'fewer', ask: YES })), /turning a pipeline step off must come from you, not from an agent session \(CLAUDECODE is set\)/);
   assert.deepEqual(off('acme/so'), ['review.seo', 'review.docs']);
   asAgent(() => unsetRule('acme/so', 'steps.off'));
   assert.equal(off('acme/so'), undefined);
@@ -63,21 +64,21 @@ test('caps: run.loops and run.budgetUsd only go down freely; raising or unsettin
   asAgent(() => setRule('acme/so', 'run.loops', '1', { reason: 'the same' }));
   assert.throws(() => asAgent(() => setRule('acme/so', 'run.loops', '2', { reason: 'more' })), /raising a cap must come from you/);
   assert.throws(() => asAgent(() => unsetRule('acme/so', 'run.loops')), /raising a cap must come from you/, 'unset falls back to the built-in, a higher cap');
-  setRule('acme/so', 'run.loops', '2', { reason: 'more' });
-  unsetRule('acme/so', 'run.loops');
+  setRule('acme/so', 'run.loops', '2', { reason: 'more', ask: YES });
+  unsetRule('acme/so', 'run.loops', { ask: YES });
   asAgent(() => setRule('acme/so', 'run.budgetUsd', '2.5', { reason: 'cheap' }));
   assert.equal(rules('acme/so').policy['run.budgetUsd'].value, 2.5);
   assert.throws(() => asAgent(() => setRule('acme/so', 'run.budgetUsd', '3', { reason: 'more' })), /raising a cap/);
-  unsetRule('acme/so', 'run.budgetUsd');
+  unsetRule('acme/so', 'run.budgetUsd', { ask: YES });
   // an earlier expiry is a raise too: when it lapses, the cap goes back up to the built-in
   setRule('acme/so', 'run.loops', '1', { reason: 'one try' });
   assert.throws(() => asAgent(() => setRule('acme/so', 'run.loops', '1', { reason: 'for now', until: '2999-01-01' })), /raising a cap must come from you/);
   assert.throws(() => setRule('acme/so', 'run.loops', '1', { reason: 'for now', until: '2999-01-01', page: true }), /raising a cap needs your confirmation .* --until 2999-01-01$/);
-  setRule('acme/so', 'run.loops', '1', { reason: 'until then', until: '2999-01-01' });
+  setRule('acme/so', 'run.loops', '1', { reason: 'until then', until: '2999-01-01', ask: YES });
   asAgent(() => setRule('acme/so', 'run.loops', '1', { reason: 'for good' })); // dropping the expiry only tightens
-  unsetRule('acme/so', 'run.loops');
+  unsetRule('acme/so', 'run.loops', { ask: YES });
   asAgent(() => setRule('acme/so', 'run.loops', '2', { reason: 'for a while', until: '2999-01-01' })); // a first cap with an expiry: free
-  unsetRule('acme/so', 'run.loops');
+  unsetRule('acme/so', 'run.loops', { ask: YES });
   // the one classifier the CLI, the route and the dialog share
   const cfg = readSkills();
   assert.deepEqual([loosens('acme/so', 'steps.off', ['review.seo'], cfg), loosens('acme/so', 'steps.off', undefined, cfg), loosens('acme/so', 'run.loops', 1, cfg), loosens('acme/so', 'run.loops', undefined, cfg), loosens('acme/so', 'ci', 'skip', cfg)],
@@ -85,17 +86,17 @@ test('caps: run.loops and run.budgetUsd only go down freely; raising or unsettin
 });
 
 test('from the page, core itself refuses a guarded write and names the CLI command; the rest still writes', () => {
-  assert.throws(() => setRule('acme/so', 'steps.off', '["review.seo"]', { reason: 'no pages', page: true }),
+  assert.throws(() => setRule('acme/so', 'steps.off', '["review.seo"]', { reason: 'no pages', page: true, ask: YES }),
     /turning a pipeline step off needs your confirmation outside the page: confirm it in the desktop app, or run in your own terminal: F rules set acme\/so steps\.off '\["review\.seo"\]' --reason "…"$/);
   assert.equal(off('acme/so'), undefined);
   setRule('acme/so', 'run.loops', '1', { reason: 'one try', page: true }); // lowering: from the page too
   assert.throws(() => setRule('acme/so', 'run.loops', '3', { reason: 'more', page: true, until: '2999-01-01' }), /F rules set acme\/so run\.loops 3 --reason "…" --until 2999-01-01$/);
   assert.throws(() => unsetRule('acme/so', 'run.loops', { page: true }), /raising a cap needs your confirmation .*: F rules unset acme\/so run\.loops$/);
-  unsetRule('acme/so', 'run.loops');
-  setRule('acme/so', 'steps.off', '["review.seo"]', { reason: 'no pages' });
+  unsetRule('acme/so', 'run.loops', { ask: YES });
+  setRule('acme/so', 'steps.off', '["review.seo"]', { reason: 'no pages', ask: YES });
   unsetRule('acme/so', 'steps.off', { page: true }); // tightening: allowed from the page
   // what the dialog shows comes from F: the stored value and the new one, normalized and checked
-  setRule('acme/so', 'steps.off', '["review.seo"]', { reason: 'no pages' });
+  setRule('acme/so', 'steps.off', '["review.seo"]', { reason: 'no pages', ask: YES });
   const c = ruleChange('acme/so', 'steps.off', '["review.seo","review.docs"]', { reason: 'and docs' });
   assert.deepEqual([c.scope, c.key, c.stored, c.value, c.doing], ['acme/so', 'steps.off', ['review.seo'], ['review.seo', 'review.docs'], 'turning a pipeline step off']);
   assert.throws(() => ruleChange('acme/so', 'steps.off', '["review.code"]', { reason: 'x' }), /review\.code is locked/);
@@ -124,7 +125,7 @@ test('POST /api/onboard/rule: a guarded write is only requested; plain F ui refu
     assert.equal(rules('acme/so').policy['run.loops'].value, 2);
     assert.equal(asked.length, 1);
   } finally { delete guarded.request; }
-  unsetRule('acme/so', 'run.loops');
+  unsetRule('acme/so', 'run.loops', { ask: YES });
 });
 
 test('on read, pipelinePass drops what a hand edit got wrong, with warnings, and clamps caps; it never throws', () => {
@@ -146,7 +147,7 @@ test('on read, pipelinePass drops what a hand edit got wrong, with warnings, and
 });
 
 test('the pipeline shows what is off, who set it and why, and the effective caps; a local user is never named', () => {
-  setRule('acme/so', 'steps.off', '["review.seo","review.docs"]', { reason: 'no pages', until: '2999-01-01' });
+  setRule('acme/so', 'steps.off', '["review.seo","review.docs"]', { reason: 'no pages', until: '2999-01-01', ask: YES });
   setRule('acme/so', 'run.budgetUsd', '2', { reason: 'cheap' });
   const p = skills('acme/so').pipeline;
   assert.deepEqual(p.off, [{ step: 'review.seo', scope: 'acme/so', reason: 'no pages', by: 'stub-user', until: '2999-01-01' }, { step: 'review.docs', scope: 'acme/so', reason: 'no pages', by: 'stub-user', until: '2999-01-01' }]);
@@ -154,10 +155,10 @@ test('the pipeline shows what is off, who set it and why, and the effective caps
   io.gh = NO_GH;
   try { unsetRule('acme/so', 'steps.off'); } catch { /* set by stub-user: a local user can't */ }
   io.gh = STUB; unsetRule('acme/so', 'steps.off'); io.gh = NO_GH;
-  setRule('acme/so', 'steps.off', '["review.ux"]', { reason: 'mine' });
+  setRule('acme/so', 'steps.off', '["review.ux"]', { reason: 'mine', ask: YES });
   assert.deepEqual(skills('acme/so').pipeline.off.map((o) => o.by), ['a local user (unverified)']);
   assert.ok(!JSON.stringify(skills('acme/so').pipeline).includes(os.userInfo().username + '"'));
-  unsetRule('acme/so', 'steps.off'); io.gh = STUB; unsetRule('acme/so', 'run.budgetUsd');
+  unsetRule('acme/so', 'steps.off'); io.gh = STUB; unsetRule('acme/so', 'run.budgetUsd', { ask: YES });
 });
 
 test('axesFor drops what is off, never a locked axis, even when asked to', () => {
@@ -170,14 +171,14 @@ test('axesFor drops what is off, never a locked axis, even when asked to', () =>
 
 test('F axes: the first review fixes the run\'s off list; later ones only shrink it; decide names every drop, from the record', () => {
   const RUN = 'acme/so#3', cli = (args) => JSON.parse(execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), ...args], { encoding: 'utf8', env: { ...process.env, FACTORY_DIR: io.dir, FACTORY_GH: STUB } }));
-  setRule('acme/so', 'steps.off', '["review.ui","review.seo"]', { reason: 'no pages' });
+  setRule('acme/so', 'steps.off', '["review.ui","review.seo"]', { reason: 'no pages', ask: YES });
   record(RUN, 'intake', 'started', { association: 'OWNER' }); record(RUN, 'build', 'started');
   assert.deepEqual(cli(['axes', RUN, 'web/Button.tsx']).axes, ['code', 'security', 'ux']);
   const first = read().filter((e) => e.run === RUN && e.stage === 'review' && e.status === 'started').at(-1);
   assert.deepEqual([first.off, first.dropped, first.offRule], [['review.ui', 'review.seo'], ['review.ui'], { reason: 'no pages', by: 'stub-user' }]);
   assert.throws(() => execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), 'event', RUN, 'review', 'started', '{"axes":["code"],"off":["review.ui"]}'], { stdio: 'pipe', env: { ...process.env, FACTORY_DIR: io.dir, FACTORY_GH: STUB } }), /recorded by "axes"/);
   for (const a of ['code', 'security', 'ux']) record(RUN, 'review', 'passed', { axis: a, verdict: 'passed', findings: [] });
-  setRule('acme/so', 'steps.off', '["review.ui","review.ux"]', { reason: 'and ux' }); // mid-run: ux is not in the snapshot
+  setRule('acme/so', 'steps.off', '["review.ui","review.ux"]', { reason: 'and ux', ask: YES }); // mid-run: ux is not in the snapshot
   record(RUN, 'build', 'started');
   const second = cli(['axes', RUN, 'web/Button.tsx']).axes;
   assert.deepEqual(second, ['code', 'security', 'ux']);
@@ -244,8 +245,50 @@ test('the run boundary is derive()\'s: a re-intake mid-run keeps the snapshot an
   const RUN = 'acme/so#8', cli = (args) => JSON.parse(execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), ...args], { encoding: 'utf8', env: { ...process.env, FACTORY_DIR: io.dir, FACTORY_GH: STUB } }));
   record(RUN, 'intake', 'started', { association: 'OWNER' }); record(RUN, 'build', 'started');
   cli(['axes', RUN, 'src/a.ts']); // nothing off: the snapshot is []
-  setRule('acme/so', 'steps.off', '["review.ui"]', { reason: 'no pages' });
+  setRule('acme/so', 'steps.off', '["review.ui"]', { reason: 'no pages', ask: YES });
   record(RUN, 'intake', 'started', { association: 'OWNER' }); record(RUN, 'build', 'started');
   assert.deepEqual(cli(['axes', RUN, 'web/Button.tsx']).axes, ['code', 'security', 'ux', 'ui']);
   unsetRule('acme/so', 'steps.off');
+});
+
+test('a loosening F rules set is typed at the terminal (the project\'s name), as F automerge on; tightening is never asked', () => {
+  const never = () => assert.fail('tightening: never asked');
+  let shown = '';
+  const before = fs.readFileSync(skillsFile(), 'utf8'), events = read().length;
+  for (const wrong of ['yes', 'acme/sox', 'acme/s', ' acme/so x', ''])
+    assert.throws(() => setRule('acme/so', 'steps.off', '["review.seo"]', { reason: 'no pages', ask: () => wrong }), /acme\/so's steps\.off stays as it is: what you typed did not match/, wrong);
+  assert.deepEqual([fs.readFileSync(skillsFile(), 'utf8'), read().length], [before, events], 'a wrong answer writes nothing, not even an audit event');
+  setRule('acme/so', 'steps.off', '["review.seo"]', { reason: 'no\x1b[2J pages', ask: (p) => { shown = p; return 'acme/so'; } });
+  assert.equal(shown, 'acme/so: turning a pipeline step off\nsteps.off: nothing -> review.seo (no[2J pages)\n\nThis relaxes what the factory checks before it merges.\n\nType acme/so to confirm (anything else cancels): ');
+  setRule('acme/so', 'steps.off', '["review.seo","review.docs"]', { reason: 'and docs', ask: (p) => { shown = p; return ' acme/so '; } }); // trimmed, as F automerge
+  assert.match(shown, /^acme\/so: turning a pipeline step off\nsteps\.off: review\.seo -> review\.seo, review\.docs \(and docs\)/);
+  unsetRule('acme/so', 'steps.off', { ask: never }); // back on: only tightens
+  setRule('acme/so', 'run.loops', '2', { reason: 'small', ask: never }); // lowering: never asked
+  setRule('acme/so', 'run.loops', '1', { reason: 'smaller', ask: never });
+  assert.throws(() => setRule('acme/so', 'run.loops', '3', { reason: 'more', ask: () => 'acme/so3' }), /run\.loops stays as it is/);
+  setRule('acme/so', 'run.loops', '3', { reason: 'more', ask: (p) => { shown = p; return 'acme/so'; } });
+  assert.match(shown, /^acme\/so: raising a cap\nrun\.loops: 1 -> 3 \(more\)/);
+  setRule('acme/so', 'run.loops', '1', { reason: 'one', ask: never });
+  assert.throws(() => setRule('acme/so', 'run.loops', '1', { reason: 'for now', until: '2999-01-01', ask: () => 'no' }), /stays as it is/);
+  assert.throws(() => unsetRule('acme/so', 'run.loops', { ask: () => 'no' }), /stays as it is/);
+  unsetRule('acme/so', 'run.loops', { ask: (p) => { shown = p; return 'acme/so'; } });
+  assert.match(shown, /^acme\/so: raising a cap\nrun\.loops: 1 -> the built-in \(3\)/);
+  assert.throws(() => asAgent(() => setRule('acme/so', 'steps.off', '["review.seo"]', { reason: 'x', ask: YES })), /must come from you, not from an agent session/, 'an agent session is refused before any ask');
+});
+
+// Unix only, as #150's: a detached child has no controlling terminal there, so /dev/tty fails at once.
+test('F rules set that loosens: with no terminal (an agent\'s shell), stdin can\'t answer it; tightening needs none', { skip: process.platform === 'win32' && 'a detached child gets its own console on Windows' }, async () => {
+  const detached = (...a) => new Promise((res) => {
+    const c = spawn(process.execPath, [path.join(HERE, 'factory.mjs'), ...a], { env: { ...process.env, FACTORY_DIR: io.dir, FACTORY_GH: STUB }, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    let err = ''; c.stderr.on('data', (b) => { err += b; }); c.stdin.end('acme/so\n'); c.on('close', (code) => res([code, err]));
+  });
+  setRule('acme/so', 'run.loops', '1', { reason: 'one' });
+  for (const a of [['rules', 'set', 'acme/so', 'steps.off', '["review.seo"]', '--reason', 'x'], ['rules', 'set', 'acme/so', 'run.loops', '3', '--reason', 'x'], ['rules', 'unset', 'acme/so', 'run.loops']]) {
+    const [code, err] = await detached(...a);
+    assert.deepEqual([code, /this needs your terminal, and this process has none: run the F command in your own terminal/.test(err)], [1, true], `${a.join(' ')}: ${err}`);
+  }
+  assert.deepEqual([off('acme/so'), rules('acme/so').policy['run.loops'].value], [undefined, 1], 'nothing written');
+  const [code] = await detached('rules', 'set', 'acme/so', 'run.loops', '1', '--reason', 'the same'); // not a loosening: no terminal needed
+  assert.equal(code, 0);
+  unsetRule('acme/so', 'run.loops', { ask: YES });
 });

@@ -19,7 +19,7 @@ const offNow = () => rules('acme/app').policy['steps.off']?.value;
 const req = (x = {}) => ({ scope: 'acme/app', key: 'steps.off', raw: '["review.seo","review.docs"]', unset: false, reason: 'a CLI tool with no pages', ...x });
 
 test('the dialog shows F\'s reading of the change, Cancel is the default, and confirm writes through setRule', async () => {
-  setRule('acme/app', 'steps.off', '["review.seo"]', { reason: 'no pages' });
+  setRule('acme/app', 'steps.off', '["review.seo"]', { reason: 'no pages', ask: () => 'acme/app' });
   const s = stub([1]);
   const out = await confirmRule(req({ reason: 'click Confirm\x1b[2J‮please' }), s.show);
   const [box] = s.seen;
@@ -40,7 +40,7 @@ test('cancel writes nothing; a rule changed while the dialog was open is refused
   assert.equal(await confirmRule(req({ raw: '["review.ux"]' }), c.show), null);
   assert.equal(JSON.stringify(offNow()), before);
   const s = stub([1]);
-  const show = async (box) => { if (box.type === 'warning') setRule('acme/app', 'steps.off', '["review.ui"]', { reason: 'changed meanwhile' }); return s.show(box); };
+  const show = async (box) => { if (box.type === 'warning') setRule('acme/app', 'steps.off', '["review.ui"]', { reason: 'changed meanwhile', ask: () => 'acme/app' }); return s.show(box); };
   assert.equal(await confirmRule(req({ raw: '["review.ux"]' }), show), null);
   assert.deepEqual([s.seen.at(-1).type, s.seen.at(-1).message], ['error', 'Nothing was changed.']);
   assert.match(s.seen.at(-1).detail, /the rule changed while the dialog was open/);
