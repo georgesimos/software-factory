@@ -18,3 +18,6 @@ export const LOCAL_USER = 'a local user';
 // The name part is what LOCAL_BY allows (1-100 characters, no control character), quotes included.
 export const LOCAL_BY_TEXT = /\bset by [^\x00-\x1f\x7f]{1,100}? \(local, unverified\)/g;
 export const scrubText = (s: string) => s.replace(LOCAL_BY_TEXT, `set by ${LOCAL_USER} (local, unverified)`).replace(LOCAL_PATH, '[local path]');
+// An @mention in untrusted text (an issue's spec, a reviewer's finding, an error) never pings: a zero-width joiner after the
+// "@" (not a login character). An email address keeps its "@".
+export const unmention = (s: string) => s.replace(/(^|[^\w.+-])@(?=[A-Za-z0-9])/g, '$1@\u200d');

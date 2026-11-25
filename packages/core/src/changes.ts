@@ -10,29 +10,36 @@ import { localResult } from './gate.ts';
 import { adapterCtx, parseRun, postmerge } from './github.ts';
 import { record, runDir } from './log.ts';
 import { rules } from './rules.ts';
-import { scrubText } from './scrub.ts';
+import { scrubText, unmention } from './scrub.ts';
 import { baseBranch, git, hostFn, hostOf, projects, trackerOf, wtInfo } from './workspace.ts';
 import type { AxisReview, Run } from './types.ts';
 
-const BODY_MAX = 60_000; // GitHub refuses a body over 65,536 characters
+const BODY_MAX = 60_000; // GitHub refuses a body over 65,536 characters: the PR body and the escalation comment
+const cut = (s: string, rest: string) => s.length > BODY_MAX ? `${s.slice(0, BODY_MAX)}\n\n… (cut here: ${rest})` : s;
 const driven = (run: string) => {
   const r = getRun(run);
   if (r.imported) throw new Error(`${run} is imported: the factory doesn't drive it`);
   return r;
 };
 
-/** Opens the run's change request once, as a draft from its factory branch; later calls return the recorded one. */
+/** Opens the run's change request once, as a draft from its factory branch; later calls return the recorded one while it is
+ *  open from that branch. A merged or closed one is never reused: a new run (intake after a revert) starts with none. */
 export function openPr(run: string) {
   const r = driven(run), { repo, n } = parseRun(run);
-  if (r.pr) return { pr: r.pr, branch: r.branch, existing: true };
   const w = wtInfo(run);
   if (!w) throw new Error(`${run} has no worktree: run F worktree ${run} first`);
+  const base = w.base ? String(w.base) : baseBranch(repo, w.repoPath);
+  if (r.pr) {
+    const c = hostFn(hostOf(repo), 'changeRequest', 'look up a change request')(adapterCtx(), { repo, path: w.repoPath, id: r.pr, base });
+    const from = c.fork ? `a fork's ${c.branch}` : c.branch;
+    if (c.state !== 'open' || c.fork || c.branch !== w.branch) throw new Error(`${run}'s recorded change request ${r.pr} is ${c.state === 'open' ? `open from ${from}` : c.state}, not open from ${w.branch}: start a new run (F intake ${run})`);
+    return { pr: r.pr, branch: w.branch, existing: true };
+  }
   let spec = '';
   try { spec = fs.readFileSync(path.join(runDir(run), 'spec.md'), 'utf8'); } catch { /* refused below */ }
   if (!spec.trim()) throw new Error(`${run} has no spec: write DIR/spec.md (F dir ${run}) first`);
-  let body = `${trackerOf(repo) === 'github-issues' ? `Closes #${n}` : `Factory item #${n}`}\n\n${spec}`;
-  if (body.length > BODY_MAX) body = `${body.slice(0, BODY_MAX)}\n\n… (cut here: the whole spec is the run's DIR/spec.md)`;
-  const c = hostFn(hostOf(repo), 'openChangeRequest', 'open a change request')(adapterCtx(), { repo, path: w.repoPath, branch: w.branch, base: w.base ? String(w.base) : baseBranch(repo, w.repoPath), title: String(r.title || `#${n}`), body, draft: true });
+  const body = cut(`${trackerOf(repo) === 'github-issues' ? `Closes #${n}` : `Factory item #${n}`}\n\n${unmention(spec)}`, 'the whole spec is the run\'s DIR/spec.md');
+  const c = hostFn(hostOf(repo), 'openChangeRequest', 'open a change request')(adapterCtx(), { repo, path: w.repoPath, branch: w.branch, base, title: String(r.title || `#${n}`), body, draft: true });
   record(run, 'build', 'opened', { pr: c.id, branch: w.branch });
   return { pr: c.id, branch: w.branch, ...(c.url && { url: c.url }) };
 }
@@ -50,17 +57,20 @@ export function ciStatus(run: string, { watch = false, every = 30_000, max = 20 
   return { state: c.state, ci: c.ci, ...(c.url && { url: c.url }), ...(c.failed?.length && { failed: c.failed }), ...(c.detail && { detail: c.detail }), ...(c.broken && { broken: c.broken }), ...(log && { log }) };
 }
 
-/** Why the run needs a human: its decision's reasons (after a merge, why its base can't be watched) and its open blocking findings. */
-function why(run: string, r: Run) {
-  const reasons = r.outcome === 'merged' ? [postmerge(run).reason ?? 'CI on the base branch after the merge could not be read'] : r.decision?.reasons ?? [];
-  if (!reasons.length) throw new Error(`${run} has no decision to escalate: run F merge ${run} first`);
+/** Why the run needs a human: its escalate decision's reasons (after a merge, why its base can't be watched; with no decision,
+ *  or a merge one that didn't merge, that F merge failed, with its error) and its open blocking findings. */
+function why(run: string, r: Run, error?: string) {
+  const d = r.decision, reasons = r.outcome === 'merged' ? [postmerge(run).reason ?? 'CI on the base branch after the merge could not be read']
+    : d?.action === 'escalate' && d.reasons?.length ? d.reasons
+    : [d?.action === 'merge' ? 'F merge decided to merge, but the merge did not happen' : 'no decision was recorded: F merge failed'];
+  if (error) reasons.push(`F merge's error: ${error.slice(0, 2000)}`);
   const open = Object.entries(r.reviews[r.iteration] ?? {}).filter(([, v]) => v.verdict !== 'passed')
     .flatMap(([axis, v]) => (v as AxisReview).findings.filter(blocking).map((f) => `- ${axis}, ${f.severity} ${f.file ?? ''}${f.line ? `:${f.line}` : ''} ${f.issue ?? ''}`.trimEnd()));
-  return scrubText(['The software factory needs a human here.', '', 'Why:', ...reasons.map((x) => `- ${x}`), ...(open.length ? ['', 'Open findings:', ...open] : [])].join('\n'));
+  return cut(unmention(scrubText(['The software factory needs a human here.', '', 'Why:', ...reasons.map((x) => `- ${x}`), ...(open.length ? ['', 'Open findings:', ...open] : [])].join('\n'))), 'the rest is in the run\'s events');
 }
 /** Marks the change request (or the issue, with none) for a human, with one comment. Cosmetic: the escalation itself is F event … approve escalated. */
-export function escalate(run: string) {
-  const r = driven(run), { repo, n } = parseRun(run), body = why(run, r), at = projects()[repo]?.path;
+export function escalate(run: string, { error }: { error?: string } = {}) {
+  const r = driven(run), { repo, n } = parseRun(run), body = why(run, r, error), at = projects()[repo]?.path;
   const out = hostFn(hostOf(repo), 'escalate', 'escalate')(adapterCtx(), { repo, ...(at && { path: at }), ...(r.pr && { id: r.pr }), issue: n, body });
   if (out.detail && out.posted) console.error(`factory: ${out.detail}`);
   return { on: r.pr ? 'pr' : 'issue', ...out };

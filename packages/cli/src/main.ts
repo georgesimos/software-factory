@@ -52,8 +52,8 @@ export async function main(argv: string[]) {
         if (stage === 'review' && p.role !== 'verifier') throw new Error('axis verdicts are recorded by "review", not by hand; "event" only takes the verifier usage record ({"role":"verifier",…})');
         if (stage === 'note') throw new Error('"note" is recorded by "note" and "notes", not by hand');
         const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'hostSessionId', 'cwd', 'runner', 'localChecks', 'mergedBy',
-          'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // the last row: set by ship connectors only
-        if (typed.length) throw new Error(`these fields come from GitHub, git, the environment or a ship connector, not from a payload: ${typed.join(', ')}`);
+          'pr', 'branch', 'connector', 'kind', 'env', 'state', 'url', 'detail', 'creator', 'at'].filter((k) => k in p); // pr, branch: F pr and sync; the last row: ship connectors only
+        if (typed.length) throw new Error(`these fields come from GitHub, git, F pr, the environment or a ship connector, not from a payload: ${typed.join(', ')}`);
         record(run, stage, status, p, { fallback }); break;
       }
       case 'review': { // raw reviewer output on stdin, from any runner; invalid output is recorded as a failed review
@@ -137,7 +137,11 @@ export async function main(argv: string[]) {
       case 'merge': out(merge(run)); break;
       case 'pr': out(openPr(run)); break; // pr <run>: the run's draft change request from its branch, opened once and recorded
       case 'ci': out(ciStatus(run, { watch: rest.includes('--watch') })); break; // ci <run> [--watch]: CI on the worktree head; a failure carries its log's tail
-      case 'escalate': out(escalate(run)); break; // escalate <run>: ready, factory:needs-human and one comment from the decision (cosmetic)
+      case 'escalate': { // escalate <run> [--error TEXT]: ready, factory:needs-human and one comment from the decision (cosmetic)
+        const i = rest.indexOf('--error');
+        if (i >= 0 && !rest[i + 1]) throw new Error('--error needs the text of F merge\'s error');
+        out(escalate(run, i >= 0 ? { error: rest[i + 1] } : {})); break;
+      }
       case 'risk': out(risk(getRun(run), rest)); break;
       case 'approval': out(approval(run)); break;
       case 'approve': // approve <owner/repo#N>: you approve a local item's spec at your own terminal; never an agent, the page or HTTP
@@ -266,7 +270,7 @@ export async function main(argv: string[]) {
   merge  <run>                            re-decide, then merge the reviewed commit (the only merge path)
   pr <run>                                open the run's draft change request from its branch (once; recorded)
   ci <run> [--watch]                      CI on the run's head; a failure carries the failed log's last 80 lines
-  escalate <run>                          mark the change request (or issue) for a human, with the decision as a comment
+  escalate <run> [--error TEXT]           mark the change request (or issue) for a human, with why as a comment
   risk   <run> <planned files...>         does the spec need human approval before building?
   approval <run>                          spec approved since waiting? (GitHub: a trusted "/factory approve|reject" comment; local items: F approve)
   approve <run>                           approve a local item's spec at your own terminal (type the code it shows); meant for you, refused inside agent sessions

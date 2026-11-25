@@ -637,16 +637,22 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
        request, its issue), and every text is F's, never typed:
        - `F pr RUN`: a draft change request from the run's branch, titled from intake, with "Closes #N" (a local item:
          "Factory item #N") and `DIR/spec.md` as the body. F records it as `build opened {pr, branch}`, which `F event`
-         refuses. A later call returns the recorded one. It refuses an imported run, and one with no worktree or no spec.
+         refuses, as it refuses any typed `pr` or `branch`. A later call returns the recorded one only while the host says
+         it is open from the run's own branch (not a fork's); a merged or closed one is refused, and a new run (intake
+         after a revert) starts with none. It refuses an imported run, and one with no worktree or no spec.
        - `F ci RUN [--watch]`: the project's CI provider on the worktree head and the change request. `--watch` polls
          while `pending`, every 30 s for at most 20 minutes, and then answers `pending`: it never hangs. On `fail` it adds
-         the provider's `logTail`, its last 80 lines.
+         the provider's `logTail`, its last 80 lines and at most 16 KB.
        - `F escalate RUN`: the host's `escalate`. On GitHub: `gh pr ready`, `factory:needs-human` and one comment, through
          the REST issues endpoints with JSON on stdin, or on the issue when there is no PR. The comment is the decision's
-         reasons (after a merge, `F postmerge`'s reason) and the open blocking findings. It is cosmetic: a failure is
-         reported. `F event RUN approve escalated` still records the escalation.
+         reasons (after a merge, `F postmerge`'s reason; with no decision, or a merge one that didn't merge, that `F merge`
+         failed, with `--error`'s text) and the open blocking findings, cut at 60,000 characters. It is cosmetic: a
+         failure is reported. `F event RUN approve escalated` still records the escalation.
      - The comment goes through `core/src/scrub.ts`, now shared with the published page: the OS user name in "set by
-       <name> (local, unverified)" and local paths never reach the host.
+       <name> (local, unverified)" and local paths never reach the host. An @mention in it, or in the PR body's spec,
+       gets a zero-width joiner, so untrusted text never pings anyone.
+     - gh always gets a PR's number with `-R` (gh takes the repo from a URL over `-R`), and a recorded PR on another
+       repo is refused: `prNumber` in `hosts/github.ts`, for the host, `github-actions` and core's own gh calls.
      - Adapters: `openChangeRequest` takes `draft`; `escalate` is new on hosts (`git`: `posted: false`, since it has
        nothing to comment on); CI providers gain an optional `logTail` (`github-actions`: `gh run view --log-failed` of
        the first failed run; `local`: `F checks`' output). `adapterCtx` gains `ghInput` (gh with stdin).

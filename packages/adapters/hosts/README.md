@@ -34,7 +34,7 @@ Change requests (PRs on GitHub), all optional too:
 | `changeRequest(ctx, {repo, path, id, base?, sha?})` | `{state: open\|merged\|closed\|unknown, detail?, approval, branch, fork, mergedAt, mergedBy, mergeSha}` | One change request. Throw when the host can't be read: the caller reports it. |
 | `merge(ctx, {repo, path, id, sha, base})` | `{merged, sha?, detail?}` | Merge exactly `sha`. Never force anything. |
 | `openChangeRequest(ctx, {repo, path, branch, base, title, body, labels, draft})` | `{id, url?}` | Open one from a branch already pushed; `draft` (from `F pr`) until a human or `F merge` marks it ready. |
-| `escalate(ctx, {repo, path, id?, issue, body})` | `{posted, labelled, ready, detail?}` | For `F escalate`: mark the change request `id` ready and `factory:needs-human`, with `body` as one comment; with no `id`, label and comment on the issue. Cosmetic: report what failed, don't throw. A host with no comments returns `posted: false` and says why. |
+| `escalate(ctx, {repo, path, id?, issue, body})` | `{posted, labelled, ready, detail?}` | For `F escalate`: mark the change request `id` ready and `factory:needs-human`, with `body` as one comment; with no `id`, label and comment on the issue. Cosmetic: report what failed, don't throw, except for an `id` that isn't the repo's. A host with no comments returns `posted: false` and says why. |
 | `publicUrl`, `secretPatterns` | regexes | The host's public URLs (scrubbed from the published page) and token shapes (refused in it). |
 
 An attached project's `host` can be `github` or `git` only: core imports those two by name, so this folder's other files

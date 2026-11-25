@@ -1,12 +1,13 @@
 // GitHub Actions (any GitHub check), through the logged-in gh: a PR's checks, or the workflow runs on a base-branch commit.
 import type { Ctx } from './index.ts';
+import { prNumber } from '../hosts/github.ts';
 
 export const id = 'github-actions';
 
 export function checks({ gh }: Ctx, { repo, sha, changeRequest }: { repo: string; sha?: string; changeRequest?: string }) {
   if (changeRequest) {
     let b: string[];
-    try { b = JSON.parse(gh('pr', 'checks', changeRequest, '-R', repo, '--json', 'bucket')).map((c: { bucket: string }) => c.bucket); } catch (e) {
+    try { b = JSON.parse(gh('pr', 'checks', prNumber(repo, changeRequest), '-R', repo, '--json', 'bucket')).map((c: { bucket: string }) => c.bucket); } catch (e) {
       if (/no checks reported/i.test(String((e as { stderr?: unknown }).stderr))) return { state: 'none' as const };
       throw e;
     }

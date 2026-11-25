@@ -195,7 +195,7 @@ Run `F gate RUN`. Its `next` decides where the run goes:
    
    If they hold, it marks the PR ready, squash-merges it and labels the issue.
 2. **`merged: false`, or `F merge` fails with an error:** escalate. Never retry the merge by hand.
-   1. `F escalate RUN`. It marks the PR ready, adds `factory:needs-human`, and comments the decision's reasons and the open findings, on the issue when there is no PR. Its writes are cosmetic: on `"posted":false` (a git project has no comments) or a `detail`, tell the user, and go on.
+   1. `F escalate RUN`, or `F escalate RUN --error "<the first line of F merge's error>"` when it failed. It marks the PR ready, adds `factory:needs-human`, and comments why (the decision's reasons, or that `F merge` failed) and the open findings, on the issue when there is no PR. Its writes are cosmetic: on `"posted":false` (a git project has no comments) or a `detail`, tell the user, and go on.
    2. `F event RUN approve escalated`.
 3. Once the run is `merged` or `escalated`, [publish](#publish-to-the-artifact) before watching main.
 

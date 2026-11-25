@@ -12,7 +12,8 @@ import { HERE } from '../factory.mjs';
 import { ciStatus, escalate, openPr } from '../../core/src/changes.ts';
 import { getRun } from '../../core/src/derive.ts';
 import { decide } from '../../core/src/gate.ts';
-import { facts } from '../../core/src/github.ts';
+import { facts, postmerge } from '../../core/src/github.ts';
+import * as github from '../../adapters/hosts/github.ts';
 import { io, read, record, runDir } from '../../core/src/log.ts';
 import { projects, projectsFile, wtFile } from '../../core/src/workspace.ts';
 
@@ -24,8 +25,10 @@ fs.writeFileSync(ghStub, `import fs from 'node:fs';
 const a = process.argv.slice(2).join(' '), out = (x) => process.stdout.write(typeof x === 'string' ? x : JSON.stringify(x));
 const input = a.includes('--input -') ? fs.readFileSync(0, 'utf8') : '';
 fs.appendFileSync(${JSON.stringify(ghLog)}, JSON.stringify({ a, input }) + '\\n');
+if (/^pr (view|checks|ready|merge) \\D/.test(a)) { process.stderr.write('a PR URL: gh takes its repo over -R'); process.exit(4); }
 if (a === 'api user --jq .login') out('stub-user\\n');
-else if (a.startsWith('pr create')) out('https://github.com/acme/cr/pull/9\\n');
+else if (a.startsWith('pr create')) out((process.env.STUB_NEW_PR || 'https://github.com/acme/cr/pull/9') + '\\n');
+else if (a.includes('--json state,mergedAt')) out({ state: process.env.STUB_PR_STATE || 'OPEN', headRefName: process.env.STUB_HEAD || 'factory/issue-' + a.split(' ')[2], isCrossRepository: !!process.env.STUB_FORK, mergedAt: null });
 else if (a.includes('--json bucket')) {
   const all = (process.env.STUB_BUCKETS || 'pass').split(','), n = fs.existsSync(${JSON.stringify(count)}) ? +fs.readFileSync(${JSON.stringify(count)}, 'utf8') : 0;
   fs.writeFileSync(${JSON.stringify(count)}, String(n + 1));
@@ -33,7 +36,7 @@ else if (a.includes('--json bucket')) {
 }
 else if (a.includes('--json mergeCommit')) out({ mergeCommit: { oid: 'c'.repeat(40) } });
 else if (a.startsWith('run list')) out([{ databaseId: 7, conclusion: 'failure' }, { databaseId: 8, conclusion: 'success' }]);
-else if (a.startsWith('run view 7')) out(Array.from({ length: 200 }, (_, i) => 'log line ' + (i + 1)).join('\\n') + '\\n');
+else if (a.startsWith('run view 7')) out(Array.from({ length: 200 }, (_, i) => 'log line ' + (i + 1) + (process.env.STUB_WIDE ? ' ' + 'é'.repeat(500) : '')).join('\\n') + '\\n');
 else if (/^pr ready|^api -X POST repos\\/acme\\/cr\\/issues\\/\\d+\\/(labels|comments) --input -$/.test(a)) out('{}');
 else process.exit(1);
 `);
@@ -64,10 +67,11 @@ test('F pr: a draft from the run\'s branch, titled and closing from intake, with
   const e = read().filter((x) => x.run === run).at(-1);
   assert.deepEqual([e.stage, e.status, e.pr, e.branch], ['build', 'opened', 'https://github.com/acme/cr/pull/9', 'factory/issue-1']);
   assert.equal(getRun(run).pr, 'https://github.com/acme/cr/pull/9');
-  // iteration 2: the same change request, nothing opened or recorded
+  // iteration 2: the same change request, still open from the run's branch: nothing opened or recorded
   const before = read().length;
-  assert.deepEqual(openPr(run), { pr: 'https://github.com/acme/cr/pull/9', branch: 'factory/issue-1', existing: true });
-  assert.deepEqual([calls().length, read().length], [1, before]);
+  process.env.STUB_HEAD = 'factory/issue-1';
+  try { assert.deepEqual(openPr(run), { pr: 'https://github.com/acme/cr/pull/9', branch: 'factory/issue-1', existing: true }); } finally { delete process.env.STUB_HEAD; }
+  assert.deepEqual([calls().map((x) => x.a.split(' --json')[0]), read().length], [[c.a, 'pr view 9 -R acme/cr'], before]);
   assert.match(F('event', run, 'build', 'opened', '{}').stderr, /"build opened" is recorded by "pr", not by hand/);
 });
 
@@ -95,6 +99,7 @@ test('F ci: the provider\'s answer on the worktree head; a failure carries the f
   assert.equal(f.state, 'fail');
   assert.equal(f.log.split('\n').length, 80);
   assert.match(f.log, /^log line 121\n[\s\S]*\nlog line 200$/);
+  assert.ok(calls().some((x) => x.a === 'pr checks 9 -R acme/cr --json bucket'), 'the PR number with -R, never its URL');
   assert.ok(calls().some((c) => c.a === `run list -R acme/cr --commit ${head} --json databaseId,conclusion`) && calls().some((c) => c.a === 'run view 7 -R acme/cr --log-failed'));
   reset(); process.env.STUB_BUCKETS = 'pending,pending,pass';
   assert.equal(ciStatus(run, { watch: true, every: 0, max: 60_000 }).state, 'pass');
@@ -130,7 +135,6 @@ test('F escalate: ready, needs-human and one comment on the PR, from the decisio
 test('F escalate: no PR means the issue, no ready; no decision is refused; an imported run is refused', () => {
   reset();
   const run = built(7);
-  assert.throws(() => escalate(run), /acme\/cr#7 has no decision to escalate: run F merge acme\/cr#7 first/);
   record(run, 'approve', 'decided', { action: 'escalate', reasons: ['no PR recorded'] });
   assert.deepEqual(escalate(run), { on: 'issue', posted: true, labelled: true, ready: false });
   assert.deepEqual(calls().map((x) => x.a), ['api -X POST repos/acme/cr/issues/7/labels --input -', 'api -X POST repos/acme/cr/issues/7/comments --input -']);
@@ -184,4 +188,98 @@ test('F pr on a GitHub project with local items: the body names the factory item
     assert.match(calls()[0].a, / --body Factory item #10\n\n# Goal/);
     assert.ok(!calls()[0].a.includes('Closes #'));
   } finally { fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), 'acme/cr': { path: clone } })); }
+});
+
+test('F event refuses a typed pr or branch; gh gets the PR number and -R; a recorded PR on another repo is refused before gh', () => {
+  reset();
+  const run = built(11);
+  assert.match(F('event', run, 'build', 'passed', '{"pr":"https://github.com/evil/x/pull/1"}').stderr, /not from a payload: pr/);
+  assert.match(F('event', run, 'build', 'passed', '{"branch":"main"}').stderr, /not from a payload: branch/);
+  assert.equal(getRun(run).pr, undefined);
+  record(run, 'build', 'opened', { pr: 'https://github.com/acme/cr/pull/9', branch: 'factory/issue-11' });
+  record(run, 'approve', 'decided', { action: 'merge', reasons: ['ok'] });
+  record(run, 'approve', 'merged');
+  postmerge(run);
+  assert.ok(calls().some((x) => x.a === 'pr view 9 -R acme/cr --json mergeCommit'), calls().map((x) => x.a).join('; '));
+  const seen = [], ctx = { gh: (...a) => { seen.push(a.join(' ')); return '{"state":"OPEN","headRefName":"b"}'; } };
+  github.merge(ctx, { repo: 'acme/cr', id: 'https://github.com/acme/cr/pull/9', sha: 'abc' });
+  github.changeRequest(ctx, { repo: 'acme/cr', id: 'https://github.com/acme/cr/pull/9' });
+  assert.deepEqual(seen.map((x) => x.split(' --')[0]), ['pr ready 9 -R acme/cr', 'pr merge 9 -R acme/cr', 'pr view 9 -R acme/cr']);
+  const r2 = built(12), evil = /https:\/\/github\.com\/evil\/x\/pull\/1 is not a pull request on acme\/cr/;
+  record(r2, 'build', 'opened', { pr: 'https://github.com/evil/x/pull/1', branch: 'factory/issue-12' }); // an old log, from before the refusal
+  record(r2, 'approve', 'decided', { action: 'escalate', reasons: ['x'] });
+  reset(); seen.length = 0;
+  for (const f of [() => escalate(r2), () => postmerge(r2), () => openPr(r2), () => github.merge(ctx, { repo: 'acme/cr', id: 'https://github.com/evil/x/pull/1', sha: 'abc' }),
+    () => github.merge(ctx, { repo: 'acme/cr', id: 'https://github.com/acme/cr/pull/1/files', sha: 'abc' })]) assert.throws(f, /is not a pull request on acme\/cr/);
+  assert.deepEqual([ciStatus(r2).state, ciStatus(r2).broken], ['unknown', `CI provider github-actions failed: ${'https://github.com/evil/x/pull/1'} is not a pull request on acme/cr: refusing to act on it`], 'fails closed');
+  assert.throws(() => postmerge(r2), evil);
+  assert.deepEqual([calls(), seen], [[], []], 'no gh call at all');
+});
+
+test('a new run after a revert has no PR; F pr reuses a recorded one only while it is open from the run\'s own branch', () => {
+  reset();
+  const run = built(13);
+  record(run, 'build', 'opened', { pr: 'https://github.com/acme/cr/pull/9', branch: 'factory/issue-13' });
+  record(run, 'approve', 'decided', { action: 'merge', reasons: ['ok'] });
+  record(run, 'approve', 'merged');
+  record(run, 'approve', 'reverted', { pr: 'https://github.com/acme/cr/pull/50', reason: 'main red' });
+  record(run, 'intake', 'started', { title: 'Issue 13, again' });
+  assert.deepEqual([getRun(run).pr, getRun(run).branch], [undefined, undefined]);
+  process.env.STUB_NEW_PR = 'https://github.com/acme/cr/pull/14';
+  try { assert.equal(openPr(run).pr, 'https://github.com/acme/cr/pull/14'); } finally { delete process.env.STUB_NEW_PR; }
+  assert.ok(calls()[0].a.startsWith('pr create'));
+  reset();
+  const r = built(15);
+  record(r, 'build', 'opened', { pr: 'https://github.com/acme/cr/pull/15', branch: 'factory/issue-15' });
+  const refuse = (env, why) => {
+    Object.assign(process.env, env);
+    try { assert.throws(() => openPr(r), why); } finally { for (const k of Object.keys(env)) delete process.env[k]; }
+  };
+  refuse({ STUB_PR_STATE: 'MERGED' }, /acme\/cr#15's recorded change request https:\/\/github\.com\/acme\/cr\/pull\/15 is merged, not open from factory\/issue-15: start a new run \(F intake acme\/cr#15\)/);
+  refuse({ STUB_PR_STATE: 'CLOSED' }, /is closed, not open from factory\/issue-15/);
+  refuse({ STUB_HEAD: 'someone/else' }, /is open from someone\/else, not open from factory\/issue-15/);
+  refuse({ STUB_FORK: '1' }, /is open from a fork's factory\/issue-15, not open from factory\/issue-15/);
+  assert.equal(openPr(r).existing, true);
+  assert.ok(!calls().some((x) => x.a.startsWith('pr create')), 'never a second PR');
+});
+
+test('F escalate with no decision still hands the PR to a human, saying F merge failed; a merge decision says why it escalates', () => {
+  reset();
+  const run = built(16);
+  record(run, 'build', 'opened', { pr: 'https://github.com/acme/cr/pull/16', branch: 'factory/issue-16' });
+  assert.deepEqual(escalate(run, { error: 'gh: refused at /Users/pat-private/x, ask @octocat' }), { on: 'pr', posted: true, labelled: true, ready: true });
+  const body = () => JSON.parse(calls().find((c) => c.a.endsWith('/comments --input -')).input).body;
+  assert.match(body(), /- no decision was recorded: F merge failed\n- F merge's error: gh: refused at \[local path\], ask @‍octocat/);
+  assert.ok(!body().includes('pat-private'));
+  reset();
+  const cli = F('escalate', run, '--error', 'boom');
+  assert.equal(cli.status, 0, cli.stderr);
+  assert.match(body(), /F merge's error: boom/);
+  record(run, 'approve', 'decided', { action: 'merge', reasons: ['trusted author (OWNER)', 'CI green'] });
+  reset();
+  escalate(run);
+  assert.match(body(), /- F merge decided to merge, but the merge did not happen/);
+  assert.ok(!/trusted author|CI green/.test(body()), body());
+});
+
+test('bounds: the CI log tail is cut by bytes too; the escalation comment is cut; @mentions in untrusted text never ping', () => {
+  reset();
+  const run = built(17, '# Goal\n\nAsk @acme/team and @octocat; mail t@example.com.\n');
+  openPr(run);
+  assert.match(calls()[0].a, /Ask @‍acme\/team and @‍octocat; mail t@example\.com\./);
+  process.env.STUB_BUCKETS = 'fail'; process.env.STUB_WIDE = '1';
+  try {
+    const { log } = ciStatus(run);
+    assert.ok(Buffer.byteLength(log) <= 16_384, String(Buffer.byteLength(log)));
+    assert.match(log, /^log line \d+ é+\n[\s\S]*\nlog line 200 é+$/, 'whole lines, ending with the last');
+  } finally { delete process.env.STUB_BUCKETS; delete process.env.STUB_WIDE; }
+  record(run, 'review', 'started', { axes: ['code'] });
+  record(run, 'review', 'failed', { axis: 'code', verdict: 'failed', findings: [{ severity: 'high', file: 'a.ts', issue: '@octocat ' + 'x'.repeat(70_000), route: 'build' }] });
+  record(run, 'approve', 'decided', { action: 'escalate', reasons: ['code: 1 blocking finding(s)'] });
+  reset();
+  escalate(run);
+  const body = JSON.parse(calls().find((c) => c.a.endsWith('/comments --input -')).input).body;
+  assert.ok(body.length <= 60_100, String(body.length));
+  assert.match(body, /high a\.ts @‍octocat x+/);
+  assert.match(body, /… \(cut here: the rest is in the run's events\)$/);
 });

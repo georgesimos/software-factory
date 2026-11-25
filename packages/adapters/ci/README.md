@@ -43,7 +43,7 @@ Not shipped, because nobody here can test against a real server. To write one:
      or read the commit status Jenkins posts to the host. `building: true` is `pending`; `SUCCESS` is `pass`; anything
      else finished is `fail`.
 3. Optionally, `logTail(ctx, {repo, path, sha})`: the failed checks' log on `sha` as text, `''` when there is none. `F ci RUN`
-   shows its last 80 lines on a failure, so the build can fix it. `github-actions` gives `gh run view --log-failed` of the
+   shows its last 80 lines (at most 16 KB) on a failure, so the build can fix it. `github-actions` gives `gh run view --log-failed` of the
    first failed run; `local` gives `F checks`' own output. Read only, like `checks`.
 4. Add it to `builtin` in `index.ts`, one line. Core imports providers by name, so a broken file in this folder only fails
    `load()` and the contract test, never every command.
