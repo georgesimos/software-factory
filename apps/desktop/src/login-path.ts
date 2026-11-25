@@ -17,7 +17,7 @@ export function loginPath(env: NodeJS.ProcessEnv = process.env, platform: NodeJS
     const got = parts.length >= 3 ? parts[parts.length - 2] : '';
     if (!got) return env.PATH;
     // launchd's bare default: the login shell's order (Homebrew before /usr/bin). Else ours first: a test's stubs win.
-    const ours = (env.PATH ?? '').split(path.delimiter), theirs = got.split(path.delimiter);
-    return [...new Set((env.PATH === LAUNCHD ? [...theirs, ...ours] : [...ours, ...theirs]).filter(Boolean))].join(path.delimiter);
+    const ours = (env.PATH ?? '').split(':'), theirs = got.split(':'); // the macOS or Linux separator, never the host's (a test on Windows)
+    return [...new Set((env.PATH === LAUNCHD ? [...theirs, ...ours] : [...ours, ...theirs]).filter(Boolean))].join(':');
   } catch { return env.PATH; } // no shell, a timeout, or an rc file that fails: keep what we have
 }
