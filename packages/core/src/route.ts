@@ -122,3 +122,21 @@ export function runCapsOf(r: Pick<Run, 'id' | 'route'>, cfg: SkillsConfig = read
   const repo = r.id.split(/[#:@]/)[0] as string, now = runGets(repo, r.route && r.route.pipeline !== 'default' ? r.route.pipeline : null, cfg).caps;
   return { loops: Math.min(now.loops, r.route?.caps.loops ?? CAP), budgetUsd: Math.min(now.budgetUsd, r.route?.caps.budgetUsd ?? COST_CAP) };
 }
+/** §7.1: custom-step ids and extra-axis names are unique across a project and all its pipelines, since the meet unions them.
+ *  owners: the project first, then its pipelines in `pipelines` order, then drafts. Slice 5 feeds it the store's lists. */
+export interface IdOwner { owner: string; ids: string[] }
+/** Read side: a duplicate is dropped with a warning, keeping the first owner's copy (the project's, then the first pipeline's). */
+export function uniqueIds(owners: IdOwner[]) {
+  const seen = new Map<string, string>(), warnings: string[] = [];
+  const kept = owners.map(({ owner, ids }) => ({ owner, ids: ids.filter((id) => {
+    const first = seen.get(id);
+    if (first !== undefined) { warnings.push(`${owner}: "${id}" is ignored: ${first} already has it (ids are unique across a project and its pipelines)`); return false; }
+    seen.set(id, owner); return true;
+  }) }));
+  return { kept, warnings };
+}
+/** Write side: why `owner` can't take `id` (another owner has it), or null. Its own ids don't count: a rewrite of its list. */
+export const idClash = (owners: IdOwner[], owner: string, id: string) => {
+  const o = owners.find((x) => x.owner !== owner && x.ids.includes(id));
+  return o ? `"${id}" is already ${o.owner}'s: ids are unique across a project and its pipelines` : null;
+};

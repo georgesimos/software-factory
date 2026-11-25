@@ -11,7 +11,7 @@ import { derive } from '../../core/src/derive.ts';
 import { decide, gate } from '../../core/src/gate.ts';
 import { io, read, record } from '../../core/src/log.ts';
 import { loosens, ruleChange, rules, setRule, unsetRule } from '../../core/src/rules.ts';
-import { pick, pipelinesOf, routeOf, runLabels } from '../../core/src/route.ts';
+import { idClash, pick, pipelinesOf, routeOf, runLabels, uniqueIds } from '../../core/src/route.ts';
 import { readSkills, setSkill, skills, skillsFile } from '../../core/src/skills.ts';
 import { getRun } from '../../core/src/derive.ts';
 import { projects, projectsFile } from '../../core/src/workspace.ts';
@@ -184,6 +184,7 @@ test('a loop-back whose match changes only tightens: a step back on stays on, an
   assert.deepEqual(axes(RUN, 'web/page.html'), ['code', 'security', 'ux', 'ui'], 'ui: seo off'); // web/page.html is an SEO file too
   record(RUN, 'build', 'started');
   assert.deepEqual(axes(RUN, 'web/page.html', 'src/pay.ts'), ['code', 'security', 'ux', 'ui', 'seo'], 'the default: nothing off');
+  for (const a of ['code', 'security', 'ux', 'ui', 'seo']) record(RUN, 'review', 'passed', { axis: a, verdict: 'passed', findings: [] }); // nothing carried over as failed
   record(RUN, 'build', 'started');
   assert.deepEqual(axes(RUN, 'web/page.html'), ['code', 'security', 'ux', 'ui', 'seo'], 'ui again: seo stays on');
   const r = getRun(RUN);
@@ -229,4 +230,44 @@ test('maxDiffLines holds only on a size F can trust: never with no count, and ne
   assert.equal(pick('acme/mt', { labels: [], files: [], diffLines: 1 }).pipeline, 'small');
   setRule('acme/mt@small', 'match', '[{"files":["docs/**"]}]', { reason: 'docs', ask: yes('acme/mt@small') });
   assert.equal(pick('acme/mt', { labels: [], files: [], diffLines: 1 }).pipeline, 'default', 'no files: files never holds');
+});
+
+test('the guard compares caps too, and the list being written: listing a draft that differs only in its loop cap is guarded', () => {
+  reset();
+  asAgent(() => setRule('acme/mt@x', 'match', '[{"labels":["x"]}]', { reason: 'x' })); // identical to the default: free
+  asAgent(() => setRule('acme/mt@x', 'run.loops', '1', { reason: 'one try' })); // lowering a cap: free, and now x differs
+  assert.equal(loosens('acme/mt', 'pipelines', ['x']), 'changing which pipeline a run gets', 'nothing is listed yet: only the new list names x');
+  assert.throws(() => asAgent(() => setRule('acme/mt', 'pipelines', '["x"]', { reason: 'x' })), /changing which pipeline a run gets must come from you/);
+});
+
+test('an unlisted draft never matches, even when its match holds; a match a local user set marks the pick local', () => {
+  setupThree();
+  setRule('acme/mt@src', 'match', '[{"files":["src/**"]}]', { reason: 'a draft', ask: yes('acme/mt@src') });
+  assert.equal(pick('acme/mt', { labels: [], files: ['src/a.ts'], diffLines: 1 }).pipeline, 'default');
+  const cfg = readSkills(); cfg['acme/mt@ui'].rules.match = { ...cfg['acme/mt@ui'].rules.match, via: 'local', setBy: 'someone' };
+  fs.writeFileSync(skillsFile(), JSON.stringify(cfg));
+  assert.deepEqual([pick('acme/mt', { labels: [], files: ['src/a.ts'], diffLines: 1 }).local, pick('acme/mt', { labels: [], files: ['web/a.html'], diffLines: 1 }).local], [true, true], 'read on the way, even when the default is picked');
+  assert.equal(pick('acme/mt', { labels: ['hotfix'], files: ['src/a.ts'], diffLines: 1 }).local, false, 'hotfix matched before ui was read');
+});
+
+test('routed moves neither the stage, the status nor the clock; decide takes the meet\'s caps from the run alone', () => {
+  const ev = (stage, status, x = {}, ts = '2026-11-25T10:00:00Z') => ({ ts, run: 'acme/mt#20', stage, status, ...x });
+  const caps = { loops: 1, budgetUsd: 5 };
+  const r = derive([ev('intake', 'started', { labels: [] }), ev('build', 'started'), ev('build', 'started'), ev('review', 'routed', { pipeline: 'hot', set: 0, text: 'label hot', iteration: 2, off: [], caps }, '2026-11-25T11:00:00Z')])['acme/mt#20'];
+  assert.deepEqual([r.stage, r.status, r.updated, r.pipeline, r.route.caps.loops], ['build', 'started', '2026-11-25T10:00:00Z', 'hot', 1]);
+  const d = decide({ ...r, pr: 'https://github.com/acme/mt/pull/20', reviewedSha: 'abc' }, { autoMerge: true, association: 'OWNER', checks: 'pass', files: ['a.ts', 'a.test.ts'], additions: 1, deletions: 0, rules: {} });
+  assert.ok(d.reasons.includes('iteration 2 exceeds cap 1 (rule run.loops)'), d.reasons.join('\n'));
+});
+
+test('ids are unique across a project and its pipelines: refused on write, dropped on read keeping the project\'s, then the first pipeline\'s', () => {
+  // synthetic owners: the store can't hold a pipeline's custom steps or extra axes until slice 5, which adds the end-to-end test
+  const owners = [{ owner: 'acme/mt', ids: ['lint', 'a11y'] }, { owner: 'acme/mt@hot', ids: ['smoke', 'lint'] }, { owner: 'acme/mt@ui', ids: ['smoke', 'visual'] }];
+  assert.equal(idClash(owners, 'acme/mt@hot', 'a11y'), '"a11y" is already acme/mt\'s: ids are unique across a project and its pipelines', 'across project and pipeline');
+  assert.equal(idClash(owners, 'acme/mt@ui', 'smoke'), '"smoke" is already acme/mt@hot\'s: ids are unique across a project and its pipelines', 'between two pipelines');
+  assert.equal(idClash(owners, 'acme/mt@ui', 'visual'), null, 'its own id: a rewrite of its own list');
+  assert.equal(idClash(owners, 'acme/mt', 'perf'), null);
+  const { kept, warnings } = uniqueIds(owners);
+  assert.deepEqual(kept, [{ owner: 'acme/mt', ids: ['lint', 'a11y'] }, { owner: 'acme/mt@hot', ids: ['smoke'] }, { owner: 'acme/mt@ui', ids: ['visual'] }]);
+  assert.deepEqual(warnings, ['acme/mt@hot: "lint" is ignored: acme/mt already has it (ids are unique across a project and its pipelines)',
+    'acme/mt@ui: "smoke" is ignored: acme/mt@hot already has it (ids are unique across a project and its pipelines)']);
 });
