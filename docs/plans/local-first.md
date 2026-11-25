@@ -658,7 +658,7 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
        the first failed run; `local`: `F checks`' output). `adapterCtx` gains `ghInput` (gh with stdin).
      - `pr`, `ci` and `escalate` refuse a run another launcher holds, as the other run commands do.
      - A git run with a recorded change request still escalates: a local item is never trusted.
-     - Not here, left for 6b or later: `F event` still accepts a typed `pr` and `branch`; the skill no longer types them.
+     - `F event` refuses a typed `pr` or `branch` (the review): `F pr` and sync record them.
    - **6b, the tracker side**, next: `F label` (a closed allow-list of the factory's labels, `factory:ready` only from
      `F split`), `F split` (children through `tracker.createIssues`, "Part of #N" written by F, `factory:ready` only for a
      trusted parent, from the association intake recorded), the reject and needs-info comments from the recorded
