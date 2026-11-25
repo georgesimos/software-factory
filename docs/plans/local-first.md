@@ -609,6 +609,20 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
      - Not here: `F queue` and `F loop` still read GitHub Issues only (they take the tracker from `F new`'s project state).
 5c. **Desktop approval.** (~300 lines)
    - The Electron main-process menu item and native dialog (§2.2 step 3). It writes the same approve event, and the page and HTTP can't reach it.
+   - Landed as:
+     - Core: `specPending(run)` holds `F approve`'s checks (human only, a local item, awaiting approval, `DIR/spec.md`
+       unchanged since it was put to you, not already approved) and returns the cleaned title, spec, reasons and sha;
+       `awaitingSpecs()` lists the local runs it would accept. `approveSpec` (terminal) and `approveSpecDesktop` both start
+       from it and write the same `spec decided` record; the desktop one has `via: 'desktop'`, `verified: false`, the OS
+       user as `by`, and runs the checks again with the sha the dialog showed, so a spec changed while it was open is refused.
+     - `apps/desktop/src/approve-menu.ts`: Run → Approve… picks a run (up to 8), then shows its title, why it waits, the
+       spec's short sha and the spec (cut at 3000 characters). Cancel is the default and the Escape answer in both boxes.
+       Spec approvals only: the dialog has no diff stats or merge; "approve and merge" comes with PR 7.
+     - The page says where to approve (the app menu or `F approve RUN` for a local item, a `/factory approve` comment for a
+       GitHub issue), with no button.
+     - Tests: `apps/desktop/test/approve.test.mjs` (the dialog stubbed, real core on a temp `FACTORY_DIR`: nothing waiting,
+       the record, cancel at either box, a spec changed while the dialog was open, an agent session); the e2e checks the
+       menu, that no app IPC channel or preload exists, and that `/api/approve` is a 404.
 6. **SKILL.md stops naming gh.** (~300 lines)
    - New commands: `F label`, `F split` (→ `tracker.createIssues`), `F escalate RUN` (→ `host.comment`), `F pr RUN`
      (→ `openChangeRequest`).

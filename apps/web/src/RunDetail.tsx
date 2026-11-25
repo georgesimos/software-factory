@@ -38,7 +38,8 @@ function Decision({ run: r }: { run: Run }) {
     <>
       <div className="web-verdict"><Dot tone={tone as 'ok'} />{head}</div>
       {list.length ? <ul className="web-reasons">{list.map((x, i) => <li key={i}>{x}</li>)}</ul> : null}
-      {/* Approval is never taken from the page (#21): an escalated run is reviewed and merged on GitHub. */}
+      {/* Approval is never taken from the page (#21): an escalated run is reviewed and merged on GitHub, a spec in the app menu or a terminal. */}
+      {o === 'awaiting-approval' ? <p className="sf-muted">A local item: approve from the app menu (Run → Approve…) or run <code>F approve {r.id}</code>. A GitHub issue: comment <code>/factory approve</code> on it.</p> : null}
       {o === 'escalated' && /^https:\/\//.test(r.pr ?? '') ? <p className="web-links"><Ext url={r.pr}>Review and merge on GitHub</Ext></p> : null}
       {r.reverted ? (
         <div className="web-callout">

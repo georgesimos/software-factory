@@ -87,6 +87,15 @@ try {
 
   // No Node in the page, nothing from another origin, no new windows, no navigation away.
   assert.deepEqual(await win.evaluate(() => [typeof window.process, typeof window.require, typeof window.module]), ['undefined', 'undefined', 'undefined']);
+  // Run → Approve… belongs to main alone (local-first 5c): no preload, no IPC channel, no server route reaches it.
+  // Electron's own channels ('error', and UPPER_SNAKE ones such as IMPORT_SHARED_TEXTURE_…) are left out; _invokeHandlers is where
+  // ipcMain.handle keeps its channels.
+  assert.deepEqual(await app.evaluate(({ Menu, ipcMain, BrowserWindow, session }) => {
+    const run = Menu.getApplicationMenu().items.find((i) => i.label === 'Run');
+    const w = BrowserWindow.getAllWindows()[0].webContents;
+    return [run?.submenu.items.map((i) => i.label), [...ipcMain.eventNames(), ...(ipcMain._invokeHandlers?.keys() ?? [])].map(String).filter((n) => n !== 'error' && !/^[A-Z_]+$/.test(n)), w.getLastWebPreferences().preload ?? null, session.defaultSession.getPreloads().length];
+  }), [['Approve…'], [], null, 0]);
+  for (const method of ['GET', 'POST']) assert.equal((await fetch(`${origin}/api/approve`, { method, headers: { 'x-factory-token': t, origin, 'content-type': 'application/json' }, body: method === 'POST' ? '{}' : undefined })).status, 404);
   const other = origin.replace('127.0.0.1', 'localhost'); // the same server under another origin: only the request filter stops it
   assert.equal(await win.evaluate((u) => fetch(u, { mode: 'no-cors' }).then(() => 'loaded', () => 'blocked'), `${other}/`), 'blocked');
   assert.equal(await win.evaluate(() => window.open('http://example.invalid/')), null); // http: denied and not handed to the OS either

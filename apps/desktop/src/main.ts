@@ -1,8 +1,9 @@
-import { app, BrowserWindow, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, Menu, session, shell, type MenuItemConstructorOptions } from 'electron';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { APP_HTML, hostModules, serve } from '@software-factory/server';
 import { loginPath } from './login-path.ts';
+import { approveFromMenu } from './approve-menu.ts';
 
 // F ui in this process, in one window (#56). The page is the same app.html F ui serves, loaded from the loopback server
 // with its token, so it can save settings and start sessions. Sandboxed, no preload, no Node in the page; nothing loads
@@ -36,7 +37,19 @@ async function host() {
   }
 }
 
+// The app menu: the platform's own menus, plus Run → Approve…, which only the main process can open (approve-menu.ts).
+function menu() {
+  const template: MenuItemConstructorOptions[] = [
+    ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
+    { role: 'fileMenu' }, { role: 'editMenu' }, { role: 'viewMenu' },
+    { label: 'Run', submenu: [{ label: 'Approve…', click: () => void approveFromMenu((box) => (win ? dialog.showMessageBox(win, box) : dialog.showMessageBox(box))) }] },
+    { role: 'windowMenu' },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
 async function start() {
+  menu();
   const PATH = loginPath(); // before anything looks a harness up
   if (PATH) process.env.PATH = PATH;
   await host();
