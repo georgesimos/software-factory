@@ -19,8 +19,9 @@ export interface TrackerItem { id: string; title: string; url?: string; author: 
 export interface Comment { author: string; association: string; created_at: string; body?: string | null }
 export interface Tracker {
   id: string;
-  /** path: the project's clone, for a tracker that keeps its items there (local). */
-  createIssues(ctx: Ctx, opts: { repo: string; path?: string; items: Item[]; existing?: Record<string, { id: string; url?: string | undefined }>; onCreated?: (r: Created) => void }): Created[];
+  /** path: the project's clone, for a tracker that keeps its items there (local). ready: false (F split for an untrusted
+   *  parent) creates the issues without factory:ready, so nothing can pick them up; the default labels them. */
+  createIssues(ctx: Ctx, opts: { repo: string; path?: string; items: Item[]; existing?: Record<string, { id: string; url?: string | undefined }>; onCreated?: (r: Created) => void; ready?: boolean }): Created[];
   listOpen(ctx: Ctx, opts: { repo: string; path?: string }): OpenIssue[];
   dependencies(item: OpenIssue): string[];
   /** One item; intake reads its comments only once it knows it is an open issue. */
@@ -28,6 +29,12 @@ export interface Tracker {
   comments?(ctx: Ctx, opts: { repo: string; path?: string; id: string }): Comment[];
   /** The item author's association, alone (facts() re-reads it at merge time). */
   trust?(ctx: Ctx, opts: { repo: string; id: string }): string;
+  /** F labels: creates the factory's labels where the tracker needs them first; -> their names. */
+  ensureLabels?(ctx: Ctx, opts: { repo: string; path?: string }): string[];
+  /** F label: adds or removes labels on one item. A label that isn't there is no error on remove; anything else throws. */
+  label?(ctx: Ctx, opts: { repo: string; path?: string; id: string; add?: string[]; remove?: string[] }): { labelled: boolean; detail?: string };
+  /** F comment: one comment on an item. A tracker with no comments returns posted: false and says why. */
+  comment?(ctx: Ctx, opts: { repo: string; path?: string; id: string; body: string }): { posted: boolean; detail?: string };
 }
 
 export const REQUIRED = ['createIssues', 'listOpen', 'dependencies'];
@@ -56,4 +63,6 @@ export function contract(p: Tracker, { ctx, repo, path: at }: { ctx: Ctx; repo: 
   assert.ok(b && Array.isArray(b.labels) && typeof b.title === 'string', `${p.id}: listOpen returns {id, title, labels}`);
   assert.ok(b.labels.includes('factory:ready') && !open.find((i) => i.id === r1[2]!.id)!.labels.includes('factory:ready'), `${p.id}: issues are factory:ready, the epic is not`);
   assert.deepEqual(p.dependencies(b), [r1[0]!.id], `${p.id}: dependencies() gives the ids it depends on`);
+  const [c] = p.createIssues(ctx, { repo, ...where, items: [{ key: 'c', title: 'Third', body: 'b', acceptance: ['z works'] }], ready: false });
+  assert.ok(!p.listOpen(ctx, { repo, ...where }).find((i) => i.id === c!.id)!.labels.includes('factory:ready'), `${p.id}: ready: false creates it without factory:ready`);
 }

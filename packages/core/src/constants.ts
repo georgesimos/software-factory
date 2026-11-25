@@ -34,7 +34,7 @@ export const byText = (x: { setBy?: unknown; by?: unknown; via?: unknown }) => `
 export const OUTCOMES: readonly unknown[] = ['rejected', 'needs-info', 'merged', 'escalated', 'closed', 'awaiting-approval', 'split'];
 export const TERMINAL: readonly unknown[] = ['rejected', 'merged', 'escalated', 'closed', 'split']; // needs-info / awaiting-approval resume later
 export const STAGES: readonly unknown[] = ['intake', 'spec', 'build', 'review', 'gate', 'approve', 'ship']; // ship: deploy observations, recorded only by packages/ship's track()
-export const STATUSES: readonly unknown[] = ['started', 'passed', 'failed', 'decided', 'reverted', ...OUTCOMES];
+export const STATUSES: readonly unknown[] = ['started', 'passed', 'failed', 'decided', 'reverted', 'opened', ...OUTCOMES]; // opened: build's change request, by F pr
 export const BLOCKING: readonly unknown[] = ['high', 'medium'];
 export const SENSITIVE = /(^|\/)(auth|login|session|oauth|payments?|billing|money|migrations?)(\/|\.|$)|^\.github\/workflows\/|(^|\/)(package(-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|bun\.lockb|requirements[^/]*\.txt|pyproject\.toml|poetry\.lock|Gemfile(\.lock)?|go\.(mod|sum)|Cargo\.(toml|lock))$|(^|\/)\.env|(^|\/)\.(claude|codex|factory)\/|(^|\/)\.mcp\.json$/i; // .factory/: local items (local-first D3), never in a change. .claude/** (settings, hooks, skills, agents), .codex/ and .mcp.json: `claude -p` in the worktree runs repo hooks and MCP servers with no trust prompt
 // A harness adapter can name its own repo config folder (configDirs); that only ever adds sensitive paths.

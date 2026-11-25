@@ -8,8 +8,9 @@ export const id = '_template';
 
 // items arrive in dependency order: [{key, title, body, acceptance[], dependsOn[keys], milestone}, …, {key:"epic", kind:"epic", title, body, children[keys]}].
 // Skip any key in `existing` ({key: {id, url}}) or already in the tracker; call onCreated({key, id, url, created:true}) right after each
-// create; label every non-epic issue factory:ready. -> [{key, id, url, created}] in the same order. ids are strings.
-export function createIssues(ctx: Ctx, { repo, items, existing, onCreated }: { repo: string; items: Item[]; existing?: Record<string, { id: string; url?: string }>; onCreated?: (r: Created) => void }): Created[] { throw new Error('not implemented'); }
+// create; label every non-epic issue factory:ready, unless ready is false (F split for an untrusted parent: no label at all).
+// -> [{key, id, url, created}] in the same order. ids are strings.
+export function createIssues(ctx: Ctx, { repo, items, existing, onCreated, ready = true }: { repo: string; items: Item[]; existing?: Record<string, { id: string; url?: string }>; onCreated?: (r: Created) => void; ready?: boolean }): Created[] { throw new Error('not implemented'); }
 
 // -> [{id, title, labels: [names], key|null, …anything dependencies() needs}] for the project's open issues.
 export function listOpen(ctx: Ctx, { repo }: { repo: string }): OpenIssue[] { throw new Error('not implemented'); }

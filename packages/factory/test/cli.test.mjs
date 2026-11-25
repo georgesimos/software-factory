@@ -1,6 +1,7 @@
 // @ts-nocheck
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { COST_CAP } from '../../core/src/constants.ts';
@@ -41,7 +42,8 @@ export function cliTest() {
   cli(['event', RUN, 'intake', 'passed', '-'], JSON.stringify({ summary: nasty }));
   cli(['event', RUN, 'spec', 'passed', '-'], JSON.stringify({ spec: nasty }));
   cli(['event', RUN, 'build', 'started']);
-  cli(['event', RUN, 'build', 'passed', '-'], '{"pr":"https://github.com/acme/shop/pull/9","branch":"factory/issue-7"}');
+  record(RUN, 'build', 'passed', { pr: 'https://github.com/acme/shop/pull/9', branch: 'factory/issue-7' }); // as F pr records it: F event refuses a typed pr
+  assert.throws(() => cli(['event', RUN, 'build', 'passed', '-'], '{"pr":"https://github.com/evil/x/pull/1"}'), /not from a payload: pr/);
   assert.deepEqual(JSON.parse(cli(['axes', RUN, 'src/a.ts'])).axes, ['code', 'security']);
   cli(['review', RUN, 'code'], '{"axis":"code","verdict":"passed","findings":[]}');
   // Says "passed" but carries a medium finding: must count as failed.
@@ -690,7 +692,7 @@ export function syncTest(cli) {
   put(path.join(home, '.codex/sessions/2026/11/20/other.jsonl'), JSON.stringify({ payload: { git: { branch: 'x', repository_url: 'git@github.com:acme/other.git' } } }) + '\n');
   const env = { HOME: home, USERPROFILE: home, FACTORY_GIT: path.join(HERE, 'test', 'git-stub.mjs') };
   // An existing factory run owns PR 13 / factory/issue-8.
-  cli(['event', 'acme/app#8', 'build', 'passed', '-'], '{"pr":"https://github.com/acme/app/pull/13","branch":"factory/issue-8"}', env);
+  record('acme/app#8', 'build', 'passed', { pr: 'https://github.com/acme/app/pull/13', branch: 'factory/issue-8' });
   const [first] = JSON.parse(cli(['sync', 'acme/app', repoPath], '', env));
   // factory/issue-9 (our own build mid-flight) and dev/squashed (merged PR) are not imported.
   assert.deepEqual(first.added.sort(), ['acme/app#10', 'acme/app#11', 'acme/app#12', 'acme/app#14', 'acme/app:dev/wip-9']);
@@ -801,7 +803,11 @@ export function syncTest(cli) {
   assert.deepEqual([ghost.author, ghost.comments, ghost.ignoredComments], ['', [], 1]);
   // Spec approval: only a trusted "/factory approve" after the wait started counts.
   record('acme/app#21', 'intake', 'started', { title: 't', association: 'NONE' });
-  cli(['event', 'acme/app#21', 'spec', 'awaiting-approval'], '', env);
+  cli(['event', 'acme/app#21', 'spec', 'awaiting-approval', '-'], '{"spec":"s"}', env);
+  assert.throws(() => cli(['approval', 'acme/app#21'], '', env), /spec was never posted: F comment acme\/app#21 posts it/); // a vote is for the spec on the issue
+  fs.mkdirSync(runDir('acme/app#21'), { recursive: true });
+  fs.writeFileSync(path.join(runDir('acme/app#21'), 'spec.md'), '# Goal\n');
+  record('acme/app#21', 'spec', 'awaiting-approval', { spec: 's', postedSha: createHash('sha256').update('# Goal\n').digest('hex') }); // what F comment records (items.test posts it)
   assert.deepEqual(JSON.parse(cli(['approval', 'acme/app#21'], '', env)), { decision: 'approve', by: 'acme' });
   cli(['event', 'acme/app#21', 'spec', 'passed', '-'], '{"approvedBy":"acme"}', env);
   assert.equal(derive(read())['acme/app#21'].outcome, 'in-progress');
@@ -884,7 +890,7 @@ export function worktreeTest(cli) {
   // Post-merge: red CI on the merge commit -> a revert PR is opened (never merged) and the run is marked reverted.
   fs.writeFileSync(path.join(clone, 'feature.txt'), 'f'); g(clone, 'add', '.'); g(clone, 'commit', '-qm', 'feature'); g(clone, 'push', '-q', 'origin', 'HEAD:main');
   const sha = g(clone, 'rev-parse', 'HEAD').trim();
-  cli(['event', R, 'build', 'passed', '-'], '{"pr":"https://github.com/acme/wt/pull/3"}', env2);
+  record(R, 'build', 'passed', { pr: 'https://github.com/acme/wt/pull/3' });
   const env3 = { ...env2, STUB_MERGE_SHA: sha };
   cli(['rules', 'set', 'acme/wt', 'ci', 'skip', '--reason', 'Actions billing'], '', env3);
   const skipped = JSON.parse(cli(['postmerge', R], '', env3));

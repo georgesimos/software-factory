@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && vite build",
     "start": "vite build && electron .",
-    "test": "vite build && node --test test/build.test.mjs test/login-path.test.mjs",
+    "test": "vite build && node --test test/build.test.mjs test/login-path.test.mjs test/approve.test.mjs",
     "e2e": "vite build && node test/app.e2e.mjs",
     "package": "node scripts/package.mjs",
     "smoke": "node scripts/smoke.mjs",

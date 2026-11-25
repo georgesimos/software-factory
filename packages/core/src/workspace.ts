@@ -31,7 +31,7 @@ export function requireGithub(repo: string, doing: string) {
 /** A clone's origin URL, or '' when it has none (or the folder is not a clone). */
 export const originUrl = (repoPath: string) => { try { return git('-C', repoPath, 'remote', 'get-url', 'origin').trim(); } catch { return ''; } };
 /** The project's host adapter function, or a refusal naming the host and what it can't do. Never another host's. */
-export function hostFn<K extends 'whoami' | 'baseBranch' | 'listChangeRequests' | 'changeRequest' | 'merge' | 'openChangeRequest'>(id: string, fn: K, verb: string): NonNullable<Host[K]> {
+export function hostFn<K extends 'whoami' | 'baseBranch' | 'listChangeRequests' | 'changeRequest' | 'merge' | 'openChangeRequest' | 'escalate'>(id: string, fn: K, verb: string): NonNullable<Host[K]> {
   const f = Object.hasOwn(builtinHosts, id) ? (builtinHosts as Record<string, Host>)[id]![fn] : undefined;
   if (!f) throw new Error(`host "${id}" cannot ${verb}`);
   return f as NonNullable<Host[K]>;
@@ -44,7 +44,7 @@ export const trackerOf = (repo: string) => {
   return t;
 };
 /** The tracker's function, or a refusal naming the tracker and what it can't do. */
-export function trackerFn<K extends 'getItem' | 'comments' | 'trust'>(id: string, fn: K, verb: string): NonNullable<Tracker[K]> {
+export function trackerFn<K extends 'getItem' | 'comments' | 'trust' | 'createIssues' | 'listOpen' | 'ensureLabels' | 'label' | 'comment'>(id: string, fn: K, verb: string): NonNullable<Tracker[K]> {
   const f = Object.hasOwn(builtinTrackers, id) ? (builtinTrackers as Record<string, Tracker>)[id]![fn] : undefined;
   if (!f) throw new Error(`tracker "${id}" cannot ${verb}`);
   return f as NonNullable<Tracker[K]>;

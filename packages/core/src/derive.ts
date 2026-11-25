@@ -89,6 +89,7 @@ export function derive(events: FactoryEvent[]): Record<string, Run> {
     r.events.push(e);
     Object.assign(r, { stage: e.stage, status: e.status, updated: e.ts });
     r.started ??= e.ts;
+    if (e.stage === 'intake' && e.status === 'started' && (r.reverted || r.outcome === 'merged' || r.outcome === 'closed')) { delete r.pr; delete r.branch; } // a new run: never the old, finished change request
     for (const k of ['title', 'url', ...(e.status === 'reverted' ? [] : ['pr']), 'branch', 'spec', 'issues', 'children']) if (e[k]) (r as Record<string, unknown>)[k] = e[k];
     if (e.stage === 'intake' && e.status === 'started') for (const k of ['author', 'association', 'source', 'imported', 'origin', 'originAssociation']) if (e[k]) (r as Record<string, unknown>)[k] = e[k];
     if (e.sessionId && !(r.sessions ||= []).some((x) => x.id === e.sessionId)) r.sessions.push({ agent: e.harness, id: e.sessionId, cwd: e.cwd, last: e.ts, ...(e.hostSessionId && { hostId: e.hostSessionId }) });

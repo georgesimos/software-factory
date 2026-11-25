@@ -11,6 +11,7 @@ import { cloneId, hostFor, isGithubRemote, normRemote, remoteParts, withoutUseri
 import { harnesses } from '../../adapters/harnesses/index.ts';
 import type { FactoryEvent, Project, Session } from './types.ts';
 import type { Host } from '../../adapters/hosts/index.ts';
+import { prNumber } from '../../adapters/hosts/github.ts';
 
 /** Agent sessions on one branch, from the harnesses' local logs. */
 export interface BranchSessions { agents: string[]; last: string; sessions: (Session & { last: string })[] }
@@ -171,7 +172,9 @@ export function sync(repo: string, repoPath?: string) {
     let reason: string | undefined;
     if (r.pr && !open.has(r.pr)) {
       if (!onGithub) continue; // a git project's PR (none yet) is never looked up on GitHub
-      const { state }: { state: string } = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'state'));
+      let n: string;
+      try { n = prNumber(repo, r.pr); } catch { continue; } // an old log's PR on another repo: never looked up
+      const { state }: { state: string } = JSON.parse(gh('pr', 'view', n, '-R', repo, '--json', 'state'));
       if (state !== 'OPEN') reason = `PR ${state.toLowerCase()} outside the factory`;
     } else if (!r.pr && r.imported && r.branch && !openHeads.has(r.branch) && (done.has(r.branch) || !unmerged.has(r.branch))) {
       reason = `branch ${r.branch} was merged, closed or deleted`;
@@ -186,7 +189,7 @@ export function sync(repo: string, repoPath?: string) {
   // A failed lookup skips the run and is reported, never breaks sync. shortcut: archived escalated runs are not checked.
   const humanMerged: string[] = [], humanMergeErrors: { run: string; error: string }[] = [];
   for (const r of runs) {
-    const m = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)$/.exec(r.pr || ''); // r.pr was typed by the orchestrator
+    const m = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)$/.exec(r.pr || ''); // r.pr: from F pr or sync, or an old log's typed one
     if (!onGithub || r.outcome !== 'escalated' || r.imported || !m || m[1] !== repo || open.has(r.pr as string)) continue; // imported runs: not the factory's work
     const decided = r.events.findLast((e) => e.stage === 'approve' && e.status === 'decided');
     const since = decided?.action === 'escalate' ? decided.ts : r.events.findLast((e) => e.stage === 'approve' && e.status === 'escalated')?.ts;

@@ -29,6 +29,12 @@ describe('RunDetail decision', () => {
       .toMatch(/Rejected at intakeOut of scope\.Duplicate of #3\./);
   });
 
+  it('awaiting approval: the reasons, then where the human approves, and no button (local-first 5c)', () => {
+    expect(decision({ outcome: 'awaiting-approval', events: [{ stage: 'spec', status: 'awaiting-approval', reasons: ['Untrusted author.'] }] }))
+      .toMatch(/Spec awaiting human approvalUntrusted author\.A local item: approve from the app menu \(Run → Approve…\) or run F approve acme\/app#1\. A GitHub issue: comment \/factory approve on it\.$/);
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
   it('takes split reasons from the split event', () => {
     expect(decision({ outcome: 'split', children: ['a/b#2', 'a/b#3'], events: [{ stage: 'intake', status: 'split', reasons: ['Two features.'] }] }))
       .toMatch(/Split into 2 runsTwo features\./);

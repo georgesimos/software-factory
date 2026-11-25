@@ -64,24 +64,45 @@ export function listChangeRequests({ gh }: Ctx, { repo }: { repo: string }) {
       closes: p.closingIssuesReferences.nodes.map((x) => String(x.number)), author: p.author?.login, association: p.authorAssociation })),
   };
 }
+// A recorded PR (its URL, or a number) as gh's PR number on repo. gh takes the repo from a URL over -R, so a URL is never
+// passed on, and one on another repo is refused: F acts only on the run's own repo.
+export function prNumber(repo: string, id: string) {
+  if (/^\d+$/.test(id)) return id;
+  const m = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)$/.exec(id);
+  if (!m || m[1]!.toLowerCase() !== repo.toLowerCase()) throw new Error(`${id} is not a pull request on ${repo}: refusing to act on it`);
+  return m[2]!;
+}
 // One PR by number, as sync's human-merge check (#21) reads it. Throws when gh fails: the caller reports it.
 // shortcut: no headSha (headRefOid) yet, so the gh call is the one sync always made; add it when a caller reads it.
 export function changeRequest({ gh }: Ctx, { repo, id }: { repo: string; id: string }) {
   const p: { state: string; mergedAt: string | null; mergedBy?: { login: string } | null; mergeCommit?: { oid: string } | null; headRefName: string; isCrossRepository?: boolean } =
-    JSON.parse(gh('pr', 'view', id, '-R', repo, '--json', 'state,mergedAt,mergedBy,mergeCommit,headRefName,isCrossRepository'));
+    JSON.parse(gh('pr', 'view', prNumber(repo, id), '-R', repo, '--json', 'state,mergedAt,mergedBy,mergeCommit,headRefName,isCrossRepository'));
   const state = ({ OPEN: 'open', MERGED: 'merged', CLOSED: 'closed' } as const)[p.state as 'OPEN'] ?? 'unknown';
   return { state, approval: null, branch: p.headRefName, fork: p.isCrossRepository, mergedAt: p.mergedAt, mergedBy: p.mergedBy?.login, mergeSha: p.mergeCommit?.oid }; // approval: GitHub merges on the gates alone (D2)
 }
 // Marks the PR ready, then squash-merges exactly sha (--match-head-commit). A refusal throws, as it always has.
 export function merge({ gh }: Ctx, { repo, id, sha }: { repo: string; id: string; sha: string }) {
-  gh('pr', 'ready', id, '-R', repo);
-  gh('pr', 'merge', id, '-R', repo, '--squash', '--delete-branch', '--match-head-commit', sha);
+  const n = prNumber(repo, id);
+  gh('pr', 'ready', n, '-R', repo);
+  gh('pr', 'merge', n, '-R', repo, '--squash', '--delete-branch', '--match-head-commit', sha);
   return { merged: true };
 }
 // Opens a PR from an already pushed branch; labels must exist (sync creates the factory's).
-export function openChangeRequest({ gh }: Ctx, { repo, branch, base, title, body, labels = [] }: { repo: string; branch: string; base: string; title: string; body: string; labels?: string[] }) {
-  const url = gh('pr', 'create', '-R', repo, '--base', base, '--head', branch, '--title', title, '--body', body, ...labels.flatMap((l) => ['--label', l])).trim();
+export function openChangeRequest({ gh }: Ctx, { repo, branch, base, title, body, labels = [], draft = false }: { repo: string; branch: string; base: string; title: string; body: string; labels?: string[]; draft?: boolean }) {
+  const url = gh('pr', 'create', '-R', repo, '--base', base, '--head', branch, '--title', title, '--body', body, ...labels.flatMap((l) => ['--label', l]), ...(draft ? ['--draft'] : [])).trim();
   return { id: url, url };
+}
+// A PR (id: its URL) or, with none, the issue: ready, factory:needs-human and the comment, through the REST issues endpoints
+// with JSON on stdin (a Windows gh.cmd shim can't pass labels[] brackets). Each step is cosmetic: a failure is reported, never
+// thrown; a PR on another repo is refused.
+export function escalate({ gh, ghInput }: Ctx, { repo, id, issue, body }: { repo: string; id?: string; issue: string; body: string }) {
+  const n = id ? prNumber(repo, id) : issue;
+  const ok = (f: () => unknown) => { try { f(); return true; } catch { return false; } };
+  if (!ghInput) throw new Error('github escalate needs ctx.ghInput (gh with stdin)');
+  const api = (what: string, input: object) => ghInput(JSON.stringify(input), 'api', '-X', 'POST', `repos/${repo}/issues/${n}/${what}`, '--input', '-');
+  const ready = !!id && ok(() => gh('pr', 'ready', n, '-R', repo));
+  const labelled = ok(() => api('labels', { labels: ['factory:needs-human'] })), posted = ok(() => api('comments', { body }));
+  return { posted, labelled, ready, ...(!(posted && labelled && (ready || !id)) && { detail: `some of ready, label and comment failed on ${repo}#${n}` }) };
 }
 // What the published page's scrub removes (any GitHub URL), and GitHub's token shapes for its leak check.
 export const publicUrl = /(?:https?:\/\/)?(?:www\.)?github\.com[/:][^\s"\\,]*/gi; // JSON text: \n is two characters, so stop at '\' too

@@ -9,7 +9,8 @@ import { baseBranch, baseRef, git, hostFn, hostOf, projects, requireGithub, trac
 import { io, read, readArchive, record, runDir } from './log.ts';
 import { shipTrack } from './ship.ts';
 import { gitTooOld } from '../../adapters/hosts/git.ts';
-import { pending } from './approve.ts';
+import { prNumber } from '../../adapters/hosts/github.ts';
+import { current, pending } from './approve.ts';
 import { createHash } from 'node:crypto';
 import { rules } from './rules.ts';
 import type { Facts } from './gate.ts';
@@ -55,8 +56,11 @@ export function intake(run: string) {
     meta.itemSha = createHash('sha256').update(snap).digest('hex');
   }
   // A split child is authored by whoever ran the split; it inherits its parent's (possibly untrusted) author.
-  const parent = [...Object.values(derive(read())), ...readArchive()].find((r) => (r.children || []).includes(run));
-  if (parent) Object.assign(meta, { origin: parent.id, originAssociation: parent.originAssociation || parent.association });
+  // Listed by more than one parent (live or archived): the least trusted wins, and a missing association is NONE, never unchecked.
+  const trust = (p: Run) => [p.association || 'NONE', ...(p.origin ? [p.originAssociation || 'NONE'] : [])];
+  const parents = [...Object.values(derive(read())), ...readArchive()].filter((r) => (r.children || []).includes(run));
+  const worst = parents.find((p) => trust(p).some((a) => !TRUSTED.includes(a))) || parents[0];
+  if (worst) Object.assign(meta, { origin: worst.id, originAssociation: trust(worst).find((a) => !TRUSTED.includes(a)) || trust(worst).at(-1) });
   record(run, 'intake', 'started', meta);
   // Only the reporter and repo insiders may shape requirements; others could steer a trusted issue into auto-merge.
   const counts = (c: Comment) => (!!c.author && c.author === meta.author) || TRUSTED.includes(c.association); // a deleted account ('') is nobody's
@@ -72,7 +76,8 @@ export function intakeFixture(run: string, n: string) {
   record(run, 'intake', 'started', meta);
   return { ...meta, state: 'open', body: fx.issue.body, mentions: [], comments: fx.comments || [], ignoredComments: 0, dryRun: true };
 }
-export const adapterCtx = () => ({ gh, git }); // what host and tracker adapters get: the same stubbable gh and git
+export const ghInput = (input: string, ...args: string[]): string => exec(io.gh, args, { encoding: 'utf8', input, stdio: ['pipe', 'pipe', 'pipe'] });
+export const adapterCtx = () => ({ gh, git, ghInput }); // what host and tracker adapters get: the same stubbable gh and git
 /** The project's open change requests, from its host (a git host reads the clone at path). */
 export function openPRs(repo: string, path = projects()[repo]?.path) {
   const base = projects()[repo]?.base;
@@ -96,7 +101,7 @@ export function facts(r: Run): Facts {
     dep.deploys = derive(read())[r.id]?.deploys || [];
   }
   if (!(onGit ? r.reviewedSha : r.pr)) return { ...who, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy, ...dep, ...on };
-  const diff = onGit ? gitDiff(repo, r.reviewedSha as string) : JSON.parse(gh('pr', 'view', r.pr as string, '-R', repo, '--json', 'additions,deletions,files')) as ReturnType<typeof gitDiff>;
+  const diff = onGit ? gitDiff(repo, r.reviewedSha as string) : JSON.parse(gh('pr', 'view', prNumber(repo, r.pr as string), '-R', repo, '--json', 'additions,deletions,files')) as ReturnType<typeof gitDiff>;
   // the project's CI provider on the reviewed commit; ci=skip doesn't read it, but a provider that can't answer still escalates
   const local = (sha?: string) => localResult(r.localChecks, policy['checks.commands']?.value, sha);
   const c = policy.ci?.value === 'skip' ? { ci: undefined, state: 'skipped', broken: ciBroken(repo) } : ciChecks(repo, { path: projects()[repo]?.path, sha: r.reviewedSha, changeRequest: r.pr }, local);
@@ -152,9 +157,11 @@ export function approval(run: string) {
     return said ? { decision: said.decision, by: said.by } : { decision: 'waiting', next: `the user runs F approve ${run} in their own terminal` };
   }
   requireGithub(repo, 'reading spec approval');
-  const since = [...r.events].reverse().find((e) => e.status === 'awaiting-approval')?.ts;
-  if (!since) throw new Error(`${run} is not awaiting approval`);
-  return approvalVote(trackerFn(t, 'comments', 'read comments')(adapterCtx(), { repo, id: n }), since);
+  const asked = r.events.findLast((e) => e.status === 'awaiting-approval');
+  if (!asked) throw new Error(`${run} is not awaiting approval`);
+  if (!asked.postedSha) throw new Error(`${run}'s spec was never posted: F comment ${run} posts it, and a maintainer answers there`); // a vote is for the spec on the issue
+  if (current(run) !== asked.postedSha) throw new Error(`${run}'s spec.md changed after it was posted: post it again (F comment ${run})`);
+  return approvalVote(trackerFn(t, 'comments', 'read comments')(adapterCtx(), { repo, id: n }), asked.ts);
 }
 // The latest trusted "/factory approve|reject" posted after `since`. GitHub stamps comments to the whole second and F to the
 // millisecond, so only a comment from a later second counts: one in the same second may predate the spec it would approve.
@@ -171,7 +178,7 @@ export function postmerge(run: string): PostMerge {
   const { repo } = parseRun(run);
   requireGithub(repo, 'post-merge CI');
   if (!r.pr) return { state: 'no-pr', reason: 'no PR recorded for this run' }; // never `gh pr view undefined`
-  const sha: string | undefined = JSON.parse(gh('pr', 'view', r.pr, '-R', repo, '--json', 'mergeCommit')).mergeCommit?.oid;
+  const sha: string | undefined = JSON.parse(gh('pr', 'view', prNumber(repo, r.pr), '-R', repo, '--json', 'mergeCommit')).mergeCommit?.oid;
   if (!sha) return { state: 'not-merged' };
   const ship = shipTrack([{ run, repo, sha, path: projects()[repo]?.path }]), deploys = ship?.recorded.length ? { deploys: ship.recorded } : {}; // production deploy of the merge commit, when a connector reports one
   const policy = rules(repo).policy, ci = policy.ci?.value, broken = ciBroken(repo);

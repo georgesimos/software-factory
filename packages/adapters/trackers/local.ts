@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { Ctx } from '../hosts/index.ts';
 import type { Comment, Created, Item, OpenIssue, TrackerItem } from './index.ts';
-import { dependencies as fromBody, render } from './github-issues.ts';
+import { dependencies as fromBody, misfit, render } from './github-issues.ts';
 
 export const id = 'local';
 
@@ -67,14 +67,14 @@ export function newItem(ctx: Ctx, { path: at, title, body = '', labels = ['facto
   }
 }
 
-export function createIssues(ctx: Ctx, { path: at, items, existing = {}, onCreated = () => {} }: { repo: string; path?: string; items: Item[]; existing?: Record<string, { id: string; url?: string | undefined }>; onCreated?: (r: Created) => void }): Created[] {
+export function createIssues(ctx: Ctx, { path: at, items, existing = {}, onCreated = () => {}, ready = true }: { repo: string; path?: string; items: Item[]; existing?: Record<string, { id: string; url?: string | undefined }>; onCreated?: (r: Created) => void; ready?: boolean }): Created[] {
   const found: Record<string, string> = {};
-  for (const i of all(dirOf(ctx, at))) { const k = MARK.exec(i.body)?.[1]; if (k && !found[k]) found[k] = i.id; }
+  for (const i of all(dirOf(ctx, at))) { const k = MARK.exec(i.body)?.[1]; if (k && !found[k] && !misfit(k, i.body)) found[k] = i.id; } // local items have no author: all are untrusted anyway
   const ids: Record<string, string> = {}, titles = Object.fromEntries(items.map((it) => [it.key, it.title]));
   return items.map((it) => {
     const have = existing[it.key]?.id ?? found[it.key];
     if (have) { ids[it.key] = have; return { key: it.key, id: have, created: false }; }
-    const n = newItem(ctx, { path: at, title: it.title, body: render(it, ids, titles), labels: [it.kind === 'epic' ? 'factory:epic' : 'factory:ready'] }).id;
+    const n = newItem(ctx, { path: at, title: it.title, body: render(it, ids, titles), labels: it.kind === 'epic' ? ['factory:epic'] : ready ? ['factory:ready'] : [] }).id;
     ids[it.key] = n;
     const r = { key: it.key, id: n, created: true };
     onCreated(r);
@@ -94,3 +94,14 @@ export function getItem(ctx: Ctx, { path: at, id: n }: { repo: string; path?: st
   return { id: n, title: i.title, author: '', association: 'NONE', state: i.state, isChangeRequest: false, body: i.body };
 }
 export const comments = (): Comment[] => [];
+export const ensureLabels = (): string[] => []; // a label is a word in the front matter: nothing to create
+export const comment = () => ({ posted: false, detail: 'local items have no comments: the reason is in the run\'s events and the dashboard' });
+/** Rewrites the item's front matter with the new labels (title, state and labels; the body as it was), without following a link. */
+export function label(ctx: Ctx, { path: at, id: n, add = [], remove = [] }: { repo: string; path?: string; id: string; add?: string[]; remove?: string[] }) {
+  if (!/^\d+$/.test(n)) throw new Error(`no item ${n} in .factory/issues`);
+  const file = path.join(dirOf(ctx, at), `${n}.md`), i = readItem(file);
+  const labels = [...new Set([...i.labels.filter((l) => !remove.includes(l)), ...add])];
+  const fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_TRUNC | (fs.constants.O_NOFOLLOW ?? 0));
+  try { fs.writeFileSync(fd, `---\ntitle: ${JSON.stringify(i.title)}\nstate: ${i.state}\nlabels: ${JSON.stringify(labels)}\n---\n\n${i.body}\n`); } finally { fs.closeSync(fd); }
+  return { labelled: true };
+}

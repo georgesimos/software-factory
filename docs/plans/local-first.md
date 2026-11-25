@@ -298,7 +298,8 @@ Telling the agent not to (in the skill text) isn't enough. Even so, it is a spee
      through core directly.
    - Picking one opens a native `dialog.showMessageBox` naming the run, its title, the sha, the diff stats and what
      the approval does ("approve the spec" / "approve and merge"). Cancel is the default button.
-   - On confirm, main writes the same approve event as the CLI, with `{by: OS user, via: 'desktop', verified: false}`.
+   - On confirm, main writes the same approve event as the CLI, with `{by: OS user, via: 'local', channel: 'desktop'}`:
+     a local, unverified identity, scrubbed from a published page like any other.
    - Nothing the page or HTTP can reach opens this dialog: no IPC channel, no preload function, no server route. The
      menu and the dialog belong to main alone.
    - The page shows "Approve from the app menu (Run → Approve…) or run `F approve RUN`" and nothing more.
@@ -476,7 +477,7 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
    - `adapters/ci/` registry, template, README, `contract()`, `github-actions`, `local`, `none`.
    - `facts()` and `postmerge()` call the provider.
    - The local-checks helper is pulled out, and `decide()` keeps calling it.
-   - `F ci RUN [--watch]` and `logTail` (not in PR 3; they follow with PR 6, which replaces SKILL.md's gh calls).
+   - `F ci RUN [--watch]` and `logTail` (not in PR 3; they landed with PR 6a, which replaces SKILL.md's gh calls).
    - Landed as:
      - A project's provider is `projects.json` `ci`, else `github-actions` on GitHub and `local` on `git` (core's `ciOf`).
        Core imports the three providers by name, as the hosts are; a new one (Jenkins) is a file plus one line, documented
@@ -609,10 +610,77 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
      - Not here: `F queue` and `F loop` still read GitHub Issues only (they take the tracker from `F new`'s project state).
 5c. **Desktop approval.** (~300 lines)
    - The Electron main-process menu item and native dialog (§2.2 step 3). It writes the same approve event, and the page and HTTP can't reach it.
-6. **SKILL.md stops naming gh.** (~300 lines)
+   - Landed as:
+     - Core: `specPending(run)` holds `F approve`'s checks (human only, a local item, awaiting approval, `DIR/spec.md`
+       unchanged since it was put to you, not already approved) and returns the cleaned title, spec, reasons and sha;
+       `awaitingSpecs()` lists the local runs it would accept. `approveSpec` (terminal) and `approveSpecDesktop` both start
+       from it and write the same `spec decided` record; the desktop one has the OS user as `by` with `via: 'local'` (so
+       it is labelled unverified and scrubbed from a published page, as whoami's OS user is) and `channel: 'desktop'`, and runs the checks again with the sha the dialog showed, so a spec changed while it was open is refused.
+     - `apps/desktop/src/approve-menu.ts`: Run → Approve… picks a run (up to 8), then shows its title, why it waits, the
+       spec's short sha and the whole spec. A spec over 3000 characters is refused there with the `F approve RUN` command,
+       since the approval covers the whole file and the dialog would show only part of it. Cancel is the default and the Escape answer in both boxes.
+       Spec approvals only: the dialog has no diff stats or merge; "approve and merge" comes with PR 7.
+     - `clean()`, shared by both paths, also strips U+00AD, U+061C, U+2028/2029, U+2060–2064 and U+FEFF.
+     - The page says where to approve (the app menu or `F approve RUN` for a local item, a `/factory approve` comment for a
+       GitHub issue), with no button.
+     - Tests: `apps/desktop/test/approve.test.mjs` (the dialog stubbed, real core on a temp `FACTORY_DIR`: nothing waiting,
+       the record, cancel at either box, a spec changed while the dialog was open, an agent session, a published page with a
+       desktop approval, an over-long spec, invisible characters); the e2e checks the menu, that neither `ipcMain` nor the
+       window's `webContents.ipc` has a channel beyond Electron's own (listed by name), that no preload exists, and that
+       `/api/approve` is a 404.
+6. **SKILL.md stops naming gh.** (~300 lines) Cut in two, by side, since one PR came out well over the size limit.
    - New commands: `F label`, `F split` (→ `tracker.createIssues`), `F escalate RUN` (→ `host.comment`), `F pr RUN`
      (→ `openChangeRequest`).
    - The skill text uses only these commands.
+   - **6a, the change-request side.** Landed as:
+     - `packages/core/src/changes.ts`. Every target is the run's own (its worktree branch and base, its recorded change
+       request, its issue), and every text is F's, never typed:
+       - `F pr RUN`: a draft change request from the run's branch, titled from intake, with "Closes #N" (a local item:
+         "Factory item #N") and `DIR/spec.md` as the body. F records it as `build opened {pr, branch}`, which `F event`
+         refuses, as it refuses any typed `pr` or `branch`. A later call returns the recorded one only while the host says
+         it is open from the run's own branch (not a fork's). One closed unmerged (a human closed an escalated run's PR)
+         is replaced by a fresh draft from the run's branch, recorded as `build opened`; a merged one is refused (`F sync`
+         records it, then `F intake` starts clean); one open from elsewhere needs a human to close it. A new run after a
+         revert or a merge starts with none. It refuses an imported run, and one with no worktree or no spec.
+       - `F ci RUN [--watch]`: the project's CI provider on the worktree head and the change request. `--watch` polls
+         while `pending`, every 30 s for at most 20 minutes, and then answers `pending`: it never hangs. On `fail` it adds
+         the provider's `logTail`, its last 80 lines and at most 16 KB.
+       - `F escalate RUN`: the host's `escalate`. On GitHub: `gh pr ready`, `factory:needs-human` and one comment, through
+         the REST issues endpoints with JSON on stdin, or on the issue when there is no PR. The comment is the decision's
+         reasons (after a merge, `F postmerge`'s reason; with no decision, or a merge one that didn't merge, that `F merge`
+         failed, with `--error`'s text) and the open blocking findings, cut at 60,000 characters. It is cosmetic: a
+         failure is reported. `F event RUN approve escalated` still records the escalation.
+     - The comment goes through `core/src/scrub.ts`, now shared with the published page: the OS user name in "set by
+       <name> (local, unverified)" and local paths never reach the host. An @mention in it, or in the PR body's spec,
+       gets a zero-width joiner, so untrusted text never pings anyone.
+     - gh always gets a PR's number with `-R` (gh takes the repo from a URL over `-R`), and a recorded PR on another
+       repo is refused: `prNumber` in `hosts/github.ts`, for the host, `github-actions` and core's own gh calls.
+     - Adapters: `openChangeRequest` takes `draft`; `escalate` is new on hosts (`git`: `posted: false`, since it has
+       nothing to comment on); CI providers gain an optional `logTail` (`github-actions`: `gh run view --log-failed` of
+       the first failed run; `local`: `F checks`' output). `adapterCtx` gains `ghInput` (gh with stdin).
+     - `pr`, `ci` and `escalate` refuse a run another launcher holds, as the other run commands do.
+     - A git run with a recorded change request still escalates: a local item is never trusted.
+     - `F event` refuses a typed `pr` or `branch` (the review): `F pr` and sync record them.
+   - **6b, the tracker side.** Landed as `packages/core/src/items.ts`, through the tracker adapter. The target is always
+     the run's own item, and the text is F's or the recorded event's, through 6a's scrub, `unmention` and cut:
+     - `F labels OWNER/REPO`: the tracker's `ensureLabels` (GitHub: every factory label; `local`: nothing to create).
+     - `F label RUN add|remove LABEL`: only `factory:in-progress`, `needs-info`, `rejected` and `needs-approval`. Every
+       other factory label names the command that adds it (`ready`: `F split`; `merged`: `F merge` and `F sync`;
+       `needs-human`: `F escalate` and `F revert`; `epic`: `F issues create`). A remove of a label that isn't there is
+       fine; any other failure throws. `local` rewrites the item's front matter.
+     - `F comment RUN`: from the latest intake or spec event, the rejection `reason`, the numbered needs-info
+       `questions`, or a spec awaiting approval (`DIR/spec.md`, which F hashed then, and how a maintainer answers).
+       `local` posts nothing (`posted: false`).
+     - `F split RUN -`: 2 to 10 children `{title, body, acceptance}`, through `createIssues`, with F's "Part of #N" and a
+       key per child (`split-N-i`), so a re-run finds them. `factory:ready` only when the parent's recorded association,
+       and its origin's, are trusted. `createIssues` takes `ready: false`, so an untrusted parent's children never carry
+       it, not even for a moment (`F queue` could pick them up). F records `intake split {children}`, which `F event`
+       refuses, as it refuses a typed `children`: a child's trust comes from its parent's list. `--dry-run` records nothing.
+     - `F similar RUN WORD…`: the duplicate check through `listOpen`, best match first. It sees open items only; the old
+       `gh issue list --state all` also saw closed ones.
+     - A test that SKILL.md and `references/*.md` name no `gh`, except the user's own `gh auth login`.
+     - Not here: `F escalate` recording `approve escalated` itself (many tests type that event), and the sweep's "open one
+       issue each", which still has no F command.
 7. **Merge flow (§3) with D1.** (~400 lines)
    - `decide()`'s `await-approval`, `merge: auto|ask` with the legacy `autoMerge` mapping, and `F approve RUN --merge`
      (CLI and desktop dialog) as the ask confirmation.

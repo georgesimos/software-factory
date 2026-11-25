@@ -3,6 +3,7 @@
 // What it stops is the run's own agent approving its own spec by mistake or by following an item's text. It is a speed bump, not a
 // security boundary: an agent determined to get past it can (see ttyAsk), so a local item's merge never rests on it (always trustBroken).
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { derive } from './derive.ts';
@@ -10,7 +11,7 @@ import { read, record, runDir } from './log.ts';
 import { parseRun } from './github.ts';
 import { trackerOf } from './workspace.ts';
 import { humanOnly } from './projectset.ts';
-import { whoami } from './rules.ts';
+import { LOCAL_BY, whoami } from './rules.ts';
 import type { FactoryEvent, Run } from './types.ts';
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -19,7 +20,7 @@ const ownChannel = (repo: string) => { try { return trackerOf(repo) === 'github-
 /** A tracker item's run (owner/repo#N) off GitHub Issues; F sync's imports of branches (owner/repo:branch) are not specced. */
 const needsF = (run: string) => { try { return !ownChannel(parseRun(run).repo); } catch { return false; } };
 /** Control characters (C0 and C1, keeping tab and newline) out of what goes to the terminal: an item's title or spec can't move the cursor or retitle the window. */
-export const clean = (s: string) => s.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, ''); // and bidi and zero-width marks, which can reorder or hide what the spec says
+export const clean = (s: string) => s.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, ''); // and bidi, zero-width, soft-hyphen and line/paragraph separator marks, which can reorder or hide what the spec says
 
 /** The spec put to the user: all of DIR/spec.md, a plain file, never empty. */
 function specOf(run: string) {
@@ -56,7 +57,8 @@ export function specApproved(run: string, p: { spec?: unknown }) {
     : p.spec !== undefined && p.spec !== asked.spec ? ['it is not the spec you approved', 'pass the approved spec line, or none'] : [null, null];
   if (why) throw new Error(`${run}'s spec can't pass: ${why}. Next: ${next}`);
 }
-const current = (run: string) => { try { return specOf(run).sha; } catch { return undefined; } };
+/** The sha of DIR/spec.md now (or of text read from it), or undefined. */
+export const current = (run: string, text?: string) => { if (text !== undefined) return sha(text); try { return specOf(run).sha; } catch { return undefined; } };
 
 /** record()'s check on "build started", and worktree()'s: off GitHub Issues, building waits for a "spec passed" (so an approved
  *  spec) after the latest intake or ask, and for DIR/spec.md to still be the approved one. */
@@ -89,20 +91,43 @@ export function ttyAsk(prompt: string) {
   } finally { fs.closeSync(i); fs.closeSync(o); }
 }
 
-/** F approve RUN: yours only (refused in an agent session), typed at your terminal, for the spec a local item's run is waiting on. */
-export function approveSpec(run: string, ask: (prompt: string) => string = ttyAsk) {
+/** What F approve puts to the user for a run, after every refusal F approve makes (an agent session, a GitHub Issues item, a
+ *  run not waiting, an approved spec, a spec.md changed since the ask). The desktop dialog shows the same. */
+export function specPending(run: string) {
   humanOnly('approving a spec');
   const { repo } = parseRun(run);
   if (ownChannel(repo)) throw new Error(`${repo}'s items are on GitHub Issues: approve with a "/factory approve" comment on the issue from a trusted account`);
   const r = derive(read())[run];
   if (r?.outcome !== 'awaiting-approval') throw new Error(`${run} is not awaiting approval`);
   const { asked, said } = pending(r); // awaiting-approval: the outcome comes from that event
-  const { text, sha: h } = specOf(run), code = h.slice(0, 7);
+  const { text, sha: h } = specOf(run);
   if (asked!.specSha !== h) throw new Error(`${run}'s DIR/spec.md changed after it was put to you${said ? ' and approved' : ''}: the run records "spec awaiting-approval" again, then you approve that`);
   if (said) throw new Error(`${run}'s spec is already approved: the run goes on with "spec passed"`);
-  const typed = ask(clean(`${run}: ${r.title ?? ''}\n\nSpec (DIR/spec.md):\n${text}\n\nWhy it waits: ${(asked!.reasons as string[] | undefined ?? []).join('; ') || '-'}\n\nType ${code} to approve this spec (anything else cancels): `));
-  if (typed.trim() !== code) throw new Error('not approved: what you typed did not match');
+  return { run, title: clean(r.title ?? ''), spec: clean(text), sha: h, code: h.slice(0, 7), reasons: (asked!.reasons as string[] | undefined ?? []).map((x) => clean(String(x))) };
+}
+
+/** The local items' specs waiting for approval: what the desktop app's Run → Approve… lists. Never a GitHub Issues run. */
+export const awaitingSpecs = () => Object.values(derive(read()))
+  .filter((r) => r.outcome === 'awaiting-approval' && needsF(r.id) && !pending(r).said).map((r) => ({ run: r.id, title: clean(r.title ?? '') }));
+
+/** F approve RUN: yours only (refused in an agent session), typed at your terminal, for the spec a local item's run is waiting on. */
+export function approveSpec(run: string, ask: (prompt: string) => string = ttyAsk) {
+  const p = specPending(run);
+  const typed = ask(`${run}: ${p.title}\n\nSpec (DIR/spec.md):\n${p.spec}\n\nWhy it waits: ${p.reasons.join('; ') || '-'}\n\nType ${p.code} to approve this spec (anything else cancels): `);
+  if (typed.trim() !== p.code) throw new Error('not approved: what you typed did not match');
   const who = whoami('approving a spec');
-  record(run, 'spec', 'decided', { decision: 'approve', by: who.by, via: who.via, specSha: h });
+  record(run, 'spec', 'decided', { decision: 'approve', by: who.by, via: who.via, specSha: p.sha });
   return { run, decision: 'approve', by: who.by, via: who.via };
+}
+
+/** The desktop app's Run → Approve…, once its dialog was confirmed for the spec with hash `sha` (local-first §2.2 step 3): the
+ *  checks again (the log may have moved while the dialog was open), then the same record, by the OS user, unverified. */
+export function approveSpecDesktop(run: string, sha: string, user = () => os.userInfo().username) {
+  const p = specPending(run);
+  if (p.sha !== sha) throw new Error(`${run}'s spec changed while the dialog was open: nothing was approved`);
+  const by = user();
+  if (!LOCAL_BY.test(by)) throw new Error('cannot tell who is approving a spec: there is no OS user name');
+  // via 'local' as whoami's OS user: unverified everywhere, and scrubbed from a published page (isLocal); channel says where.
+  record(run, 'spec', 'decided', { decision: 'approve', by, via: 'local', channel: 'desktop', specSha: sha });
+  return { run, decision: 'approve', by, via: 'local', channel: 'desktop' };
 }
