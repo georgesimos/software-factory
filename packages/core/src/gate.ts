@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { CAP, COST_CAP, DOCS, MAX_DIFF, SEO, SOURCE, TEST, TRUSTED, UI, blocking, byText, isLocal, sensitive } from './constants.ts';
-import { budget, budgetWhy } from './derive.ts';
+import { budget, budgetWhy, thisRun } from './derive.ts';
 import { AXIS_WHEN, BUILTIN_AXES, LOCKED_STEPS, isObj } from './skills.ts';
 import { runCaps } from './rules.ts';
 import type { AxisReview, Deploy, LocalChecks, Metrics, Rule, Run } from './types.ts';
@@ -124,7 +124,7 @@ export function decide(r: Run, f: Facts) {
   }
   // steps.off (pipelines §6): every review this run's F axes dropped, from the run's own record (never the live rule, which
   // may be gone by now), with who turned it off and why. On GitHub, a local user's rule never counts toward a merge (§5).
-  const offs = (r.events || []).slice(r.events?.findLastIndex((e) => e.stage === 'intake' && e.status === 'started') ?? 0)
+  const offs = thisRun(r.events)
     .filter((e) => e.stage === 'review' && e.status === 'started' && Array.isArray(e.dropped) && e.dropped.length && isObj(e.offRule));
   const seen = new Set<string>();
   for (const e of offs) {

@@ -150,11 +150,13 @@ export function audit(scope: string, status: string, e: Record<string, unknown>,
 }
 export const checkScope = (scope: string) => { if (scope !== 'default' && !(typeof scope === 'string' && /^[\w.-]+\/[\w.-]+$/.test(scope))) throw new Error(`scope "${scope}" must be "default" or owner/repo`); };
 // docs/plans/pipelines.md §5: what a rule write loosens, or null. The CLI, the page's route and the desktop dialog all ask this.
-// Any steps.off set (a smaller list is still a set); a cap set above what applies now, or unset (back up to the built-in).
-export function loosens(scope: string, key: string, value: unknown, cfg: SkillsConfig = readSkills()): string | null {
+// Any steps.off set (a smaller list is still a set); a cap set above what applies now, or unset (back up to the built-in), or
+// set to expire before the stored one does (when it lapses, the cap goes back up).
+export function loosens(scope: string, key: string, value: unknown, cfg: SkillsConfig = readSkills(), until?: string): string | null {
   if (key === 'steps.off') return value === undefined ? null : 'turning a pipeline step off';
   if (!Object.hasOwn(RUN_CAPS, key)) return null;
-  const built = RUN_CAPS[key]!, old = cfg[scope]?.rules?.[key], now = old && !(old.until && old.until < dayOf()) ? Math.min(built, Number(old.value)) : built;
+  const built = RUN_CAPS[key]!, old = cfg[scope]?.rules?.[key], live = old && !(old.until && old.until < dayOf()), now = live ? Math.min(built, Number(old.value)) : built;
+  if (value !== undefined && until && live && now < built && (!old.until || old.until > until)) return 'raising a cap';
   return Number(value ?? built) > now ? 'raising a cap' : null;
 }
 // The terminal command for a rule write, built only from checked values (scope, key, value, until), never page text.
@@ -189,7 +191,7 @@ export function ruleChange(scope: string, key: string, raw: unknown, { reason, u
     value = prepare(scope, key, raw, until, cfg);
     checkRules({ [key]: { value, reason, setBy: 'x', setAt: new Date().toISOString(), ...(until && { until }) } }, `rules ${scope}`); // the value and the reason, as writeSkills would
   }
-  return { scope, key, stored: cfg[scope]?.rules?.[key]?.value, value, ...(until && { until }), doing: loosens(scope, key, value, cfg), command: ruleCommand(scope, key, value, until) };
+  return { scope, key, stored: cfg[scope]?.rules?.[key]?.value, value, ...(until && { until }), doing: loosens(scope, key, value, cfg, until), command: ruleCommand(scope, key, value, until) };
 }
 // page: the write comes from the dashboard's route, which may only request a guarded write (§5); core refuses it here too.
 export function setRule(scope: string, key: string, raw: unknown, { reason, until, page }: { reason?: string; until?: string; page?: boolean } = {}) {
@@ -199,7 +201,7 @@ export function setRule(scope: string, key: string, raw: unknown, { reason, unti
   if (step !== null) s.guide = { ...s.guide, [step]: String(raw ?? '') };
   else {
     value = prepare(scope, key, raw, until, cfg);
-    const doing = loosens(scope, key, value, cfg);
+    const doing = loosens(scope, key, value, cfg, until);
     if (doing && page) throw pageRefusal(doing, ruleCommand(scope, key, value, until));
     if (doing) humanOnly(doing);
   }

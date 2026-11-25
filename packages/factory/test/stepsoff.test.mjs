@@ -69,6 +69,15 @@ test('caps: run.loops and run.budgetUsd only go down freely; raising or unsettin
   assert.equal(rules('acme/so').policy['run.budgetUsd'].value, 2.5);
   assert.throws(() => asAgent(() => setRule('acme/so', 'run.budgetUsd', '3', { reason: 'more' })), /raising a cap/);
   unsetRule('acme/so', 'run.budgetUsd');
+  // an earlier expiry is a raise too: when it lapses, the cap goes back up to the built-in
+  setRule('acme/so', 'run.loops', '1', { reason: 'one try' });
+  assert.throws(() => asAgent(() => setRule('acme/so', 'run.loops', '1', { reason: 'for now', until: '2999-01-01' })), /raising a cap must come from you/);
+  assert.throws(() => setRule('acme/so', 'run.loops', '1', { reason: 'for now', until: '2999-01-01', page: true }), /raising a cap needs your confirmation .* --until 2999-01-01$/);
+  setRule('acme/so', 'run.loops', '1', { reason: 'until then', until: '2999-01-01' });
+  asAgent(() => setRule('acme/so', 'run.loops', '1', { reason: 'for good' })); // dropping the expiry only tightens
+  unsetRule('acme/so', 'run.loops');
+  asAgent(() => setRule('acme/so', 'run.loops', '2', { reason: 'for a while', until: '2999-01-01' })); // a first cap with an expiry: free
+  unsetRule('acme/so', 'run.loops');
   // the one classifier the CLI, the route and the dialog share
   const cfg = readSkills();
   assert.deepEqual([loosens('acme/so', 'steps.off', ['review.seo'], cfg), loosens('acme/so', 'steps.off', undefined, cfg), loosens('acme/so', 'run.loops', 1, cfg), loosens('acme/so', 'run.loops', undefined, cfg), loosens('acme/so', 'ci', 'skip', cfg)],
@@ -214,4 +223,29 @@ test('caps: gate and decide use the lower of run.loops / run.budgetUsd and the b
   assert.ok(decide(r, { rules: { 'run.loops': rl(1) } }).reasons.includes('iteration 2 exceeds cap 1 (rule run.loops)'));
   assert.ok(decide({ ...r, costUsd: 2.5 }, { rules: { 'run.budgetUsd': rl(2) } }).reasons.some((x) => /^run budget exceeded \(\$2\.5/.test(x)));
   assert.ok(!decide({ ...r, costUsd: 2.5 }, { rules: {} }).reasons.some((x) => /run budget exceeded/.test(x)));
+});
+
+test('the run boundary is derive()\'s: a re-intake mid-run keeps the snapshot and the drops; a run with no intake event too', () => {
+  const ev = (stage, status, x = {}) => ({ ts: '2026-11-25T10:00:00Z', run: 'acme/so#6', stage, status, ...x });
+  const facts = { autoMerge: true, association: 'OWNER', checks: 'pass', files: ['a.ts', 'a.test.ts'], additions: 5, deletions: 0, rules: {} };
+  const drop = ev('review', 'started', { axes: ['code', 'security'], sha: 'abc', off: ['review.docs'], dropped: ['review.docs'], offRule: { reason: 'mine', by: 'a local user (unverified)', local: true } });
+  const passes = ['code', 'security'].map((a) => ev('review', 'passed', { axis: a, verdict: 'passed', findings: [] }));
+  const pr = ev('build', 'opened', { pr: 'https://github.com/acme/so/pull/6' });
+  for (const events of [[ev('intake', 'started'), ev('build', 'started'), pr, drop, ev('intake', 'started'), ev('build', 'started'), ev('review', 'started', { axes: ['code', 'security'], sha: 'abc', off: [] }), ...passes],
+    [ev('build', 'started'), pr, drop, ...passes]]) {
+    const r = derive(events)['acme/so#6'];
+    assert.equal(decide(r, { ...facts, association: 'OWNER' }).action, 'escalate', JSON.stringify(events.map((e) => e.stage + ' ' + e.status)));
+  }
+  // after a merge, the next intake starts a new run: the old drop no longer counts
+  const again = derive([ev('intake', 'started'), ev('build', 'started'), pr, drop, ...passes, ev('approve', 'merged'), ev('intake', 'started'), ev('build', 'started'), ev('build', 'opened', { pr: 'https://github.com/acme/so/pull/7' }),
+    ev('review', 'started', { axes: ['code', 'security'], sha: 'def', off: [] }), ...passes])['acme/so#6'];
+  assert.equal(decide(again, facts).action, 'merge', decide(again, facts).reasons.join('; '));
+  // F axes: a re-intake mid-run doesn't reset the snapshot
+  const RUN = 'acme/so#8', cli = (args) => JSON.parse(execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), ...args], { encoding: 'utf8', env: { ...process.env, FACTORY_DIR: io.dir, FACTORY_GH: STUB } }));
+  record(RUN, 'intake', 'started', { association: 'OWNER' }); record(RUN, 'build', 'started');
+  cli(['axes', RUN, 'src/a.ts']); // nothing off: the snapshot is []
+  setRule('acme/so', 'steps.off', '["review.ui"]', { reason: 'no pages' });
+  record(RUN, 'intake', 'started', { association: 'OWNER' }); record(RUN, 'build', 'started');
+  assert.deepEqual(cli(['axes', RUN, 'web/Button.tsx']).axes, ['code', 'security', 'ux', 'ui']);
+  unsetRule('acme/so', 'steps.off');
 });

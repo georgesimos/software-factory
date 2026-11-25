@@ -8,7 +8,7 @@ import { approveMerge, approveSpec } from '../../core/src/approve.ts';
 import { newItem } from '../../adapters/trackers/local.ts';
 import { closeMerged, setProject } from '../../core/src/projectset.ts';
 import { archive, io, read, record, runDir } from '../../core/src/log.ts';
-import { budget, budgetWhy, derive, getRun } from '../../core/src/derive.ts';
+import { budget, budgetWhy, derive, getRun, thisRun } from '../../core/src/derive.ts';
 import { DEFAULT_PRESET, PRESETS, applyPreset, availablePlan, catalog, setSkill, skills } from '../../core/src/skills.ts';
 import { decide, gate, reviewAxes, risk } from '../../core/src/gate.ts';
 import { demo } from '../../core/src/demo.ts';
@@ -112,8 +112,8 @@ export async function main(argv: string[]) {
         const sha = w && fs.existsSync(w.path) ? git('-C', w.path, 'rev-parse', 'HEAD').trim() : undefined;
         const repo = run.split(/[#:]/)[0] as string, extra = skills(repo).extra, rule = rules(repo).policy['steps.off']; // split always has a first part
         // steps.off (pipelines §6): the run's first review fixes its list; later ones turn off only what is in it and still in the
-        // live rule. A run whose first review predates the rule has nothing off. Since its latest intake, as decide() reads it.
-        const mine = r.events.slice(r.events.findLastIndex((e) => e.stage === 'intake' && e.status === 'started'));
+        // live rule. A run whose first review predates the rule has nothing off. This attempt only, as derive() and decide() read it.
+        const mine = thisRun(r.events);
         const first = mine.find((e) => e.stage === 'review' && e.status === 'started'), live = (rule?.value as string[] | undefined) ?? [];
         const off = first ? live.filter((k) => Array.isArray(first.off) && first.off.includes(k)) : live;
         const all = reviewAxes(r, files, extra), axes = reviewAxes(r, files, extra, off), dropped = all.filter((a) => !axes.includes(a)).map((a) => `review.${a}`);

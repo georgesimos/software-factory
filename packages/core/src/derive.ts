@@ -137,6 +137,10 @@ export const getRun = (run: string): Run => {
   if (!r) throw new Error(`no run ${run}`);
   return r;
 };
+/** The events of a run's current attempt, as derive() reads runs: after a merge, a close or a revert the next intake begins a
+ *  new run. A re-intake mid-run (a resume after needs-info, or F intake run again) is the same run. */
+export const thisRun = <E extends { status?: unknown }>(events: E[] = []) =>
+  events.slice(events.findLastIndex((e) => e.status === 'merged' || e.status === 'closed' || e.status === 'reverted') + 1);
 // Measured dollars, when known, are the whole budget; otherwise the old rule on reported dollars and non-cache-read tokens.
 export function budget(r: Run, cap = COST_CAP) { // cap: the run.budgetUsd rule's, when lower (gate.ts)
   const m = r.burn?.measured ? r.burn.total : null;
