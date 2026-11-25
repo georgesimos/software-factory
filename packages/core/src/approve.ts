@@ -144,7 +144,9 @@ export function approveMerge(run: string, ask: (prompt: string) => string = ttyA
   const { repo } = parseRun(run);
   if (hostOf(repo) === 'github') throw new Error(`${repo} is a GitHub project: merge its PR in GitHub yourself (F sync records it), or turn auto-merge on (F automerge ${repo} on)`);
   const r = derive(read())[run], sha = r?.reviewedSha;
-  if (r?.decision?.action !== 'await-approval' || !sha) throw new Error(`${run} is not waiting for a merge approval: F merge ${run} says where it stands`);
+  const at = (stage: string, status: string) => r?.events.findLastIndex((e) => e.stage === stage && e.status === status) ?? -1;
+  // the wait must postdate the latest review: derive keeps an older decision, whose facts are another commit's
+  if (r?.decision?.action !== 'await-approval' || !sha || at('approve', 'decided') < at('review', 'started')) throw new Error(`${run} is not waiting for a merge approval: F merge ${run} says where it stands`);
   const who = whoami('approving a merge');
   const f = (r.events.findLast((e) => e.stage === 'approve' && e.status === 'decided')?.facts ?? {}) as Facts, files = (f.files ?? []).map(line);
   const code = sha.slice(0, 7);

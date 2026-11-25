@@ -165,10 +165,34 @@ export function sync(repo: string, repoPath?: string) {
     record(id, 'build', 'started', { branch });
     added.push(id);
   }
-  // In-progress runs whose work ended outside the factory become "closed": a merge elsewhere is not a factory merge.
   const open = new Set(prs.map((p) => p.url));
+  // First, escalated runs whose PR a human then merged on GitHub (#21): recorded as merged by a human. Every fact comes from
+  // GitHub (state, merge time, merger, merge commit, head branch, fork or not), never from issue, PR or comment text. It
+  // never merges or re-runs; it only records, then relabels the issue factory:merged. The merge must follow the latest
+  // "decided escalate" (the first since the latest review), or else (a "merge" decision, or none because facts() threw) the
+  // "escalated" event: F merge has returned or thrown by then, so a later merge is not its own. A run still in progress counts
+  // once its latest decision is escalate, so an agent that stopped before "escalated" loses no human merge.
+  // A failed lookup skips the run and is reported, never breaks sync. shortcut: archived escalated runs are not checked.
+  const humanMerged: string[] = [], humanMergeErrors: { run: string; error: string }[] = [];
   for (const r of runs) {
-    if (r.outcome !== 'in-progress' || attached.includes(r.id)) continue;
+    const m = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)$/.exec(r.pr || ''); // r.pr: from F pr or sync, or an old log's typed one
+    const isDecided = (e: FactoryEvent) => e.stage === 'approve' && e.status === 'decided', decided = r.events.findLast(isDecided);
+    const escalated = r.outcome === 'escalated' || r.outcome === 'in-progress' && decided?.action === 'escalate'; // in progress: the agent stopped before "escalated"
+    if (!onGithub || !escalated || r.imported || !m || m[1]!.toLowerCase() !== repo.toLowerCase() || open.has(r.pr as string)) continue; // imported runs: not the factory's work
+    // the first "decided escalate" since the latest review or non-escalate decision: a re-run F decide never moves it past a human merge
+    const from = r.events.findLastIndex((e) => e.stage === 'review' && e.status === 'started' || isDecided(e) && e.action !== 'escalate');
+    const since = decided?.action === 'escalate' ? r.events.slice(from + 1).find(isDecided)?.ts : r.events.findLast((e) => e.stage === 'approve' && e.status === 'escalated')?.ts;
+    let p: ReturnType<NonNullable<Host['changeRequest']>>;
+    try { p = hostFn(hostOf(repo), 'changeRequest', 'look up a change request')(adapterCtx(), { repo, id: m[2] as string }); }
+    catch (e: any) { humanMergeErrors.push({ run: r.id, error: String(e?.stderr || e?.message || e).trim().split('\n')[0] as string }); continue; }
+    if (p.state !== 'merged' || p.fork !== false || p.branch !== `factory/issue-${r.id.split('#')[1]}` || !(Date.parse(p.mergedAt as string) > Date.parse(since as string))) continue; // a fork's factory/issue-N branch never counts; no since: NaN, never later, so skipped
+    record(r.id, 'approve', 'merged', { by: 'human', mergedBy: p.mergedBy || null, sha: p.mergeSha || null });
+    relabelMerged(r.id);
+    humanMerged.push(r.id);
+  }
+  // In-progress runs whose work ended outside the factory become "closed": a merge elsewhere is not a factory merge.
+  for (const r of runs) {
+    if (r.outcome !== 'in-progress' || attached.includes(r.id) || humanMerged.includes(r.id)) continue; // recorded above: a human merged it
     let reason: string | undefined;
     if (r.pr && !open.has(r.pr)) {
       if (!onGithub) continue; // a git project's PR (none yet) is never looked up on GitHub
@@ -180,26 +204,6 @@ export function sync(repo: string, repoPath?: string) {
       reason = `branch ${r.branch} was merged, closed or deleted`;
     }
     if (reason) { record(r.id, 'approve', 'closed', { reasons: [reason] }); closed.push(r.id); }
-  }
-  // Escalated runs whose PR a human then merged on GitHub (#21): recorded as merged by a human. Every fact comes from
-  // GitHub (state, merge time, merger, merge commit, head branch, fork or not), never from issue, PR or comment text. It
-  // never merges or re-runs; it only records, then relabels the issue factory:merged. The merge must follow the latest
-  // "decided escalate", or else (a "merge" decision, or none because facts() threw) the "escalated" event: F merge has
-  // returned or thrown by then, so a later merge is not its own.
-  // A failed lookup skips the run and is reported, never breaks sync. shortcut: archived escalated runs are not checked.
-  const humanMerged: string[] = [], humanMergeErrors: { run: string; error: string }[] = [];
-  for (const r of runs) {
-    const m = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)$/.exec(r.pr || ''); // r.pr: from F pr or sync, or an old log's typed one
-    if (!onGithub || r.outcome !== 'escalated' || r.imported || !m || m[1]!.toLowerCase() !== repo.toLowerCase() || open.has(r.pr as string)) continue; // imported runs: not the factory's work
-    const decided = r.events.findLast((e) => e.stage === 'approve' && e.status === 'decided');
-    const since = decided?.action === 'escalate' ? decided.ts : r.events.findLast((e) => e.stage === 'approve' && e.status === 'escalated')?.ts;
-    let p: ReturnType<NonNullable<Host['changeRequest']>>;
-    try { p = hostFn(hostOf(repo), 'changeRequest', 'look up a change request')(adapterCtx(), { repo, id: m[2] as string }); }
-    catch (e: any) { humanMergeErrors.push({ run: r.id, error: String(e?.stderr || e?.message || e).trim().split('\n')[0] as string }); continue; }
-    if (p.state !== 'merged' || p.fork !== false || p.branch !== `factory/issue-${r.id.split('#')[1]}` || !(Date.parse(p.mergedAt as string) > Date.parse(since as string))) continue; // a fork's factory/issue-N branch never counts; no since: NaN, never later, so skipped
-    record(r.id, 'approve', 'merged', { by: 'human', mergedBy: p.mergedBy || null, sha: p.mergeSha || null });
-    relabelMerged(r.id);
-    humanMerged.push(r.id);
   }
   const links = sessionsFile();
   const prev: Record<string, Session[]> = fs.existsSync(links) ? JSON.parse(fs.readFileSync(links, 'utf8')) : {};

@@ -734,6 +734,12 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
      - **The push-time race** (4b's `ls-remote` race): accepted by the owner. No force flag is added; a lease later is the
        one push line plus narrowing the force grep (`hosts/git.ts` says how).
      - Also: sync's human-merge check compares the PR's repo case-insensitively.
+     - **Second review round.** `count()` probes a blob with `--literal-pathspecs`, so a file named `:(top)x.ts` is
+       counted. `decide()` treats facts with no `autoMerge` as off. `F approve --merge` refuses a wait decided before the
+       latest `review started` (derive keeps the old decision, with another commit's facts). Sync records a human merge
+       on a run still in progress whose latest decision is escalate (an agent that stopped before `approve escalated`),
+       checked before the step that closes in-progress runs, and measures it from the first `decided escalate` since the
+       latest review or non-escalate decision, so re-running `F decide` after the human merged loses nothing.
      - Not here: the desktop dialog's "approve and merge" (5c's dialog approves specs only), and a revert on the git host
        (`F revert` still needs GitHub; with CI `local` or `none` a git project's postmerge is `skipped`, so it never asks for one).
 8. **Docs only.** A plugin guide for hosts, trackers and CI: how to write Bitbucket, GitLab, Jenkins or Jira as one file

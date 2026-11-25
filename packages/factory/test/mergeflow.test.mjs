@@ -83,6 +83,16 @@ test('#137: a -diff file over 1 MB still counts every line, and a blob git can\'
   try { assert.throws(() => facts({ id: 'local/big#6', events: [], reviewedSha: s }), /cannot read blob/); } finally { io.git = prev; }
 });
 
+test('#137: a -diff file whose name is pathspec magic (":(top)big.ts") still counts every line', () => {
+  const d = repo('magic'); sync('local/magic', d);
+  g(d, 'checkout', '-q', '-b', 'factory/issue-8');
+  const blob = execFileSync('git', ['-C', d, 'hash-object', '-w', '--stdin'], { input: 'x\n'.repeat(5000), encoding: 'utf8' }).trim(); // plumbing: no file system takes this name on Windows
+  for (const name of [':(top)big.ts', ':!x.ts', '*.ts']) g(d, 'update-index', '--add', '--cacheinfo', `100644,${blob},${name}`);
+  g(d, 'commit', '-q', '-m', 'magic'); const s = g(d, 'rev-parse', 'HEAD'); g(d, 'checkout', '-q', '-f', 'main');
+  fs.writeFileSync(path.join(d, '.git', 'info', 'attributes'), '* -diff\n');
+  assert.equal(facts({ id: 'local/magic#8', events: [], reviewedSha: s }).additions, 15_000, 'each name read literally, never as a pathspec');
+});
+
 // ---- decide(): await-approval (local-first §0 D4, §3) ----
 const SHA = 'a'.repeat(40);
 const ok = { id: 'acme/d#1', iteration: 0, axes: { 0: ['code'] }, reviews: { 0: { code: { verdict: 'passed', findings: [] } } }, pr: '1', reviewedSha: SHA, association: 'OWNER', loopbacks: [], events: [] };
@@ -96,6 +106,9 @@ test('decide: on GitHub, auto-merge off escalates, even with an approval of the 
   const ask = { ...green, autoMerge: false };
   assert.deepEqual(decide(ok, ask), { action: 'escalate', reasons: [ASK_GH] });
   assert.deepEqual(decide({ ...ok, events: [yes()] }, ask), { action: 'escalate', reasons: [ASK_GH] }, 'a recorded approval never merges a GitHub project: the human merges in GitHub');
+  const { autoMerge, ...noKey } = green; // facts with no autoMerge at all: fail closed
+  assert.deepEqual(decide(ok, noKey), { action: 'escalate', reasons: [ASK_GH] });
+  assert.deepEqual(decide(ok, { ...noKey, ...onGit, autoMerge: undefined }), { action: 'await-approval', reasons: [LOCAL, ASK_GIT] });
   assert.deepEqual(decide(ok, onGit), { action: 'await-approval', reasons: [LOCAL, ASK_GIT] });
   assert.equal(decide({ ...ok, events: [yes(SHA, 'local')] }, onGit).action, 'merge', 'on the git host the OS user approves');
   assert.match(decide({ ...ok, events: [yes(SHA, 'local')] }, onGit).reasons.join(), /merge approved by pat \(local, unverified\) for aaaaaaa/);
@@ -209,6 +222,15 @@ test('core merge(): only merged === true counts as merged; anything else a host 
       builtin.git = real;
     }
   } finally { builtin.git = real; }
+});
+test('F approve RUN --merge refuses a wait decided before the latest review: the prompt would show one commit with another\'s files', () => {
+  const d = repo('m6'); sync('local/m6', d); project('local/m6', { ci: 'local' }); setRule('local/m6', 'checks.commands', '["true"]', { reason: 'local CI' });
+  const R = 'local/m6#1'; ready(R, d, 1); assert.equal(merge(R).action, 'await-approval');
+  g(d, 'checkout', '-q', 'factory/issue-1'); const b = commit(d, 'more.txt', 'b\n'.repeat(500)); g(d, 'checkout', '-q', 'main');
+  record(R, 'review', 'started', { axes: ['code'], sha: b }); // a loop-back: commit b under review, the wait still recorded for a
+  assert.equal(derive(read())[R].decision.action, 'await-approval', 'derive keeps the last decision');
+  assert.throws(() => approveMerge(R, typeCode), /local\/m6#1 is not waiting for a merge approval/);
+  assert.equal(read().some((e) => e.run === R && e.stage === 'approve' && e.status === 'passed'), false);
 });
 test('F merge on a git project with git older than 2.40 refuses, naming the version it needs', () => {
   const d = repo('gv'); sync('local/gv', d); const R = 'local/gv#1'; ready(R, d, 1);

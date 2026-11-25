@@ -124,7 +124,7 @@ function gitDiff(repo: string, sha: string) {
   // any file "-". So a "-" file with no NUL in its first 8000 bytes (git's own binary test) counts every line of both versions.
   let fork: string | undefined;
   const count = (c: string, p: string) => { // fails closed: a blob git can't read throws, never counts 0
-    if (!git('-C', at, 'ls-tree', c, '--', p).trim()) return 0; // added or deleted: no blob on this side
+    if (!git('-C', at, '--literal-pathspecs', 'ls-tree', c, '--', p).trim()) return 0; // added or deleted: no blob on this side. Literal: a name like ":(top)x" is no pathspec magic
     const b = exec(io.git, ['-C', at, 'cat-file', 'blob', `${c}:${p}`], { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: Infinity }) as Buffer; // any size: the default 1 MB threw
     return b.subarray(0, 8000).includes(0) ? 0 : b.reduce((n, x) => n + (x === 10 ? 1 : 0), 0) + (b.length && b[b.length - 1] !== 10 ? 1 : 0);
   };

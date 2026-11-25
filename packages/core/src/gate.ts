@@ -71,7 +71,7 @@ export function decide(r: Run, f: Facts) {
   if (f.trustBroken) (git && f.unverifiable ? asks : why).push(f.trustBroken); // the tracker can't say: never intake's recorded association instead
   else if (!TRUSTED.includes(assoc)) (git ? asks : why).push(`author association "${assoc || 'unknown'}" is not trusted`);
   if (r.originAssociation && !TRUSTED.includes(r.originAssociation)) (git ? asks : why).push(`split from ${r.origin}, whose author "${r.originAssociation}" is not trusted`);
-  if (f.autoMerge === false) (git ? asks : why).push(git ? 'auto-merge is turned off for this project: it merges once you approve the reviewed commit (F approve RUN --merge)'
+  if (f.autoMerge !== true) (git ? asks : why).push(git ? 'auto-merge is turned off for this project: it merges once you approve the reviewed commit (F approve RUN --merge)'
     : 'auto-merge is turned off for this project: merge the PR in GitHub yourself (F sync records it)'); // GitHub: a human merges there; the typed approval is a speed bump an agent can clear
   if (f.headBroken) why.push(f.headBroken);
   const expected = r.axes?.[r.iteration] || [];
