@@ -113,7 +113,9 @@ export const UI_ROUTES: Record<string, (x: Body) => unknown> = {
     if (typeof key !== 'string') throw new Error('key must be a string');
     const raw = typeof value === 'string' ? value : JSON.stringify(value), opts = { reason, until: until || undefined };
     const c = key.startsWith('guide.') ? null : ruleChange(scope, key, unset ? undefined : raw, opts); // checks it all before any dialog
-    if (c?.doing && guarded.request) { guarded.request({ scope, key, raw, unset: !!unset, reason, ...(opts.until && { until: opts.until }) }); return { ...onboardConfig(), requested: c.doing }; }
+    if (c?.doing && guarded.request) {
+      if (!guarded.request({ scope, key, raw, unset: !!unset, reason, ...(opts.until && { until: opts.until }) })) throw new Error('a confirmation is already open in the desktop app: answer it, then ask again');
+      return { ...onboardConfig(), requested: c.doing }; }
     if (unset) unsetRule(scope, key, { reason, page: true });
     else setRule(scope, key, raw, { ...opts, page: true });
     return onboardConfig();
@@ -175,7 +177,7 @@ export const budgetLeft = (b: { usd: number; tokens: number } | null | undefined
 export const hostModules: Record<string, unknown> = {};
 // Set only by the desktop app's main process (apps/desktop, rule-confirm.ts): it confirms a guarded rule write in a native
 // dialog, then writes it. In-process, like hostModules: no IPC channel or preload, and the page never sees it.
-export const guarded: { request?: (x: RuleRequest) => void } = {};
+export const guarded: { request?: (x: RuleRequest) => boolean } = {}; // false: a dialog is already open
 const checkRepo = (repo: unknown) => {
   const [owner, name, extra] = typeof repo === 'string' ? repo.split('/') : [];
   if (extra !== undefined || !LOGIN.test(owner || '') || !/^(?!\.\.?$)[\w.-]{1,100}$/.test(name || '')) throw new Error('repo must be owner/repo');

@@ -101,7 +101,7 @@ export function derive(events: FactoryEvent[]): Record<string, Run> {
     if (e.tokens) r.tokens = (r.tokens || 0) + e.tokens;
     if (e.stage === 'intake' && e.status === 'started') { r.outcome = 'in-progress'; delete r.humanMerge; delete r.reverted; } // resume after needs-info, or a new run after a revert
     if (r.outcome === 'awaiting-approval' && e.stage === 'spec' && e.status === 'passed') r.outcome = 'in-progress'; // only the spec passing ends the wait
-    if (e.status === 'reverted') r.reverted = { pr: e.pr, reason: e.reason };
+    if (ends(e) && e.status === 'reverted') r.reverted = { pr: e.pr, reason: e.reason };
     if (e.stage === 'build' && e.status === 'started') r.iteration++;
     if (e.tokens || e.costUsd) { // reported: what the orchestrator copied from a subagent result
       const u = e.usage || {};
@@ -119,7 +119,7 @@ export function derive(events: FactoryEvent[]): Record<string, Run> {
     if (e.stage === 'gate' && ['spec', 'build'].includes(e.next as string)) r.loopbacks.push({ iteration: r.iteration, route: e.next, reasons: e.reasons, ts: e.ts });
     if (e.stage === 'approve' && e.status === 'decided') r.decision = { action: e.action, reasons: e.reasons };
     if (e.stage === 'approve' && e.status === 'merged' && e.by === 'human') r.humanMerge = { by: e.mergedBy, sha: e.sha, ts: e.ts }; // only sync records it
-    if (OUTCOMES.includes(e.status)) r.outcome = e.status as Outcome;
+    if (OUTCOMES.includes(e.status) && (ends(e) || !RUN_ENDS.includes(e.status as string))) r.outcome = e.status as Outcome; // merged or closed only from F's approve stage
   }
   for (const r of Object.values(runs)) {
     r.durationMs = Date.parse(r.updated as string) - Date.parse(r.started as string); // set by every run's first event
@@ -137,10 +137,13 @@ export const getRun = (run: string): Run => {
   if (!r) throw new Error(`no run ${run}`);
   return r;
 };
+/** What ends a run: merged, closed or reverted on the approve stage, the only place F's own commands (merge, sync, revert)
+ *  record them. F event refuses all three on every stage, and the same status on another stage, written to the log by hand, ends nothing. */
+const RUN_ENDS = ['merged', 'closed', 'reverted'];
+function ends(e: { stage?: unknown; status?: unknown }) { return e.stage === 'approve' && RUN_ENDS.includes(e.status as string); }
 /** The events of a run's current attempt, as derive() reads runs: after a merge, a close or a revert the next intake begins a
  *  new run. A re-intake mid-run (a resume after needs-info, or F intake run again) is the same run. */
-export const thisRun = <E extends { status?: unknown }>(events: E[] = []) =>
-  events.slice(events.findLastIndex((e) => e.status === 'merged' || e.status === 'closed' || e.status === 'reverted') + 1);
+export const thisRun = <E extends { stage?: unknown; status?: unknown }>(events: E[] = []) => events.slice(events.findLastIndex(ends) + 1);
 // Measured dollars, when known, are the whole budget; otherwise the old rule on reported dollars and non-cache-read tokens.
 export function budget(r: Run, cap = COST_CAP) { // cap: the run.budgetUsd rule's, when lower (gate.ts)
   const m = r.burn?.measured ? r.burn.total : null;

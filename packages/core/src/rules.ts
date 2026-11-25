@@ -191,7 +191,8 @@ export function ruleChange(scope: string, key: string, raw: unknown, { reason, u
     value = prepare(scope, key, raw, until, cfg);
     checkRules({ [key]: { value, reason, setBy: 'x', setAt: new Date().toISOString(), ...(until && { until }) } }, `rules ${scope}`); // the value and the reason, as writeSkills would
   }
-  return { scope, key, stored: cfg[scope]?.rules?.[key]?.value, value, ...(until && { until }), doing: loosens(scope, key, value, cfg, until), command: ruleCommand(scope, key, value, until) };
+  const old = cfg[scope]?.rules?.[key];
+  return { scope, key, stored: old?.value, ...(old?.until && { storedUntil: old.until, expired: old.until < dayOf() }), value, ...(until && { until }), doing: loosens(scope, key, value, cfg, until), command: ruleCommand(scope, key, value, until) };
 }
 /** A rule's value as a person reads it: an unset cap is the built-in one. */
 export const shownRule = (key: string, v: unknown) => v === undefined ? (Object.hasOwn(RUN_CAPS, key) ? `the built-in (${RUN_CAPS[key]})` : 'nothing') : Array.isArray(v) ? v.join(', ') : String(v);

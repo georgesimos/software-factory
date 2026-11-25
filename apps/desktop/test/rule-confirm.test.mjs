@@ -7,9 +7,10 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { setup } from '../../../packages/factory/test/setup.mjs';
 import { io, read } from '../../../packages/core/src/log.ts';
-import { rules, setRule } from '../../../packages/core/src/rules.ts';
+import { rules, setRule, unsetRule } from '../../../packages/core/src/rules.ts';
+import { skillsFile } from '../../../packages/core/src/skills.ts';
 import { projectsFile } from '../../../packages/core/src/workspace.ts';
-import { confirmRule } from '../src/rule-confirm.ts';
+import { confirmRule, requestRule } from '../src/rule-confirm.ts';
 
 setup();
 io.gh = path.join(import.meta.dirname, '..', '..', '..', 'packages', 'factory', 'test', 'gh-stub.mjs');
@@ -70,4 +71,41 @@ test('one dialog at a time: a request while one is open is dropped; a cap raise 
   assert.match(u.seen[0].detail, /^Project: acme\/app\nRule: run\.loops\nNow: 2\nAfter: the built-in \(3\)\n/);
   assert.equal(rules('acme/app').policy['run.loops'], undefined);
   assert.ok(!JSON.stringify([...s.seen, ...u.seen]).includes(os.userInfo().username + ' '), 'never the OS user');
+});
+
+test('requestRule: false while a dialog is open, so the route can refuse instead of answering "requested"', async () => {
+  let release, shown = 0;
+  const held = new Promise((r) => { release = r; }), show = async () => { shown++; await held; return { response: 0 }; };
+  assert.equal(requestRule(req({ raw: '["review.ux"]' }), show), true);
+  assert.equal(requestRule(req(), show), false);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(shown, 1);
+  release(); await new Promise((r) => setImmediate(r)); await new Promise((r) => setImmediate(r));
+  assert.equal(requestRule(req({ raw: '["review.ux"]' }), async () => ({ response: 0 })), true, 'free again once answered');
+});
+
+test('a tightening request opens no confirmation; an expired rule reads as expired; a change to until alone is a change', async () => {
+  setRule('acme/app', 'steps.off', '["review.seo"]', { reason: 'no pages', ask: () => 'acme/app' });
+  setRule('acme/app', 'run.loops', '2', { reason: 'two' });
+  const before = fs.readFileSync(skillsFile(), 'utf8');
+  for (const r of [{ key: 'run.loops', raw: '1', reason: 'lower' }, { key: 'steps.off', unset: true }]) {
+    const t = stub([1]);
+    assert.equal(await confirmRule(req(r), t.show), null, r.key);
+    assert.deepEqual(t.seen.map((b) => b.type), ['error'], r.key);
+    assert.match(t.seen[0].detail, /needs no confirmation/);
+  }
+  assert.equal(fs.readFileSync(skillsFile(), 'utf8'), before, 'nothing written');
+  const cfg = JSON.parse(before); // expired by hand: F refuses a past --until, so only time or an edit gets here
+  cfg['acme/app'].rules['steps.off'].until = '2020-01-01'; cfg['acme/app'].rules['run.loops'].until = '2020-01-01';
+  fs.writeFileSync(skillsFile(), JSON.stringify(cfg));
+  const x = stub([0]);
+  await confirmRule(req({ raw: '["review.ux"]' }), x.show);
+  assert.match(x.seen[0].detail, /\nNow off: nothing \(review\.seo expired on 2020-01-01\)\nAfter: review\.ux\n/);
+  unsetRule('acme/app', 'steps.off');
+  setRule('acme/app', 'steps.off', '["review.seo"]', { reason: 'no pages', ask: () => 'acme/app' });
+  const s = stub([1]); // only until changes while the dialog is open
+  const show = async (box) => { if (box.type === 'warning') setRule('acme/app', 'steps.off', '["review.seo"]', { reason: 'for now', until: '2999-01-01', ask: () => 'acme/app' }); return s.show(box); };
+  assert.equal(await confirmRule(req({ raw: '["review.ux"]' }), show), null);
+  assert.match(s.seen.at(-1).detail, /the rule changed while the dialog was open/);
+  assert.deepEqual(rules('acme/app').policy['steps.off'].value, ['review.seo']);
 });

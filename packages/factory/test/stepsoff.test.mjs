@@ -9,7 +9,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { HERE } from '../factory.mjs';
 import { CAP, COST_CAP } from '../../core/src/constants.ts';
-import { derive } from '../../core/src/derive.ts';
+import { derive, thisRun } from '../../core/src/derive.ts';
 import { axesFor, decide, gate } from '../../core/src/gate.ts';
 import { io, read, record } from '../../core/src/log.ts';
 import { asStrict, loosens, ruleChange, rules, setRule, unsetRule } from '../../core/src/rules.ts';
@@ -112,7 +112,7 @@ test('POST /api/onboard/rule: a guarded write is only requested; plain F ui refu
   assert.equal(r.status, 400);
   assert.match(JSON.parse(r.body).error, /needs your confirmation outside the page: confirm it in the desktop app, or run in your own terminal: F rules set acme\/so steps\.off '\["review\.seo"\]' --reason "…"/);
   const asked = [];
-  guarded.request = (x) => asked.push(x);
+  guarded.request = (x) => { asked.push(x); return true; };
   try {
     r = post({ scope: 'acme/so', key: 'steps.off', value: ['review.seo'], reason: 'no pages' });
     assert.equal(r.status, 200, r.body);
@@ -124,6 +124,11 @@ test('POST /api/onboard/rule: a guarded write is only requested; plain F ui refu
     assert.equal(post({ scope: 'acme/so', key: 'run.loops', value: 2, reason: 'lower' }).status, 200); // lowering: written straight away
     assert.equal(rules('acme/so').policy['run.loops'].value, 2);
     assert.equal(asked.length, 1);
+    guarded.request = () => false; // a dialog is already open: the request is refused, not answered "requested"
+    r = post({ scope: 'acme/so', key: 'steps.off', value: ['review.docs'], reason: 'docs' });
+    assert.deepEqual([r.status, JSON.parse(r.body).requested], [400, undefined]);
+    assert.match(JSON.parse(r.body).error, /^a confirmation is already open in the desktop app: answer it, then ask again$/);
+    assert.equal(off('acme/so'), undefined);
   } finally { delete guarded.request; }
   unsetRule('acme/so', 'run.loops', { ask: YES });
 });
@@ -291,4 +296,34 @@ test('F rules set that loosens: with no terminal (an agent\'s shell), stdin can\
   const [code] = await detached('rules', 'set', 'acme/so', 'run.loops', '1', '--reason', 'the same'); // not a loosening: no terminal needed
   assert.equal(code, 0);
   unsetRule('acme/so', 'run.loops', { ask: YES });
+});
+
+test('only F\'s own approve-stage merged, closed or reverted ends a run: F event refuses them on every stage, and a forged one moves nothing', () => {
+  const RUN = 'acme/so#9', F = (args) => execFileSync(process.execPath, [path.join(HERE, 'factory.mjs'), ...args], { encoding: 'utf8', stdio: 'pipe', env: { ...process.env, FACTORY_DIR: io.dir, FACTORY_GH: STUB } });
+  for (const [stage, status] of [['spec', 'closed'], ['build', 'reverted'], ['review', 'closed'], ['build', 'merged'], ['intake', 'reverted']])
+    assert.throws(() => F(['event', RUN, stage, status, '{}']), new RegExp(`"${status}" is recorded by "`), `${stage} ${status}`);
+  const ev = (stage, status, x = {}) => ({ ts: '2026-11-25T10:00:00Z', run: RUN, stage, status, ...x });
+  const facts = { autoMerge: true, association: 'OWNER', checks: 'pass', files: ['a.ts', 'a.test.ts'], additions: 5, deletions: 0, rules: {} };
+  const drop = ev('review', 'started', { axes: ['code', 'security'], sha: 'abc', off: ['review.docs'], dropped: ['review.docs'], offRule: { reason: 'mine', by: 'a local user (unverified)', local: true } });
+  const passes = ['code', 'security'].map((a) => ev('review', 'passed', { axis: a, verdict: 'passed', findings: [] }));
+  const head = [ev('intake', 'started', { association: 'OWNER' }), ev('build', 'started'), ev('build', 'opened', { pr: 'https://github.com/acme/so/pull/9' }), drop, ...passes];
+  for (const forged of [ev('spec', 'closed'), ev('build', 'reverted', { pr: 'x' }), ev('review', 'closed'), ev('build', 'merged')]) { // as if written to the log directly
+    const at = derive([...head, forged])[RUN];
+    assert.deepEqual([at.outcome, !!at.reverted, decide(at, facts).action], ['in-progress', false, 'escalate'], `${forged.stage} ${forged.status}: no outcome, right after it`);
+    const events = [...head, forged, ev('intake', 'started', { association: 'OWNER' }), ev('build', 'started'), ev('review', 'started', { axes: ['code', 'security'], sha: 'abc', off: [] }), ...passes];
+    assert.deepEqual(thisRun(events).length, events.length, `${forged.stage} ${forged.status}: the boundary didn't move`);
+    const r = derive(events)[RUN];
+    assert.deepEqual([r.outcome, !!r.reverted], ['in-progress', false], `${forged.stage} ${forged.status}: no outcome`);
+    const d = decide(r, facts);
+    assert.equal(d.action, 'escalate', `${forged.stage} ${forged.status}: ${d.reasons.join('; ')}`);
+    assert.ok(d.reasons.includes('review.docs off by rule steps.off, set by a local user (unverified): mine'));
+  }
+  // F axes: a forged close mid-run doesn't reset the snapshot either
+  const cli = (args) => JSON.parse(F(args));
+  record(RUN, 'intake', 'started', { association: 'OWNER' }); record(RUN, 'build', 'started');
+  cli(['axes', RUN, 'src/a.ts']); // nothing off: the snapshot is []
+  setRule('acme/so', 'steps.off', '["review.ui"]', { reason: 'no pages', ask: YES });
+  record(RUN, 'spec', 'closed'); record(RUN, 'intake', 'started', { association: 'OWNER' }); record(RUN, 'build', 'started');
+  assert.deepEqual(cli(['axes', RUN, 'web/Button.tsx']).axes, ['code', 'security', 'ux', 'ui']);
+  unsetRule('acme/so', 'steps.off');
 });

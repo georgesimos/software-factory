@@ -99,6 +99,20 @@ try {
     return [run?.submenu.items.map((i) => i.label), channels(ipcMain), channels(w.ipc), w.getLastWebPreferences().preload ?? null, session.defaultSession.getPreloads().length];
   }, ELECTRON_OWN), [['Approve…'], [], [], null, 0]);
   for (const method of ['GET', 'POST']) assert.equal((await fetch(`${origin}/api/approve`, { method, headers: { 'x-factory-token': t, origin, 'content-type': 'application/json' }, body: method === 'POST' ? '{}' : undefined })).status, 404);
+  // A guarded rule write from the page (pipelines §5) reaches main's own dialog through guarded.request, one at a time.
+  // The dialog is stubbed in main (no clicking a native box); Cancel writes nothing.
+  await app.evaluate(({ dialog }) => {
+    globalThis.e2eBoxes = []; globalThis.e2eShow = dialog.showMessageBox;
+    dialog.showMessageBox = (...a) => new Promise((r) => { globalThis.e2eBoxes.push(a.at(-1).message); globalThis.e2eAnswer = r; });
+  });
+  const rule = async () => { const r = await fetch(`${origin}/api/onboard/rule`, { method: 'POST', headers: { 'x-factory-token': t, origin, 'content-type': 'application/json' }, body: JSON.stringify({ scope: 'acme/shop', key: 'steps.off', value: ['review.seo'], reason: 'e2e' }) }); return [r.status, await r.json()]; };
+  const [asked, busy] = [await rule(), await rule()];
+  assert.deepEqual([asked[0], asked[1].requested], [200, 'turning a pipeline step off']);
+  assert.deepEqual([busy[0], busy[1].error], [400, 'a confirmation is already open in the desktop app: answer it, then ask again']);
+  assert.deepEqual(await app.evaluate(() => { globalThis.e2eAnswer({ response: 0 }); return globalThis.e2eBoxes; }), ['Turn review steps off for acme/shop?']);
+  await app.evaluate(({ dialog }) => { dialog.showMessageBox = globalThis.e2eShow; });
+  const skillsJson = path.join(env.FACTORY_DIR, 'skills.json');
+  assert.ok(!(fs.existsSync(skillsJson) && fs.readFileSync(skillsJson, 'utf8').includes('steps.off')), 'Cancel wrote nothing');
   const other = origin.replace('127.0.0.1', 'localhost'); // the same server under another origin: only the request filter stops it
   assert.equal(await win.evaluate((u) => fetch(u, { mode: 'no-cors' }).then(() => 'loaded', () => 'blocked'), `${other}/`), 'blocked');
   assert.equal(await win.evaluate(() => window.open('http://example.invalid/')), null); // http: denied and not handed to the OS either

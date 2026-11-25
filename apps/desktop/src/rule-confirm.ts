@@ -15,6 +15,12 @@ const WORDS: Record<string, [message: (scope: string) => string, button: string,
 };
 const clean = (s: unknown) => String(s ?? '').replace(/[\x00-\x1f\x7f-\x9f​-‏‪-‮⁦-⁩]/g, ' ').slice(0, 200);
 
+/** The server's guarded.request: false while a dialog is open, so the route refuses rather than answering "requested". */
+export function requestRule(req: RuleRequest, show: ShowBox) {
+  if (open) return false;
+  void confirmRule(req, show);
+  return true;
+}
 export async function confirmRule(req: RuleRequest, show: ShowBox) {
   if (open) return null;
   open = true;
@@ -23,10 +29,11 @@ export async function confirmRule(req: RuleRequest, show: ShowBox) {
     const c = ruleChange(req.scope, req.key, raw, at), w = WORDS[c.key];
     if (!c.doing || !w) throw new Error(`${c.key} needs no confirmation: nothing to do here`); // the route only requests what loosens
     const ok = (await show({ type: 'warning', title: 'Confirm a rule change', message: w[0](c.scope),
-      detail: `Project: ${c.scope}\nRule: ${c.key}\n${c.key === 'steps.off' ? 'Now off' : 'Now'}: ${shown(c.key, c.stored)}\nAfter: ${shown(c.key, c.value)}${c.until ? `\nUntil: ${c.until}` : ''}\n\n${w[2]}${req.unset ? '' : `\n\nReason, as typed on the page: ${clean(req.reason)}`}`,
+      detail: `Project: ${c.scope}\nRule: ${c.key}\n${c.key === 'steps.off' ? 'Now off' : 'Now'}: ${c.expired ? `${shown(c.key, undefined)} (${shown(c.key, c.stored)} expired on ${c.storedUntil})` : shown(c.key, c.stored)}\nAfter: ${shown(c.key, c.value)}${c.until ? `\nUntil: ${c.until}` : ''}\n\n${w[2]}${req.unset ? '' : `\n\nReason, as typed on the page: ${clean(req.reason)}`}`,
       buttons: ['Cancel', w[1]], defaultId: 0, cancelId: 0, noLink: true })).response === 1;
     if (!ok) return null;
-    if (JSON.stringify(ruleChange(req.scope, req.key, raw, at).stored) !== JSON.stringify(c.stored)) throw new Error('the rule changed while the dialog was open: nothing was written. Request it again to see the new value.');
+    const was = (x: typeof c) => JSON.stringify([x.stored, x.storedUntil]);
+    if (was(ruleChange(req.scope, req.key, raw, at)) !== was(c)) throw new Error('the rule changed while the dialog was open: nothing was written. Request it again to see the new value.');
     const ask = () => c.scope; // the dialog was the confirmation: core's typed one would need a terminal the app has none of
     return req.unset ? unsetRule(c.scope, c.key, { reason: req.reason, ask }) : setRule(c.scope, c.key, req.raw, { ...at, ask });
   } catch (e) {

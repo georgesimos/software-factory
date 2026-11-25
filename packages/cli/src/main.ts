@@ -50,7 +50,8 @@ export async function main(argv: string[]) {
         const owned: Record<string, string> = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:passed': 'approve --merge', 'spec:decided': 'approve', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'build:opened': 'pr', 'intake:split': 'split', 'intake:decided': 'split', 'approve:closed': 'sync', 'idea:retired': 'retire' };
         const owner = owned[`${stage}:${status}`] || ({ gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop', ship: 'ship' } as Record<string, string>)[stage];
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
-        if (status === 'merged') throw new Error('"merged" is recorded by "merge" and "sync", not by hand'); // on any stage: derive() reads it as the run's outcome
+        const ender = ({ merged: '"merge" and "sync"', closed: '"sync"', reverted: '"revert"' } as Record<string, string>)[status];
+        if (ender) throw new Error(`"${status}" is recorded by ${ender}, not by hand`); // on any stage: they end a run (derive, thisRun)
         if (stage === 'review' && p.role !== 'verifier') throw new Error('axis verdicts are recorded by "review", not by hand; "event" only takes the verifier usage record ({"role":"verifier",…})');
         if (stage === 'note') throw new Error('"note" is recorded by "note" and "notes", not by hand');
         const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'hostSessionId', 'cwd', 'runner', 'localChecks', 'mergedBy',
