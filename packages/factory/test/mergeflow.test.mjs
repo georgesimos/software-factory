@@ -157,7 +157,8 @@ test('D1: turning auto-merge on is refused in an agent session, from an unverifi
     try { assert.throws(() => setAutoMerge('acme/app', true), /turning auto-merge on must come from you, not from an agent session/); assert.equal(setAutoMerge('acme/app', false).autoMerge, false); }
     finally { delete process.env.CLAUDECODE; }
     let shown = '';
-    assert.throws(() => setAutoMerge('acme/app', true, () => 'yes'), /auto-merge stays off: what you typed did not match/);
+    for (const wrong of ['yes', 'acme/appx', 'acme/ap', '']) // close is not the name: only the exact name turns it on
+      assert.throws(() => setAutoMerge('acme/app', true, () => wrong), /auto-merge stays off: what you typed did not match/, wrong);
     assert.equal(projects()['acme/app'].autoMerge, false, 'nothing written');
     assert.equal(setAutoMerge('acme/app', true, (p) => { shown = p; return 'acme/app'; }).autoMerge, true);
     assert.match(shown, /merge with nobody asked[^]*Type acme\/app to turn it on \(anything else cancels\): $/);
@@ -165,7 +166,9 @@ test('D1: turning auto-merge on is refused in an agent session, from an unverifi
   } finally { io.gh = prev; }
 });
 
-test('F automerge on and a relaxing F project set ask at the terminal: with none (an agent\'s shell), stdin can\'t answer them', async () => {
+// Unix only: a detached child there has no controlling terminal, so /dev/tty fails at once. On Windows a detached child gets a
+// console of its own, so CONIN$ opens and the read could wait for the test's timeout instead of failing.
+test('F automerge on and a relaxing F project set ask at the terminal: with none (an agent\'s shell), stdin can\'t answer them', { skip: process.platform === 'win32' && 'a detached child gets its own console on Windows' }, async () => {
   const d = repo('tty'); project('acme/tty', { path: d, ci: 'github-actions' });
   const detached = (...a) => new Promise((res) => { // no controlling terminal, as an agent's shell tool
     const c = spawn(process.execPath, [path.join(HERE, 'factory.mjs'), ...a], { env: { ...process.env, ...ID, FACTORY_DIR: io.dir, FACTORY_GH: STUB }, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });

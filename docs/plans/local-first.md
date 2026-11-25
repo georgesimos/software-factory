@@ -747,6 +747,8 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
        git host and then use the pty approval. Both now also ask at the terminal (`ttyAsk`, type the project's name), the
        same speed bump as `F approve`, not a boundary. `POST /onboard/automerge` refuses `on`, and the Setup page shows the
        command instead. Turning auto-merge off, and every tightening change, still asks nothing.
+       A host change, either way, drops `autoMerge` from projects.json (and so does the first attach that makes a project
+       `git`): a `true` kept through `github` to `git` and back would have turned auto-merge on again with nobody asked.
 8. **Docs only.** A plugin guide for hosts, trackers and CI: how to write Bitbucket, GitLab, Jenkins or Jira as one file
    each against the contract tests, and why the factory doesn't ship them (nobody can test them).
 

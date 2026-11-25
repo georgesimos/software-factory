@@ -11,10 +11,10 @@ import { setup } from './setup.mjs';
 import { HERE } from '../factory.mjs';
 import { io, read } from '../../core/src/log.ts';
 import { humanOnly, setProject } from '../../core/src/projectset.ts';
-import { setRule, whoami } from '../../core/src/rules.ts';
+import { setAutoMerge, setRule, whoami } from '../../core/src/rules.ts';
 import { builtin, load } from '../../adapters/hosts/index.ts';
 import { sync } from '../../core/src/sync.ts';
-import { baseBranch, projects, projectsFile } from '../../core/src/workspace.ts';
+import { autoMergeOn, baseBranch, projects, projectsFile } from '../../core/src/workspace.ts';
 import { UI_ROUTES, artifact } from '../../server/src/server.ts';
 
 setup();
@@ -93,6 +93,29 @@ test('a GitHub project: relaxing needs a reason and a verified login; github -> 
     assert.deepEqual([lastRule().key, lastRule().cleared], ['project.host', { base: 'dev' }]);
     sync('acme/gx', clone('gx', 'git@gitlab.com:acme/gx.git'));
     assert.throws(() => setProject('acme/gx', 'host', 'github'), /host github needs acme\/gx's clone to have the GitHub origin acme\/gx/);
+  } finally { io.gh = gh; }
+});
+
+test('auto-merge never survives a host change: github -> git -> github leaves it off, and nothing asks', () => {
+  const gh = io.gh, never = () => assert.fail('never asked');
+  try {
+    io.gh = STUB;
+    sync('acme/am', clone('am', 'https://github.com/acme/am.git'));
+    setAutoMerge('acme/am', true, () => 'acme/am');
+    assert.equal(autoMergeOn('acme/am'), true);
+    assert.match(setProject('acme/am', 'host', 'git', { reason: 'offline', ask: () => 'acme/am' }).note, /auto-merge cleared: on GitHub, F automerge turns it on/);
+    assert.equal(projects()['acme/am'].autoMerge, undefined, 'leaving GitHub clears it');
+    assert.deepEqual(lastRule().cleared, { autoMerge: true });
+    setProject('acme/am', 'host', 'github', { ask: never });
+    assert.equal(autoMergeOn('acme/am'), false, 'back on GitHub, turning it on is F automerge\'s typed confirmation again');
+    // a store an older F left with a git host and autoMerge true: back to github still starts off
+    fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), 'acme/am': { ...projects()['acme/am'], host: 'git', autoMerge: true } }));
+    setProject('acme/am', 'host', 'github', { ask: never });
+    assert.equal(autoMergeOn('acme/am'), false);
+    // the first attach that makes an entry a git project clears it too
+    fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), 'acme/ag': { autoMerge: true } }));
+    sync('acme/ag', clone('ag', 'git@gitlab.com:acme/ag.git'));
+    assert.deepEqual([projects()['acme/ag'].host, projects()['acme/ag'].autoMerge], ['git', undefined]);
   } finally { io.gh = gh; }
 });
 
