@@ -78,3 +78,73 @@ describe('Pipelines sheet', () => {
     expect(screen.queryAllByRole('button', { name: 'Pipelines' })).toHaveLength(0);
   });
 });
+
+describe('Pipelines sheet: a step’s panel writes as the Skills sheet does; a run drawn on the graph', () => {
+  const sheet = (d: FactoryData = data, onSaved = vi.fn()) => render(<PipelinesSheet open onClose={() => {}} data={d} project="acme/shop" onSaved={onSaved} />);
+  const F = 'node ~/.claude/skills/software-factory/factory.mjs';
+  it('under F ui, a model change saves through POST /api/skills with {scope, step, runner}', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify(data.skills), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    const onSaved = vi.fn();
+    sheet({ ...data, token: 'tok' }, onSaved);
+    await userEvent.click(screen.getByRole('button', { name: /^Build/ }));
+    const panel = screen.getByRole('complementary', { name: 'Build step' });
+    expect(panel).toHaveTextContent('set for this project');
+    await userEvent.selectOptions(within(panel).getByRole('combobox', { name: 'Model for Build' }), 'opus');
+    expect(fetch).toHaveBeenCalledWith('/api/skills', expect.objectContaining({ method: 'POST', body: JSON.stringify({ scope: 'acme/shop', step: 'build', runner: { use: 'default', model: 'opus' } }) }));
+    expect(await within(panel).findByRole('status')).toHaveTextContent('Saved.');
+    expect(onSaved).toHaveBeenCalledWith(data.skills);
+  });
+  it('read-only page: an effort change copies the CLI command instead', async () => {
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    const fetch = vi.fn(); vi.stubGlobal('fetch', fetch);
+    sheet();
+    await userEvent.click(screen.getByRole('button', { name: /^Build/ }));
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Effort for Build' }), 'max');
+    expect(writeText).toHaveBeenCalledWith(`${F} skills set 'acme/shop' 'build' '{"use":"default","model":"sonnet","effort":"max"}'`);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent('Command copied.');
+  });
+  it('opening another step clears the last save’s status, which was about the step before', async () => {
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText: vi.fn(async () => {}) } });
+    sheet();
+    await userEvent.click(screen.getByRole('button', { name: /^Build/ }));
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'Effort for Build' }), 'max');
+    expect(screen.getByRole('status')).toHaveTextContent('Command copied.');
+    await userEvent.click(screen.getByRole('button', { name: /^Spec/ }));
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+  it('Change runner opens the Skills picker, and the pick keeps the step’s model', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify(data.skills), { status: 200 }));
+    vi.stubGlobal('fetch', fetch);
+    sheet({ ...data, token: 'tok' });
+    await userEvent.click(screen.getByRole('button', { name: /^Build/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Change runner' }));
+    const pick = screen.getByRole('dialog', { name: 'Runner for Build' });
+    await userEvent.type(within(pick).getByRole('textbox', { name: 'Skill name' }), 'fast-build');
+    await userEvent.click(within(pick).getByRole('button', { name: 'Save' }));
+    expect(fetch).toHaveBeenCalledWith('/api/skills', expect.objectContaining({ body: JSON.stringify({ scope: 'acme/shop', step: 'build', runner: { use: 'skill', name: 'fast-build', model: 'sonnet' } }) }));
+  });
+  it('the gate is F’s own and an extra axis changes in Skills: both read-only here', async () => {
+    sheet();
+    await userEvent.click(screen.getByRole('button', { name: /^Gate/ }));
+    expect(within(screen.getByRole('complementary', { name: 'Gate step' })).queryByRole('combobox')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: /^A11y review/ }));
+    const a11y = screen.getByRole('complementary', { name: 'A11y review step' });
+    expect(a11y).toHaveTextContent('when **/*.tsx change');
+    expect(a11y).toHaveTextContent('Who runs it changes in Skills.');
+    expect(within(a11y).queryByRole('button', { name: 'Change runner' })).toBeNull();
+  });
+  it('“Show a run…” lists this project’s runs; #43 shows its loop-backs, its revert and its spend', async () => {
+    sheet();
+    const pick = screen.getByRole('combobox', { name: 'Show a run' });
+    expect(within(pick).getAllByRole('option')).toHaveLength(data.runs.filter((r) => r.id.startsWith('acme/shop#')).length + 1);
+    await userEvent.selectOptions(pick, 'acme/shop#43');
+    const graph = screen.getByRole('list', { name: 'acme/shop pipeline' });
+    expect(within(graph).getByRole('listitem', { name: /^Merge/ })).toHaveAttribute('data-status', 'passed');
+    expect(within(graph).getByRole('listitem', { name: /^Watch main/ })).toHaveTextContent('reverted');
+    expect(within(graph).getByRole('listitem', { name: /^Docs review/ })).toHaveTextContent('Skipped');
+    expect(screen.getByText('#43 · Merged · $3.84 of $5 · 2 of 3 loops')).toBeInTheDocument();
+  });
+});

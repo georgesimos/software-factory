@@ -57,3 +57,87 @@ export function pipelineGraph(p: Pipeline, plan: Record<string, StepRunner> = {}
   const placed: PipelineNode[] = nodes.map((n) => { const c = col[n.id] ?? 0; return { ...n, col: c, row: (rows[c] = (rows[c] ?? -1) + 1) }; });
   return { nodes: placed, edges };
 }
+
+// ---- a run drawn on its pipeline ----
+export type StepStatus = 'passed' | 'failed' | 'skipped' | 'pending' | 'running';
+export const STEP_STATUS: Record<StepStatus, string> = { passed: 'Passed', failed: 'Failed', skipped: 'Skipped', pending: 'Not reached', running: 'Running' };
+/** One step's latest result in a run. `review`: a review axis's verdict, with findings outranking the status word as in F. */
+export interface StepResult { status: StepStatus; note?: string; tokens?: number; ms?: number; review?: { verdict: 'passed' | 'failed'; findings: number; blocking: number; dismissed: number } }
+/** The few event fields the overlay reads (core's FactoryEvent): nothing else of an event reaches the page. */
+export interface StepEvent { ts?: string; stage?: string; status?: string; axis?: string; axes?: string[]; role?: string; next?: string; tokens?: number; findings?: { severity?: string; dismissed?: unknown }[] }
+/** Steps by node id, the forward edges the run took (`from>to`), and how often the gate looped back to each step. */
+export interface RunOverlay { steps: Record<string, StepResult>; taken: string[]; loops: Record<string, number> }
+
+const OUTCOME_NODE: Record<string, string> = { split: 'children', 'needs-info': 'ask', rejected: 'close' };
+const WAITING: Record<string, string> = { 'awaiting-approval': 'waiting for approval', decided: 'approved by a person', 'needs-info': 'waiting for answers' };
+/** Only `passed` is passed: a failure or a refusal is failed, and anything else F records leaves the step running, named. */
+const recorded = (status: string): [StepStatus, Omit<StepResult, 'status'>] =>
+  status === 'passed' ? ['passed', {}] : ['failed', 'rejected', 'closed'].includes(status) ? ['failed', status === 'failed' ? {} : { note: status }] : ['running', { note: status }];
+const ENDED = new Set(['merged', 'escalated', 'rejected', 'closed', 'split']);
+const blocks = (f: { severity?: string; dismissed?: unknown }) => (f.severity === 'high' || f.severity === 'medium') && !f.dismissed;
+
+/**
+ * Each step's status in one run, from its events alone. A step shows its latest attempt: `build started` begins an
+ * iteration and resets every step after build, and a gate loop-back puts its target back to running. The path and the
+ * loop counts cover the whole run.
+ */
+export function runOverlay({ nodes, edges }: { nodes: PipelineNode[]; edges: PipelineEdge[] }, events: StepEvent[]): RunOverlay {
+  const ids = new Set(nodes.map((n) => n.id)), steps: Record<string, StepResult> = {}, reached = new Set<string>(), loops: Record<string, number> = {};
+  const after = new Set(nodes.filter((n) => n.col > (nodes.find((x) => x.id === 'build')?.col ?? Infinity)).map((n) => n.id));
+  const since: Record<string, { ts?: string; tokens: number }> = {}; // the current attempt of each step: its start and its tokens so far
+  const put = (id: string, status: StepStatus, x: Omit<StepResult, 'status'> = {}) => {
+    if (!ids.has(id)) return;
+    steps[id] = { status, ...x };
+    if (status !== 'pending' && status !== 'skipped') reached.add(id);
+  };
+  const begin = (id: string, e: StepEvent) => { since[id] = { ts: e.ts, tokens: e.tokens ?? 0 }; put(id, 'running'); };
+  const end = (id: string, e: StepEvent, status: StepStatus, x: Omit<StepResult, 'status'> = {}) => {
+    const a = (since[id] ??= { tokens: 0 }); // a step may record twice (build's checks, then its PR): time and tokens run to the last
+    a.tokens += e.tokens ?? 0;
+    const ms = a.ts && e.ts ? Date.parse(e.ts) - Date.parse(a.ts) : NaN;
+    put(id, status, { ...(a.tokens && { tokens: a.tokens }), ...(Number.isFinite(ms) && { ms }), ...x });
+  };
+  const reset = (xs: Iterable<string>) => { for (const id of xs) { delete steps[id]; delete since[id]; } };
+  let ended = false, blocking = 0; // blocking: this iteration's undismissed high and medium findings, so the verifier had work
+  for (const e of events) {
+    const { stage, status = '' } = e;
+    if (!['intake', 'spec', 'build', 'review', 'gate', 'approve'].includes(stage ?? '')) continue; // notes, deploys, rules: not steps
+    if (!steps.ready) put('ready', 'passed');
+    ended = ENDED.has(status) || (ended && !(stage === 'intake' && status === 'started'));
+    if (stage === 'intake' || stage === 'spec') {
+      if (status === 'started') begin(stage, e);
+      else if (WAITING[status]) put(stage, 'running', { note: WAITING[status] });
+      else if (status === 'split') end(stage, e, 'passed', { note: status }); // intake's own decision: the child issues carry the work
+      else end(stage, e, ...recorded(status));
+      if (OUTCOME_NODE[status]) put(OUTCOME_NODE[status]!, 'passed');
+    } else if (stage === 'build') {
+      if (status === 'started') { reset(after); blocking = 0; begin('build', e); }
+      else if (status === 'opened') end('build', e, 'running', { note: 'change request open, CI pending' });
+      else end('build', e, ...recorded(status));
+    } else if (stage === 'review' && e.role === 'verifier') {
+      if (status === 'started') begin('verifier', e); else end('verifier', e, ...recorded(status));
+    } else if (stage === 'review' && status === 'started') {
+      for (const n of nodes) if (n.kind === 'review') (e.axes ?? []).includes(n.id.slice(7)) ? begin(n.id, e) : put(n.id, 'skipped');
+    } else if (stage === 'review' && e.axis) {
+      const fs = e.findings ?? [], n = fs.filter(blocks).length, verdict = n ? 'failed' : 'passed';
+      blocking += n;
+      end(`review.${e.axis}`, e, verdict, { review: { verdict, findings: fs.length, blocking: n, dismissed: fs.filter((f) => f.dismissed).length } });
+    } else if (stage === 'gate') {
+      if (!steps.verifier && ids.has('verifier')) { put('verifier', 'skipped', { note: blocking ? 'no record' : 'nothing blocking to verify' }); reached.add('verifier'); } // the run went through it
+      const back = e.next === 'spec' || e.next === 'build' ? e.next : '';
+      put('gate', status === 'passed' ? 'passed' : 'failed', status === 'passed' ? {} : { note: back ? `back to ${back}` : 'to you' });
+      if (back === 'spec') reset([...after, 'build']); // back before build: build and everything after it run again
+      if (back) { loops[back] = (loops[back] ?? 0) + 1; put(back, 'running', { note: 'sent back by the gate' }); delete since[back]; }
+    } else if (stage === 'approve') {
+      if (status === 'reverted') put('watch', 'failed', { note: 'reverted' });
+      else if (status === 'merged') put('merge', 'passed');
+      else if (status === 'escalated' || status === 'closed') put('merge', 'failed', { note: status === 'escalated' ? 'escalated to you' : 'closed' });
+      else if (status === 'decided') put('merge', 'running');
+    }
+  }
+  for (const n of nodes) {
+    const s = steps[n.id];
+    if (!s || (ended && s.status === 'running')) steps[n.id] = { status: 'pending' }; // a finished run has nothing running
+  }
+  return { steps, taken: edges.filter((x) => !x.loop && reached.has(x.from) && reached.has(x.to)).map((x) => `${x.from}>${x.to}`), loops };
+}

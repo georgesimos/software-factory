@@ -26,6 +26,9 @@ describe('factory', () => {
     expect(stageState(run, 'gate').state).toBe('pending');
     expect(stageState({ id: 'x', stage: 'build', events: [{ stage: 'build', status: 'started' }] }, 'spec').state).toBe('skipped');
   });
+  it('build’s change request open, CI pending, is active, never pending', () => {
+    expect(stageState({ id: 'x', stage: 'build', events: [{ stage: 'build', status: 'started' }, { stage: 'build', status: 'opened' }] }, 'build').state).toBe('active');
+  });
 
   it('syncCounts splits PRs from session-only branches', () => {
     expect(syncCounts({ repo: 'a/b', path: '/x', added: ['a/b#1', 'a/b#2', 'a/b:wip'], attached: ['a/b:old'], closed: [] })).toEqual({ prs: 2, sessions: 2, closed: 0 });
