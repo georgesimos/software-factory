@@ -23,7 +23,8 @@ export function demo() {
     ev(run, 'intake', 'started', { title, url: `https://github.com/acme/shop/issues/${n}`, author: association === 'OWNER' ? 'acme' : 'drive-by', association });
   const pass = (run: string, axes: string[], usage?: boolean) => axes.forEach((axis, i) => ev(run, 'review', 'passed', { axis, findings: [], ...(usage ? { usage: { input: 9 + i, output: 2400 + 300 * i, cacheRead: 38000, cacheWrite: 9000 }, model: 'claude-sonnet-5-5', tokens: 49409 + 301 * i } : {}) }));
   const g = (run: string, extra?: Record<string, unknown>) => { const { status, ...p } = gate(getRun(run)); ev(run, 'gate', status, { ...p, ...extra }); };
-  const d = (run: string, facts: Facts) => { const x = decide(getRun(run), facts); ev(run, 'approve', 'decided', x); return x; };
+  // the demo project turned auto-merge on
+  const d = (run: string, facts: Facts) => { const x = decide(getRun(run), { autoMerge: true, ...facts }); ev(run, 'approve', 'decided', x); return x; };
 
   let R = 'acme/shop#41';
   intake(R, 'Make the site support crypto payments', 41, 'NONE');

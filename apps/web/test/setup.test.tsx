@@ -148,12 +148,13 @@ describe('Setup wizard', () => {
   });
 
   it('read-only: auto-merge reads the page data', async () => {
-    wizard({ data: { ...data, autoMerge: { 'acme/budget': false } } });
+    wizard({ data: { ...data, autoMerge: { 'acme/budget': true } } });
     await step(/^Rules/);
     await userEvent.click(screen.getByRole('button', { name: 'acme/budget' }));
-    expect(screen.getByRole('checkbox', { name: /auto-merge/ })).not.toBeChecked();
-    await userEvent.click(screen.getByRole('button', { name: 'acme/shop' }));
     expect(screen.getByRole('checkbox', { name: /auto-merge/ })).toBeChecked();
+    await userEvent.click(screen.getByRole('button', { name: 'acme/shop' }));
+    expect(screen.getByRole('checkbox', { name: /auto-merge/ })).not.toBeChecked(); // D1: no setting is off
+    expect(screen.getByText(/^Off \(the default\): a run whose gates pass escalates, and you merge its PR in GitHub\./)).toBeInTheDocument();
   });
 
   it('Alt+Arrow moves between steps, but not from a field', async () => {

@@ -4,13 +4,19 @@ import { MAX_DIFF, MAX_ISSUES_PER_SESSION, PROJECT_BUDGET_USD, isLocal } from '.
 import { STEP_KEYS, isObj, isStepKey, readSkills, writeSkills, type ScopeConfig, type SkillsConfig } from './skills.ts';
 import { dashboard } from './log.ts';
 import { gh } from './github.ts';
-import { git, hostFn, projects, projectsFile } from './workspace.ts';
+import { git, hostFn, hostOf, projects, projectsFile } from './workspace.ts';
+import { humanOnly } from './projectset.ts';
 import { log, stateDir } from './log.ts';
 import type { Rule } from './types.ts';
 
 export function setAutoMerge(repo: string, on: unknown) {
   if (!projects()[repo]) throw new Error(`${repo} is not attached; run sync first`);
   if (typeof on !== 'boolean') throw new Error('auto-merge must be on or off');
+  if (on) { // D1: on lets runs merge with nobody asked, so it comes from you (F automerge, or the page's toggle in F ui), verified where the host can verify
+    if (hostOf(repo) !== 'github') throw new Error(`${repo} is a git project: it always asks before merging (F approve RUN --merge)`);
+    humanOnly('turning auto-merge on');
+    if (whoami('turning auto-merge on').via !== 'github') throw new Error('turning auto-merge on for a GitHub project needs a verified login (gh auth login)');
+  }
   fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...projects()[repo], autoMerge: on } }, null, 2));
   dashboard.render();
   return projects()[repo];

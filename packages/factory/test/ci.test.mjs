@@ -89,8 +89,8 @@ test('facts and postmerge read the project\'s provider: GitHub\'s by default, F\
     project('acme/ci', {});
     assert.equal(ciOf('acme/ci'), 'github-actions');
     assert.equal(ciOf('local/x'), 'local', 'a git project with no ci set');
-    // no ci key: what facts() always returned
-    assert.deepEqual(facts(run), { association: 'OWNER', autoMerge: true, checks: 'pass', additions: 3, deletions: 1, files: ['src/a.ts', 'src/a.test.ts'], rules: {} });
+    // no ci key: what facts() always returned, but auto-merge off: no autoMerge key asks (D1, local-first PR 7)
+    assert.deepEqual(facts(run), { association: 'OWNER', autoMerge: false, checks: 'pass', additions: 3, deletions: 1, files: ['src/a.ts', 'src/a.test.ts'], rules: {} });
     assert.ok(calls().some((c) => c.includes('pr checks')));
     record(run.id, 'build', 'passed', { pr: PR });
     assert.deepEqual(postmerge(run.id), { sha: MERGED, state: 'pass', failed: [] });
@@ -102,7 +102,7 @@ test('facts and postmerge read the project\'s provider: GitHub\'s by default, F\
     assert.equal(decide(run, facts(run)).action, 'escalate', 'a throwing provider escalates under advisory too');
     delete process.env.STUB_CI_FAIL;
     // ci local: F's own checks on the reviewed commit, no gh pr checks
-    project('acme/ci', { ci: 'local' });
+    project('acme/ci', { ci: 'local', autoMerge: true }); // D1: on, so the merge rests on CI alone
     setRule('acme/ci', 'ci', 'required', { reason: 'back on' });
     fs.rmSync(ghLog, { force: true });
     assert.deepEqual([facts(run).checks, facts(run).ciDetail], ['none', 'no checks.commands rule, so nothing was checked']);

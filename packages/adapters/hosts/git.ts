@@ -151,10 +151,12 @@ const checkouts = (git: Git, path: string, ref: string) => git('-C', path, 'work
   .map((b) => ({ dir: /^worktree (.+)$/m.exec(b)?.[1] ?? '', on: /^branch (.+)$/m.exec(b)?.[1], gone: /^prunable/m.test(b) })).filter((w) => w.on === ref);
 // An ignored file the squash would overwrite or delete: at a changed path, under one (a directory that becomes a file),
 // or in the way of one (a file where a directory comes). read-tree treats ignored files as expendable; the user may not.
+// With core.ignorecase (macOS, Windows) Foo.o and foo.o are one file on disk, so names compare case-folded.
 function ignoredInTheWay(git: Git, dir: string, paths: string[]) {
   // --directory lists a wholly ignored directory once (node_modules/), so the output stays small; no pathspecs, so no argv limit
   const ignored = git('-C', dir, 'ls-files', '-z', '-o', '-i', '--exclude-standard', '--directory').split('\0').filter(Boolean).map((p) => p.replace(/\/$/, ''));
-  return ignored.find((i) => paths.some((p) => i === p || i.startsWith(`${p}/`) || p.startsWith(`${i}/`)));
+  const fold = tryGit(git, '-C', dir, 'config', '--type=bool', 'core.ignorecase') === 'true' ? (x: string) => x.toLowerCase() : (x: string) => x;
+  return ignored.find((i) => paths.some((q) => { const [a, b] = [fold(i), fold(q)]; return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`); }));
 }
 
 // Squashes exactly sha onto the base as it is now, then moves the base only if nobody moved it since (see the rule above).
@@ -181,9 +183,13 @@ export function merge(ctx: Ctx, { repo, path, id, sha, base }: { repo: string; p
     mergeSha = git('-C', path, 'commit-tree', tree, '-p', seen, '-m', msg).trim();
   } catch (e) { return no(`cannot commit the squash of ${branch}: ${firstLine(e)}`); }
   if (origin) {
+    // The check below reads the URL origin fetches from; the push goes to its push URL. They must be one and the same repo.
+    const url = (...push: string[]) => tryGit(git, '-C', path, 'remote', 'get-url', ...push, '--all', 'origin');
+    if (!url() || url() !== url('--push') || url()!.includes('\n')) return no(`origin pushes to a different URL than it fetches from (remote.origin.pushurl or url.*.pushInsteadOf), so the factory can't check the ${base} it would push to: merge ${branch} yourself, then F close RUN --merged <sha>`);
     // A plain push refuses only a non-fast-forward: origin's base reset to an ancestor of seen, or deleted, would take it.
-    // So origin's base must still be exactly seen. shortcut: a reset or delete between this check and the push still
-    // lands (docs/plans/local-first.md, 4b known limits); closing it needs a lease on the exact sha, which the no-force rule forbids for now.
+    // So origin's base must still be exactly seen. shortcut: a reset or delete between this check and the push still lands
+    // (docs/plans/local-first.md, 4b known limits). The owner accepted that race over a guarded push (PR 7); closing it is this
+    // push with git's lease on refs/heads/<base> at seen (hosts/README.md has the exact form), and that grep allowing only it.
     const now = tryGit(git, '-C', path, 'ls-remote', 'origin', `refs/heads/${base}`);
     if (now === null) return no(`cannot read ${base} on origin: merge again`);
     const at = now.split('\n').find((l) => l.endsWith(`\trefs/heads/${base}`))?.split('\t')[0];
@@ -197,7 +203,8 @@ export function merge(ctx: Ctx, { repo, path, id, sha, base }: { repo: string; p
   // No remote: compare-and-swap the base. Where it is checked out (once at most), the checkout must be there and clean, a dry
   // run must show its files can follow, and no ignored file may be in the way; after the swap the checkouts are listed again
   // and that one's HEAD re-read, and any change undoes the swap. shortcut: a checkout switched between that re-check and
-  // read-tree still gets the squash staged; git has no lock spanning both. Upgrade if it is ever seen in practice.
+  // read-tree still gets the squash staged; git has no lock spanning both. So does a checkout of the base made between the
+  // swap and the re-list: the undo moves the ref back under it. Upgrade if either is ever seen in practice.
   const before = checkouts(git, path, ref);
   if (before.length > 1) return no(`${base} is checked out in ${before.length} worktrees (${before.map((w) => w.dir).join(', ')}): leave one, then merge again`);
   const wt = before[0];

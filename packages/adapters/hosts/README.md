@@ -31,8 +31,8 @@ Change requests (PRs on GitHub), all optional too:
 | Function | Returns | Must |
 |---|---|---|
 | `listChangeRequests(ctx, {repo, path, base?})` | `{base, open: [{id, url, title, branch, headSha, closes, author, association}], doneBranches}` | The default branch, the open change requests, and the branches of recently merged or closed ones. |
-| `changeRequest(ctx, {repo, path, id, base?, sha?})` | `{state: open\|merged\|closed\|unknown, detail?, approval, branch, fork, mergedAt, mergedBy, mergeSha}` | One change request. Throw when the host can't be read: the caller reports it. |
-| `merge(ctx, {repo, path, id, sha, base})` | `{merged, sha?, detail?}` | Merge exactly `sha`. Never force anything. |
+| `changeRequest(ctx, {repo, path, id, base?, sha?})` | `{state: open\|merged\|closed\|unknown, detail?, headSha, approval, branch, fork, mergedAt, mergedBy, mergeSha}` | One change request. Throw when the host can't be read: the caller reports it. `F merge` merges only an open one from the run's own branch, never a fork (a missing `fork` on GitHub counts as one), whose `headSha` is the reviewed commit. |
+| `merge(ctx, {repo, path, id, sha, base})` | `{merged, sha?, detail?}` | Merge exactly `sha` into `base` (the project's own, resolved by core). Never force anything. `merged: false` escalates with the `detail`; only `merged: true` is recorded as merged. |
 | `openChangeRequest(ctx, {repo, path, branch, base, title, body, labels, draft})` | `{id, url?}` | Open one from a branch already pushed; `draft` (from `F pr`) until a human or `F merge` marks it ready. |
 | `escalate(ctx, {repo, path, id?, issue, body})` | `{posted, labelled, ready, detail?}` | For `F escalate`: mark the change request `id` ready and `factory:needs-human`, with `body` as one comment; with no `id`, label and comment on the issue. Cosmetic: report what failed, don't throw, except for an `id` that isn't the repo's. A host with no comments returns `posted: false` and says why. |
 | `publicUrl`, `secretPatterns` | regexes | The host's public URLs (scrubbed from the published page) and token shapes (refused in it). |
@@ -50,12 +50,17 @@ there is one, with a plain push. It refuses a branch with nothing beyond the bas
 sha onto the base it just fetched (`merge-tree --write-tree` and `commit-tree -p <seen>`, with no checkout). It then
 moves the base only by:
 - **A plain push of that commit.** The remote refuses it as a non-fast-forward if anyone moved the base on, and an
-  `ls-remote` just before the push refuses a base reset backwards or deleted since the fetch.
+  `ls-remote` just before the push refuses a base reset backwards or deleted since the fetch. An origin whose push URL
+  isn't its fetch URL (`remote.origin.pushurl`, `url.*.pushInsteadOf`, or several URLs) is refused: the `ls-remote` would
+  read another repo. A reset or delete between that `ls-remote` and the push still lands: the owner accepted that race
+  rather than a guarded push (local-first PR 7). Closing it later is one change: that push becomes
+  `--force-with-lease=refs/heads/<base>:<seen>` (`seen` is in scope), and the force-flag grep allows exactly that form.
 - **With no remote, `update-ref refs/heads/<base> <new> <seen>`:** a compare-and-swap, forwards or backwards. When the
   base is checked out, in one worktree at most:
   - the worktree must exist and be clean;
   - a dry run (`read-tree -m -u -n`) must show its files can follow, with no untracked file in the way;
-  - no ignored file may sit at, under, or in the way of a path the squash changes.
+  - no ignored file may sit at, under, or in the way of a path the squash changes (compared case-folded under
+    `core.ignorecase`, where `Foo.o` and `foo.o` are one file).
 
   After the swap, the base's checkouts are listed again and that one's HEAD is re-read. Any change undoes the swap;
   otherwise `read-tree -m -u` updates the files.
