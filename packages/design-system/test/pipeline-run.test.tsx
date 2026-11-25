@@ -270,3 +270,25 @@ describe('the graph’s accessibility and ids', () => {
     expect(rule).not.toMatch(/opacity/);
   });
 });
+
+describe('a run that ends while a step is still going', () => {
+  const asked = [e('intake', 'started'), e('intake', 'passed'), e('spec', 'awaiting-approval')];
+  it('closed while spec waited for approval: spec is stopped with its last note, and what came after was never reached', () => {
+    const o = runOverlay(G, [...asked, e('approve', 'closed')]);
+    expect(o.steps.spec).toEqual({ status: 'stopped', note: 'waiting for approval' });
+    expect(o.steps.build).toEqual({ status: 'pending' });
+  });
+  it('rejected by a new intake while spec waited: spec is stopped', () => {
+    expect(runOverlay(G, [...asked, e('intake', 'started'), e('intake', 'rejected')]).steps.spec).toEqual({ status: 'stopped', note: 'waiting for approval' });
+  });
+  it('closed while build’s change request was open: build is stopped, CI pending; one with no note is stopped too', () => {
+    const built = [e('intake', 'started'), e('intake', 'passed'), e('spec', 'passed'), e('build', 'started')];
+    expect(runOverlay(G, [...built, e('build', 'opened'), e('approve', 'closed')]).steps.build).toMatchObject({ status: 'stopped', note: 'change request open, CI pending' });
+    expect(runOverlay(G, [...built, e('approve', 'closed')]).steps.build).toMatchObject({ status: 'stopped' });
+  });
+  it('the graph reads it out: “Stopped”, then the note', () => {
+    render(<PipelineGraph name="acme/shop" pipeline={P} cap={3} costCap={5} runs={[run('acme/shop#9', [...asked, e('approve', 'closed')], { outcome: 'closed' })]} />);
+    fireEvent.change(screen.getByRole('combobox', { name: 'Show a run' }), { target: { value: 'acme/shop#9' } });
+    expect(screen.getByRole('button', { name: /^Spec/ })).toHaveAccessibleName(/Stopped · waiting for approval/);
+  });
+});
