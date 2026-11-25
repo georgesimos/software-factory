@@ -3,9 +3,9 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import state from '../fixtures/state.json';
 import { App } from '../src/App.tsx';
+import { pipelineGraph } from '@software-factory/design-system';
 import { normData, type FactoryData, type Pipeline } from '../src/data.ts';
 import { PipelinesSheet } from '../src/Pipelines.tsx';
-import { pipelineGraph } from '../src/pipelineModel.ts';
 
 const data = normData(state as unknown as FactoryData);
 const P = data.skills!.plans!['acme/shop']!.pipeline!;
@@ -47,7 +47,7 @@ describe('Pipelines sheet', () => {
     expect(screen.getByText('loops ≤ 3 · $5 / run')).toBeInTheDocument();
     expect(screen.getByText(/host github/)).toBeInTheDocument();
     expect(screen.getByText('pipeline.json').closest('details')).toHaveTextContent('"tracker": "github-issues"');
-    const canvas = graph.closest('.web-pl-canvas') as HTMLElement;
+    const canvas = graph.closest('.sf-pl-canvas') as HTMLElement;
     expect(canvas.style.transform).toBe('scale(1)'); // opens readable, at zoom 1; Fit is a button
     expect(screen.getByText(/Issues labelled factory:ready in GitHub Issues start here\./)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }));

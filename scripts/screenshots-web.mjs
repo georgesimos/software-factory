@@ -50,7 +50,7 @@ for (const theme of ['light', 'dark']) {
     await save('skills');
     await page.keyboard.press('Escape'); // then the Pipelines sheet, as it opens (zoom 1)
     await page.getByRole('button', { name: 'Pipelines' }).click();
-    await page.waitForSelector('dialog.web-pl[open] .web-pl-canvas li');
+    await page.waitForSelector('dialog.web-pl[open] .sf-pl-canvas li');
     await overflow('pipelines sheet');
     if (await page.evaluate(() => { const d = document.querySelector('dialog.web-pl'); return d.scrollWidth > d.clientWidth; })) problems.push(`${tag}: the Pipelines sheet scrolls sideways`);
     await save('pipelines');

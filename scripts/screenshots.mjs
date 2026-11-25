@@ -45,7 +45,7 @@ for (const theme of ['light', 'dark']) {
     await page.addStyleTag({ content: '.pg-top { position: static !important; }' }); // keep the sticky bar out of section shots
     const save = async (name, fn) => { const f = path.join(OUT, `${tag}-${name}.png`); await fn(f); shots.push(f); };
     await save('full', (f) => page.screenshot({ path: f, fullPage: true }));
-    for (const id of ['tokens', 'basics', 'factory', 'onboarding', 'board', 'detail']) {
+    for (const id of ['tokens', 'basics', 'factory', 'onboarding', 'board', 'detail', 'pipelines']) {
       await save(id, (f) => page.locator(`#${id}`).screenshot({ path: f }));
     }
     // Interactive states: run-detail sheet and the command menu.

@@ -21,4 +21,5 @@
 @import "./factory/Timeline.css";
 @import "./factory/CommandMenu.css";
 @import "./factory/Sessions.css";
+@import "./factory/PipelineGraph.css";
 @import "./onboarding/ProjectPicker.css";

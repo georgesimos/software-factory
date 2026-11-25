@@ -1,4 +1,5 @@
-import { repoOf, type Burn, type BurnCell, type Deploy, type Metrics, type Run } from '@software-factory/design-system';
+import { repoOf, type Burn, type BurnCell, type Deploy, type Metrics, type Pipeline, type Run, type StepRunner } from '@software-factory/design-system';
+export type { Pipeline, StepRunner }; // the design system declares them: its pipeline graph draws F's shape
 
 export interface Rule { key?: string; value?: unknown; scope?: string; setBy?: string; via?: string; setAt?: string; reason?: string; until?: string }
 export interface RuleChange { ts?: string; run?: string; status?: string; key?: string; value?: unknown; setBy?: string; via?: string; reason?: string; until?: string }
@@ -13,14 +14,7 @@ export interface Idea {
   next?: IdeaIssue; remote?: { url?: string };
 }
 export interface Harness { id: string; label?: string; install?: string }
-/** A step's runner in skills.json (packages/core/src/skills.ts checkRunner). Extra axes add `axis` and `when`. */
-export interface StepRunner { use?: string; name?: string; path?: string; harness?: string; model?: string; effort?: string; fallback?: string[]; axis?: string; when?: string[] }
 export interface CatalogEntry { source: string; group: string; name: string; kind: string; desc?: string; runner: StepRunner }
-/** A project's pipeline as F resolves it (packages/core/src/skills.ts pipeline()): the Pipelines page draws only this. */
-export interface Pipeline {
-  host: string | null; tracker: string | null; locked: string[]; optional: string[]; steps: string[]; intake: string[]; loops: string[];
-  axes: { axis: string; when: string | string[] }[]; off: string[]; custom: Record<string, StepRunner[]>; warnings: string[];
-}
 /** skillsData(): raw config (to tell "set here" from "inherited"), resolved plans, the catalog, models and presets. */
 export interface SkillsData {
   error?: string; steps?: string[]; required?: string[]; scopes?: string[];

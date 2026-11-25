@@ -4,10 +4,11 @@ import { Board } from './Board.tsx';
 import { RUNS } from './fixtures/index.ts';
 import { Basics, FactoryParts } from './Gallery.tsx';
 import { Onboarding } from './Onboarding.tsx';
+import { Pipelines } from './Pipelines.tsx';
 import { RunDetail } from './RunDetail.tsx';
 import { Tokens } from './Tokens.tsx';
 
-const SECTIONS = [['tokens', 'Tokens'], ['basics', 'Basics'], ['factory', 'Factory'], ['onboarding', 'Onboarding'], ['board', 'Board'], ['detail', 'Run detail']] as const;
+const SECTIONS = [['tokens', 'Tokens'], ['basics', 'Basics'], ['factory', 'Factory'], ['onboarding', 'Onboarding'], ['board', 'Board'], ['detail', 'Run detail'], ['pipelines', 'Pipelines']] as const;
 
 const Sec = ({ id, title, lede, children }: { id: string; title: string; lede: string; children: ReactNode }) => (
   <section id={id} className="pg-section" aria-labelledby={`${id}-h`}>
@@ -46,6 +47,7 @@ export function App() {
         <Sec id="onboarding" title="Onboarding" lede="Discover every local git clone, pick several, attach them in one go."><Onboarding /></Sec>
         <Sec id="board" title="Board" lede="The dashboard, rebuilt from components. Click a card for its detail sheet; ⌘K jumps to any run."><Board selected={selected} onSelect={setSelected} /></Sec>
         <Sec id="detail" title="Run detail" lede="acme/shop#43: two loop-backs, a dismissed finding, merged then reverted."><div className="pg-detail-frame"><RunDetail run={detail} /></div></Sec>
+        <Sec id="pipelines" title="Pipelines" lede="acme/shop's sample pipelines: the first match wins and the default catches the rest. Each keeps the locked steps; caps only go down."><Pipelines /></Sec>
       </main>
       <CommandMenu open={menu} onOpenChange={setMenu} commands={commands} />
     </>
