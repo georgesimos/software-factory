@@ -366,7 +366,7 @@ export function projectStatus(repo: string, { events = read(), runs }: { events?
   const merged = (k: string) => runs[runOf(k) as string]?.outcome === 'merged'; // undefined finds no run, as before
   const issues = (p.created ? p.created.filter((i) => i.kind !== 'epic') : (p.plan?.issues || []) as PlanIssue[]).map((i) => {
     const run = runOf(i.key), r = run && runs[run];
-    const state = !run ? 'planned' : r ? (r.reverted ? 'reverted' : r.outcome) : (i.dependsOn || []).every(merged) ? 'ready' : 'blocked';
+    const state = !run ? 'planned' : r ? (r.reverted ? 'reverted' : waits(r) ? 'awaiting-approval' : r.outcome) : (i.dependsOn || []).every(merged) ? 'ready' : 'blocked';
     return { key: i.key, title: i.title, milestone: i.milestone, dependsOn: i.dependsOn || [], run: run || null, url: ids[i.key]?.url || null, state };
   });
   const milestones = [...new Set(issues.map((i) => i.milestone))].map((name) => {
@@ -374,7 +374,7 @@ export function projectStatus(repo: string, { events = read(), runs }: { events?
     return { name, merged: of.filter((i) => i.state === 'merged').length, total: of.length };
   });
   const lim = limits(repo), burn = projectBurn(p, runs);
-  const working = p.loop.state === 'running' && issues.find((i) => i.run === p.loop.last && (!runs[i.run] || runs[i.run]!.outcome === 'in-progress'));
+  const working = p.loop.state === 'running' && issues.find((i) => i.run === p.loop.last && (!runs[i.run] || runs[i.run]!.outcome === 'in-progress' && !waits(runs[i.run])));
   const t = loadTemplates()[p.stack as string], checks = (policyOf(repo)['checks.commands']?.value || t?.checks || []) as string[]; // rules.ts checks it is a list of commands
   return {
     run: p.id, repo, idea: p.idea, stack: p.stack, visibility: p.visibility, dryRun: p.dryRun, host: p.host, tracker: p.tracker, started: p.started, updated: p.updated,
@@ -386,6 +386,9 @@ export function projectStatus(repo: string, { events = read(), runs }: { events?
     loop: { ...p.loop, maxIssuesPerSession: lim.maxIssuesPerSession }, checks, goal: goalFor(checks),
   };
 }
+
+/** A run whose merge waits for F approve RUN --merge (a git project, local-first PR 7): no agent resumes it. */
+const waits = (r?: Run) => r?.outcome === 'in-progress' && r.decision?.action === 'await-approval';
 
 export function ideas(events: FactoryEvent[] = read(), runs?: Record<string, Run>) {
   const repos = [...new Set(events.filter((e) => PROJECT_EVENTS[e.stage] && String(e.run).endsWith(':project')).map((e) => e.run.slice(0, -':project'.length)))];
@@ -401,6 +404,7 @@ export async function loop(repo: string) {
   const runs = allRuns(), lim = limits(repo), last = p.loop.last;
   const status = () => projectStatus(repo);
   const stop = (reason: string) => { emit(repo, 'loop', 'stopped', { reason }); return { state: 'stopped', reason, project: status() }; };
+  if (last && waits(runs[last])) return stop(`${last} awaits F approve ${last} --merge`); // a git project's merge: only the user goes on
   if (p.loop.state === 'running' && last && (!runs[last] || runs[last].outcome === 'in-progress')) {
     const c = claimedElsewhere(last);
     if (c !== undefined) return stop(`${last} is held by another launcher${c ? ` (${c.launcher}, pid ${c.pid})` : ''}; if that is stuck: ${unclaimCmd(last, c)}`);

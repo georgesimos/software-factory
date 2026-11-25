@@ -217,6 +217,10 @@ export async function projectTest({ uiHandle, read, project: { validateIssues, v
   merged('acme/budget#1');
   assert.equal(cli(['loop', 'acme/budget']).next, 'acme/budget#2');
   append('acme/budget#2', 'intake', 'started', { association: 'OWNER' });
+  append('acme/budget#2', 'approve', 'decided', { action: 'await-approval', reasons: ['auto-merge is turned off for this project'] }); // F merge on a git project
+  const waiting = cli(['project', 'acme/budget']); // the loop still says running: the status never offers it as the next to build
+  assert.deepEqual([waiting.loop.state, waiting.issues.find((x) => x.run === 'acme/budget#2').state, waiting.next?.run], ['running', 'awaiting-approval', undefined]);
+  for (let i = 0; i < 2; i++) assert.equal(cli(['loop', 'acme/budget']).reason, 'acme/budget#2 awaits F approve acme/budget#2 --merge', 'never resume, while running or once stopped');
   append('acme/budget#2', 'approve', 'escalated');
   assert.match(cli(['loop', 'acme/budget']).reason, /^acme\/budget#2 is escalated: a human needs to resolve it/); // first escalation stops
   assert.equal(cli(['loop', 'acme/budget']).state, 'stopped'); // continue: still unresolved

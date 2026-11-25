@@ -129,7 +129,7 @@ test('track records through factory record(): typed fields, deduped, cached per 
   // decide(): deploy.preview=required is met by the fake provider, because only kind/env/state/sha count.
   const ok = { ...r, association: 'OWNER', iteration: 1, pr: 'x', reviewedSha: SHA, axes: { 1: ['code'] }, reviews: { 1: { code: { verdict: 'passed' } } } };
   const rules = { 'deploy.preview': { value: 'required', reason: 'r', setBy: 'acme', setAt: '2026-11-22T00:00:00Z' } };
-  const facts = { checks: 'pass', additions: 1, deletions: 0, files: ['README.md'], rules };
+  const facts = { autoMerge: true, checks: 'pass', additions: 1, deletions: 0, files: ['README.md'], rules };
   assert.equal(F.decide(ok, facts).action, 'merge');
   assert.match(F.decide(ok, facts).reasons.join(), /preview ready: https:\/\/pr-1\.fake\.host \(fake-host\)/);
   assert.equal(F.decide({ ...ok, reviewedSha: 'e'.repeat(40) }, facts).action, 'escalate');

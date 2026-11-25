@@ -12,7 +12,7 @@ import { harnesses } from '../../adapters/harnesses/index.ts';
 import { ideas, startIdea } from '../../core/src/project.ts';
 import { metrics } from '../../core/src/gate.ts';
 import { fCmd, onboardConfig, onboardState, readOnboard, setShip } from '../../core/src/onboard.ts';
-import { projects, wtInfo } from '../../core/src/workspace.ts';
+import { autoMergeOn, projects, wtInfo } from '../../core/src/workspace.ts';
 import { remoteParts } from '../../core/src/remote.ts';
 import { builtin as builtinHosts } from '../../adapters/hosts/index.ts';
 import { HOST_ID, dashboard, read, readArchive, runDir, sessionsFile, stateDir } from '../../core/src/log.ts';
@@ -509,7 +509,7 @@ export function pageData(extra: object = {}, { sheet = false, publish = false } 
   const sheetData = sheet ? { metricsLog: sheetMetrics(events, Object.keys(byProject), now, readArchive().filter((a) => !hidden(a.id))) } : {}; // a failure fails the publish: F render --artifact says why
   return { generated: new Date(now).toISOString(), cap: CAP, costCap: COST_CAP, tokenCap: TOKEN_CAP, projects: Object.keys(projects()), metrics: { all: metrics(runs), byProject }, runs, ...ruleData, skills: skillsData(Object.keys(byProject)),
     harnesses: harnesses.map(({ id, label, install }) => ({ id, label, install })), hooks: hooks(), onboard: readOnboard(), fCmd: F_CMD, ...(!F_CMD && { fMissing: true }),
-    autoMerge: Object.fromEntries(Object.entries(projects()).map(([r, p]) => [r, p?.autoMerge !== false])), ...idea, ...sheetData, ...extra };
+    autoMerge: Object.fromEntries(Object.keys(projects()).map((r) => [r, autoMergeOn(r)])), ...idea, ...sheetData, ...extra };
 }
 export function page(extra: object = {}, opts?: { sheet?: boolean; publish?: boolean }) {
   const data = JSON.stringify(pageData(extra, opts)).replace(/</g, '\\u003c'), html = fs.readFileSync(APP_HTML, 'utf8');

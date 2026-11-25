@@ -24,6 +24,9 @@ export const saveProject = (repo: string, p: string) => { fs.mkdirSync(stateDir(
 /** The project's host: set at attach (sync), never read from the id's shape, except that a local/ id is never GitHub. A legacy
  *  entry, or none, is GitHub. stored: the host to use instead of projects.json's (attach, before it writes). */
 export const hostOf = (repo: string, stored = projects()[repo]?.host) => repo.startsWith('local/') ? 'git' : stored ?? 'github';
+/** D1: a project merges on the gates alone only when it turned auto-merge on (autoMerge: true); a missing setting asks. The git
+ *  host always asks (D4): nobody there is verified. */
+export const autoMergeOn = (repo: string) => hostOf(repo) === 'github' && projects()[repo]?.autoMerge === true;
 /** Refuses a GitHub call for a git-hosted project, before anything runs, with what was being done. */
 export function requireGithub(repo: string, doing: string) {
   if (hostOf(repo) !== 'github') throw new Error(`${repo} is a git project, not on GitHub: ${doing} works only for GitHub projects for now`);
@@ -56,6 +59,8 @@ export const baseBranch = (repo: string, repoPath: string, host = hostOf(repo)) 
 // The base as a full ref, never a short name: a tag main or a branch origin/main, which anyone with the clone (a build agent in its
 // worktree too) can create, would otherwise stand in for it and hide the run's diff.
 export const baseRef = (repoPath: string, base: string) => { const r = `refs/remotes/origin/${base}`; try { git('-C', repoPath, 'rev-parse', '--verify', '-q', `${r}^{commit}`); return r; } catch { return `refs/heads/${base}`; } };
+/** Fetches origin's base into refs/remotes/origin/<base> by its full name: a tag named like it would win a short name and leave that ref stale. */
+export const fetchBase = (repoPath: string, base: string) => git('-C', repoPath, 'fetch', '-q', 'origin', `+refs/heads/${base}:refs/remotes/origin/${base}`);
 export const wtFile = (run: string) => path.join(runDir(run), 'worktree.json');
 export const wtInfo = (run: string): WorktreeInfo | null => { try { return JSON.parse(fs.readFileSync(wtFile(run), 'utf8')); } catch { return null; } };
 // One git worktree per run, sharing the clone's object store (not a second clone). A resume recreates it from the pushed branch.
@@ -74,10 +79,10 @@ export function worktree(run: string, repoPath?: string): WorktreeInfo {
   const wt = path.join(runDir(run), 'wt');
   fs.mkdirSync(runDir(run), { recursive: true });
   git('-C', repoPath, 'worktree', 'prune');
-  if (remote) git('-C', repoPath, 'fetch', '-q', 'origin', base);
+  if (remote) fetchBase(repoPath, base);
   let from = remote ? `refs/remotes/origin/${base}` : `refs/heads/${base}`; // full refs: see baseRef
   let fetched = false;
-  if (remote) try { git('-C', repoPath, 'fetch', '-q', 'origin', `${branch}:refs/remotes/origin/${branch}`); from = `refs/remotes/origin/${branch}`; fetched = true; } catch { /* first run: nothing pushed yet */ }
+  if (remote) try { git('-C', repoPath, 'fetch', '-q', 'origin', `refs/heads/${branch}:refs/remotes/origin/${branch}`); from = `refs/remotes/origin/${branch}`; fetched = true; } catch { /* first run: nothing pushed yet */ }
   // a git project pushes nothing yet: a resume starts from its local branch, never resets it to the base
   if (local && !fetched) try { git('-C', repoPath, 'rev-parse', '--verify', '-q', `refs/heads/${branch}`); from = `refs/heads/${branch}`; } catch { /* first run */ }
   git('-C', repoPath, 'worktree', 'add', '-q', '-B', branch, wt, from);

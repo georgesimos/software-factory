@@ -7,7 +7,7 @@ import { hooks, shipConnectors } from './ship.ts';
 import { discover } from './sync.ts';
 import { harnesses } from '../../adapters/harnesses/index.ts';
 import { GIT_MIN, gitTooOld } from '../../adapters/hosts/git.ts';
-import { git, projects } from './workspace.ts';
+import { autoMergeOn, git, projects } from './workspace.ts';
 import { readSkills, skillsData } from './skills.ts';
 import { stateDir } from './log.ts';
 
@@ -124,7 +124,7 @@ export function onboardText(s: ReturnType<typeof onboardState>, platform = proce
   L.push('', '5. Rules');
   for (const sc of scopes) {
     const pol = Object.entries(s.rules[sc]?.policy || {}).filter(([, x]) => x.scope === sc);
-    const am = sc === 'default' ? '' : `   auto-merge ${s.projects[sc]?.autoMerge === false ? 'off' : 'on'}`;
+    const am = sc === 'default' ? '' : `   auto-merge ${autoMergeOn(sc) ? 'on' : 'off'}`;
     L.push(`   ${sc}: ${pol.map(([k, x]) => `${k}=${JSON.stringify(x.value)}`).join(', ') || 'built-in'}${am}`);
   }
   L.push(`   ${F_CMD} rules set <scope> ci required|advisory|skip --reason "…"   ·   ${F_CMD} automerge <owner/repo> on|off`);

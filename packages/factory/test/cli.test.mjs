@@ -23,6 +23,8 @@ import { test } from 'node:test';
 import { setup } from './setup.mjs';
 
 // Drives the real CLI exactly as SKILL.md does, against a stubbed gh.
+// D1: auto-merge is off unless a project turns it on; F automerge on (guarded, mergeflow.test.mjs) for a project the test may not have attached.
+const autoOn = (repo) => { const pj = path.join(io.dir, 'projects.json'), all = fs.existsSync(pj) ? JSON.parse(fs.readFileSync(pj, 'utf8')) : {}; fs.writeFileSync(pj, JSON.stringify({ ...all, [repo]: { ...all[repo], autoMerge: true } })); };
 export function cliTest() {
   io.dir = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-cli-'));
   const stub = path.join(HERE, 'test', 'gh-stub.mjs');
@@ -84,7 +86,18 @@ export function cliTest() {
   assert.throws(() => cli(['event', RUN, 'ship', 'passed', '-'], '{"connector":"x","env":"preview","state":"ready"}'), /recorded by "ship"/);
   for (const k of ['connector', 'kind', 'env', 'state', 'url', 'sha']) assert.throws(() => cli(['event', RUN, 'build', 'passed', '-'], JSON.stringify({ [k]: 'https://evil.example' })), new RegExp(`not from a payload: ${k}`));
   const labelLog = path.join(io.dir, 'labels.log');
-  assert.equal(JSON.parse(cli(['merge', RUN], '', { STUB_CHECKS: '1', STUB_LABEL_LOG: labelLog, STUB_LABEL_FAIL: 'post' })).merged, true); // stub fails unless --match-head-commit abc123; a failed label POST doesn't fail the merge
+  const mine = { STUB_CHECKS: '1', STUB_PR_BRANCH: 'factory/issue-7' }; // RUN's PR is #9, from F's branch for issue 7
+  const ask = JSON.parse(cli(['merge', RUN], '', mine)); // D1: no auto-merge setting escalates: the human merges in GitHub, F sync records it
+  assert.deepEqual([ask.merged, ask.action, ask.reasons], [false, 'escalate', ['auto-merge is turned off for this project: merge the PR in GitHub yourself (F sync records it)']]);
+  autoOn('acme/shop'); // as F automerge on would, for a project the test never attached (its guard: mergeflow.test.mjs)
+  const head = (env2) => JSON.parse(cli(['merge', RUN], '', { ...mine, ...env2 })); // escalates before gh pr merge (the stub would fail on another sha)
+  assert.deepEqual(head({ STUB_PR_HEAD: 'def456' }).reasons.slice(0, 1), ['change request head is def456, not the reviewed commit abc123']); // a head moved since review
+  assert.match(head({ STUB_PR_BRANCH: 'dev/other' }).reasons[0], /is from dev\/other, not the run's branch factory\/issue-7$/); // a legacy log's typed PR on another branch
+  assert.match(head({ STUB_FORK: '1' }).reasons[0], /is from a fork$/);
+  assert.match(head({ STUB_FORK: 'omit' }).reasons[0], /is from a fork$/); // gh said nothing about it: on GitHub that counts as a fork
+  assert.match(head({ STUB_PR_VIEW_FAIL: '1' }).reasons[0], /^cannot read change request \S+: HTTP 502: Bad Gateway$/); // the host can't say: escalate
+  assert.match(head({ STUB_PR_STATE: 'CLOSED' }).reasons[0], /is closed, not open$/);
+  assert.equal(JSON.parse(cli(['merge', RUN], '', { ...mine, STUB_LABEL_LOG: labelLog, STUB_LABEL_FAIL: 'post' })).merged, true); // stub fails unless --match-head-commit abc123; a failed label POST doesn't fail the merge
   assert.deepEqual(fs.readFileSync(labelLog, 'utf8').trim().split('\n'), [ // relabels the run's issue through the REST endpoint, with no argument a gh.cmd shim refuses
     'api -X POST repos/acme/shop/issues/7/labels --input - {"labels":["factory:merged"]}', 'api -X DELETE repos/acme/shop/issues/7/labels/factory:in-progress']);
   const relabelWarnings = (fail) => {
@@ -317,7 +330,7 @@ export function rulesTest(cli) {
   const rule = (value) => ({ value, reason: 'billing', setBy: 'acme', setAt: '2026-11-20T10:00:00Z' });
   const pol = (ci, cmds, extra) => ({ ...(ci && { ci: rule(ci) }), ...(cmds && { 'checks.commands': rule(cmds) }), ...extra });
   const lc = (state, sha = 's1', cmds = ['pnpm test']) => ({ state, sha, commands: cmds.map((cmd) => ({ cmd, exit: state === 'pass' ? 0 : 1, ms: 1 })) });
-  const D = (r, f) => decide(r, { checks: 'skipped', additions: 10, deletions: 0, files: ['src/a.ts', 'src/a.test.ts'], ...f });
+  const D = (r, f) => decide(r, { autoMerge: true, checks: 'skipped', additions: 10, deletions: 0, files: ['src/a.ts', 'src/a.test.ts'], ...f });
   const skip = pol('skip', ['pnpm test']), green = { ...ok, localChecks: lc('pass') };
   const m = D(green, { rules: skip });
   assert.equal(m.action, 'merge');
@@ -386,6 +399,7 @@ export function rulesTest(cli) {
   record(P10, 'review', 'started', { axes: ['code', 'security'], sha: head10 });
   record(P10, 'review', 'passed', { axis: 'code', findings: [] });
   record(P10, 'review', 'passed', { axis: 'security', findings: [] });
+  autoOn('acme/app');
   const gated = JSON.parse(cli(['decide', P10], '', { STUB_CHECKS: '1' }));
   assert.equal(gated.action, 'merge');
   assert.match(gated.reasons.join(), /preview ready: https:\/\/deploy-10\.example\.app \([\w-]+\)/);
@@ -761,7 +775,7 @@ export function syncTest(cli) {
   assert.deepEqual(hsync({}), []); // still open
   assert.deepEqual(hsync({ STUB_PR_STATE: 'CLOSED' }), []);
   assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED', STUB_MERGED_AT: '2000-01-01T00:00:00Z' }), []); // merged before the escalation
-  assert.match(cliErr(['event', H, 'build', 'merged', '-'], '{"by":"human"}', env), /refusing "merged"/); // never by hand, on any stage
+  assert.match(cliErr(['event', H, 'build', 'merged', '-'], '{"by":"human"}', env), /"merged" is recorded by "merge" and "sync", not by hand/); // never by hand, on any stage
   assert.match(cliErr(['event', H, 'approve', 'merged', '-'], '{"by":"human"}', env), /recorded by "merge"/);
   assert.match(cliErr(['event', H, 'spec', 'passed', '-'], '{"mergedBy":"x"}', env), /mergedBy/);
   assert.equal(derive(read())[H].outcome, 'escalated');
@@ -776,8 +790,27 @@ export function syncTest(cli) {
   assert.deepEqual(read().filter((e) => e.run === H && e.status === 'merged').map(({ by, mergedBy, sha }) => ({ by, mergedBy, sha })), [{ by: 'human', mergedBy: 'octo', sha: 'f'.repeat(40) }]);
   assert.equal(derive(read())['acme/app#11'].outcome, 'escalated');
   assert.equal(derive(read())['acme/app#11'].humanMerge, undefined);
-  assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED' }), ['acme/app#27']); // each recorded once; #27 (a "merge" decision) only by a merge after "escalated"
+  record('acme/app#29', 'intake', 'started', { title: 'c', association: 'OWNER' }); // a PR URL recorded in another case: GitHub's owner and repo names aren't case-sensitive
+  record('acme/app#29', 'build', 'passed', { pr: 'https://github.com/Acme/App/pull/29', branch: 'factory/issue-29' });
+  record('acme/app#29', 'approve', 'decided', { action: 'escalate', reasons: ['x'] }); record('acme/app#29', 'approve', 'escalated');
+  assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED' }), ['acme/app#27', 'acme/app#29']); // each recorded once; #27 (a "merge" decision) only by a merge after "escalated"
   assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED' }), []);
+  // GitHub escalates by default now, so a human merge must be found even when the agent died after "decided escalate" (no
+  // "escalated"), or re-ran F decide after the human merged (a later "decided escalate"); never on a "merge" decision alone.
+  for (const [n, action] of [[61, 'escalate'], [62, 'escalate'], [63, 'merge'], [64, 'escalate']]) {
+    record(`acme/app#${n}`, 'intake', 'started', { title: 'k', association: 'OWNER' });
+    record(`acme/app#${n}`, 'build', 'passed', { pr: `https://github.com/acme/app/pull/${n}`, branch: `factory/issue-${n}` });
+    record(`acme/app#${n}`, 'review', 'started', { axes: ['code'], sha: 'abc123' });
+    record(`acme/app#${n}`, 'approve', 'decided', { action, reasons: ['x'] });
+  }
+  record('acme/app#62', 'approve', 'escalated');
+  record('acme/app#64', 'approve', 'decided', { action: 'merge', reasons: [] }); tick(); // F merge merged it itself, then stopped
+  const mid = tick(); tick();
+  record('acme/app#62', 'approve', 'decided', { action: 'escalate', reasons: ['x'] }); // F decide again, after the human merged
+  record('acme/app#64', 'approve', 'decided', { action: 'escalate', reasons: ['change request is merged, not open'] }); // and F merge again
+  assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED', STUB_MERGED_AT: mid }), ['acme/app#61', 'acme/app#62'], '#64\'s merge came after its merge decision: the factory\'s own');
+  assert.deepEqual([61, 62, 64].map((n) => derive(read())[`acme/app#${n}`].outcome), ['merged', 'merged', 'closed'], 'a recorded human merge is never then closed');
+  assert.equal(derive(read())['acme/app#63'].outcome, 'closed', 'a "merge" decision alone (F merge may have merged it itself): closed, as before, never a human merge');
   assert.match(cliErr(['intake', H], '', env), /merged by octo: it needs a human, not a new run/);
   record(H, 'approve', 'reverted', { pr: 'https://github.com/acme/app/pull/98', reason: 'main went red' }); // reverted (and the issue reopened): it may be built again
   assert.equal(JSON.parse(cli(['intake', H], '', env)).title, 'app issue');

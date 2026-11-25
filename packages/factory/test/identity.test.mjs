@@ -109,7 +109,7 @@ test('decide: a local rule that relaxes CI is shown as unverified and escalates;
   const ok = { association: 'OWNER', iteration: 1, pr: 'x', reviewedSha: 's1', axes: { 1: ['code'] }, reviews: { 1: { code: { verdict: 'passed' } } },
     localChecks: { state: 'pass', sha: 's1', commands: [{ cmd: 'pnpm test', exit: 0, ms: 1 }] } };
   const rule = (value, via) => ({ value, reason: 'no CI', setBy: via ? 'DOMAIN\\pat' : 'acme', setAt: '2026-11-20T10:00:00Z', ...(via && { via }) });
-  const D = (ci, cmds) => decide(ok, { checks: 'skipped', additions: 10, deletions: 0, files: ['src/a.ts', 'src/a.test.ts'], rules: { ci, 'checks.commands': cmds } });
+  const D = (ci, cmds) => decide(ok, { autoMerge: true, checks: 'skipped', additions: 10, deletions: 0, files: ['src/a.ts', 'src/a.test.ts'], rules: { ci, 'checks.commands': cmds } });
   assert.equal(D(rule('skip'), rule(['pnpm test'])).action, 'merge');
   for (const [ci, cmds, k] of [[rule('skip', 'local'), rule(['pnpm test']), 'ci=skip'], [rule('advisory', 'local'), rule(['pnpm test']), 'ci=advisory'], [rule('skip'), rule(['pnpm test'], 'local'), 'checks.commands']]) {
     const d = D(ci, cmds);
@@ -117,9 +117,9 @@ test('decide: a local rule that relaxes CI is shown as unverified and escalates;
     assert.ok(d.reasons.some((x) => x.startsWith(`rule ${k} was set by DOMAIN\\pat (local, unverified): a rule that relaxes CI needs a verified login`)), d.reasons.join(' | '));
   }
   // Only when the merge relies on it: GitHub CI passed, so the local relaxation changes nothing.
-  assert.equal(decide(ok, { checks: 'pass', additions: 10, deletions: 0, files: ['src/a.ts', 'src/a.test.ts'], rules: { ci: rule('advisory', 'local'), 'checks.commands': rule(['pnpm test'], 'local') } }).action, 'merge');
+  assert.equal(decide(ok, { autoMerge: true, checks: 'pass', additions: 10, deletions: 0, files: ['src/a.ts', 'src/a.test.ts'], rules: { ci: rule('advisory', 'local'), 'checks.commands': rule(['pnpm test'], 'local') } }).action, 'merge');
   // Tightening applies whoever set it: a local checks.commands while CI is still required adds a check, it relaxes nothing.
-  assert.equal(decide(ok, { checks: 'pass', additions: 10, deletions: 0, files: ['src/a.ts', 'src/a.test.ts'], rules: { 'checks.commands': rule(['pnpm test'], 'local') } }).action, 'merge');
+  assert.equal(decide(ok, { autoMerge: true, checks: 'pass', additions: 10, deletions: 0, files: ['src/a.ts', 'src/a.test.ts'], rules: { 'checks.commands': rule(['pnpm test'], 'local') } }).action, 'merge');
 });
 
 test('privacy: a local user name (DOMAIN\\user) never reaches the published page', () => {

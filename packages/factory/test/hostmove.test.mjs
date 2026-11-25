@@ -17,9 +17,9 @@ test('the GitHub host makes exactly the gh calls core made before the move', () 
       { id: '5', url: pr.url, title: 'Fix #3', branch: 'dev/x', headSha: 'a'.repeat(40), closes: ['3'], author: 'acme', association: 'OWNER' },
       { id: '6', url: pr.url, title: 'Fix #3', branch: 'dev/x', headSha: 'a'.repeat(40), closes: [], author: undefined, association: 'OWNER' }] });
   assert.deepEqual(l.calls, [['api', 'graphql', '-f', `query=${q}`, '-f', 'o=acme', '-f', 'n=app']]);
-  const v = logged([['pr view', { state: 'MERGED', mergedAt: '2026-11-20T00:00:00Z', mergedBy: { login: 'octo' }, mergeCommit: { oid: 'f'.repeat(40) }, headRefName: 'factory/issue-3', isCrossRepository: false }]]);
-  assert.deepEqual(github.changeRequest({ gh: v.gh }, { repo: 'acme/app', id: '9' }), { state: 'merged', approval: null, branch: 'factory/issue-3', fork: false, mergedAt: '2026-11-20T00:00:00Z', mergedBy: 'octo', mergeSha: 'f'.repeat(40) });
-  assert.deepEqual(v.calls, [['pr', 'view', '9', '-R', 'acme/app', '--json', 'state,mergedAt,mergedBy,mergeCommit,headRefName,isCrossRepository']]);
+  const v = logged([['pr view', { state: 'MERGED', mergedAt: '2026-11-20T00:00:00Z', mergedBy: { login: 'octo' }, mergeCommit: { oid: 'f'.repeat(40) }, headRefName: 'factory/issue-3', headRefOid: 'e'.repeat(40), isCrossRepository: false }]]);
+  assert.deepEqual(github.changeRequest({ gh: v.gh }, { repo: 'acme/app', id: '9' }), { state: 'merged', approval: null, branch: 'factory/issue-3', headSha: 'e'.repeat(40), fork: false, mergedAt: '2026-11-20T00:00:00Z', mergedBy: 'octo', mergeSha: 'f'.repeat(40) });
+  assert.deepEqual(v.calls, [['pr', 'view', '9', '-R', 'acme/app', '--json', 'state,mergedAt,mergedBy,mergeCommit,headRefName,isCrossRepository,headRefOid']]); // headRefOid: F merge's head check (PR 7)
   assert.equal(github.changeRequest({ gh: logged([['pr view', { state: 'DRAFT?', headRefName: 'x' }]]).gh }, { repo: 'acme/app', id: '9' }).state, 'unknown');
   const m = logged([['pr ready', ''], ['pr merge', '']]);
   assert.deepEqual(github.merge({ gh: m.gh }, { repo: 'acme/app', id: pr.url, sha: 'abc123' }), { merged: true });
