@@ -1,12 +1,13 @@
 import { Dialog, EmptyState, PipelineGraph, PipelineList, repoOf, type StepEditing } from '@software-factory/design-system';
 import { useState } from 'react';
 import { CAP, COST_CAP, type FactoryData, type SkillsData } from './data.ts';
-import { Picker, runnerPick, useSkillsSave, type Pick } from './Skills.tsx';
-import { editStep, runnerFrom, runnerName, stepChoices } from './skillsModel.ts';
+import { Picker, copy, runnerPick, useSkillsSave, type Pick, type SaveStatus } from './Skills.tsx';
+import { editStep, pipelineCommand, runnerFrom, runnerName, stepChoices } from './skillsModel.ts';
 
 // The steps each issue goes through, per project, drawn from F's own `pipeline` (F skills) by the design system's graph.
 // A step's panel changes who runs it through the Skills sheet's write path (POST /api/skills, or the copied F skills set
-// command on a read-only page); nothing else here writes (docs/plans/pipelines.md, slice 2).
+// command on a read-only page). Adding a step of the user's own only copies the F pipelines set command, even under F ui:
+// core has no such command yet, and a shell check is human-only, behind the desktop's confirmation over HTTP.
 interface Props { open: boolean; onClose: () => void; data: FactoryData; project?: string; onSaved?: (s: SkillsData) => void }
 
 export const pipelinesOf = (S?: SkillsData) => Object.entries(S?.plans ?? {}).filter(([, p]) => p.pipeline?.host).map(([scope]) => scope);
@@ -17,7 +18,11 @@ export function PipelinesSheet({ open, onClose, data, project, onSaved = () => {
   const scope = scopes.includes(picked) ? picked : scopes[0] ?? '', at = data.skills?.plans?.[scope];
   const { status, setStatus, save } = useSkillsSave(data.token, data.fCmd ?? undefined, onSaved), [pick, setPick] = useState<Pick | null>(null);
   const items = scopes.map((s) => { const n = data.runs.filter((r) => repoOf(r.id) === s).length; return { id: s, name: s, meta: `${n} run${n === 1 ? '' : 's'}`, pipeline: data.skills!.plans![s]!.pipeline! }; });
-  const S = data.skills!, plan = at?.plan ?? {};
+  const S = data.skills!, plan = at?.plan ?? {}, [added, setAdded] = useState<SaveStatus>({ text: '' });
+  const addSteps = async (slots: unknown) => {
+    const cmd = pipelineCommand(scope, slots, data.fCmd ?? undefined), ok = await copy(cmd);
+    setAdded({ text: <>{ok ? 'Command copied. ' : ''}F has no pipelines set yet, so nothing is saved: this is the command it will take. <code>{cmd}</code></> });
+  };
   // Only F's runner keys change here; an extra axis is a list saved whole (its runner and its files together), in Skills.
   const edit: StepEditing = {
     for: (step) => {
@@ -35,10 +40,10 @@ export function PipelinesSheet({ open, onClose, data, project, onSaved = () => {
     <Dialog open={open} onClose={onClose} variant="sheet" title="Pipelines" className="web-pl" description="The steps each issue goes through.">
       {!at?.pipeline ? <EmptyState title="No project attached">Attach a project with F sync to see its pipeline.</EmptyState> : (
         <div className="sf-pl-cols">
-          <PipelineList items={items} current={scope} onPick={(s) => { setPicked(s); setStatus({ text: '' }); }} />
+          <PipelineList items={items} current={scope} onPick={(s) => { setPicked(s); setStatus({ text: '' }); setAdded({ text: '' }); }} />
           <PipelineGraph name={scope} pipeline={at.pipeline} plan={{ ...plan, ...Object.fromEntries((at.extra ?? []).map((x) => [`review.${x.axis}`, x])) }}
             runnerName={(r) => runnerName(S, scope, r)} cap={data.cap ?? CAP} costCap={data.costCap ?? COST_CAP}
-            edit={edit} runs={data.runs.filter((r) => repoOf(r.id) === scope)} />
+            edit={edit} runs={data.runs.filter((r) => repoOf(r.id) === scope)} steps={{ save: addSteps, status: added }} />
         </div>
       )}
       <Dialog open={!!pick} onClose={() => setPick(null)} title={pick ? 'Runner for ' + pick.title : ''} description={'For ' + scope} className="web-pk">

@@ -1,0 +1,217 @@
+{
+    "nodes": [
+        {
+            "id": "ready",
+            "label": "Issue ready",
+            "kind": "start",
+            "locked": false,
+            "sub": "GitHub Issues",
+            "col": 0,
+            "row": 0
+        },
+        {
+            "id": "intake",
+            "label": "Intake",
+            "kind": "step",
+            "locked": true,
+            "col": 1,
+            "row": 0
+        },
+        {
+            "id": "children",
+            "label": "Child issues",
+            "kind": "outcome",
+            "locked": false,
+            "col": 2,
+            "row": 0
+        },
+        {
+            "id": "ask",
+            "label": "Ask questions",
+            "kind": "outcome",
+            "locked": false,
+            "col": 2,
+            "row": 1
+        },
+        {
+            "id": "close",
+            "label": "Comment & close",
+            "kind": "outcome",
+            "locked": false,
+            "col": 2,
+            "row": 2
+        },
+        {
+            "id": "spec",
+            "label": "Spec",
+            "kind": "step",
+            "locked": true,
+            "sub": "risky specs wait for approval",
+            "col": 2,
+            "row": 3
+        },
+        {
+            "id": "build",
+            "label": "Build",
+            "kind": "step",
+            "locked": true,
+            "col": 3,
+            "row": 0
+        },
+        {
+            "id": "review.code",
+            "label": "Code review",
+            "kind": "review",
+            "locked": true,
+            "sub": "every change",
+            "col": 4,
+            "row": 0
+        },
+        {
+            "id": "review.security",
+            "label": "Security review",
+            "kind": "review",
+            "locked": true,
+            "sub": "every change",
+            "col": 4,
+            "row": 1
+        },
+        {
+            "id": "review.ui",
+            "label": "UI review",
+            "kind": "review",
+            "locked": false,
+            "sub": "when UI files change",
+            "col": 4,
+            "row": 2
+        },
+        {
+            "id": "review.docs",
+            "label": "Docs review",
+            "kind": "review",
+            "locked": false,
+            "sub": "when docs change",
+            "col": 4,
+            "row": 3
+        },
+        {
+            "id": "verifier",
+            "label": "Verifier",
+            "kind": "step",
+            "locked": true,
+            "col": 5,
+            "row": 0
+        },
+        {
+            "id": "gate",
+            "label": "Gate",
+            "kind": "step",
+            "locked": true,
+            "sub": "loops back on blocking findings",
+            "col": 6,
+            "row": 0
+        },
+        {
+            "id": "merge",
+            "label": "Merge",
+            "kind": "step",
+            "locked": true,
+            "sub": "or escalates to you",
+            "col": 7,
+            "row": 0
+        },
+        {
+            "id": "watch",
+            "label": "Watch main",
+            "kind": "step",
+            "locked": true,
+            "sub": "main\u2019s CI after the merge",
+            "col": 8,
+            "row": 0
+        }
+    ],
+    "edges": [
+        {
+            "from": "ready",
+            "to": "intake"
+        },
+        {
+            "from": "intake",
+            "to": "children",
+            "label": "split"
+        },
+        {
+            "from": "intake",
+            "to": "ask",
+            "label": "needs-info"
+        },
+        {
+            "from": "intake",
+            "to": "close",
+            "label": "reject"
+        },
+        {
+            "from": "intake",
+            "to": "spec",
+            "label": "pass"
+        },
+        {
+            "from": "spec",
+            "to": "build"
+        },
+        {
+            "from": "build",
+            "to": "review.code"
+        },
+        {
+            "from": "build",
+            "to": "review.security"
+        },
+        {
+            "from": "build",
+            "to": "review.ui"
+        },
+        {
+            "from": "build",
+            "to": "review.docs"
+        },
+        {
+            "from": "review.code",
+            "to": "verifier"
+        },
+        {
+            "from": "review.security",
+            "to": "verifier"
+        },
+        {
+            "from": "review.ui",
+            "to": "verifier"
+        },
+        {
+            "from": "review.docs",
+            "to": "verifier"
+        },
+        {
+            "from": "verifier",
+            "to": "gate"
+        },
+        {
+            "from": "gate",
+            "to": "merge"
+        },
+        {
+            "from": "merge",
+            "to": "watch"
+        },
+        {
+            "from": "gate",
+            "to": "spec",
+            "loop": true
+        },
+        {
+            "from": "gate",
+            "to": "build",
+            "loop": true
+        }
+    ]
+}
