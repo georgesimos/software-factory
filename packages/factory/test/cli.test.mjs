@@ -797,16 +797,19 @@ export function syncTest(cli) {
   assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED' }), []);
   // GitHub escalates by default now, so a human merge must be found even when the agent died after "decided escalate" (no
   // "escalated"), or re-ran F decide after the human merged (a later "decided escalate"); never on a "merge" decision alone.
-  for (const [n, action] of [[61, 'escalate'], [62, 'escalate'], [63, 'merge']]) {
+  for (const [n, action] of [[61, 'escalate'], [62, 'escalate'], [63, 'merge'], [64, 'escalate']]) {
     record(`acme/app#${n}`, 'intake', 'started', { title: 'k', association: 'OWNER' });
     record(`acme/app#${n}`, 'build', 'passed', { pr: `https://github.com/acme/app/pull/${n}`, branch: `factory/issue-${n}` });
     record(`acme/app#${n}`, 'review', 'started', { axes: ['code'], sha: 'abc123' });
     record(`acme/app#${n}`, 'approve', 'decided', { action, reasons: ['x'] });
   }
-  record('acme/app#62', 'approve', 'escalated'); tick();
+  record('acme/app#62', 'approve', 'escalated');
+  record('acme/app#64', 'approve', 'decided', { action: 'merge', reasons: [] }); tick(); // F merge merged it itself, then stopped
   const mid = tick(); tick();
   record('acme/app#62', 'approve', 'decided', { action: 'escalate', reasons: ['x'] }); // F decide again, after the human merged
-  assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED', STUB_MERGED_AT: mid }), ['acme/app#61', 'acme/app#62']);
+  record('acme/app#64', 'approve', 'decided', { action: 'escalate', reasons: ['change request is merged, not open'] }); // and F merge again
+  assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED', STUB_MERGED_AT: mid }), ['acme/app#61', 'acme/app#62'], '#64\'s merge came after its merge decision: the factory\'s own');
+  assert.deepEqual([61, 62, 64].map((n) => derive(read())[`acme/app#${n}`].outcome), ['merged', 'merged', 'closed'], 'a recorded human merge is never then closed');
   assert.equal(derive(read())['acme/app#63'].outcome, 'closed', 'a "merge" decision alone (F merge may have merged it itself): closed, as before, never a human merge');
   assert.match(cliErr(['intake', H], '', env), /merged by octo: it needs a human, not a new run/);
   record(H, 'approve', 'reverted', { pr: 'https://github.com/acme/app/pull/98', reason: 'main went red' }); // reverted (and the issue reopened): it may be built again
