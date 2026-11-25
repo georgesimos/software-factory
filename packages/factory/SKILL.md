@@ -188,10 +188,10 @@ Run `F gate RUN`. Its `next` decides where the run goes:
    - the run is within the loop and budget caps;
    - under `deploy.preview=required`, a preview of the reviewed commit is `ready`;
    - the PR is open, from the run's own `factory/issue-N` branch (never a fork), and its head still equals the reviewed commit;
-   - auto-merge is on for the project (`F automerge OWNER/REPO on`). It is off unless the user turned it on, and a git project always asks.
+   - auto-merge is on for the project (`F automerge OWNER/REPO on`). It is off unless the user turned it on, and a git project always asks. Off, a GitHub project escalates: the user merges the PR in GitHub, and `F sync` records it.
    
    If they hold, it marks the PR ready, squash-merges it and labels the issue. A git project's merge squashes the branch onto its base.
-2. **`"action": "await-approval"`:** every gate passed, and the merge waits only for the user: auto-merge is off, or a git project's item has no author anyone can verify. Tell the user to run `F approve RUN --merge` in their own terminal: it shows the reviewed commit, asks them to type its code, then merges. Never run it yourself (it refuses an agent session anyway), never escalate, and never merge another way. Stop here; the run stays in progress.
+2. **`"action": "await-approval"`** (a git project only): every gate passed, and the merge waits only for the user, because nobody there is verified. Tell the user to run `F approve RUN --merge` in their own terminal: it shows the reviewed commit, asks them to type its code, then merges. Never run it yourself (it refuses an agent session anyway), never escalate, and never merge another way. Stop here; the run stays in progress, and `F loop` stops on it.
 3. **`merged: false` with `"action": "escalate"`, or `F merge` fails with an error:** escalate. Never retry the merge by hand. A host that refused the merge (a moved or protected base, a conflict) says why in the reasons.
    1. `F escalate RUN`, or `F escalate RUN --error "<the first line of F merge's error>"` when it failed. It marks the PR ready, adds `factory:needs-human`, and comments why (the decision's reasons, or that `F merge` failed) and the open findings, on the issue when there is no PR. Its writes are cosmetic: on `"posted":false` (a git project has no comments) or a `detail`, tell the user, and go on.
    2. `F event RUN approve escalated`.
@@ -393,7 +393,7 @@ Run `F sync owner/repo <local clone path>`. Running `F sync` with no arguments l
 
 The factory never imports its own `factory/*` branches. A sync only reads GitHub, except that it relabels the issue of a run a human merged (`factory:merged`). Repeating a sync never duplicates a run.
 
-Auto-merge is off unless a project turns it on: `F merge` then waits for the user's `F approve RUN --merge`. `F automerge owner/repo on` lets that project merge on the gates alone, and `off` asks again. `on` is the user's own: refused inside an agent session, from an unverified login on a GitHub project, and on a git project, which always asks. While a GitHub project has no setting, `F sync` says so in `automerge`.
+Auto-merge is off unless a project turns it on: `F merge` then escalates, and the user merges the PR in GitHub (`F sync` records it). A git project always waits for the user's `F approve RUN --merge`. `F automerge owner/repo on` lets that project merge on the gates alone, and `off` asks again. `on` is the user's own: refused inside an agent session, from an unverified login on a GitHub project, and on a git project, which always asks. While a GitHub project has no setting, `F sync` says so in `automerge`.
 
 `F project set owner/repo host|ci|base <value>` changes a project's host, CI provider or base branch. Never run it yourself:
 it is the user's, refused inside an agent session. If a change is needed, show the user the command to run in their own terminal.

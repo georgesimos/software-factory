@@ -300,7 +300,8 @@ function Rules({ data, ob, live, F, scope, scopePicker, write, fail, setStatus, 
         <label className="web-ob-field">GitHub CI before merging<Select aria-label="CI" value={f.ci} onChange={(e) => set('ci', e.target.value)}>{['required', 'advisory', 'skip'].map((v) => <option key={v}>{v}</option>)}</Select></label>
         <label className="web-ob-field">Local check commands (run by F checks, one per line; they stand in for CI when it is skipped)
           <textarea className="sf-input web-ob-ta" aria-label="Local check commands, one per line" placeholder={'pnpm test\npnpm lint'} value={f.checks} onChange={(e) => set('checks', e.target.value)} /></label>
-        <Checkbox label={proj ? 'Allow auto-merge when every gate passes' : 'Auto-merge is set per project: pick one above'} checked={f.merge} disabled={!proj} onChange={(e) => set('merge', e.target.checked)} />
+        <Checkbox label={proj ? 'Allow auto-merge when every gate passes' : 'Auto-merge is set per project: pick one above'} checked={f.merge} disabled={!proj} onChange={(e) => set('merge', e.target.checked)}
+          description={proj && 'Off (the default): a run whose gates pass escalates, and you merge its PR in GitHub. A git project always asks: F approve RUN --merge.'} />
         <label className="web-ob-field">Guidance for every step (optional)
           <textarea className="sf-input web-ob-ta" aria-label="Guidance for every step" placeholder="e.g. Prefer small PRs. Never touch the billing module." value={f.guide} onChange={(e) => set('guide', e.target.value)} /></label>
         <label className="web-ob-field">Reason (required for rule changes)<Input id="ob-reason" aria-label="Reason (required)" maxLength={200} placeholder="Why: e.g. GitHub Actions billing is failing" value={f.reason} onChange={(e) => set('reason', e.target.value)} /></label>

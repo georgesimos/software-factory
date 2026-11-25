@@ -123,7 +123,11 @@ function gitDiff(repo: string, sha: string) {
   // .git/info/attributes (a run's worktree shares it; --attr-source doesn't replace it, and --text doesn't beat its -diff) can make
   // any file "-". So a "-" file with no NUL in its first 8000 bytes (git's own binary test) counts every line of both versions.
   let fork: string | undefined;
-  const count = (c: string, p: string) => { let t: string; try { t = git('-C', at, 'cat-file', 'blob', `${c}:${p}`); } catch { return 0; } return t.slice(0, 8000).includes('\0') ? 0 : t.split('\n').length - (!t || t.endsWith('\n') ? 1 : 0); };
+  const count = (c: string, p: string) => { // fails closed: a blob git can't read throws, never counts 0
+    if (!git('-C', at, 'ls-tree', c, '--', p).trim()) return 0; // added or deleted: no blob on this side
+    const b = exec(io.git, ['-C', at, 'cat-file', 'blob', `${c}:${p}`], { stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: Infinity }) as Buffer; // any size: the default 1 MB threw
+    return b.subarray(0, 8000).includes(0) ? 0 : b.reduce((n, x) => n + (x === 10 ? 1 : 0), 0) + (b.length && b[b.length - 1] !== 10 ? 1 : 0);
+  };
   for (const x of rows) if (x[0] === '-') { const p = x.slice(2).join('\t'); fork ??= git('-C', at, 'merge-base', ref, sha).trim(); [x[0], x[1]] = [String(count(sha, p)), String(count(fork, p))]; }
   const lines = (i: number) => rows.reduce((t, x) => t + (Number(x[i]) || 0), 0);
   return { additions: lines(0), deletions: lines(1), files: rows.map((x) => ({ path: x.slice(2).join('\t') })) };
@@ -155,8 +159,8 @@ export function merge(run: string) {
   if (d.action !== 'merge') return { merged: false, ...d };
   if (!r.reviewedSha) throw new Error('no reviewed commit recorded; refusing to merge');
   const m = hostFn(host, 'merge', 'merge')(adapterCtx(), { repo, id: r.pr as string, sha: r.reviewedSha, ...(base && { path: at, base }) }); // decide() escalates a run with no PR
-  if (!m.merged) {
-    const no = { action: 'escalate', reasons: [`the host refused the merge: ${m.detail || 'it gave no reason'}`] };
+  if (m?.merged !== true) { // fail closed: only an explicit true is a merge
+    const no = { action: 'escalate', reasons: [`the host refused the merge: ${m?.detail || 'it gave no reason'}`] };
     record(run, 'approve', 'decided', { ...no, facts: f });
     return { merged: false, ...no };
   }

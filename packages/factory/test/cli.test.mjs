@@ -87,14 +87,16 @@ export function cliTest() {
   for (const k of ['connector', 'kind', 'env', 'state', 'url', 'sha']) assert.throws(() => cli(['event', RUN, 'build', 'passed', '-'], JSON.stringify({ [k]: 'https://evil.example' })), new RegExp(`not from a payload: ${k}`));
   const labelLog = path.join(io.dir, 'labels.log');
   const mine = { STUB_CHECKS: '1', STUB_PR_BRANCH: 'factory/issue-7' }; // RUN's PR is #9, from F's branch for issue 7
-  const ask = JSON.parse(cli(['merge', RUN], '', mine)); // D1: no auto-merge setting asks first (local-first PR 7)
-  assert.deepEqual([ask.merged, ask.action, ask.reasons], [false, 'await-approval', ['auto-merge is turned off for this project: it merges once you approve the reviewed commit (F approve RUN --merge)']]);
+  const ask = JSON.parse(cli(['merge', RUN], '', mine)); // D1: no auto-merge setting escalates: the human merges in GitHub, F sync records it
+  assert.deepEqual([ask.merged, ask.action, ask.reasons], [false, 'escalate', ['auto-merge is turned off for this project: merge the PR in GitHub yourself (F sync records it)']]);
+  autoOn('acme/shop'); // as F automerge on would, for a project the test never attached (its guard: mergeflow.test.mjs)
   const head = (env2) => JSON.parse(cli(['merge', RUN], '', { ...mine, ...env2 })); // escalates before gh pr merge (the stub would fail on another sha)
   assert.deepEqual(head({ STUB_PR_HEAD: 'def456' }).reasons.slice(0, 1), ['change request head is def456, not the reviewed commit abc123']); // a head moved since review
   assert.match(head({ STUB_PR_BRANCH: 'dev/other' }).reasons[0], /is from dev\/other, not the run's branch factory\/issue-7$/); // a legacy log's typed PR on another branch
   assert.match(head({ STUB_FORK: '1' }).reasons[0], /is from a fork$/);
+  assert.match(head({ STUB_FORK: 'omit' }).reasons[0], /is from a fork$/); // gh said nothing about it: on GitHub that counts as a fork
+  assert.match(head({ STUB_PR_VIEW_FAIL: '1' }).reasons[0], /^cannot read change request \S+: HTTP 502: Bad Gateway$/); // the host can't say: escalate
   assert.match(head({ STUB_PR_STATE: 'CLOSED' }).reasons[0], /is closed, not open$/);
-  autoOn('acme/shop'); // as F automerge on would, for a project the test never attached (its guard: mergeflow.test.mjs)
   assert.equal(JSON.parse(cli(['merge', RUN], '', { ...mine, STUB_LABEL_LOG: labelLog, STUB_LABEL_FAIL: 'post' })).merged, true); // stub fails unless --match-head-commit abc123; a failed label POST doesn't fail the merge
   assert.deepEqual(fs.readFileSync(labelLog, 'utf8').trim().split('\n'), [ // relabels the run's issue through the REST endpoint, with no argument a gh.cmd shim refuses
     'api -X POST repos/acme/shop/issues/7/labels --input - {"labels":["factory:merged"]}', 'api -X DELETE repos/acme/shop/issues/7/labels/factory:in-progress']);
@@ -773,7 +775,7 @@ export function syncTest(cli) {
   assert.deepEqual(hsync({}), []); // still open
   assert.deepEqual(hsync({ STUB_PR_STATE: 'CLOSED' }), []);
   assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED', STUB_MERGED_AT: '2000-01-01T00:00:00Z' }), []); // merged before the escalation
-  assert.match(cliErr(['event', H, 'build', 'merged', '-'], '{"by":"human"}', env), /refusing "merged"/); // never by hand, on any stage
+  assert.match(cliErr(['event', H, 'build', 'merged', '-'], '{"by":"human"}', env), /"merged" is recorded by "merge" and "sync", not by hand/); // never by hand, on any stage
   assert.match(cliErr(['event', H, 'approve', 'merged', '-'], '{"by":"human"}', env), /recorded by "merge"/);
   assert.match(cliErr(['event', H, 'spec', 'passed', '-'], '{"mergedBy":"x"}', env), /mergedBy/);
   assert.equal(derive(read())[H].outcome, 'escalated');

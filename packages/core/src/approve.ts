@@ -24,6 +24,9 @@ const needsF = (run: string) => { try { return !ownChannel(parseRun(run).repo); 
 /** Control characters (C0 and C1, keeping tab and newline) out of what goes to the terminal: an item's title or spec can't move the cursor or retitle the window. */
 export const clean = (s: string) => s.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00ad\u061c\u200b-\u200f\u2028\u2029\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, ''); // and bidi, zero-width, soft-hyphen and line/paragraph separator marks, which can reorder or hide what the spec says
 
+/** One line of the merge prompt: a title, file name or reason can't start a line of its own (a fake "Type … to approve"). */
+const line = (s: unknown) => clean(String(s)).replace(/\s+/g, ' ').trim();
+
 /** The spec put to the user: all of DIR/spec.md, a plain file, never empty. */
 function specOf(run: string) {
   const f = path.join(runDir(run), 'spec.md');
@@ -135,16 +138,17 @@ export function approveSpecDesktop(run: string, sha: string, user = () => os.use
 }
 
 /** F approve RUN --merge (local-first §3): yours only, typed at your terminal, for the reviewed commit a run's merge waits on (F merge
- *  said await-approval), then F merge in the same command, which merges only if decide() now says merge. On GitHub, a verified login. */
+ *  said await-approval), then F merge in the same command, which merges only if decide() now says merge. Never on GitHub: a human merges there. */
 export function approveMerge(run: string, ask: (prompt: string) => string = ttyAsk) {
   humanOnly('approving a merge');
+  const { repo } = parseRun(run);
+  if (hostOf(repo) === 'github') throw new Error(`${repo} is a GitHub project: merge its PR in GitHub yourself (F sync records it), or turn auto-merge on (F automerge ${repo} on)`);
   const r = derive(read())[run], sha = r?.reviewedSha;
   if (r?.decision?.action !== 'await-approval' || !sha) throw new Error(`${run} is not waiting for a merge approval: F merge ${run} says where it stands`);
   const who = whoami('approving a merge');
-  if (hostOf(parseRun(run).repo) === 'github' && who.via !== 'github') throw new Error('approving a merge on a GitHub project needs a verified login (gh auth login)');
-  const f = (r.events.findLast((e) => e.stage === 'approve' && e.status === 'decided')?.facts ?? {}) as Facts, files = (f.files ?? []).map((x) => clean(String(x)));
+  const f = (r.events.findLast((e) => e.stage === 'approve' && e.status === 'decided')?.facts ?? {}) as Facts, files = (f.files ?? []).map(line);
   const code = sha.slice(0, 7);
-  const typed = ask(`${run}: ${clean(r.title ?? '')}\n\nReviewed commit ${sha}: +${f.additions ?? '?'} -${f.deletions ?? '?'} in ${files.length} file(s)\n${files.slice(0, 40).join('\n')}${files.length > 40 ? `\n... and ${files.length - 40} more` : ''}\n\nWhy it waits: ${(r.decision.reasons ?? []).map((x) => clean(String(x))).join('; ')}\n\nType ${code} to approve merging exactly this commit (anything else cancels): `);
+  const typed = ask(`${run}: ${line(r.title ?? '')}\n\nReviewed commit ${sha}: +${f.additions ?? '?'} -${f.deletions ?? '?'} in ${files.length} file(s)\n${files.slice(0, 40).join('\n')}${files.length > 40 ? `\n... and ${files.length - 40} more` : ''}\n\nWhy it waits: ${(r.decision.reasons ?? []).map(line).join('; ')}\n\nType ${code} to approve merging exactly this commit (anything else cancels): `);
   if (typed.trim() !== code) throw new Error('not approved: what you typed did not match');
   record(run, 'approve', 'passed', { by: who.by, via: who.via, sha });
   return merge(run);

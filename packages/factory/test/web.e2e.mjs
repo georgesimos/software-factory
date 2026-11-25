@@ -210,8 +210,8 @@ try {
     assert.equal(fs.readFileSync(path.join(DIR, 'onboard.json'), 'utf8').includes('mobile'), false); // the read-only page never writes
     await shot(page, '1280-light-static-3');
     await wiz.getByRole('button', { name: /^Close/ }).click();
-    F(['event', 'acme/app#77', 'spec', 'started', '-'], '{"title":"Arrived after the page loaded"}'); // record() re-renders the file
-    await page.getByText('Arrived after the page loaded').first().waitFor({ timeout: 15_000 }); // the file re-reads itself every 10 s
+    F(['event', 'acme/app#77', 'spec', 'started']); // record() re-renders the file; a title comes from intake only
+    await page.getByText('app#77').first().waitFor({ timeout: 15_000 }); // the file re-reads itself every 10 s
     await ctx.close();
   }
   // The claude.ai Artifact: the same app, scrubbed; the host adds the skeleton.

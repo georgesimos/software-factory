@@ -61,9 +61,9 @@ export function gate(r: Run) {
   if (b.over) return { status: 'failed', next: 'approve', reasons: [...reasons, `budget reached ${budgetWhy(b)}`] };
   return { status: 'failed', next: route, reasons };
 }
-// Default is escalate: merge only when every condition holds. await-approval (local-first §0 D4): every reason left is one that
-// F approve RUN --merge may clear, auto-merge off (D1) or, on a host with no verified identities, an author nobody can verify;
-// it merges only with that approval of exactly the reviewed commit (on GitHub, by a verified login). Every other reason escalates.
+// Default is escalate: merge only when every condition holds. await-approval (local-first §0 D4), on the git host only: every reason
+// left is one that F approve RUN --merge may clear, auto-merge off or an author nobody can verify; it merges only with that approval
+// of exactly the reviewed commit. On GitHub every reason escalates, auto-merge off (D1) included: the human merges in GitHub.
 export function decide(r: Run, f: Facts) {
   if (r.imported) return { action: 'escalate', reasons: [`imported ${r.source || ''} run: the factory did not spec or build it`] };
   const why: string[] = [], asks: string[] = [], git = (f.host ?? 'github') !== 'github';
@@ -71,7 +71,8 @@ export function decide(r: Run, f: Facts) {
   if (f.trustBroken) (git && f.unverifiable ? asks : why).push(f.trustBroken); // the tracker can't say: never intake's recorded association instead
   else if (!TRUSTED.includes(assoc)) (git ? asks : why).push(`author association "${assoc || 'unknown'}" is not trusted`);
   if (r.originAssociation && !TRUSTED.includes(r.originAssociation)) (git ? asks : why).push(`split from ${r.origin}, whose author "${r.originAssociation}" is not trusted`);
-  if (f.autoMerge === false) asks.push('auto-merge is turned off for this project: it merges once you approve the reviewed commit (F approve RUN --merge)');
+  if (f.autoMerge === false) (git ? asks : why).push(git ? 'auto-merge is turned off for this project: it merges once you approve the reviewed commit (F approve RUN --merge)'
+    : 'auto-merge is turned off for this project: merge the PR in GitHub yourself (F sync records it)'); // GitHub: a human merges there; the typed approval is a speed bump an agent can clear
   if (f.headBroken) why.push(f.headBroken);
   const expected = r.axes?.[r.iteration] || [];
   const rev = r.reviews[r.iteration] || {};
@@ -118,7 +119,7 @@ export function decide(r: Run, f: Facts) {
     (!hit && pv === 'required' ? why : notes).push(line); // advisory: shown, never blocking
   }
   if (why.length) return { action: 'escalate', reasons: [...why, ...asks, ...notes] };
-  const yes = r.reviewedSha && r.events?.findLast((e) => e.stage === 'approve' && e.status === 'passed' && e.sha === r.reviewedSha && (git || e.via === 'github'));
+  const yes = r.reviewedSha && r.events?.findLast((e) => e.stage === 'approve' && e.status === 'passed' && e.sha === r.reviewedSha); // only a git project has asks
   if (asks.length && !yes) return { action: 'await-approval', reasons: [...asks, ...notes] };
   const ok = asks.length && yes ? [`merge approved by ${byText(yes)} for ${String(r.reviewedSha).slice(0, 7)}: ${asks.join('; ')}`] : [];
   return ciLine ? { action: 'merge', reasons: [`trusted author, all axes passed, tests changed, ${lines}-line diff, no sensitive paths`, ...(ci === 'required' ? ['CI green'] : []), ciLine, ...ok, ...notes] }

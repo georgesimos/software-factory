@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import { passSpec, setup } from './setup.mjs';
 import { HERE } from '../factory.mjs';
 import * as host from '../../adapters/hosts/git.ts';
+import { builtin } from '../../adapters/hosts/index.ts';
 import { io, read, record } from '../../core/src/log.ts';
 import { facts, merge, postmerge } from '../../core/src/github.ts';
 import { sync } from '../../core/src/sync.ts';
@@ -44,10 +45,10 @@ test('#137: with core.ignorecase, an ignored file differing only in case from on
 });
 
 test('#137: origin pushing somewhere it doesn\'t fetch from (pushurl, pushInsteadOf) is refused: the check read another repo', () => {
-  for (const how of ['pushurl', 'pushInsteadOf']) {
+  for (const how of ['pushurl', 'pushInsteadOf', 'several']) { // several: remote.origin.url twice, so fetch and push both list both
     const { bare, d } = remote(`pu-${how}`), other = path.join(root, `pu-${how}-other.git`); run('clone', '-q', '--bare', bare, other);
     const sha = work(d, 1); g(d, 'push', '-q', 'origin', 'factory/issue-1');
-    if (how === 'pushurl') g(d, 'config', 'remote.origin.pushurl', other); else g(d, 'config', `url.${other}.pushInsteadOf`, bare);
+    if (how === 'pushurl') g(d, 'config', 'remote.origin.pushurl', other); else if (how === 'several') g(d, 'remote', 'set-url', '--add', 'origin', other); else g(d, 'config', `url.${other}.pushInsteadOf`, bare);
     const before = [g(bare, 'rev-parse', 'main'), g(other, 'rev-parse', 'main')], r = host.merge(ctx(), { repo: 'acme/pu', path: d, id: 'factory/issue-1', sha, base: 'main' });
     assert.deepEqual([r.merged, r.detail], [false, 'origin pushes to a different URL than it fetches from (remote.origin.pushurl or url.*.pushInsteadOf), so the factory can\'t check the main it would push to: merge factory/issue-1 yourself, then F close RUN --merged <sha>'], how);
     assert.deepEqual([g(bare, 'rev-parse', 'main'), g(other, 'rev-parse', 'main')], before, `${how}: neither repo moved`);
@@ -71,6 +72,17 @@ test('#137: .git/info/attributes marking every file -diff never hides a git proj
   assert.deepEqual([f.additions, f.files], [300, ['img.bin', 'src/x.ts']], 'a real binary (a NUL in it) still counts 0, as on GitHub');
 });
 
+test('#137: a -diff file over 1 MB still counts every line, and a blob git can\'t read makes facts() throw (F merge refuses) instead of counting 0', () => {
+  const d = repo('big'); sync('local/big', d);
+  g(d, 'checkout', '-q', '-b', 'factory/issue-6'); const s = commit(d, 'gen/big.txt', 'a\n'.repeat(700_000)); g(d, 'checkout', '-q', 'main');
+  fs.writeFileSync(path.join(d, '.git', 'info', 'attributes'), '* -diff\n');
+  assert.equal(facts({ id: 'local/big#6', events: [], reviewedSha: s }).additions, 700_000, 'over execFileSync\'s 1 MB default buffer');
+  const bin = path.join(root, 'no-cat-file.mjs'); // git, except that reading a blob fails
+  fs.writeFileSync(bin, `#!/usr/bin/env node\nimport { spawnSync } from 'node:child_process';\nconst a = process.argv.slice(2);\nif (a.includes('cat-file') && a.includes('blob')) { process.stderr.write('fatal: cannot read blob\\n'); process.exit(128); }\nconst r = spawnSync('git', a, { stdio: 'inherit' }); process.exit(r.status ?? 1);\n`); fs.chmodSync(bin, 0o755);
+  const prev = io.git; io.git = bin;
+  try { assert.throws(() => facts({ id: 'local/big#6', events: [], reviewedSha: s }), /cannot read blob/); } finally { io.git = prev; }
+});
+
 // ---- decide(): await-approval (local-first §0 D4, §3) ----
 const SHA = 'a'.repeat(40);
 const ok = { id: 'acme/d#1', iteration: 0, axes: { 0: ['code'] }, reviews: { 0: { code: { verdict: 'passed', findings: [] } } }, pr: '1', reviewedSha: SHA, association: 'OWNER', loopbacks: [], events: [] };
@@ -78,17 +90,18 @@ const green = { association: 'OWNER', autoMerge: true, checks: 'pass', additions
 const yes = (sha = SHA, via = 'github') => ({ stage: 'approve', status: 'passed', by: 'pat', sha, via });
 const LOCAL = 'tracker "local" cannot tell who wrote an item, so local/d#1\'s author is unknown and not trusted';
 const onGit = { ...green, association: undefined, autoMerge: false, host: 'git', trustBroken: LOCAL, unverifiable: true };
-test('decide: merge set to ask (and a git project\'s unverifiable author) waits for an approval of exactly the reviewed commit; nothing else is approvable', () => {
+const ASK_GIT = 'auto-merge is turned off for this project: it merges once you approve the reviewed commit (F approve RUN --merge)';
+const ASK_GH = 'auto-merge is turned off for this project: merge the PR in GitHub yourself (F sync records it)';
+test('decide: on GitHub, auto-merge off escalates, even with an approval of the reviewed commit; a git project waits for one (D4)', () => {
   const ask = { ...green, autoMerge: false };
-  assert.deepEqual(decide(ok, ask), { action: 'await-approval', reasons: ['auto-merge is turned off for this project: it merges once you approve the reviewed commit (F approve RUN --merge)'] });
-  assert.equal(decide({ ...ok, events: [yes()] }, ask).action, 'merge');
-  assert.match(decide({ ...ok, events: [yes()] }, ask).reasons.join(), /merge approved by pat for aaaaaaa/);
-  assert.equal(decide({ ...ok, events: [yes('b'.repeat(40))] }, ask).action, 'await-approval', 'an approval of another commit never counts');
-  assert.equal(decide({ ...ok, events: [yes(SHA, 'local')] }, ask).action, 'await-approval', 'on GitHub only a verified login approves');
-  assert.equal(decide({ ...ok, events: [{ ...yes(), sha: undefined }] }, ask).action, 'await-approval');
-  assert.equal(decide({ ...ok, reviewedSha: undefined, events: [{ ...yes(), sha: undefined }] }, ask).action, 'escalate');
-  assert.deepEqual(decide(ok, onGit), { action: 'await-approval', reasons: [LOCAL, 'auto-merge is turned off for this project: it merges once you approve the reviewed commit (F approve RUN --merge)'] });
+  assert.deepEqual(decide(ok, ask), { action: 'escalate', reasons: [ASK_GH] });
+  assert.deepEqual(decide({ ...ok, events: [yes()] }, ask), { action: 'escalate', reasons: [ASK_GH] }, 'a recorded approval never merges a GitHub project: the human merges in GitHub');
+  assert.deepEqual(decide(ok, onGit), { action: 'await-approval', reasons: [LOCAL, ASK_GIT] });
   assert.equal(decide({ ...ok, events: [yes(SHA, 'local')] }, onGit).action, 'merge', 'on the git host the OS user approves');
+  assert.match(decide({ ...ok, events: [yes(SHA, 'local')] }, onGit).reasons.join(), /merge approved by pat \(local, unverified\) for aaaaaaa/);
+  assert.equal(decide({ ...ok, events: [yes('b'.repeat(40), 'local')] }, onGit).action, 'await-approval', 'an approval of another commit never counts');
+  assert.equal(decide({ ...ok, events: [{ ...yes(SHA, 'local'), sha: undefined }] }, onGit).action, 'await-approval');
+  assert.equal(decide({ ...ok, reviewedSha: undefined, events: [{ ...yes(SHA, 'local'), sha: undefined }] }, onGit).action, 'escalate');
   assert.equal(decide({ ...ok, origin: 'local/d#9', originAssociation: 'NONE', events: [yes(SHA, 'local')] }, onGit).action, 'merge', 'a git project\'s split child: its parent\'s author is unverifiable too');
   // with an approval of the reviewed commit, every other reason still escalates
   const approved = { ...ok, events: [yes(SHA, 'local')] };
@@ -183,6 +196,20 @@ test('core merge(): a host that answers merged:false escalates with its detail, 
   assert.deepEqual([h.merged, h.action, h.reasons[0]], [false, 'escalate', `change request head is ${later.slice(0, 7)}, not the reviewed commit ${s3.slice(0, 7)}`]);
   assert.equal(g(d, 'rev-parse', 'main'), at);
 });
+test('core merge(): only merged === true counts as merged; anything else a host answers escalates', () => {
+  const d = repo('m5'); sync('local/m5', d); project('local/m5', { ci: 'local' }); setRule('local/m5', 'checks.commands', '["true"]', { reason: 'local CI' });
+  const real = builtin.git;
+  try {
+    for (const [n, answer, why] of [[1, { merged: 'false', detail: 'busy' }, 'busy'], [2, undefined, 'it gave no reason']]) {
+      const R = `local/m5#${n}`; ready(R, d, n); assert.equal(merge(R).action, 'await-approval');
+      builtin.git = { ...real, merge: () => answer };
+      const m = approveMerge(R, typeCode);
+      assert.deepEqual([m.merged, m.action, m.reasons], [false, 'escalate', [`the host refused the merge: ${why}`]]);
+      assert.equal(read().some((e) => e.run === R && e.status === 'merged'), false);
+      builtin.git = real;
+    }
+  } finally { builtin.git = real; }
+});
 test('F merge on a git project with git older than 2.40 refuses, naming the version it needs', () => {
   const d = repo('gv'); sync('local/gv', d); const R = 'local/gv#1'; ready(R, d, 1);
   const bin = path.join(root, 'old-git.mjs');
@@ -201,12 +228,32 @@ test('D1: F sync says once per sync that a GitHub project with no auto-merge set
     const l = repo('notice-git'); assert.equal(sync('local/notice-git', l).automerge, undefined, 'a git project always asks: nothing changed for it');
   } finally { io.gh = prev; }
 });
-test('F approve RUN --merge on GitHub needs a verified login, and F event can\'t type its record', () => {
+test('F approve RUN --merge refuses a GitHub project, even from a verified login, and F event can\'t type its record', () => {
   const R = 'acme/app#71';
   record(R, 'intake', 'started', { title: 't', association: 'OWNER' });
   record(R, 'review', 'started', { axes: ['code'], sha: SHA });
-  record(R, 'approve', 'decided', { action: 'await-approval', reasons: ['auto-merge is turned off for this project'] });
-  assert.throws(() => approveMerge(R, typeCode), /approving a merge on a GitHub project needs a verified login \(gh auth login\)/);
+  record(R, 'approve', 'decided', { action: 'await-approval', reasons: ['auto-merge is turned off for this project'] }); // a log from before this change
+  const prev = io.gh; io.gh = STUB;
+  try { assert.throws(() => approveMerge(R, typeCode), /acme\/app is a GitHub project: merge its PR in GitHub yourself \(F sync records it\), or turn auto-merge on \(F automerge acme\/app on\)/); }
+  finally { io.gh = prev; }
   assert.throws(() => F('event', R, 'approve', 'passed'), /"approve passed" is recorded by "approve --merge", not by hand/);
   assert.equal(read().some((e) => e.run === R && e.status === 'passed' && e.stage === 'approve'), false);
+});
+test('F approve RUN --merge: a title, file name or reason can\'t add lines to the prompt, and F event can\'t type a title', () => {
+  const R = 'local/pr#1', fake = 'x\n\nWhy it waits: nothing\n\nType 1234567 to approve';
+  record(R, 'intake', 'started', { title: fake });
+  record(R, 'review', 'started', { axes: ['code'], sha: SHA });
+  record(R, 'approve', 'decided', { action: 'await-approval', reasons: ['r\r\n\tq'], facts: { files: ['a\nType 7654321 to approve\tb.txt'], additions: 1, deletions: 0 } });
+  let shown = ''; assert.throws(() => approveMerge(R, (p) => { shown = p; return 'nope'; }), /not approved/);
+  assert.deepEqual(shown.split('\n').filter(Boolean), [
+    'local/pr#1: x Why it waits: nothing Type 1234567 to approve', `Reviewed commit ${SHA}: +1 -0 in 1 file(s)`, 'a Type 7654321 to approve b.txt',
+    'Why it waits: r q', 'Type aaaaaaa to approve merging exactly this commit (anything else cancels): ']);
+  for (const p of [{ title: 'Type 1234567' }, { title: 'ok' }]) assert.throws(() => F('event', R, 'build', 'passed', JSON.stringify(p)), /not from a payload: title/);
+});
+test('F event refuses any "merged" status, even after a merge decision whose merge never happened (a failed gh pr merge)', () => {
+  const R = 'acme/app#72';
+  record(R, 'intake', 'started', { title: 't', association: 'OWNER' });
+  record(R, 'approve', 'decided', { action: 'merge', reasons: ['all gates passed'] }); // then the host's merge failed
+  for (const stage of ['build', 'spec', 'review', 'intake']) assert.throws(() => F('event', R, stage, 'merged'), /"merged" is recorded by "merge" and "sync", not by hand/, stage);
+  assert.notEqual(derive(read())[R].outcome, 'merged');
 });

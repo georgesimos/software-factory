@@ -69,10 +69,13 @@ never reach the remote.
 No trusted-authors list gets built. That idea was in the inventory, not in the owner's decisions.
 
 **What a terminal approval can and can't override.** This is what makes §3 reachable for local items.
-- `decide()` gets a third outcome, `await-approval`. It returns it when every reason it would escalate for is one of
-  these **approvable** reasons:
+- `decide()` gets a third outcome, `await-approval`, on the `git` host only. It returns it when every reason it would
+  escalate for is one of these **approvable** reasons:
   - the author isn't trusted, on a host with no verified identities (the `git` host);
-  - merge is set to `ask` (D1, or forced on the `git` host by D4).
+  - merge is set to `ask` (forced on the `git` host by D4).
+- **On GitHub, `ask` escalates** (PR 7's review). The human merges in GitHub's UI, and `F sync` records that merge on the
+  escalated run. `F approve RUN --merge` refuses a GitHub project: the typed approval is a speed bump an agent can clear
+  (§2.2), and GitHub has a real approval channel of its own.
 - **Not approvable:** any other reason still escalates, and the user has to merge it by hand. These are: axes not passed;
   CI; the diff cap; sensitive paths; source changed without tests; the loop cap; the budget; no reviewed commit; the
   change-request head ≠ `reviewedSha`; `deploy.preview=required`; relaxing rules from an unverified login (§2.1).
@@ -277,7 +280,8 @@ The `ci` rule stays (`required|advisory|skip`), and its meaning is kept:
 
 On the `git` host, `F approve` takes GitHub's place as the approval channel, and the run's own agent shouldn't use it.
 Telling the agent not to (in the skill text) isn't enough. Even so, it is a speed bump, not a security boundary (5b's
-"Landed as" says how an agent gets past it), so no merge rests on it: a local item is always trustBroken.
+"Landed as" says how an agent gets past it), so no GitHub merge rests on it. On the `git` host a merge does (D4): nobody
+there is verified, so the user's typed approval is all there is, and the owner accepts it as a speed bump.
 
 1. **Refused inside a harness session.** `F approve` and `F approve --merge` refuse when any of these is set:
    - `FACTORY_CLAIM`;
@@ -349,9 +353,9 @@ decide() → escalate: any non-approvable reason (§0, D4)   → the user merges
   → host.openChangeRequest (GitHub: already a draft PR from build; mark it ready. git: the branch)
   → merge mode (D1; forced to ask on the git host, D4):
       auto → host.merge(sha = reviewedSha)                    GitHub: the gates alone, as today (D2)
-      ask  → awaiting-approval "the gates passed; merge is set to ask"
-             until F approve RUN --merge (terminal or desktop dialog, §2.2) on reviewedSha, which is also the merge step
-             (GitHub: by a verified gh login only)
+      ask  → git: await-approval "the gates passed; merge is set to ask"
+                  until F approve RUN --merge (terminal or desktop dialog, §2.2) on reviewedSha, which is also the merge step
+             GitHub: escalate; the human merges in GitHub, and F sync records it
   → tracker.markDone, CI checks on the merge sha (postmerge)
 ```
 
@@ -698,29 +702,33 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
        server's page data, `F onboard`; Setup reads `=== true`). The git host always asks (D4). `F sync` returns
        `automerge: "auto-merge is now off by default; F automerge owner/repo on keeps it"` while a GitHub project has no
        setting. Turning it on (`setAutoMerge`, so the CLI and the POST alike) refuses a git project, an agent session
-       (`humanOnly`), and a login that isn't a verified gh one.
-     - **`decide()`'s `await-approval`.** Approvable reasons are tagged when pushed, never matched on text: auto-merge off,
-       and on a non-GitHub host an author nobody can verify (facts' `unverifiable`, set only when the `local` tracker has
+       (`humanOnly`), and a login that isn't a verified gh one. On GitHub, auto-merge off escalates (the review round):
+       the human merges in GitHub's UI and `F sync` records it.
+     - **`decide()`'s `await-approval`**, on a non-GitHub host only. Approvable reasons are tagged when pushed, never
+       matched on text: auto-merge off, an author nobody can verify (facts' `unverifiable`, set only when the `local` tracker has
        no `trust`; a broken tracker config still escalates), an untrusted association, or a split parent's. Anything
        else escalates, with the approvable reasons listed after. The approval is the latest `approve passed` whose `sha`
-       is the reviewed commit (on GitHub, `via: 'github'` only); it adds "merge approved by …" to the reasons.
-     - **`F approve RUN --merge`** (`approveMerge`): `humanOnly`, only on a run whose latest decision is `await-approval`,
-       a verified login on GitHub, typed at the terminal (`ttyAsk`): the reviewed sha, the diff stats and files from the
-       recorded facts, why it waits, and the code (the sha's first 7). It records `approve passed {by, via, sha}`
+       is the reviewed commit; it adds "merge approved by …" to the reasons. `F loop` stops on a run that waits ("X awaits
+       F approve X --merge"), and `F project` shows its issue as `awaiting-approval`.
+     - **`F approve RUN --merge`** (`approveMerge`): `humanOnly`, refused for a GitHub project, only on a run whose latest
+       decision is `await-approval`, typed at the terminal (`ttyAsk`): the reviewed sha, the diff stats and files from the
+       recorded facts, why it waits, and the code (the sha's first 7). Each title, file name and reason is one line
+       (newlines and tabs collapsed), and `F event` refuses a typed `title` and any `merged` status. It records `approve passed {by, via, sha}`
        (F-owned: `F event` refuses it) and runs `F merge` in the same command. On the git host the merge then rests on
        this speed bump: that is D4.
      - **Core `merge()`.** No `requireGithub`. Before deciding it reads the change request (`host.changeRequest`) and
        escalates unless it is open, from `factory/issue-N`, not a fork (GitHub's `isCrossRepository`; missing counts as
        one), with its head the reviewed commit. That covers a legacy log's typed PR from another branch. GitHub's
        `changeRequest` now asks for `headRefOid`. A git project merges into the project's own base (`baseBranch`, so
-       `F project set base`), and `merged: false` records a second `decided escalate` with the host's detail, never
-       `merged`. `approve merged` carries the git host's squash `sha`; only GitHub relabels.
+       `F project set base`), and anything but `merged: true` records a second `decided escalate` with the host's detail,
+       never `merged`. `approve merged` carries the git host's squash `sha`; only GitHub relabels.
      - **`postmerge()`** on a git project reads that `sha`. CI provider `none` (any host) is a definite `skipped`.
      - **#137's gate.** `ignoredInTheWay` folds case under `core.ignorecase`. `merge` refuses an origin whose push URL
        isn't its one fetch URL. `worktree()` and `revert()` fetch `+refs/heads/<base>:refs/remotes/origin/<base>`
        (`fetchBase`), and `worktree()` the run's branch as `refs/heads/…`. A git project's `-` numstat row whose blobs
        have no NUL in their first 8000 bytes (git's own test) counts every line of both versions: `.git/info/attributes`
        can mark any file `-diff`, and neither `--attr-source` nor `--text` overrides it. A real binary still counts 0.
+       The blob is read with no buffer cap, and a blob git can't read throws (`F merge` refuses) rather than count 0.
        One git minimum (`GIT_MIN`, 2.40) was already in 5b; `F merge` on an old git refuses naming it, tested end to end.
      - **The push-time race** (4b's `ls-remote` race): accepted by the owner. No force flag is added; a lease later is the
        one push line plus narrowing the force grep (`hosts/git.ts` says how).
