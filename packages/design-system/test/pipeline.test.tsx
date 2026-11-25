@@ -31,7 +31,7 @@ describe('PipelineGraph (the dashboard and the playground draw the same one)', (
     expect(onPick).toHaveBeenCalledWith('default');
   });
   it('imports nothing from core or the dashboard', () => {
-    for (const f of ['PipelineGraph.tsx', 'pipelineModel.ts']) {
+    for (const f of ['PipelineGraph.tsx', 'PipelineStepPanel.tsx', 'pipelineModel.ts']) {
       const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'factory', f), 'utf8');
       expect((src.match(/from '[^']+'/g) ?? []).filter((m) => !/^from '(react|\.\/[\w.]+|\.\.\/components\/[\w.]+)'$/.test(m)), f).toEqual([]);
     }

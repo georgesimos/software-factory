@@ -2,12 +2,37 @@ import { Badge, Button, Dialog, Dot, Input, Select, Table, Tabs } from '@softwar
 import { useState, type ReactNode } from 'react';
 import { post, type CatalogEntry, type Harness, type SkillsData, type StepRunner } from './data.ts';
 import {
-  SOURCES, editStep, entriesFor, keepModel, kindOf, modelSource, pickResult, presetCommand, runnerKey, runnerName, setHere, skillCommand, stepLabel,
+  SOURCES, editStep, entriesFor, keepModel, kindOf, pickResult, presetCommand, runnerFrom, runnerKey, runnerName, setHere, skillCommand, stepChoices, stepLabel,
 } from './skillsModel.ts';
 
 // Who runs each step. Under `F ui` (a token) changes save through /api; otherwise each change copies the CLI command.
 export const copy = async (t: string) => { try { await navigator.clipboard.writeText(t); return true; } catch { return false; } };
 export type Pick = { title: string; step: string; current: StepRunner | null; axis?: StepRunner; done: (p: { runner: StepRunner; axis?: string; when?: string[] }) => void };
+export type SaveStatus = { text: ReactNode; bad?: boolean };
+
+/** A skills change: saved through /api under F ui, else the CLI command copied. The Skills and Pipelines sheets share this one write path. */
+export function useSkillsSave(token: string | undefined, fCmd: string | undefined, onSaved: (s: SkillsData) => void) {
+  const [status, setStatus] = useState<SaveStatus>({ text: '' });
+  const apply = async (route: string, body: object, cmd: string, said = (_: SkillsData) => 'Saved.') => {
+    try {
+      if (!token) {
+        const ok = await copy(cmd);
+        return setStatus({ text: <>{ok ? 'Command copied. Run it in a terminal, or open this page with F ui to save directly:' : 'Run this in a terminal:'} <code>{cmd}</code></> });
+      }
+      const x = await post<SkillsData>(route, body, token);
+      onSaved(x);
+      setStatus({ text: said(x) });
+    } catch (e) { setStatus({ text: (e as Error).message, bad: true }); }
+  };
+  const save = (scope: string, step: string, runner: StepRunner | StepRunner[] | null) => apply('/skills', { scope, step, runner }, skillCommand(scope, step, runner, fCmd));
+  return { status, setStatus, apply, save };
+}
+/** Changing who runs a step: the picker, whose pick keeps the model, effort and fallback set on the step here. */
+export const runnerPick = (S: SkillsData, scope: string, step: string, save: (step: string, r: StepRunner) => void): Pick => ({
+  title: stepLabel(step), step, current: S.plans?.[scope]?.plan?.[step] ?? { use: 'default' },
+  done: (x) => save(step, keepModel(setHere(S, scope, step) ? (S.config?.[scope] as Record<string, StepRunner>)[step] : undefined, x.runner)),
+});
+
 interface Props { open: boolean; onClose: () => void; skills: SkillsData; harnesses?: Harness[]; token?: string; scope?: string; fCmd?: string; onSaved: (s: SkillsData) => void }
 
 export function SkillsSheet({ open, onClose, harnesses = [], ...p }: Props) {
@@ -24,25 +49,14 @@ function SkillsBody({ skills: S, token, scope: first = 'default', fCmd, onSaved 
   const scopes = S.scopes ?? [];
   const [picked, setScope] = useState(first);
   const scope = picked === 'default' || scopes.includes(picked) ? picked : 'default';
-  const [status, setStatus] = useState<{ text: ReactNode; bad?: boolean }>({ text: '' });
+  const { status, setStatus, apply, save: saveTo } = useSkillsSave(token, fCmd, onSaved);
   const [pick, setPick] = useState<Pick | null>(null);
   const live = token
     ? <p className="web-sk-live"><Dot tone="ok" /> Live: changes save to ~/.claude/factory/skills.json</p>
     : <p className="web-sk-live"><Dot tone="idle" /> <span>Read-only page. Run <code>F ui</code> to edit here; until then, each change gives you the command to run.</span></p>;
   if (S.error) return <>{live}<p className="web-sk-err">skills.json is invalid: {S.error}. Fix the file, then reload.</p></>;
 
-  const apply = async (route: string, body: object, cmd: string, said = (_: SkillsData) => 'Saved.') => {
-    try {
-      if (!token) {
-        const ok = await copy(cmd);
-        return setStatus({ text: <>{ok ? 'Command copied. Run it in a terminal, or open this page with F ui to save directly:' : 'Run this in a terminal:'} <code>{cmd}</code></> });
-      }
-      const x = await post<SkillsData>(route, body, token);
-      onSaved(x);
-      setStatus({ text: said(x) });
-    } catch (e) { setStatus({ text: (e as Error).message, bad: true }); }
-  };
-  const save = (step: string, runner: StepRunner | StepRunner[] | null) => apply('/skills', { scope, step, runner }, skillCommand(scope, step, runner, fCmd));
+  const save = (step: string, runner: StepRunner | StepRunner[] | null) => saveTo(scope, step, runner);
   const preset = (name: string) => apply('/skills/preset', { name, scope }, presetCommand(name, scope, fCmd), (x) =>
     [`Applied ${name} to ${x.applied?.length ?? 0} steps.`, x.skipped?.length ? `${x.skipped.length} not run by Claude kept their runner.` : '',
       x.inherited?.length ? `${x.inherited.length} this project doesn’t set follow global.` : ''].filter(Boolean).join(' '));
@@ -51,14 +65,14 @@ function SkillsBody({ skills: S, token, scope: first = 'default', fCmd, onSaved 
   const row = (step: string) => {
     const here = setHere(S, scope, step), r = plan[step] ?? { use: 'default' }, isDef = !r.use || r.use === 'default';
     const label = stepLabel(step), axis = step.startsWith('review.') ? step.slice(7) : '';
-    const change = () => setPick({ title: label, step, current: r, done: (x) => save(step, keepModel(here ? (cfg[scope] as Record<string, StepRunner>)[step] : undefined, x.runner)) });
+    const change = () => setPick(runnerPick(S, scope, step, save));
     return (
       <tr key={step}>
         <th scope="row">{label} {(S.required ?? []).includes(axis) ? <Badge quiet>required</Badge> : null}</th>
         <td><div className="web-sk-run">
           <span className="web-sk-name" data-def={isDef || undefined}>{runnerName(S, scope, r)}</span>
           {isDef ? null : <Badge>{kindOf(S, scope, r)}</Badge>}
-          <span className="web-sk-from" data-here={here || undefined}>{here ? (scope === 'default' ? 'set globally' : 'set for this project') : scope !== 'default' && step in glob ? 'from global' : 'built-in'}</span>
+          <span className="web-sk-from" data-here={here || undefined}>{runnerFrom(S, scope, step)}</span>
         </div></td>
         <td>{r.model ? <ModelCell S={S} scope={scope} step={step} r={r} label={label} save={save} /> : null}</td>
         <td className="web-sk-act">
@@ -126,16 +140,16 @@ function SkillsBody({ skills: S, token, scope: first = 'default', fCmd, onSaved 
 
 // Model, effort and fallback per Claude-run step (the resolved plan has a model). The empty choice inherits.
 function ModelCell({ S, scope, step, r, label, save }: { S: SkillsData; scope: string; step: string; r: StepRunner; label: string; save: (step: string, x: StepRunner | null) => void }) {
-  const m = modelSource(S, scope, step), mine = setHere(S, scope, step) ? (S.config?.[scope]?.[step] ?? {}) as StepRunner : {};
+  const c = stepChoices(S, scope, step, r), m = c.source, mine = c.mine;
   const fb = (mine.fallback ?? []).join(','), chains = [...new Set([fb, ...(S.models ?? []).filter((x) => x !== r.model)])].filter(Boolean);
   const on = (field: 'model' | 'effort' | 'fallback') => (e: { target: { value: string } }) => save(step, editStep(S, scope, step, field, e.target.value));
   return (
     <div className="web-sk-model">
-      <Select aria-label={`Model for ${label}`} value={m.set} onChange={on('model')}>
-        <option value="">{m.inherit}</option>{[...new Set([...(S.models ?? []), m.set].filter(Boolean))].map((x) => <option key={x} value={x}>{x}</option>)}
+      <Select aria-label={`Model for ${label}`} value={c.model.value} onChange={on('model')}>
+        <option value="">{c.model.inherit}</option>{c.model.options.map((x) => <option key={x} value={x}>{x}</option>)}
       </Select>
-      <Select aria-label={`Effort for ${label}`} value={mine.effort ?? ''} onChange={on('effort')}>
-        <option value="">{mine.effort ? 'Inherit' : r.effort ?? 'Default'}</option>{(S.efforts ?? []).map((x) => <option key={x} value={x}>{x}</option>)}
+      <Select aria-label={`Effort for ${label}`} value={c.effort.value} onChange={on('effort')}>
+        <option value="">{c.effort.inherit}</option>{c.effort.options.map((x) => <option key={x} value={x}>{x}</option>)}
       </Select>
       <Select aria-label={`Fallback for ${label}`} value={fb} onChange={on('fallback')}>
         <option value="">{fb ? 'Model’s chain' : '→ ' + ((r.fallback ?? []).join(' → ') || 'none')}</option>{chains.map((x) => <option key={x} value={x}>→ {x.split(',').join(' → ')}</option>)}

@@ -30,7 +30,8 @@ export { Timeline } from './factory/Timeline.tsx';
 export { SessionLink, SessionList, SessionsChip, resumeCommand, shq, type AgentSession } from './factory/Sessions.tsx';
 export { CommandMenu, filterCommands, type Command, type CommandMenuProps } from './factory/CommandMenu.tsx';
 export { PipelineGraph, PipelineList, type PipelineGraphProps, type PipelineListItem } from './factory/PipelineGraph.tsx';
-export { nodeLabel, pipelineGraph, trackerName, whenText, type Pipeline, type PipelineEdge, type PipelineNode, type StepRunner } from './factory/pipelineModel.ts';
+export { PipelineStepPanel, type PipelineStepPanelProps, type StepEdit, type StepEditing } from './factory/PipelineStepPanel.tsx';
+export { STEP_STATUS, nodeLabel, pipelineGraph, runOverlay, trackerName, whenText, type Pipeline, type PipelineEdge, type PipelineNode, type RunOverlay, type StepEvent, type StepResult, type StepRunner, type StepStatus } from './factory/pipelineModel.ts';
 
 export { ProjectPicker, type ProjectPickerProps } from './onboarding/ProjectPicker.tsx';
 export { IngestProgress, type IngestItem, type IngestStatus } from './onboarding/IngestProgress.tsx';

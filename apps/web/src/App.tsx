@@ -169,7 +169,7 @@ function Shell({ data, patch, refresh }: { data: FactoryData; patch: (p: Partial
       <SetupWizard open={setupOpen} onClose={() => { session('sf.onboardClosed', '1'); setSetupOpen(false); }} data={data} token={data.token}
         onSkills={(skills) => patch({ skills })} refresh={refresh} openSkills={(s) => setSkillsOpen(s)} />
       {data.skills ? <SkillsSheet open={!!skillsOpen} onClose={() => setSkillsOpen(false)} skills={data.skills} harnesses={data.harnesses} token={data.token} scope={skillsOpen || project} fCmd={data.fCmd ?? undefined} onSaved={(skills) => patch({ skills })} /> : null}
-      {pipelinesOpen ? <PipelinesSheet open onClose={() => setPipelinesOpen(false)} data={data} project={project} /> : null}
+      {pipelinesOpen ? <PipelinesSheet open onClose={() => setPipelinesOpen(false)} data={data} project={project} onSaved={(skills) => patch({ skills })} /> : null}
       {mx ? <MetricsSheet open={metricsOpen} onClose={() => setMetricsOpen(false)} token={data.token} metricsLog={data.metricsLog} generated={data.generated} projects={projects} project={project} /> : null}
       {token ? <LiveSessions open={liveOpen} onClose={() => setLiveOpen(false)} token={token} repos={Array.isArray(data.projects) ? data.projects : []} terminal={data.terminal} /> : null}
       {wide ? null : <Sheet open={!!sel} onClose={close} title={sel?.id ?? 'Run'}>{sel ? detail(sel) : null}</Sheet>}
