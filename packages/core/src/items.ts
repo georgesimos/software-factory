@@ -70,12 +70,16 @@ export function split(run: string, input: unknown, { dryRun = false } = {}) {
   if (r.stage !== 'intake' || !['started', 'decided'].includes(r.status)) throw new Error(`${run} is not right after F intake: split only decides intake`); // decided: a split that stopped half way
   const ready = TRUSTED.includes(r.association) && (!r.origin || TRUSTED.includes(r.originAssociation));
   if (dryRun) return { dryRun: true, ready, children: items.map((i) => ({ key: i.key, title: i.title })) };
-  // The intent, then each child as it is made, so a child of a split that fails half way still finds its parent at intake.
-  const keys = items.map((i) => i.key), kept = new Set(r.status === 'decided' ? r.children : []);
+  // The intent, then each child as it is made or found again, one item per call: a child of a split that stops part way still
+  // finds its parent at intake. The recorded list only grows (a re-intake in between keeps it), so no record drops a child.
+  const keys = items.map((i) => i.key), kept = new Set(r.children || []), create = trackerFn(trackerOf(repo), 'createIssues', 'create items');
   record(run, 'intake', 'decided', { decision: 'split', keys, ...(kept.size && { children: [...kept] }) });
-  const onCreated = (c: { id: string }) => record(run, 'intake', 'decided', { decision: 'split', keys, children: [...kept.add(`${repo}#${c.id}`)] });
-  const made = trackerFn(trackerOf(repo), 'createIssues', 'create items')(adapterCtx(), { repo, ...where(repo), items, ready, onCreated });
-  record(run, 'intake', 'split', { children: made.map((c) => `${repo}#${c.id}`) });
+  const made = items.map((it) => {
+    const [c] = create(adapterCtx(), { repo, ...where(repo), items: [it], ready });
+    record(run, 'intake', 'decided', { decision: 'split', keys, children: [...kept.add(`${repo}#${c!.id}`)] });
+    return c!;
+  });
+  record(run, 'intake', 'split', { children: [...kept] });
   return { ready, children: made.map((c) => ({ run: `${repo}#${c.id}`, ...(c.url && { url: c.url }), created: c.created })) };
 }
 

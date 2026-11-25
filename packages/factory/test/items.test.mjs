@@ -362,3 +362,45 @@ test('on GitHub, F approval holds only for the spec F comment posted: never post
   } finally { delete process.env.STUB_VOTE; }
   assert.match(F('{}', 'event', run, 'spec', 'awaiting-approval', '{"spec":"s","postedSha":"x"}').stderr, /not from a payload: postedSha/);
 });
+
+test('a child is never dropped from its parent\'s list: not by a re-intake between two partial splits, and not when a re-run finds it unrecorded (GitHub and local)', () => {
+  reset();
+  const three = [...kids, { title: 'Part three', body: 'Do three.', acceptance: ['three works'] }];
+  const twice = (run, fail, a, b) => { // split fails at a, F intake again, split fails at b
+    assert.throws(() => fail(a, () => split(run, { children: three })));
+    record(run, 'intake', 'started', { title: 'again', association: 'NONE' }); // what a re-intake records
+    assert.throws(() => fail(b, () => split(run, { children: three })));
+  };
+  const gh = (n, f) => { process.env.STUB_FAIL = String(n); try { return f(); } finally { delete process.env.STUB_FAIL; } };
+  fs.writeFileSync(count, '500');
+  twice(started(41, { association: 'NONE' }), gh, 501, 502);
+  assert.deepEqual(getRun('acme/it#41').children, ['acme/it#500', 'acme/it#501']);
+  assert.deepEqual([intake('acme/it#500').origin, getRun('acme/it#500').originAssociation], ['acme/it#41', 'NONE'], 'the first run\'s child keeps its parent');
+  process.env.STUB_FOUND = JSON.stringify([{ number: 600, url: 'https://github.com/acme/it/issues/600', author: { login: 'stub-user' }, body: 'Part of #42\n\nx\n\n<!-- factory-key: split-42-1 -->' }]);
+  try {
+    fs.writeFileSync(count, '601');
+    assert.throws(() => gh(601, () => split(started(42, { association: 'NONE' }), { children: three })));
+  } finally { delete process.env.STUB_FOUND; }
+  assert.deepEqual(getRun('acme/it#42').children, ['acme/it#600'], 'a child found again (made before a crash, never recorded) is recorded too');
+  fs.writeFileSync(count, '700');
+  assert.throws(() => gh(701, () => split(started(43, { association: 'NONE' }), { children: three })));
+  record('acme/it#43', 'intake', 'started', { title: 'again', association: 'NONE' });
+  fs.writeFileSync(made, JSON.stringify(JSON.parse(fs.readFileSync(made, 'utf8')).map((i) => ({ ...i, body: i.body.replaceAll('\n', '\r\n') })))); // a human edit in the web UI: CRLF
+  split('acme/it#43', { children: three });
+  assert.deepEqual(getRun('acme/it#43').children, ['acme/it#700', 'acme/it#701', 'acme/it#702', 'acme/it#703'], 'a child the re-run can\'t find again stays listed (the re-run makes a duplicate: noted in the PR)');
+  const g = fs.mkdtempSync(path.join(root, 'local-'));
+  git('-C', g, 'init', '-q', '-b', 'main');
+  git('-C', g, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init'); // intake reads the base branch
+  fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), 'local/two': { path: g } }));
+  fs.mkdirSync(path.join(g, '.factory', 'issues'), { recursive: true });
+  fs.writeFileSync(path.join(g, '.factory', 'issues', '1.md'), '---\ntitle: "Big"\nstate: open\nlabels: []\n---\n\nBig.\n');
+  const disk = (nth, f) => { // the nth new item file fails to write
+    const w = fs.writeFileSync; let k = 0;
+    fs.writeFileSync = (p, ...a) => { if (a[1]?.flag === 'wx' && String(p).startsWith(g) && ++k === nth) throw new Error('disk full'); return w(p, ...a); };
+    try { return f(); } finally { fs.writeFileSync = w; }
+  };
+  record('local/two#1', 'intake', 'started', { title: 'Big', association: 'NONE' });
+  twice('local/two#1', disk, 2, 2);
+  assert.deepEqual(getRun('local/two#1').children, ['local/two#2', 'local/two#3']);
+  assert.deepEqual([intake('local/two#2').origin, getRun('local/two#2').originAssociation], ['local/two#1', 'NONE']);
+});
