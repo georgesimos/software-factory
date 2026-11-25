@@ -87,6 +87,18 @@ try {
 
   // No Node in the page, nothing from another origin, no new windows, no navigation away.
   assert.deepEqual(await win.evaluate(() => [typeof window.process, typeof window.require, typeof window.module]), ['undefined', 'undefined', 'undefined']);
+  // Run → Approve… belongs to main alone (local-first 5c): no preload, no IPC channel, no server route reaches it.
+  // Electron's own channels are named one by one, so a new one fails here and gets looked at. _invokeHandlers is where
+  // ipcMain.handle (and webContents.ipc.handle) keeps its channels: if Electron moves it, this fails rather than passing empty.
+  const ELECTRON_OWN = ['error', 'IMPORT_SHARED_TEXTURE_RELEASE_RENDERER_TO_MAIN'];
+  assert.deepEqual(await app.evaluate(({ Menu, ipcMain, BrowserWindow, session }, own) => {
+    const run = Menu.getApplicationMenu().items.find((i) => i.label === 'Run');
+    const w = BrowserWindow.getAllWindows()[0].webContents;
+    const channels = (ipc) => ipc._invokeHandlers instanceof Map
+      ? [...ipc.eventNames(), ...ipc._invokeHandlers.keys()].map(String).filter((n) => !own.includes(n)) : 'no _invokeHandlers Map';
+    return [run?.submenu.items.map((i) => i.label), channels(ipcMain), channels(w.ipc), w.getLastWebPreferences().preload ?? null, session.defaultSession.getPreloads().length];
+  }, ELECTRON_OWN), [['Approve…'], [], [], null, 0]);
+  for (const method of ['GET', 'POST']) assert.equal((await fetch(`${origin}/api/approve`, { method, headers: { 'x-factory-token': t, origin, 'content-type': 'application/json' }, body: method === 'POST' ? '{}' : undefined })).status, 404);
   const other = origin.replace('127.0.0.1', 'localhost'); // the same server under another origin: only the request filter stops it
   assert.equal(await win.evaluate((u) => fetch(u, { mode: 'no-cors' }).then(() => 'loaded', () => 'blocked'), `${other}/`), 'blocked');
   assert.equal(await win.evaluate(() => window.open('http://example.invalid/')), null); // http: denied and not handed to the OS either
