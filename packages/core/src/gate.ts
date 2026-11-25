@@ -1,7 +1,8 @@
 import path from 'node:path';
-import { CAP, DOCS, MAX_DIFF, SEO, SOURCE, TEST, TRUSTED, UI, blocking, byText, isLocal, sensitive } from './constants.ts';
-import { budget, budgetWhy } from './derive.ts';
-import { AXIS_WHEN, BUILTIN_AXES } from './skills.ts';
+import { CAP, COST_CAP, DOCS, MAX_DIFF, SEO, SOURCE, TEST, TRUSTED, UI, blocking, byText, isLocal, sensitive } from './constants.ts';
+import { budget, budgetWhy, thisRun } from './derive.ts';
+import { AXIS_WHEN, BUILTIN_AXES, LOCKED_STEPS, isObj } from './skills.ts';
+import { runCaps } from './rules.ts';
 import type { AxisReview, Deploy, LocalChecks, Metrics, Rule, Run } from './types.ts';
 
 /** An extra review axis from skills.json: added when a changed file matches one of its globs. */
@@ -32,20 +33,22 @@ export function localResult(lc: LocalChecks | undefined, cmds: unknown, sha: str
     : { state: 'pass', text: `Local checks: pass (${cmds.join(', ')})` };
 }
 
-export function axesFor(files: string[], extra: ExtraAxis[] = []) {
+// off: the steps.off list F axes resolved for this run (review.<axis>). A locked axis is never dropped, whatever the list says.
+export function axesFor(files: string[], extra: ExtraAxis[] = [], off: string[] = []) {
   const on = { ui: UI, seo: SEO, docs: DOCS };
   const axes: string[] = BUILTIN_AXES.filter((a) => AXIS_WHEN[a] === 'always' || files.some((f) => on[AXIS_WHEN[a] as keyof typeof on].test(f))); // skills.ts's table, which the Pipelines page shows
   for (const x of extra) if (files.some((f) => x.when.some((g) => path.matchesGlob(f, g)))) axes.push(x.axis); // user axes only add, never replace. shortcut: path.matchesGlob needs Node >= 22.5 (experimental before 24); swap in a small glob regex if older Node matters
-  return axes;
+  return axes.filter((a) => !off.includes(`review.${a}`) || LOCKED_STEPS.includes(`review.${a}`));
 }
 // Loop-backs re-review only what the new commits touch, plus every axis that failed last time.
-export function reviewAxes(r: Run, files: string[], extra: ExtraAxis[] = []) {
+export function reviewAxes(r: Run, files: string[], extra: ExtraAxis[] = [], off: string[] = []) {
   const prev = Math.max(-1, ...Object.keys(r.axes || {}).map(Number).filter((i) => i < r.iteration));
   // prev is one of r.axes' keys
   const failed = prev < 0 ? [] : ((r.axes as Record<number, string[]>)[prev] as string[]).filter((a) => r.reviews[prev]?.[a]?.verdict !== 'passed');
-  return [...new Set([...axesFor(files, extra), ...failed])];
+  return [...new Set([...axesFor(files, extra, off), ...failed])];
 }
-export function gate(r: Run) {
+// caps: runCaps() of the project's rules; the built-in ones when none apply.
+export function gate(r: Run, caps = { loops: CAP, budgetUsd: COST_CAP }) {
   const expected = r.axes?.[r.iteration];
   if (!expected) throw new Error(`no review axes recorded for iteration ${r.iteration}; run "axes" first`);
   const rev = r.reviews[r.iteration] || {};
@@ -56,8 +59,8 @@ export function gate(r: Run) {
   const findings = failed.flatMap((a) => (rev[a] as AxisReview).findings.filter(blocking));
   const route = findings.some((f) => f.route === 'spec') ? 'spec' : 'build';
   const reasons = failed.map((a) => `${a}: ${(rev[a] as AxisReview).findings.filter(blocking).length} blocking finding(s)`);
-  if (r.iteration >= CAP) return { status: 'failed', next: 'approve', reasons: [...reasons, `loop cap ${CAP} reached`] };
-  const b = budget(r);
+  if (r.iteration >= caps.loops) return { status: 'failed', next: 'approve', reasons: [...reasons, `loop cap ${caps.loops} reached${caps.loops < CAP ? ' (rule run.loops)' : ''}`] };
+  const b = budget(r, caps.budgetUsd);
   if (b.over) return { status: 'failed', next: 'approve', reasons: [...reasons, `budget reached ${budgetWhy(b)}`] };
   return { status: 'failed', next: route, reasons };
 }
@@ -103,8 +106,9 @@ export function decide(r: Run, f: Facts) {
   if (lines > cap) why.push(`diff is ${lines} lines (max ${cap}${cap < MAX_DIFF ? ` by rule diffCap, ${by(pol.diffCap as Rule)}` : ''})`);
   const sens = (f.files || []).filter(sensitive);
   if (sens.length) why.push(`touches sensitive paths: ${sens.join(', ')}`);
-  if (r.iteration > CAP) why.push(`iteration ${r.iteration} exceeds cap ${CAP}`);
-  const b = budget(r);
+  const caps = runCaps(pol);
+  if (r.iteration > caps.loops) why.push(`iteration ${r.iteration} exceeds cap ${caps.loops}${caps.loops < CAP ? ' (rule run.loops)' : ''}`);
+  const b = budget(r, caps.budgetUsd);
   if (b.over) why.push(`run budget exceeded ${budgetWhy(b)}`);
   const src = (f.files || []).filter((p) => SOURCE.test(p) && !TEST.test(p));
   if (src.length && !(f.files || []).some((p) => TEST.test(p))) why.push(`source changed (${src.length} file(s)) with no test change`);
@@ -117,6 +121,16 @@ export function decide(r: Run, f: Facts) {
     const sha = r.reviewedSha, hit = sha && (f.deploys ?? r.deploys ?? []).find((d) => d.kind === 'web-deploy' && d.env === 'preview' && d.state === 'ready' && d.sha === sha && /^https:\/\//.test(d.url || ''));
     const line = hit ? `preview ready: ${hit.url} (${hit.connector})` : `no ready preview deploy for the reviewed commit ${String(sha || 'none').slice(0, 7)} (rule deploy.preview=${pv}, ${by(pol['deploy.preview'] as Rule)})`;
     (!hit && pv === 'required' ? why : notes).push(line); // advisory: shown, never blocking
+  }
+  // steps.off (pipelines §6): every review this run's F axes dropped, from the run's own record (never the live rule, which
+  // may be gone by now), with who turned it off and why. On GitHub, a local user's rule never counts toward a merge (§5).
+  const offs = thisRun(r.events)
+    .filter((e) => e.stage === 'review' && e.status === 'started' && Array.isArray(e.dropped) && e.dropped.length && isObj(e.offRule));
+  const seen = new Set<string>();
+  for (const e of offs) {
+    const o = e.offRule as { reason?: string; by?: string; local?: boolean }, line = `${(e.dropped as string[]).join(', ')} off by rule steps.off, set by ${o.by}: ${o.reason}`;
+    if (!seen.has(line)) { seen.add(line); notes.push(line); }
+    if (o.local && !git && !why.some((w) => w.startsWith('rule steps.off'))) why.push(`rule steps.off was set by ${o.by}: a rule that removes a review needs a verified login (gh auth login) before the factory merges on its own`);
   }
   if (why.length) return { action: 'escalate', reasons: [...why, ...asks, ...notes] };
   const yes = r.reviewedSha && r.events?.findLast((e) => e.stage === 'approve' && e.status === 'passed' && e.sha === r.reviewedSha); // only a git project has asks

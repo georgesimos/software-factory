@@ -6,7 +6,7 @@ import path from 'node:path';
 import { CAP, COST_CAP, TERMINAL, TOKEN_CAP, isLocal } from '../../core/src/constants.ts';
 import { LOCAL_PATH, LOCAL_USER, scrubText } from '../../core/src/scrub.ts';
 import { hooks, loadShipList } from '../../core/src/ship.ts';
-import { LOGIN, rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
+import { LOGIN, ruleChange, rules, setAutoMerge, setRule, unsetRule, type RuleRequest } from '../../core/src/rules.ts';
 import { budget, budgetWhy, derive } from '../../core/src/derive.ts';
 import { harnesses } from '../../adapters/harnesses/index.ts';
 import { ideas, startIdea } from '../../core/src/project.ts';
@@ -107,10 +107,17 @@ export const UI_ROUTES: Record<string, (x: Body) => unknown> = {
     return onboardConfig();
   },
   '/onboard/ship': ({ scope, ship }) => { setShip(scope, ship); return onboardConfig(); },
+  // A guarded write (pipelines §5: steps.off, raising a cap) is only requested: the desktop app's main process confirms it in
+  // its own dialog and writes it (guarded.request). Plain F ui refuses with the terminal command; core refuses page writes too.
   '/onboard/rule': ({ scope, key, value, reason, until, unset }) => {
     if (typeof key !== 'string') throw new Error('key must be a string');
-    if (unset) unsetRule(scope, key, { reason });
-    else setRule(scope, key, typeof value === 'string' ? value : JSON.stringify(value), { reason, until: until || undefined });
+    const raw = typeof value === 'string' ? value : JSON.stringify(value), opts = { reason, until: until || undefined };
+    const c = key.startsWith('guide.') ? null : ruleChange(scope, key, unset ? undefined : raw, opts); // checks it all before any dialog
+    if (c?.doing && guarded.request) {
+      if (!guarded.request({ scope, key, raw, unset: !!unset, reason, ...(opts.until && { until: opts.until }) })) throw new Error('a confirmation is already open in the desktop app: answer it, then ask again');
+      return { ...onboardConfig(), requested: c.doing }; }
+    if (unset) unsetRule(scope, key, { reason, page: true });
+    else setRule(scope, key, raw, { ...opts, page: true });
     return onboardConfig();
   },
   '/onboard/automerge': ({ repo, on }) => { // on is typed at the user's terminal (setAutoMerge asks there): never from the page
@@ -168,6 +175,9 @@ export const budgetLeft = (b: { usd: number; tokens: number } | null | undefined
 // node-pty and the SDK for terminal and sdk sessions, keyed by package name. Empty until a host that ships them (apps/desktop,
 // main.ts) sets them: packages/adapters' lazy import() can't see apps/desktop's dependencies under pnpm (ADR 0001).
 export const hostModules: Record<string, unknown> = {};
+// Set only by the desktop app's main process (apps/desktop, rule-confirm.ts): it confirms a guarded rule write in a native
+// dialog, then writes it. In-process, like hostModules: no IPC channel or preload, and the page never sees it.
+export const guarded: { request?: (x: RuleRequest) => boolean } = {}; // false: a dialog is already open
 const checkRepo = (repo: unknown) => {
   const [owner, name, extra] = typeof repo === 'string' ? repo.split('/') : [];
   if (extra !== undefined || !LOGIN.test(owner || '') || !/^(?!\.\.?$)[\w.-]{1,100}$/.test(name || '')) throw new Error('repo must be owner/repo');

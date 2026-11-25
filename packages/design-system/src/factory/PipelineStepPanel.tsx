@@ -1,8 +1,8 @@
-import { forwardRef, type ReactNode } from 'react';
+import { forwardRef, useState, type ReactNode } from 'react';
 import { Badge } from '../components/Badge.tsx';
 import { Button, IconButton } from '../components/Button.tsx';
 import { CloseIcon } from '../components/icons.tsx';
-import { Select } from '../components/Input.tsx';
+import { Input, Select } from '../components/Input.tsx';
 import { formatDuration, formatTokens } from './model.ts';
 import { STEP_STATUS, type PipelineNode, type StepResult, type StepRunner } from './pipelineModel.ts';
 
@@ -18,6 +18,9 @@ export interface StepEditing {
   onModel: (step: string, model: string) => void;
   onEffort: (step: string, effort: string) => void;
   onRunner: (step: string) => void;
+  /** Turn an optional review step off (with the reason given) or back on. The host only requests it: F's steps.off rule is
+   *  guarded, so the desktop app confirms it in its own dialog, and elsewhere the host gives the command (pipelines §5). */
+  onOff?: (step: string, off: boolean, reason: string) => void;
   /** A step's panel opened: the host clears the last change's status, which was about another step. */
   onOpen?: (step: string) => void;
   /** The last change's result: saved, the command to run, or why it failed. */
@@ -41,7 +44,7 @@ const file = (p?: string) => (p ?? '').split(/[\\/]/).pop();
 
 /** One step of a pipeline, beside the graph (n8n's node panel, in this design system): what it is, who runs it, and its result in a run. */
 export const PipelineStepPanel = forwardRef<HTMLHeadingElement, PipelineStepPanelProps>(function PipelineStepPanel({ node: n, id, runnerName, edit, result, runLabel, onClose }, head) {
-  const r = n.runner, e = edit?.for(n.id) ?? null, label = n.label;
+  const r = n.runner, e = edit?.for(n.id) ?? null, label = n.label, [why, setWhy] = useState('');
   const row = (k: string, v: ReactNode) => (v ? <><dt>{k}</dt><dd>{v}</dd></> : null);
   return (
     <aside className="sf-pl-side sf-pl-panel" aria-label={`${label} step`} id={id}
@@ -51,6 +54,7 @@ export const PipelineStepPanel = forwardRef<HTMLHeadingElement, PipelineStepPane
         <IconButton label="Close step" size="sm" onClick={onClose}><CloseIcon /></IconButton>
       </div>
       <p>{n.locked ? <><Badge quiet>Locked</Badge> Every run has it; it can’t be turned off.</> : <><Badge quiet>Optional</Badge> Not on F’s locked list.</>}</p>
+      {n.off ? <p className="sf-pl-note">Turned off by rule steps.off, set by {n.off.by ?? 'someone'}{n.off.until ? ` until ${n.off.until}` : ''}{n.off.reason ? `: ${n.off.reason}` : ''}</p> : null}
       <dl className="sf-pl-dl">
         {row('Runs', n.kind === 'review' ? n.sub : n.sub ? `every issue · ${n.sub}` : 'every issue')}
         {r ? <>
@@ -74,6 +78,15 @@ export const PipelineStepPanel = forwardRef<HTMLHeadingElement, PipelineStepPane
           <Button size="sm" onClick={() => edit!.onRunner(n.id)}>Change runner</Button>
         </div>
       ) : edit ? <p className="sf-pl-note">Who runs it changes in Skills.</p> : null}
+      {edit?.onOff && n.kind === 'review' && !n.locked ? (
+        <div className="sf-pl-edit">
+          {n.off ? <Button size="sm" onClick={() => edit.onOff!(n.id, false, '')}>Turn back on</Button> : <>
+            <label>Why turn it off<Input aria-label={`Why turn ${label} off`} value={why} maxLength={200} onChange={(x) => setWhy(x.target.value)} /></label>
+            <Button size="sm" disabled={!why.trim()} onClick={() => edit.onOff!(n.id, true, why.trim())}>Turn off</Button>
+          </>}
+          <p className="sf-pl-note">Turning a review off is yours alone: the desktop app asks you to confirm it, and elsewhere you get the command to run in a terminal. Code and security reviews always run.</p>
+        </div>
+      ) : null}
       {edit?.status?.text ? <p className="sf-pl-status" role="status" data-bad={edit.status.bad || undefined}>{edit.status.text}</p> : null}
       {result && runLabel ? (
         <section className="sf-pl-result" aria-label={`In ${runLabel}`}>
