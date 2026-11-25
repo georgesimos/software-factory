@@ -776,7 +776,10 @@ export function syncTest(cli) {
   assert.deepEqual(read().filter((e) => e.run === H && e.status === 'merged').map(({ by, mergedBy, sha }) => ({ by, mergedBy, sha })), [{ by: 'human', mergedBy: 'octo', sha: 'f'.repeat(40) }]);
   assert.equal(derive(read())['acme/app#11'].outcome, 'escalated');
   assert.equal(derive(read())['acme/app#11'].humanMerge, undefined);
-  assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED' }), ['acme/app#27']); // each recorded once; #27 (a "merge" decision) only by a merge after "escalated"
+  record('acme/app#29', 'intake', 'started', { title: 'c', association: 'OWNER' }); // a PR URL recorded in another case: GitHub's owner and repo names aren't case-sensitive
+  record('acme/app#29', 'build', 'passed', { pr: 'https://github.com/Acme/App/pull/29', branch: 'factory/issue-29' });
+  record('acme/app#29', 'approve', 'decided', { action: 'escalate', reasons: ['x'] }); record('acme/app#29', 'approve', 'escalated');
+  assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED' }), ['acme/app#27', 'acme/app#29']); // each recorded once; #27 (a "merge" decision) only by a merge after "escalated"
   assert.deepEqual(hsync({ STUB_PR_STATE: 'MERGED' }), []);
   assert.match(cliErr(['intake', H], '', env), /merged by octo: it needs a human, not a new run/);
   record(H, 'approve', 'reverted', { pr: 'https://github.com/acme/app/pull/98', reason: 'main went red' }); // reverted (and the issue reopened): it may be built again

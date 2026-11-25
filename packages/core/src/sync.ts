@@ -190,7 +190,7 @@ export function sync(repo: string, repoPath?: string) {
   const humanMerged: string[] = [], humanMergeErrors: { run: string; error: string }[] = [];
   for (const r of runs) {
     const m = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)$/.exec(r.pr || ''); // r.pr: from F pr or sync, or an old log's typed one
-    if (!onGithub || r.outcome !== 'escalated' || r.imported || !m || m[1] !== repo || open.has(r.pr as string)) continue; // imported runs: not the factory's work
+    if (!onGithub || r.outcome !== 'escalated' || r.imported || !m || m[1]!.toLowerCase() !== repo.toLowerCase() || open.has(r.pr as string)) continue; // imported runs: not the factory's work
     const decided = r.events.findLast((e) => e.stage === 'approve' && e.status === 'decided');
     const since = decided?.action === 'escalate' ? decided.ts : r.events.findLast((e) => e.stage === 'approve' && e.status === 'escalated')?.ts;
     let p: ReturnType<NonNullable<Host['changeRequest']>>;

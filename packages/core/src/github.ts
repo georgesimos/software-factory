@@ -5,7 +5,7 @@ import { decide, localResult } from './gate.ts';
 import { ciBroken, ciChecks, ciOf } from './ci.ts';
 import { derive, getRun } from './derive.ts';
 import { exec } from './platform.ts';
-import { baseBranch, baseRef, git, hostFn, hostOf, projects, requireGithub, trackerFn, trackerOf } from './workspace.ts';
+import { baseBranch, baseRef, fetchBase, git, hostFn, hostOf, projects, requireGithub, trackerFn, trackerOf } from './workspace.ts';
 import { io, read, readArchive, record, runDir } from './log.ts';
 import { shipTrack } from './ship.ts';
 import { gitTooOld } from '../../adapters/hosts/git.ts';
@@ -117,8 +117,13 @@ function gitDiff(repo: string, sha: string) {
   if (!at) throw new Error(`no local clone registered for ${repo}`);
   const old = gitTooOld(git);
   if (old) throw new Error(old);
-  const empty = git('-C', at, 'rev-parse', '--show-object-format').trim() === 'sha256' ? EMPTY_TREE.sha256 : EMPTY_TREE.sha1;
-  const rows = git('-C', at, `--attr-source=${empty}`, 'diff', '--numstat', '-z', '--no-renames', `${baseRef(at, baseBranch(repo, at))}...${sha}`).split('\0').filter(Boolean).map((l) => l.split('\t'));
+  const empty = git('-C', at, 'rev-parse', '--show-object-format').trim() === 'sha256' ? EMPTY_TREE.sha256 : EMPTY_TREE.sha1, ref = baseRef(at, baseBranch(repo, at));
+  const rows = git('-C', at, `--attr-source=${empty}`, 'diff', '--numstat', '-z', '--no-renames', `${ref}...${sha}`).split('\0').filter(Boolean).map((l) => l.split('\t'));
+  // .git/info/attributes (a run's worktree shares it; --attr-source doesn't replace it, and --text doesn't beat its -diff) can make
+  // any file "-". So a "-" file with no NUL in its first 8000 bytes (git's own binary test) counts every line of both versions.
+  let fork: string | undefined;
+  const count = (c: string, p: string) => { let t: string; try { t = git('-C', at, 'cat-file', 'blob', `${c}:${p}`); } catch { return 0; } return t.slice(0, 8000).includes('\0') ? 0 : t.split('\n').length - (!t || t.endsWith('\n') ? 1 : 0); };
+  for (const x of rows) if (x[0] === '-') { const p = x.slice(2).join('\t'); fork ??= git('-C', at, 'merge-base', ref, sha).trim(); [x[0], x[1]] = [String(count(sha, p)), String(count(fork, p))]; }
   const lines = (i: number) => rows.reduce((t, x) => t + (Number(x[i]) || 0), 0);
   return { additions: lines(0), deletions: lines(1), files: rows.map((x) => ({ path: x.slice(2).join('\t') })) };
 }
@@ -206,7 +211,7 @@ export function revert(run: string, reason: string) {
   if (!repoPath) throw new Error(`no local clone registered for ${repo}`);
   const base = baseBranch(repo, repoPath);
   const branch = `factory/revert-${n}`, wt = path.join(runDir(run), 'revert');
-  git('-C', repoPath, 'fetch', '-q', 'origin', base);
+  fetchBase(repoPath, base);
   git('-C', repoPath, 'worktree', 'add', '-q', '-B', branch, wt, `refs/remotes/origin/${base}`); // a full ref: see baseRef
   try {
     git('-C', wt, 'revert', '--no-edit', pm.sha);
