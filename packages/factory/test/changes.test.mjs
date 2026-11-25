@@ -36,6 +36,7 @@ else if (a.includes('--json bucket')) {
 }
 else if (a.includes('--json mergeCommit')) out({ mergeCommit: { oid: 'c'.repeat(40) } });
 else if (a.startsWith('run list')) out([{ databaseId: 7, conclusion: 'failure' }, { databaseId: 8, conclusion: 'success' }]);
+else if (a.startsWith('run view 7') && process.env.STUB_ONE) out('€'.repeat(6000) + '\\n'); // 18,000 bytes: the 16 KB cut lands inside a character
 else if (a.startsWith('run view 7')) out(Array.from({ length: 200 }, (_, i) => 'log line ' + (i + 1) + (process.env.STUB_WIDE ? ' ' + 'é'.repeat(500) : '')).join('\\n') + '\\n');
 else if (/^pr ready|^api -X POST repos\\/acme\\/cr\\/issues\\/\\d+\\/(labels|comments) --input -$/.test(a)) out('{}');
 else process.exit(1);
@@ -249,7 +250,7 @@ test('F escalate with no decision still hands the PR to a human, saying F merge 
   record(run, 'build', 'opened', { pr: 'https://github.com/acme/cr/pull/16', branch: 'factory/issue-16' });
   assert.deepEqual(escalate(run, { error: 'gh: refused at /Users/pat-private/x, ask @octocat' }), { on: 'pr', posted: true, labelled: true, ready: true });
   const body = () => JSON.parse(calls().find((c) => c.a.endsWith('/comments --input -')).input).body;
-  assert.match(body(), /- no decision was recorded: F merge failed\n- F merge's error: gh: refused at \[local path\], ask @‍octocat/);
+  assert.match(body(), /- no decision was recorded: F merge failed\n- F merge's error: gh: refused at \[local path\], ask @\u200doctocat/);
   assert.ok(!body().includes('pat-private'));
   reset();
   const cli = F('escalate', run, '--error', 'boom');
@@ -264,15 +265,18 @@ test('F escalate with no decision still hands the PR to a human, saying F merge 
 
 test('bounds: the CI log tail is cut by bytes too; the escalation comment is cut; @mentions in untrusted text never ping', () => {
   reset();
-  const run = built(17, '# Goal\n\nAsk @acme/team and @octocat; mail t@example.com.\n');
+  const run = built(17, '# Goal\n\nAsk @acme/team and @octocat; mail t@example.com, first.last@example.com. (-@a .@b +@c é@d)\n');
   openPr(run);
-  assert.match(calls()[0].a, /Ask @‍acme\/team and @‍octocat; mail t@example\.com\./);
+  assert.match(calls()[0].a, /Ask @\u200dacme\/team and @\u200doctocat; mail t@example\.com, first\.last@example\.com\. \(-@\u200da \.@\u200db \+@\u200dc é@\u200dd\)/);
   process.env.STUB_BUCKETS = 'fail'; process.env.STUB_WIDE = '1';
   try {
     const { log } = ciStatus(run);
     assert.ok(Buffer.byteLength(log) <= 16_384, String(Buffer.byteLength(log)));
     assert.match(log, /^log line \d+ é+\n[\s\S]*\nlog line 200 é+$/, 'whole lines, ending with the last');
-  } finally { delete process.env.STUB_BUCKETS; delete process.env.STUB_WIDE; }
+    process.env.STUB_ONE = '1'; // one line over 16 KB, of three-byte characters: no split character, never over the bound
+    const one = ciStatus(run).log;
+    assert.ok(Buffer.byteLength(one) <= 16_384 && one.length > 5000 && !one.includes('\ufffd'), String(Buffer.byteLength(one)));
+  } finally { delete process.env.STUB_BUCKETS; delete process.env.STUB_WIDE; delete process.env.STUB_ONE; }
   record(run, 'review', 'started', { axes: ['code'] });
   record(run, 'review', 'failed', { axis: 'code', verdict: 'failed', findings: [{ severity: 'high', file: 'a.ts', issue: '@octocat ' + 'x'.repeat(70_000), route: 'build' }] });
   record(run, 'approve', 'decided', { action: 'escalate', reasons: ['code: 1 blocking finding(s)'] });
@@ -280,6 +284,6 @@ test('bounds: the CI log tail is cut by bytes too; the escalation comment is cut
   escalate(run);
   const body = JSON.parse(calls().find((c) => c.a.endsWith('/comments --input -')).input).body;
   assert.ok(body.length <= 60_100, String(body.length));
-  assert.match(body, /high a\.ts @‍octocat x+/);
+  assert.match(body, /high a\.ts @\u200doctocat x+/);
   assert.match(body, /… \(cut here: the rest is in the run's events\)$/);
 });

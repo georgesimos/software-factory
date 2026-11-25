@@ -32,7 +32,7 @@ export function ciChecks(repo: string, opts: { path?: string; sha?: string; chan
 // The last 80 lines, and at most 16 KB of them: a wide log never floods the session. Cut by bytes, it keeps whole lines.
 function tail(s: string) {
   const t = s.trimEnd().split('\n').slice(-80).join('\n'), b = Buffer.from(t);
-  return b.length <= 16_384 ? t : b.subarray(-16_384).toString('utf8').replace(/^[^\n]*\n/, '');
+  return b.length <= 16_384 ? t : b.subarray(-16_384).toString('utf8').replace(/^[^\n]*\n|^\ufffd+/, ''); // a one-line log: the split character goes
 }
 // The provider's failed-check log on sha, its tail(); '' when it has none or can't read it (the state already says so).
 export function ciLog(repo: string, opts: { path?: string; sha: string }, local: Ctx['local']) {
