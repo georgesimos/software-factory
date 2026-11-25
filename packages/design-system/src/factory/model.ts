@@ -66,7 +66,7 @@ export const reviewFailed = (v: AxisReview) => {
 
 export type StageState = 'pending' | 'active' | 'done' | 'failed' | 'warn' | 'skipped' | 'idle';
 const STATUS_STATE: Record<string, StageState> = {
-  started: 'active', passed: 'done', decided: 'active', merged: 'done', escalated: 'warn', 'needs-info': 'warn',
+  started: 'active', opened: 'active', passed: 'done', decided: 'active', merged: 'done', escalated: 'warn', 'needs-info': 'warn',
   'awaiting-approval': 'warn', rejected: 'failed', failed: 'failed', split: 'done', closed: 'idle', reverted: 'failed',
 };
 

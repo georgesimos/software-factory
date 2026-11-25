@@ -42,6 +42,20 @@ export function modelSource(S: SkillsData, scope: string, step: string) {
   return { set, inherit: g ? `Global (${g})` : `Preset${preset ? ` (${preset})` : ''}`, why: set ? 'set here' : g ? 'from global' : `preset ${S.preset ?? ''}` };
 }
 
+/** Where a step's runner comes from, as the Skills table says it. */
+export const runnerFrom = (S: SkillsData, scope: string, step: string) => setHere(S, scope, step) ? (scope === 'default' ? 'set globally' : 'set for this project')
+  : scope !== 'default' && step in own(S, 'default') ? 'from global' : 'built-in';
+
+/** The model and effort choices for a Claude-run step ('' inherits, labelled with what it inherits), shared by the Skills table and a pipeline step's panel. */
+export function stepChoices(S: SkillsData, scope: string, step: string, r: StepRunner) {
+  const m = modelSource(S, scope, step), mine: StepRunner = setHere(S, scope, step) ? own(S, scope)[step] ?? {} : {};
+  return {
+    source: m, mine,
+    model: { value: m.set, inherit: m.inherit, options: [...new Set([...(S.models ?? []), m.set].filter(Boolean))] },
+    effort: { value: mine.effort ?? '', inherit: mine.effort ? 'Inherit' : r.effort ?? 'Default', options: S.efforts ?? [] },
+  };
+}
+
 export const skillCommand = (scope: string, step: string, runner: unknown, f = F_CMD) => runner === null
   ? `${f} skills unset ${shq(scope)} ${shq(step)}`
   : `${f} skills set ${shq(scope)} ${shq(step)} ${shq(JSON.stringify(runner))}`;
