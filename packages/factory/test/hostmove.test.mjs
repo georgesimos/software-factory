@@ -23,7 +23,8 @@ test('the GitHub host makes exactly the gh calls core made before the move', () 
   assert.equal(github.changeRequest({ gh: logged([['pr view', { state: 'DRAFT?', headRefName: 'x' }]]).gh }, { repo: 'acme/app', id: '9' }).state, 'unknown');
   const m = logged([['pr ready', ''], ['pr merge', '']]);
   assert.deepEqual(github.merge({ gh: m.gh }, { repo: 'acme/app', id: pr.url, sha: 'abc123' }), { merged: true });
-  assert.deepEqual(m.calls, [['pr', 'ready', pr.url, '-R', 'acme/app'], ['pr', 'merge', pr.url, '-R', 'acme/app', '--squash', '--delete-branch', '--match-head-commit', 'abc123']]);
+  // the one change since the move (PR 6a review): the PR's number with -R, never its URL, which gh would take the repo from
+  assert.deepEqual(m.calls, [['pr', 'ready', '5', '-R', 'acme/app'], ['pr', 'merge', '5', '-R', 'acme/app', '--squash', '--delete-branch', '--match-head-commit', 'abc123']]);
   assert.throws(() => github.merge({ gh: () => { throw new Error('refused'); } }, { repo: 'acme/app', id: pr.url, sha: 'abc123' }), /refused/, 'a refusal still throws');
   const o = logged([['pr create', 'https://github.com/acme/app/pull/99\n']]);
   assert.deepEqual(github.openChangeRequest({ gh: o.gh }, { repo: 'acme/app', branch: 'factory/revert-3', base: 'main', title: 'Revert: x', body: 'b', labels: ['factory:needs-human'] }), { id: 'https://github.com/acme/app/pull/99', url: 'https://github.com/acme/app/pull/99' });
