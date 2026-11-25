@@ -11,6 +11,7 @@ import { baseBranch, git, hostFn, hostOf, originUrl, projects, projectsFile } fr
 import { getRun } from './derive.ts';
 import { record } from './log.ts';
 import { gh, parseRun } from './github.ts';
+import { line, ttyAsk } from './approve.ts';
 import fs from 'node:fs';
 import type { Project } from './types.ts';
 
@@ -27,7 +28,7 @@ export const PROJECT_KEYS = ['host', 'ci', 'base'];
 const rank = (ci: unknown) => { const i = CI_ORDER.indexOf(String(ci)); return i < 0 ? CI_ORDER.length : i; }; // an unknown stored ci counts as the strictest
 
 /** value null clears the setting (base only): back to what the host says. */
-export function setProject(repo: string, key: string, value: string | null, { reason }: { reason?: string } = {}) {
+export function setProject(repo: string, key: string, value: string | null, { reason, ask = ttyAsk }: { reason?: string; ask?: (prompt: string) => string } = {}) {
   humanOnly(`changing a project's ${key}`);
   const p = projects()[repo];
   if (!p?.path) throw new Error(`${repo} is not attached; run sync first`);
@@ -70,6 +71,9 @@ export function setProject(repo: string, key: string, value: string | null, { re
   const who = whoami(`changing ${repo}'s ${key}`);
   if (relaxing && host === 'github' && who.via === 'local')
     throw new Error(`${key} ${from} -> ${value} relaxes a GitHub project, which needs a verified login (gh auth login), not a local user; or attach the clone under a local/<name> id`);
+  // a relaxing change (github -> git included) is typed at your terminal, as F approve: a speed bump, not a boundary
+  if (relaxing && ask(`${repo}: ${key} ${from} -> ${value} (${line(reason)})\n\nThis relaxes what the factory checks before it merges.\n\nType ${repo} to confirm (anything else cancels): `).trim() !== repo)
+    throw new Error(`${repo}'s ${key} stays ${from}: what you typed did not match`);
   fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...p, ...next } }, null, 2)); // undefined drops a key
   const gone = Object.fromEntries((['base', 'ci'] as const).filter((k) => key === 'host' && k in next && p[k]).map((k) => [k, p[k]])); // what a host switch cleared
   audit(repo, value === null ? 'unset' : 'set', { key: `project.${key}`, from, ...(value !== null && { value }), ...(Object.keys(gone).length && { cleared: gone }), ...(reason && { reason }), setBy: who.by, ...(who.via === 'local' && { via: who.via }) });

@@ -66,7 +66,11 @@ test('a GitHub project: relaxing needs a reason and a verified login; github -> 
     // a verified login may, with a reason; audited like a rule
     io.gh = STUB;
     assert.throws(() => setProject('acme/gp', 'ci', 'local'), /ci github-actions -> local relaxes/);
-    assert.deepEqual(setProject('acme/gp', 'host', 'git', { reason: 'moving off GitHub' }), { repo: 'acme/gp', key: 'host', from: 'github', to: 'git', by: 'stub-user', via: 'github', note: 'ci is local (the git default)' });
+    assert.throws(() => setProject('acme/gp', 'host', 'git', { reason: 'moving off GitHub', ask: () => 'acme/gpx' }), /acme\/gp's host stays github: what you typed did not match/);
+    assert.equal(projects()['acme/gp'].host, undefined, 'nothing changed');
+    let shown = '';
+    assert.deepEqual(setProject('acme/gp', 'host', 'git', { reason: 'moving off GitHub', ask: (p) => { shown = p; return 'acme/gp'; } }), { repo: 'acme/gp', key: 'host', from: 'github', to: 'git', by: 'stub-user', via: 'github', note: 'ci is local (the git default)' });
+    assert.match(shown, /^acme\/gp: host github -> git \(moving off GitHub\)[^]*Type acme\/gp to confirm \(anything else cancels\): $/);
     assert.deepEqual([projects()['acme/gp'].host, projects()['acme/gp'].remote], ['git', 'https://github.com/acme/gp.git']);
     const e = lastRule();
     assert.deepEqual([e.run, e.status, e.key, e.from, e.value, e.reason, e.setBy, e.via], ['acme/gp', 'set', 'project.host', 'github', 'git', 'moving off GitHub', 'stub-user', undefined]);
@@ -79,12 +83,12 @@ test('a GitHub project: relaxing needs a reason and a verified login; github -> 
     git(c, 'branch', 'dev');
     assert.throws(() => setProject('acme/gp', 'base', 'dev'), /base branch dev is not on origin in .*push it, then git fetch origin/);
     git(c, 'update-ref', 'refs/remotes/origin/dev', 'HEAD');
-    setProject('acme/gp', 'base', 'dev');
+    setProject('acme/gp', 'base', 'dev', { ask: () => assert.fail('a base change relaxes nothing: never asked') });
     assert.equal(baseBranch('acme/gp', c), 'dev');
     // the only gh call is who is acting: a verified login counts on a git project too
     assert.deepEqual(ghCalls(), ['api user --jq .login']);
     // back to github is stricter: no reason needed, but the clone must be that GitHub repo
-    assert.equal(setProject('acme/gp', 'host', 'github').note, "base dev cleared: GitHub's base is the repo's default branch; ci is github-actions (the github default)");
+    assert.equal(setProject('acme/gp', 'host', 'github', { ask: () => assert.fail('back to github only tightens: never asked') }).note, "base dev cleared: GitHub's base is the repo's default branch; ci is github-actions (the github default)");
     assert.deepEqual([projects()['acme/gp'].host, projects()['acme/gp'].remote, projects()['acme/gp'].base], ['github', undefined, undefined]);
     assert.deepEqual([lastRule().key, lastRule().cleared], ['project.host', { base: 'dev' }]);
     sync('acme/gx', clone('gx', 'git@gitlab.com:acme/gx.git'));
@@ -101,7 +105,7 @@ test('a git project: a local login may change it, a relaxing change still needs 
     assert.throws(() => setProject('local/lx', 'ci', 'local'), /local\/lx already has ci local/); // a git project's default
     assert.throws(() => setProject('local/lx', 'ci', 'github-actions'), /ci github-actions needs a project on GitHub, and local\/lx is on git/);
     assert.throws(() => setProject('local/lx', 'ci', 'none'), /ci local -> none relaxes/);
-    setProject('local/lx', 'ci', 'none', { reason: 'no checks yet' });
+    setProject('local/lx', 'ci', 'none', { reason: 'no checks yet', ask: () => 'local/lx' }); // relaxing: confirmed at the terminal
     assert.deepEqual([lastRule().setBy, lastRule().via], [me, 'local']); // shown as "(local, unverified)", scrubbed on publish
     assert.throws(() => setProject('local/lx', 'ci', 'jenkins'), /ci must be none\|local\|github-actions/);
     // base: a real branch of the clone, used by the host's baseBranch

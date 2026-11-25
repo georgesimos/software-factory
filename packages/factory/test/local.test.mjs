@@ -123,7 +123,7 @@ test('F approve is yours only: refused in an agent session, for GitHub Issues it
   child.stdin.end('0000000\n');
   const code = await new Promise((res) => child.on('close', res));
   assert.equal(code, 1);
-  assert.match(err, /approval needs your terminal, and this process has none: run F approve in your own terminal/);
+  assert.match(err, /this needs your terminal, and this process has none: run the F command in your own terminal, not from an agent or a script/);
   assert.equal(getRun(R).outcome, 'awaiting-approval', 'nothing recorded');
 });
 

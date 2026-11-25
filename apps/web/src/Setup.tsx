@@ -288,8 +288,12 @@ function Rules({ data, ob, live, F, scope, scopePicker, write, fail, setStatus, 
     if (cs.some((c) => !c.guide && !c.unset) && !reason) { fail('A reason is required: it is recorded with the rule.'); return document.getElementById('ob-reason')?.focus(); }
     if (!live) return setCmds([...cs.map(cmdOf), ...(amChanged ? [`${F} automerge ${shq(scope)} ${f.merge ? 'on' : 'off'}`] : [])]);
     for (const c of cs) if (!await write('/onboard/rule', { scope, key: c.key, value: c.value, unset: !!c.unset, reason: reason || undefined, until: c.guide ? undefined : f.until || undefined }, '')) return;
-    if (amChanged && !await write('/onboard/automerge', { repo: scope, on: f.merge }, '')) return;
+    if (amChanged && !f.merge && !await write('/onboard/automerge', { repo: scope, on: false }, '')) return;
     setDirty(false);
+    if (amChanged && f.merge) { // on is typed at the user's terminal: the server refuses it
+      setCmds([`${F} automerge ${shq(scope)} on`]);
+      return setStatus({ text: 'Auto-merge is turned on at your own terminal: run the command above, then type the project name it asks for.' });
+    }
     setStatus({ text: `Rules saved for ${where(scope)}.` });
   };
   return (

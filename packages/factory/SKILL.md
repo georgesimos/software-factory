@@ -393,10 +393,10 @@ Run `F sync owner/repo <local clone path>`. Running `F sync` with no arguments l
 
 The factory never imports its own `factory/*` branches. A sync only reads GitHub, except that it relabels the issue of a run a human merged (`factory:merged`). Repeating a sync never duplicates a run.
 
-Auto-merge is off unless a project turns it on: `F merge` then escalates, and the user merges the PR in GitHub (`F sync` records it). A git project always waits for the user's `F approve RUN --merge`. `F automerge owner/repo on` lets that project merge on the gates alone, and `off` asks again. `on` is the user's own: refused inside an agent session, from an unverified login on a GitHub project, and on a git project, which always asks. While a GitHub project has no setting, `F sync` says so in `automerge`.
+Auto-merge is off unless a project turns it on: `F merge` then escalates, and the user merges the PR in GitHub (`F sync` records it). A git project always waits for the user's `F approve RUN --merge`. `F automerge owner/repo on` lets that project merge on the gates alone, and `off` asks again. `on` is the user's own: refused inside an agent session, from an unverified login on a GitHub project, and on a git project, which always asks. It also asks the user to type the project's name at their terminal; the page's toggle only shows them the command. Never run it yourself. Like `F approve`, that typed confirmation is a speed bump, not a security boundary. While a GitHub project has no setting, `F sync` says so in `automerge`.
 
 `F project set owner/repo host|ci|base <value>` changes a project's host, CI provider or base branch. Never run it yourself:
-it is the user's, refused inside an agent session. If a change is needed, show the user the command to run in their own terminal.
+it is the user's, refused inside an agent session. A change that relaxes what the factory checks (`host github` to `git`, or a weaker `ci`) also asks the user to type the project's name at their terminal: a speed bump, not a security boundary. If a change is needed, show the user the command to run in their own terminal.
 
 `F close owner/repo#N --merged <sha>` records that the user merged an escalated run of a `git` project outside the factory,
 for example when the base is protected and the factory's push was refused. It is human-only too: show the user the command

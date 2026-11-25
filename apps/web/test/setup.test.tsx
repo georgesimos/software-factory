@@ -128,6 +128,18 @@ describe('Setup wizard', () => {
     expect(screen.getByRole('heading', { name: 'Rules' })).toBeTruthy();
   });
 
+  it('live: turning auto-merge on gives the command to confirm at your terminal, and posts nothing', async () => {
+    localStorage.setItem('sf.onboard', JSON.stringify({ step: 4, scope: 'acme/app' }));
+    const posted: string[] = [];
+    live((url) => { posted.push(url); return new Response('{}', { status: 200 }); });
+    wizard({ token: 'tok' });
+    await userEvent.click(await screen.findByRole('checkbox', { name: /auto-merge/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save rules' }));
+    expect(await screen.findByText(`${F} automerge 'acme/app' on`)).toBeTruthy();
+    expect(status()).toHaveTextContent('Auto-merge is turned on at your own terminal: run the command above, then type the project name it asks for.');
+    expect(posted).toEqual([]);
+  });
+
   it('live: switching scope or closing warns once about unsaved rule edits', async () => {
     localStorage.setItem('sf.onboard', JSON.stringify({ step: 4, scope: 'acme/app' }));
     live(() => new Response('{}', { status: 200 }));
