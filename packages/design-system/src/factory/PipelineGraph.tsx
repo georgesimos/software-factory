@@ -3,7 +3,7 @@ import { Button } from '../components/Button.tsx';
 import { LockIcon } from '../components/icons.tsx';
 import { Select } from '../components/Input.tsx';
 import { OUTCOME_LABEL, formatMoney, outcomeOf, type Run } from './model.ts';
-import { STEP_STATUS, nodeLabel, pipelineGraph, runOverlay, trackerName, type Pipeline, type PipelineEdge, type PipelineNode, type RunOverlay, type StepRunner } from './pipelineModel.ts';
+import { SLOTS, STEP_STATUS, nodeLabel, pipelineGraph, runOverlay, slotProblems, trackerName, userNode, type Pipeline, type PipelineEdge, type PipelineNode, type RunOverlay, type StepRunner } from './pipelineModel.ts';
 import { PipelineStepPanel, type StepEditing } from './PipelineStepPanel.tsx';
 
 // One pipeline as a node graph, with its checks beside it. Presentational: it takes F's pipeline as props and draws only that.
@@ -42,7 +42,7 @@ export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownNa
   // The built-in brief shows only its model; anything else its name (a brief only by its file), then the model.
   const who = (r: StepRunner) => [!r.use || r.use === 'default' ? '' : r.use === 'brief' ? (r.path ?? '').split(/[\\/]/).pop() : runnerName(r), r.model].filter(Boolean).join(' · ') || runnerName(r);
   const w = cols * (W + GX) - GX, h = rows * (H + GY) + 36;
-  const warn = p.warnings.length, [zoom, setZoom] = useState(1), main = useRef<HTMLDivElement>(null), canvas = useRef<HTMLDivElement>(null);
+  const warnings = [...p.warnings, ...slotProblems(p)], warn = warnings.length, [zoom, setZoom] = useState(1), main = useRef<HTMLDivElement>(null), canvas = useRef<HTMLDivElement>(null);
   const z = (x: number) => setZoom(Math.min(1.5, Math.max(0.3, Math.round(x * 100) / 100)));
   // What part of the graph is in view, in graph units, for the map. The canvas sits `pad` into the scroll area, then scales.
   const [view, setView] = useState({ x: 0, y: 0, w: 0, h: 0 });
@@ -115,7 +115,7 @@ export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownNa
               return (
                 <li key={n.id} aria-label={n.label} data-kind={n.kind} data-locked={n.locked || undefined} data-status={st?.status} data-open={open === n.id || undefined}
                   style={{ left: x, top: y, width: W, height: H }}>
-                  {n.kind === 'step' || n.kind === 'review' ? (
+                  {n.kind === 'step' || n.kind === 'review' || n.kind === 'user' ? (
                     <button type="button" className="sf-pl-node" aria-label={n.label} aria-describedby={st ? `${uid}-${n.id}` : undefined} aria-expanded={open === n.id} aria-controls={open === n.id ? 'sf-pl-panel' : undefined}
                       ref={(b) => { buttons.current[n.id] = b; }} onClick={() => setOpen(open === n.id ? '' : n.id)}>{body}</button>
                   ) : <div className="sf-pl-node">{body}</div>}
@@ -135,8 +135,10 @@ export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownNa
         <p className="sf-pl-foot"><span>{warn ? `${warn} warning${warn === 1 ? '' : 's'}` : 'Valid'} · {nodes.length} steps · {edges.length} connections</span>
           <span>{run && o ? runFoot(run, o, cap, costCap) : `loops ≤ ${cap} · $${costCap} / run`}</span></p>
       </div>
-      {sel ? <PipelineStepPanel key={sel.id} ref={head} node={sel} runnerName={runnerName} edit={edit} result={o?.steps[sel.id]} runLabel={run && runName(run.id)} onClose={close} />
-        : <About name={name} p={p} cap={cap} costCap={costCap} />}
+      {sel ? <PipelineStepPanel key={sel.id} ref={head} node={sel} runnerName={runnerName} edit={edit} result={o?.steps[sel.id]} runLabel={run && runName(run.id)} onClose={close}
+          outcomes={sel.step && sel.slot ? Object.entries(sel.step.next).map(([k, t]) => [k, t === 'escalate' ? 'escalate to you'
+            : nodes.find((x) => x.id === userNode(t))?.label ?? (t === SLOTS[sel.slot!] ? nodeLabel(t) : `back to ${nodeLabel(t)}`)]) : undefined} />
+        : <About name={name} p={p} warnings={warnings} cap={cap} costCap={costCap} />}
     </>
   );
 }
@@ -165,7 +167,7 @@ function runFoot(r: Run, o: RunOverlay, cap: number, costCap: number) {
   return `${runName(r.id)} · ${OUTCOME_LABEL[outcomeOf(r)]} · ${formatMoney(usd)} of $${costCap} · ${loops} of ${cap} loops`;
 }
 
-function About({ name, p, cap, costCap }: { name: string; p: Pipeline; cap: number; costCap: number }) {
+function About({ name, p, warnings, cap, costCap }: { name: string; p: Pipeline; warnings: string[]; cap: number; costCap: number }) {
   return (
     <aside className="sf-pl-side" aria-label="About this pipeline">
       <h3>{name}</h3>
@@ -177,7 +179,8 @@ function About({ name, p, cap, costCap }: { name: string; p: Pipeline; cap: numb
         <li>The gate loops back to {p.loops.join(' and ')}, at most {cap} times, ${costCap} per run</li>
         <li>Steps off: {p.off.length ? p.off.join(', ') : 'none'}</li>
         <li>Custom steps: {Object.values(p.custom).flat().length || 'none'}</li>
-        {p.warnings.map((x) => <li key={x} data-bad>{x}</li>)}
+        <li>Your steps: {(Object.keys(SLOTS) as (keyof typeof SLOTS)[]).reduce((a, k) => a + (p[k]?.steps.length ?? 0), 0) || 'none'}</li>
+        {warnings.map((x) => <li key={x} data-bad>{x}</li>)}
       </ul>
       <p className="sf-pl-note">Click a step to see who runs it, and to change that. Issues labelled factory:ready{p.tracker ? ` in ${trackerName(p.tracker)}` : ''} start here.</p>
       <details><summary>pipeline.json</summary><pre>{JSON.stringify(p, null, 2)}</pre></details>
@@ -188,8 +191,8 @@ function About({ name, p, cap, costCap }: { name: string; p: Pipeline; cap: numb
 function Path({ e, at, o }: { e: PipelineEdge; at: Map<string, { x: number; y: number }>; o: RunOverlay | null }) {
   const a = at.get(e.from), b = at.get(e.to);
   if (!a || !b) return null;
-  if (e.loop) { // over the top, from the gate back to an earlier step; with a run shown, how often it went back
-    const x1 = a.x + W / 2, x2 = b.x + W / 2, top = Math.min(a.y, b.y) - 20 - (x1 - x2) / 40, n = o?.loops[e.to] ?? 0;
+  if (e.loop) { // over the top, from the gate or a user step back to an earlier step; with a run shown, how often it went back that way
+    const x1 = a.x + W / 2, x2 = b.x + W / 2, top = Math.min(a.y, b.y) - 20 - (x1 - x2) / 40, n = o?.back[`${e.from}>${e.to}`] ?? 0;
     return (
       <g>
         <path d={`M${x1},${a.y} C${x1},${top} ${x2},${top} ${x2},${b.y}`} data-loop data-on={n ? true : undefined} markerEnd={`url(#sf-pl-arrow${n ? '-on' : ''})`} />

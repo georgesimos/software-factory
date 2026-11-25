@@ -42,6 +42,8 @@ button.sf-pl-node:hover { background: var(--sf-color-sunken); }
 button.sf-pl-node:focus-visible { outline: 2px solid var(--sf-color-accent); outline-offset: -2px; }
 .sf-pl-canvas li[data-open] { border-color: var(--sf-color-accent); box-shadow: 0 0 0 1px var(--sf-color-accent); }
 .sf-pl-canvas li[data-kind="outcome"], .sf-pl-canvas li[data-kind="start"] { border-style: dashed; background: var(--sf-color-surface); box-shadow: none; }
+/* The user's own steps: an accent edge on the left, so they read apart from F's. */
+.sf-pl-canvas li[data-kind="user"] { border-left: 4px solid var(--sf-color-accent); }
 .sf-pl-lock { display: inline-flex; flex: none; color: var(--sf-color-ink-3); }
 .sf-pl-lock svg { width: 12px; height: 12px; }
 .sf-pl-label { overflow: hidden; text-overflow: ellipsis; }
@@ -91,6 +93,8 @@ button.sf-pl-node:focus-visible { outline: 2px solid var(--sf-color-accent); out
 .sf-pl-panel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sf-space-2); }
 .sf-pl-panel h3:focus { outline: none; }
 .sf-pl-panel h3:focus-visible { outline: 2px solid var(--sf-color-accent); outline-offset: 2px; }
+.sf-pl-outcomes { margin: 0; padding-left: 1.1em; display: grid; gap: var(--sf-space-1); }
+.sf-pl-dl code { font-family: var(--sf-font-mono); font-size: var(--sf-text-xs); }
 .sf-pl-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--sf-space-1) var(--sf-space-3); margin: 0; }
 .sf-pl-dl dt { color: var(--sf-color-ink-3); }
 .sf-pl-dl dd { margin: 0; color: var(--sf-color-ink); overflow-wrap: anywhere; }

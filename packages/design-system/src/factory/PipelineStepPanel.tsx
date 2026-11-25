@@ -4,7 +4,7 @@ import { Button, IconButton } from '../components/Button.tsx';
 import { CloseIcon } from '../components/icons.tsx';
 import { Select } from '../components/Input.tsx';
 import { formatDuration, formatTokens } from './model.ts';
-import { STEP_STATUS, type PipelineNode, type StepResult, type StepRunner } from './pipelineModel.ts';
+import { STEP_STATUS, slotLabel, type PipelineNode, type StepResult, type StepRunner } from './pipelineModel.ts';
 
 /** What a step's panel may change: where its runner comes from, and its model and effort ('' inherits). No model: a runner that has none. */
 export interface StepEdit {
@@ -29,6 +29,8 @@ export interface PipelineStepPanelProps {
   /** The step's latest result in the run shown, and that run's short name. */
   result?: StepResult;
   runLabel?: string;
+  /** A user step's outcomes, each with where it sends the run, as the graph names it. */
+  outcomes?: [outcome: string, to: string][];
   onClose: () => void;
 }
 const OWN = new Set(['gate', 'merge', 'watch']); // F's own decisions (docs/plans/pipelines.md §2): never a runner
@@ -36,7 +38,7 @@ const KIND: Record<string, string> = { default: 'built-in brief', skill: 'skill'
 const file = (p?: string) => (p ?? '').split(/[\\/]/).pop();
 
 /** One step of a pipeline, beside the graph (n8n's node panel, in this design system): what it is, who runs it, and its result in a run. */
-export const PipelineStepPanel = forwardRef<HTMLHeadingElement, PipelineStepPanelProps>(function PipelineStepPanel({ node: n, runnerName, edit, result, runLabel, onClose }, head) {
+export const PipelineStepPanel = forwardRef<HTMLHeadingElement, PipelineStepPanelProps>(function PipelineStepPanel({ node: n, runnerName, edit, result, runLabel, outcomes, onClose }, head) {
   const r = n.runner, e = edit?.for(n.id) ?? null, label = n.label;
   const row = (k: string, v: ReactNode) => (v ? <><dt>{k}</dt><dd>{v}</dd></> : null);
   return (
@@ -46,9 +48,13 @@ export const PipelineStepPanel = forwardRef<HTMLHeadingElement, PipelineStepPane
         <h3 ref={head} tabIndex={-1}>{label}</h3>
         <IconButton label="Close step" size="sm" onClick={onClose}><CloseIcon /></IconButton>
       </div>
-      <p>{n.locked ? <><Badge quiet>Locked</Badge> Every run has it; it can’t be turned off.</> : <><Badge quiet>Optional</Badge> Not on F’s locked list.</>}</p>
+      <p>{n.step ? <><Badge quiet>Yours</Badge> Added by this pipeline; F still runs every locked step.</> : n.locked ? <><Badge quiet>Locked</Badge> Every run has it; it can’t be turned off.</> : <><Badge quiet>Optional</Badge> Not on F’s locked list.</>}</p>
       <dl className="sf-pl-dl">
-        {row('Runs', n.kind === 'review' ? n.sub : n.sub ? `every issue · ${n.sub}` : 'every issue')}
+        {n.step && n.slot ? <>
+          {row('Kind', n.sub)}
+          {row('Where', slotLabel(n.slot))}
+          {row('Command', n.step.run ? <code>{n.step.run}</code> : '')}
+        </> : row('Runs', n.kind === 'review' ? n.sub : n.sub ? `every issue · ${n.sub}` : 'every issue')}
         {r ? <>
           {row('Runner', r.use === 'brief' ? file(r.path) : runnerName(r))}
           {row('Kind', KIND[r.use || 'default'] ?? r.use)}
@@ -58,7 +64,8 @@ export const PipelineStepPanel = forwardRef<HTMLHeadingElement, PipelineStepPane
           {row('Fallback', r.fallback?.length ? r.fallback.join(' → ') : '')}
         </> : null}
       </dl>
-      {OWN.has(n.id) ? <p className="sf-pl-note">F’s own check, not a runner: nobody else can run it.</p> : e ? (
+      {outcomes ? <><p className="sf-label">Outcomes</p><ul className="sf-pl-outcomes" aria-label="Outcomes">{outcomes.map(([k, t]) => <li key={k}>{k} → {t}</li>)}</ul></> : null}
+      {n.step ? null : OWN.has(n.id) ? <p className="sf-pl-note">F’s own check, not a runner: nobody else can run it.</p> : e ? (
         <div className="sf-pl-edit">
           <p className="sf-pl-note">{e.from}</p>
           {e.model ? <label>Model<Select aria-label={`Model for ${label}`} value={e.model.value} onChange={(x) => edit!.onModel(n.id, x.target.value)}>
