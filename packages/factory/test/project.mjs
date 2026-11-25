@@ -27,13 +27,13 @@ import { fileURLToPath } from 'node:url';
 const F = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fake-state.json');
 const all = () => { try { return JSON.parse(fs.readFileSync(F, 'utf8')); } catch { return {}; } };
 export const id = 'fake';
-export function createIssues(_ctx, { repo, items, existing = {}, onCreated = () => {} }) {
+export function createIssues(_ctx, { repo, items, existing = {}, onCreated = () => {}, ready = true }) {
   const db = all(), list = (db[repo] ||= []), ids = {};
   return items.map((it) => {
     const have = existing[it.key] || list.find((x) => x.key === it.key);
     if (have) { ids[it.key] = have.id; return { key: it.key, id: have.id, created: false }; }
     const id = 'FK-' + (list.length + 1);
-    list.push({ id, key: it.key, title: it.title, labels: it.kind === 'epic' ? [] : ['factory:ready'], deps: (it.dependsOn || []).map((k) => ids[k]) });
+    list.push({ id, key: it.key, title: it.title, labels: it.kind === 'epic' || !ready ? [] : ['factory:ready'], deps: (it.dependsOn || []).map((k) => ids[k]) });
     fs.writeFileSync(F, JSON.stringify(db));
     ids[it.key] = id;
     const r = { key: it.key, id, created: true };

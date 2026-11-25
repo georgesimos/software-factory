@@ -14,9 +14,9 @@ import { scrubText, unmention } from './scrub.ts';
 import { baseBranch, git, hostFn, hostOf, projects, trackerOf, wtInfo } from './workspace.ts';
 import type { AxisReview, Run } from './types.ts';
 
-const BODY_MAX = 60_000; // GitHub refuses a body over 65,536 characters: the PR body and the escalation comment
-const cut = (s: string, rest: string) => s.length > BODY_MAX ? `${s.slice(0, BODY_MAX)}\n\n… (cut here: ${rest})` : s;
-const driven = (run: string) => {
+export const BODY_MAX = 60_000; // GitHub refuses a body over 65,536 characters: the PR body and the escalation comment
+export const cut = (s: string, rest: string) => s.length > BODY_MAX ? `${s.slice(0, BODY_MAX)}\n\n… (cut here: ${rest})` : s;
+export const driven = (run: string) => {
   const r = getRun(run);
   if (r.imported) throw new Error(`${run} is imported: the factory doesn't drive it`);
   return r;

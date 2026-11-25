@@ -29,7 +29,7 @@ else if (args[0] === 'repo' && args[1] === 'view') {
 } else if (args[0] === 'label' && args[1] === 'create') out('');
 else if (args[0] === 'issue' && args[1] === 'create') {
   const r = opt('-R'), list = (st.issues[r] ||= []), number = list.length + 1, url = `https://github.com/${r}/issues/${number}`;
-  list.push({ number, title: opt('--title'), body: opt('--body'), labels: [{ name: opt('--label') }], state: 'OPEN', url });
+  list.push({ number, title: opt('--title'), body: opt('--body'), labels: [{ name: opt('--label') }], state: 'OPEN', url, author: { login: 'stub-user' } });
   save();
   out(url + '\n');
 } else if (args[0] === 'issue' && args[1] === 'list') out((st.issues[opt('-R')] || []).filter((i) => opt('--state') === 'all' || i.state === 'OPEN'));

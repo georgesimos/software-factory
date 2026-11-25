@@ -57,7 +57,8 @@ export function specApproved(run: string, p: { spec?: unknown }) {
     : p.spec !== undefined && p.spec !== asked.spec ? ['it is not the spec you approved', 'pass the approved spec line, or none'] : [null, null];
   if (why) throw new Error(`${run}'s spec can't pass: ${why}. Next: ${next}`);
 }
-const current = (run: string) => { try { return specOf(run).sha; } catch { return undefined; } };
+/** The sha of DIR/spec.md now (or of text read from it), or undefined. */
+export const current = (run: string, text?: string) => { if (text !== undefined) return sha(text); try { return specOf(run).sha; } catch { return undefined; } };
 
 /** record()'s check on "build started", and worktree()'s: off GitHub Issues, building waits for a "spec passed" (so an approved
  *  spec) after the latest intake or ask, and for DIR/spec.md to still be the approved one. */
