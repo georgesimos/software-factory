@@ -126,7 +126,7 @@ Rules for custom steps:
 
   A locked key is refused with a message that names F's locked list. An empty array is refused: `F rules unset` turns everything back on.
 - **`steps.custom`** unless it is an array of at most 10 entries, each with:
-  - an `id` that is a new lowercase name (`/^[a-z][a-z0-9-]{0,30}$/`), unique in the scope, and not a step key, built-in axis or slot name;
+  - an `id` that is a new lowercase name (`/^[a-z][a-z0-9-]{0,30}$/`), unique in the scope (and, with pipelines, across the project and all its pipelines, §7.1), and not a step key, built-in axis or slot name;
   - a `slot` of `spec.after` or `build.after`;
   - a runner that passes `checkRunner`, never `use: default` (there is no built-in brief for it);
   - an optional `when` that is a non-empty array of globs.
@@ -144,20 +144,22 @@ Rules for custom steps:
 | Change | Path | Guard |
 |---|---|---|
 | Change a step's runner | `F skills set <scope> <step> <runner>`, `POST /api/skills` | none new. The graph calls the same route the Skills sheet calls, so there is no second code path |
-| Turn steps off | `F rules set <project> steps.off '[…]' --reason "…" [--until]`; over HTTP, `POST /api/onboard/rule` only with the desktop app's confirmation | `setRule`, plus `humanOnly('turning a pipeline step off')` for this key, plus the confirmation over HTTP (below) |
+| Turn steps off | `F rules set <project> steps.off '[…]' --reason "…" [--until]`; over HTTP, `POST /api/onboard/rule` only with the desktop app's confirmation | `setRule`, plus `humanOnly('turning a pipeline step off')` for this key, plus the desktop confirmation over HTTP (below) |
 | Turn every step back on | `F rules unset <project> steps.off`, also over HTTP | the existing `guard`; no `humanOnly` and no confirmation, since it only tightens. A `set` with a smaller list is still a `set`, so the turning-off guards apply to it |
 | Add or reorder custom steps | `F skills set <scope> steps.custom '[…]'`, `POST /api/skills` | none new: it only adds checks |
 | Remove a custom step | the same paths | `humanOnly('removing a custom step')` on any `steps.custom` write that drops an existing `id` |
 
 **Turning a step off.** `setRule` calls `humanOnly`, so the CLI refuses inside an agent session. The audit event is the ordinary rule event: `{stage: "rules", status: "set", key: "steps.off", value, reason, setBy}`.
 - **A cycle to break:** `projectset.ts` imports `rules.ts`, so `humanOnly` moves to `rules.ts`, or to a small module of its own, to avoid a circular import.
-- **Over HTTP, the token isn't enough.** `humanOnly` checks the F process, and the per-launch token lives in a URL. The owner opens the dashboard in browser panes that agents can drive and read URLs from. So a `steps.off` set over HTTP needs a person's confirmation outside the page:
-  - **In the desktop app:** the route needs the 5c confirmation dialog in the Electron main process, the same mechanism as approvals.
-  - **With no dialog** (plain `F ui` in a browser): the route refuses, and its error gives the exact `F rules set <project> steps.off '[…]' --reason "…"` command to run in a terminal.
+- **Over HTTP, the token isn't enough.** `humanOnly` checks the F process, and the per-launch token lives in a URL. The owner opens the dashboard in browser panes that agents can drive and read URLs from. So a `steps.off` set over HTTP needs a person's confirmation outside the page. **The rule for every guarded write made from the page:**
+  - **The page may only request it.** A request writes nothing.
+  - **In the desktop app:** the Electron main process shows its own native confirmation, built from F's own reading of the change (the scope, the key, the stored value and the new one, read by F, never text the page sent), and only on confirm does it write, through `setRule` as the CLI does. Cancel is the default.
+  - **With no desktop app** (plain `F ui` in a browser): the route refuses, and its error gives the exact `F rules set <project> steps.off '[…]' --reason "…"` command to run in a terminal.
+  - **5c's invariants stay:** no approve function in IPC or preload, and `/api/approve` is a 404. 5c's dialog opens only from the app menu. Slice 3 builds its own request channel, scoped to guarded rule writes, and doesn't loosen those.
   - **In the F process:** `humanOnly` applies as well.
   - **Unsetting** `steps.off` tightens, so it stays allowed everywhere.
 
-  So slice 3 waits for 5c.
+  So slice 3 waits for 5c, and builds that request path.
 
 **Removing a custom step.** The floor F guarantees is the built-in pipeline. Adding a custom step or reordering custom steps stays unguarded, since it only adds checks above that floor. Removing one is guarded, because `pipelinePass` escalates on a dropped step, and an agent session's `F skills set` would otherwise get the same effect silently.
 - **Known gap, not fixed here:** removing an `axes.extra` entry has the same problem today. Any `F skills set` can drop an extra axis with no `humanOnly`.
@@ -166,7 +168,7 @@ Rules for custom steps:
 
 **API.md: one deliberate exception.** The existing rules never loosen the merge gate. They tighten it, or they swap one check for another: `ci=skip` with no `checks.commands` still escalates, because `localResult` is `none`. `steps.off` is the first rule that removes a check. Slice 3 adds one sentence after "No route … loosens rules, trust or the merge gate":
 
-> One route does, deliberately: `POST /api/onboard/rule` with `steps.off` turns optional review steps off for one project. It needs the desktop app's confirmation dialog, and without one it refuses and names the CLI command. Like `F rules set`, it needs a reason and is audited, a local user can't undo a verified login's choice, and it is refused when F runs inside an agent session.
+> One route does, deliberately: `POST /api/onboard/rule` with `steps.off` turns optional review steps off for one project. It only requests the change: the desktop app's main process confirms it in its own dialog, built from F's reading of the change, and writes it. Without the desktop app it refuses and names the CLI command. Like `F rules set`, it needs a reason and is audited, a local user can't undo a verified login's choice, and it is refused when F runs inside an agent session.
 
 ## 6. How the run reads it
 
@@ -251,10 +253,11 @@ A named pipeline is **one more scope in skills.json**, addressed `owner/repo@id`
 - **How each part combines with the project scope:**
   - `steps.off` is the pipeline's own list and is never inherited. The project's `steps.off` belongs to the default pipeline only. Unsetting a pipeline's `steps.off` therefore means "nothing off", which only tightens. This is the same reason `steps.off` is refused on `default` (§3).
   - `steps.custom` is additive: a pipeline runs the project's custom steps, then its own. A pipeline can't drop a check the default runs.
-  - Added review steps are additive too. `axes.on` forces its axes on, and the pipeline's `axes.extra` runs next to the project's. An extra axis name must be new across the project and the pipeline: a pipeline can't replace the project's extra axis.
+  - Added review steps are additive too. `axes.on` forces its axes on, and the pipeline's `axes.extra` runs next to the project's.
+  - **Ids are unique across the project and all its pipelines.** The meet unions custom steps and extra axes over every pipeline a run has matched, so one run can meet two pipelines' definitions. A custom-step `id` or an extra-axis name already used by the project or by any of its pipelines is refused on write; a pipeline can't replace the project's step or axis either. On read, a duplicate is dropped with a warning, keeping the project's, then the first pipeline's in `pipelines` order.
   - `run.loops` and `run.budgetUsd` take the lowest of the pipeline, the project and the built-in value (§7.5).
   - Built-in runners and `guide` come from the project scope, as today.
-- **Consequence:** compared with the default pipeline, a named pipeline can be looser **only through `steps.off`**. Its custom steps and its review steps are a superset, and its caps are at most the project's. Between two named pipelines, caps can differ too (Hotfix at 1 loop, another at 3). That keeps the "is this a loosening?" question in §7.3 down to `steps.off` and caps.
+- **Consequence:** compared with the default pipeline, a named pipeline can be looser **only through `steps.off`**. Its custom steps and its review steps are a superset, and its caps are at most the project's. Between two pipelines, though, everything a run gets can differ: `steps.off`, caps (Hotfix at 1 loop, another at 3), custom steps and added review steps. Routing a run away from a pipeline drops what that pipeline adds, so §7.3 guards a routing write whenever any of those differ.
 - **What the design system shows:** `pipeline(repo)` returns `{ pipelines: [{id, name, match, …pipeline}], default: {…pipeline} }`, the same per-pipeline shape the graph already draws (`PipelineGraph`, PR A). Each named entry adds `match`.
 
 ### 7.2 Match conditions: structured data
@@ -287,10 +290,10 @@ A named pipeline is **one more scope in skills.json**, addressed `owner/repo@id`
 
 The inputs are not trusted, so the guard sits on the **configurations**, not on the match:
 - Every pipeline keeps the locked steps. `steps.off` refuses a locked key on write, and `axesFor` checks the locked list again on read. That is unchanged.
-- A pipeline's `steps.off` is the guarded, audited write: `humanOnly`, a reason, the rule audit event, the local-user guards, and over HTTP the desktop confirmation (§5). This is the same path as the default pipeline's `steps.off`.
-- **Routing is the same loosening.** Changing `match`, the `pipelines` order, or which pipelines exist decides which `steps.off` list and which caps a run gets. F doesn't compare glob sets, so it can't tell "this narrows" from "this widens".
-  - **Guarded:** every routing write, while any two pipelines of the project (the default included) differ in `steps.off` or in effective caps. That is `humanOnly`, a reason and the audit event, with the desktop confirmation over HTTP.
-  - **Unguarded:** a routing write when they all agree on both. Routing then can't change anything a run gets that could loosen it below the default, since custom steps and added review steps only add.
+- A pipeline's `steps.off` is the guarded, audited write: `humanOnly`, a reason, the rule audit event, the local-user guards, and over HTTP a request the desktop app confirms (§5). This is the same path as the default pipeline's `steps.off`.
+- **Routing is the same loosening.** Changing `match`, the `pipelines` order, or which pipelines exist decides what a run gets: its `steps.off` list, its caps, its custom steps and its added review steps. De-listing a pipeline, or rewriting its `match` so it never matches, drops that pipeline's custom steps, `axes.on` and extra axes from every later run, just as removing them would. F doesn't compare glob sets, so it can't tell "this narrows" from "this widens".
+  - **Guarded:** every routing write, while any two pipelines of the project (the default included) differ in anything a run gets: `steps.off`, effective caps, custom steps, `axes.on` or extra axes. That is `humanOnly`, a reason and the audit event, and over HTTP a request the desktop app confirms (§5).
+  - **Unguarded:** a routing write only when all the pipelines are identical in all of those. Routing then can't change anything a run gets.
   - In practice almost every real routing change is guarded. That's intended: it's an owner's decision, made in a terminal or the desktop app.
 - **Unguarded writes:**
   - `name`;
@@ -336,7 +339,7 @@ There are two new rule keys, `run.loops` and `run.budgetUsd`, on a project scope
 - **What a pipeline gets:** the minimum of the pipeline's, the project's and the built-in value.
 - **In a run:** the minimum of the run's snapshot (the lowest value any pick has seen, per §7.4) and the live value. Spend before the pick counts against the picked pipeline's budget: a run already over it at the pick escalates at the next gate, as the over-budget check does today.
 - **Raising is a loosening:**
-  - Setting a cap higher than the stored value, or unsetting a cap rule (which falls back to a higher value), is `humanOnly`, needs a reason, and is audited, with the desktop confirmation over HTTP.
+  - Setting a cap higher than the stored value, or unsetting a cap rule (which falls back to a higher value), is `humanOnly`, needs a reason, and is audited, and over HTTP is a request the desktop app confirms (§5).
   - Lowering is free: `asStrict` already treats a smaller number as stricter.
   - Note the asymmetry with `steps.off`. Unsetting `steps.off` tightens. Unsetting a cap loosens.
 
@@ -357,7 +360,7 @@ There are two new rule keys, `run.loops` and `run.budgetUsd`, on a project scope
   - each row shows its name, its match summary ("label hotfix", "files docs/** · ≤ 40 lines"), its run count and the step strip (PR A's `PipelineList`).
 - **Centre:** the graph for the selected pipeline (`PipelineGraph`), with the footer showing that pipeline's effective caps. Turned-off steps stay on the graph, greyed and struck through, and are toggled in place.
 - **Right panel:** its conditions as structured rows, its caps next to the built-in values, its `steps.off` with who set it and why, and its custom and added review steps.
-- **Editing:** what a slice allows. Guarded writes go through the desktop app's confirmation, or show the exact `F rules set …` command when there's no dialog (plain `F ui`), as §5 says.
+- **Editing:** what a slice allows. A guarded write is only requested from the page: the desktop app confirms it in its own dialog and writes it, and plain `F ui` shows the exact `F rules set …` command instead (§5).
 
 **Editor patterns borrowed from n8n.** These are the patterns only, not n8n's look or names:
 
@@ -377,7 +380,7 @@ Not taken from n8n: re-running a single step, and pinned test data. Both would l
    - The core part is `pipeline(repo)`, `LOCKED_STEPS` and `OPTIONAL_STEPS`, read-only, with `off` and `custom` always empty until slices 3 and 5.
    - The page part is `apps/web` and the desktop bundle.
 2. **A: the design-system move** (#141): `PipelineGraph`, `PipelineList` and `pipelineModel` in the design system, with playground fixtures.
-3. **5c: the desktop approval dialog** (local-first PR 5c, #142). Slices 3 to 5 need its confirmation for guarded writes over HTTP.
+3. **5c: the desktop approval dialog** (local-first PR 5c, #142). Slices 3 to 5 confirm guarded writes in the desktop app the same way: native, in main, never opened with page text.
 4. **Slice 2: change a step's runner** from the graph, through `POST /api/skills`. No guard is needed, and nothing waits.
    - The step panel and the run overlay (§8).
    - Fixture fixes: the Hotfix fixture must not change `loops`, the graph's loop-backs to spec and build (locked structure; its lower loop cap is fine), and the Research spike fixture must not have a `spec.after` step (§7.4).
@@ -386,12 +389,13 @@ Not taken from n8n: re-running a single step, and pinned test data. Both would l
    - `humanOnly` in `setRule`;
    - `pipelinePass` for `steps.off`;
    - the `axesFor` drop, the snapshot, and the `decide` reason;
-   - the HTTP confirmation, or the refusal that names the CLI command. 5c's dialog opens only from the app menu, never from the page, so this slice settles how a request made on the page reaches it;
+   - the request path (§5): the page requests a guarded write, the desktop main process confirms it in a native dialog built from F's own reading of the change and writes it; plain `F ui` refuses and names the CLI command. 5c's invariants stay (no approve IPC or preload, `/api/approve` a 404);
    - the API.md line;
    - the caps rules (§7.5), since raising one uses the same guard;
    - turned-off steps greyed in place on the graph (§8).
 6. **Slice 4: matching.**
    - The `@id` scopes, `match` and `pipelines`, and labels on `TrackerItem` and `intake started`.
+   - The routing guard (§7.3), comparing everything a run gets, and id uniqueness across the project and its pipelines (§7.1).
    - The pick and the `routed` record, the meet, `decide` naming the pipeline, and the run detail.
    - The page's pipelines list with editing: templates, history from the rules audit trail, and the match editor (§8).
    - This waits for slice 3, since a named pipeline's only looseness is `steps.off` and caps.
@@ -409,6 +413,10 @@ Every slice has a failing-first test for each behaviour change. Slice 4's tests 
 - a loop-back whose match changes and only tightens;
 - `F event` refusing `routed`;
 - `maxDiffLines` refused on a git project;
-- a routing write refused inside an agent session while two pipelines differ.
+- a routing write refused inside an agent session while two pipelines differ;
+- a routing write that would drop a pipeline's added review step, refused inside an agent session. Pipelines hold added review steps only from slice 5, so slice 4's guard already compares them and this test lands with slice 5.
 
-Slice 5's include a removed `axes.on` entry refused inside an agent session, and an added axis that stays due after the run re-matches a pipeline without it.
+Slice 5's include:
+- a removed `axes.on` entry refused inside an agent session;
+- an added axis that stays due after the run re-matches a pipeline without it;
+- a custom-step id or extra-axis name used by two pipelines (or a pipeline and the project), refused on write, and on read the later one dropped with a warning.
