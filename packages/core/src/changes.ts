@@ -23,25 +23,29 @@ const driven = (run: string) => {
 };
 
 /** Opens the run's change request once, as a draft from its factory branch; later calls return the recorded one while it is
- *  open from that branch. A merged or closed one is never reused: a new run (intake after a revert) starts with none. */
+ *  open from that branch. One the host says was closed unmerged (a human closed an escalated run's PR) is replaced by a fresh
+ *  draft from the run's own branch; a merged one is refused. A new run after a revert or a merge starts with none. */
 export function openPr(run: string) {
   const r = driven(run), { repo, n } = parseRun(run);
   const w = wtInfo(run);
   if (!w) throw new Error(`${run} has no worktree: run F worktree ${run} first`);
   const base = w.base ? String(w.base) : baseBranch(repo, w.repoPath);
-  if (r.pr) {
-    const c = hostFn(hostOf(repo), 'changeRequest', 'look up a change request')(adapterCtx(), { repo, path: w.repoPath, id: r.pr, base });
-    const from = c.fork ? `a fork's ${c.branch}` : c.branch;
-    if (c.state !== 'open' || c.fork || c.branch !== w.branch) throw new Error(`${run}'s recorded change request ${r.pr} is ${c.state === 'open' ? `open from ${from}` : c.state}, not open from ${w.branch}: start a new run (F intake ${run})`);
-    return { pr: r.pr, branch: w.branch, existing: true };
-  }
+  const old = r.pr;
+  if (old) {
+    const c = hostFn(hostOf(repo), 'changeRequest', 'look up a change request')(adapterCtx(), { repo, path: w.repoPath, id: old, base });
+    const at = `${run}'s recorded change request ${old}`;
+    if (c.state === 'merged') throw new Error(`${at} was merged: run F sync ${repo}, which records a merge done outside the factory, then F intake ${run} starts a new run without it`);
+    if (c.state === 'open' && !c.fork && c.branch === w.branch) return { pr: old, branch: w.branch, existing: true };
+    if (c.state === 'open') throw new Error(`${at} is open from ${c.fork ? `a fork's ${c.branch}` : c.branch}, not from ${w.branch}: a human must close it on the host, then F pr ${run} opens a fresh draft from ${w.branch}`);
+    if (c.state !== 'closed') throw new Error(`${at}: the host can't tell its state${'detail' in c && c.detail ? ` (${c.detail})` : ''}; a human needs to check it`);
+  } // closed, not merged: a fresh draft from the run's own branch replaces it
   let spec = '';
   try { spec = fs.readFileSync(path.join(runDir(run), 'spec.md'), 'utf8'); } catch { /* refused below */ }
   if (!spec.trim()) throw new Error(`${run} has no spec: write DIR/spec.md (F dir ${run}) first`);
   const body = cut(`${trackerOf(repo) === 'github-issues' ? `Closes #${n}` : `Factory item #${n}`}\n\n${unmention(spec)}`, 'the whole spec is the run\'s DIR/spec.md');
   const c = hostFn(hostOf(repo), 'openChangeRequest', 'open a change request')(adapterCtx(), { repo, path: w.repoPath, branch: w.branch, base, title: String(r.title || `#${n}`), body, draft: true });
   record(run, 'build', 'opened', { pr: c.id, branch: w.branch });
-  return { pr: c.id, branch: w.branch, ...(c.url && { url: c.url }) };
+  return { pr: c.id, branch: w.branch, ...(c.url && { url: c.url }), ...(old && { replaced: old }) };
 }
 
 const sleep = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);

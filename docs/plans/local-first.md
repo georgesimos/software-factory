@@ -638,8 +638,10 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
        - `F pr RUN`: a draft change request from the run's branch, titled from intake, with "Closes #N" (a local item:
          "Factory item #N") and `DIR/spec.md` as the body. F records it as `build opened {pr, branch}`, which `F event`
          refuses, as it refuses any typed `pr` or `branch`. A later call returns the recorded one only while the host says
-         it is open from the run's own branch (not a fork's); a merged or closed one is refused, and a new run (intake
-         after a revert) starts with none. It refuses an imported run, and one with no worktree or no spec.
+         it is open from the run's own branch (not a fork's). One closed unmerged (a human closed an escalated run's PR)
+         is replaced by a fresh draft from the run's branch, recorded as `build opened`; a merged one is refused (`F sync`
+         records it, then `F intake` starts clean); one open from elsewhere needs a human to close it. A new run after a
+         revert or a merge starts with none. It refuses an imported run, and one with no worktree or no spec.
        - `F ci RUN [--watch]`: the project's CI provider on the worktree head and the change request. `--watch` polls
          while `pending`, every 30 s for at most 20 minutes, and then answers `pending`: it never hangs. On `fail` it adds
          the provider's `logTail`, its last 80 lines and at most 16 KB.
