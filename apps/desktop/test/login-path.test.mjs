@@ -22,3 +22,10 @@ test('fish joins its PATH list with colons; a failing or silent shell, and Windo
   assert.equal(loginPath(env, 'darwin', () => 'no markers'), '/usr/bin:/bin');
   assert.equal(loginPath({ PATH: 'C:\\npm' }, 'win32', () => assert.fail('no shell on Windows')), 'C:\\npm');
 });
+
+test('a login shell\'s PATH is joined with ":" whatever the host: the windows-latest runner tests the darwin branch too', async () => {
+  const path = (await import('node:path')).default, host = path.delimiter;
+  path.delimiter = ';'; // as on Windows
+  try { assert.equal(loginPath({ PATH: '/stubs:/usr/bin', SHELL: '/bin/zsh' }, 'darwin', shell([])), '/stubs:/usr/bin:/opt/homebrew/bin:/Users/me/.local/bin'); }
+  finally { path.delimiter = host; }
+});

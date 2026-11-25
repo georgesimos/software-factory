@@ -303,10 +303,10 @@ export async function main(argv: string[]) {
   issues create <owner/repo> <file.json> [--yes]  validate and preview an issue batch; with --yes create it (idempotent by key)
   project <owner/repo>                    idea-to-app status: plan, milestones, next issue, dependency order, burn, loop
   close <owner/repo#N> --merged <sha>  a git project's escalated run you merged yourself (at the remote's UI): records the merge; the sha must be the base's commit that brought in the reviewed change; yours only, never an agent's
-  project set <owner/repo> host|ci|base <value>|--unset [--reason "…"]  a project's host (github|git), CI provider (github-actions|local|none) or base branch (git hosts; on origin when it has one; --unset: the host's own); yours only, never an agent's; a relaxing change needs --reason, and a verified login on a GitHub project
+  project set <owner/repo> host|ci|base <value>|--unset [--reason "…"]  a project's host (github|git), CI provider (github-actions|local|none) or base branch (git hosts; on origin when it has one; --unset: the host's own); yours only, never an agent's; a relaxing change needs --reason, is typed at your terminal, and a verified login on a GitHub project
   retire <owner/repo> --reason "<why>"     hide an idea that never got a repo (a leaked fixture) with a recorded event; the log is never rewritten
   loop   <owner/repo>                     next issue to build, or stop (first escalation, project budget, session cap, empty queue)
-  automerge <owner/repo> on|off           merge on the gates alone, or escalate for you to merge in GitHub (the default; a git project always asks); on is yours only, and on GitHub a verified login's
+  automerge <owner/repo> on|off           merge on the gates alone, or escalate for you to merge in GitHub (the default; a git project always asks); on is yours only (typed at your terminal), and on GitHub a verified login's
   archive [days=14]                       compact finished runs older than N days
   eval   [fixture]                        score intake on evals/golden with headless claude (costs tokens)
   state  <run>                            print derived run state

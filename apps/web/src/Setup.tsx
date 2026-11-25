@@ -271,6 +271,7 @@ function Rules({ data, ob, live, F, scope, scopePicker, write, fail, setStatus, 
   const guideNow = String(((S.config?.[scope] as { guide?: Record<string, string> } | undefined)?.guide ?? {})['*'] ?? ''); // raw: resolved guidance folds "*" into every step
   const [f, setF] = useState({ ci: ciNow, checks: checksNow.join('\n'), merge: am, guide: guideNow, reason: '', until: '' });
   const [cmds, setCmds] = useState<string[]>([]);
+  useEffect(() => setF((x) => ({ ...x, merge: am })), [am]); // the terminal turned it on: a later save must not post off
   const set = (k: keyof typeof f, v: string | boolean) => { setF({ ...f, [k]: v }); if (k !== 'reason' && k !== 'until') setDirty(true); };
   const changes = () => {
     const out: { key: string; value?: string; unset?: boolean; guide?: boolean }[] = [], list = f.checks.split('\n').map((c) => c.trim()).filter(Boolean);
@@ -288,8 +289,12 @@ function Rules({ data, ob, live, F, scope, scopePicker, write, fail, setStatus, 
     if (cs.some((c) => !c.guide && !c.unset) && !reason) { fail('A reason is required: it is recorded with the rule.'); return document.getElementById('ob-reason')?.focus(); }
     if (!live) return setCmds([...cs.map(cmdOf), ...(amChanged ? [`${F} automerge ${shq(scope)} ${f.merge ? 'on' : 'off'}`] : [])]);
     for (const c of cs) if (!await write('/onboard/rule', { scope, key: c.key, value: c.value, unset: !!c.unset, reason: reason || undefined, until: c.guide ? undefined : f.until || undefined }, '')) return;
-    if (amChanged && !await write('/onboard/automerge', { repo: scope, on: f.merge }, '')) return;
+    if (amChanged && !f.merge && !await write('/onboard/automerge', { repo: scope, on: false }, '')) return;
     setDirty(false);
+    if (amChanged && f.merge) { // on is typed at the user's terminal: the server refuses it
+      setCmds([`${F} automerge ${shq(scope)} on`]); setF({ ...f, merge: am }); // the box shows the stored state, still off
+      return setStatus({ text: 'Auto-merge is turned on at your own terminal: run the command above, then type the project name it asks for.' });
+    }
     setStatus({ text: `Rules saved for ${where(scope)}.` });
   };
   return (

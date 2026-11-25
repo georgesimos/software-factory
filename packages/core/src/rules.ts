@@ -6,16 +6,20 @@ import { dashboard } from './log.ts';
 import { gh } from './github.ts';
 import { git, hostFn, hostOf, projects, projectsFile } from './workspace.ts';
 import { humanOnly } from './projectset.ts';
+import { ttyAsk } from './approve.ts';
 import { log, stateDir } from './log.ts';
 import type { Rule } from './types.ts';
 
-export function setAutoMerge(repo: string, on: unknown) {
+export function setAutoMerge(repo: string, on: unknown, ask: (prompt: string) => string = ttyAsk) {
   if (!projects()[repo]) throw new Error(`${repo} is not attached; run sync first`);
   if (typeof on !== 'boolean') throw new Error('auto-merge must be on or off');
   if (on) { // D1: on lets runs merge with nobody asked, so it comes from you (F automerge, or the page's toggle in F ui), verified where the host can verify
     if (hostOf(repo) !== 'github') throw new Error(`${repo} is a git project: it always asks before merging (F approve RUN --merge)`);
     humanOnly('turning auto-merge on');
     if (whoami('turning auto-merge on').via !== 'github') throw new Error('turning auto-merge on for a GitHub project needs a verified login (gh auth login)');
+    // typed at your terminal, as F approve: a speed bump, not a boundary (an agent that clears humanOnly's variables can get a pty)
+    const typed = ask(`${repo}: turn auto-merge on?\n\nA run whose gates all pass will then merge with nobody asked.\n\nType ${repo} to turn it on (anything else cancels): `);
+    if (typed.trim() !== repo) throw new Error('auto-merge stays off: what you typed did not match');
   }
   fs.writeFileSync(projectsFile(), JSON.stringify({ ...projects(), [repo]: { ...projects()[repo], autoMerge: on } }, null, 2));
   dashboard.render();

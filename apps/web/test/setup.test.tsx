@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import state from '../fixtures/state.json';
@@ -126,6 +126,38 @@ describe('Setup wizard', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Next' }));
     expect(status()).toHaveTextContent('Unsaved rule changes');
     expect(screen.getByRole('heading', { name: 'Rules' })).toBeTruthy();
+  });
+
+  it('live: turning auto-merge on gives the command to confirm at your terminal, and posts nothing', async () => {
+    localStorage.setItem('sf.onboard', JSON.stringify({ step: 4, scope: 'acme/app' }));
+    const posted: string[] = [];
+    live((url) => { posted.push(url); return new Response('{}', { status: 200 }); });
+    wizard({ token: 'tok' });
+    await userEvent.click(await screen.findByRole('checkbox', { name: /auto-merge/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save rules' }));
+    expect(await screen.findByText(`${F} automerge 'acme/app' on`)).toBeTruthy();
+    expect(status()).toHaveTextContent('Auto-merge is turned on at your own terminal: run the command above, then type the project name it asks for.');
+    expect(posted).toEqual([]);
+    expect(screen.getByRole('checkbox', { name: /auto-merge/ })).not.toBeChecked(); // still off until the terminal says so
+  });
+
+  it('live: once the terminal turned auto-merge on, the box follows the stored state and a later save never posts off', async () => {
+    localStorage.setItem('sf.onboard', JSON.stringify({ step: 4, scope: 'acme/app' }));
+    const posted: string[] = [];
+    live((url) => { posted.push(url); return new Response(JSON.stringify({ projects: { 'acme/app': { path: '/x', autoMerge: true } }, rules: {} }), { status: 200 }); });
+    wizard({ token: 'tok' });
+    await userEvent.click(await screen.findByRole('checkbox', { name: /auto-merge/ }));
+    await userEvent.click(screen.getByRole('button', { name: 'Save rules' }));
+    expect(screen.getByRole('checkbox', { name: /auto-merge/ })).not.toBeChecked();
+    // the user ran F automerge at their terminal; the next write's reply carries it
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'CI' }), 'skip');
+    await userEvent.type(screen.getByRole('textbox', { name: 'Reason (required)' }), 'why');
+    await userEvent.click(screen.getByRole('button', { name: 'Save rules' }));
+    expect(await screen.findByText('Rules saved for acme/app.')).toBeTruthy();
+    expect(screen.getByRole('checkbox', { name: /auto-merge/ })).toBeChecked();
+    await userEvent.click(screen.getByRole('button', { name: 'Save rules' }));
+    await waitFor(() => expect(posted.filter((u) => u.includes('/onboard/rule'))).toHaveLength(2)); // the stub keeps no rules, so CI saves again
+    expect(posted.filter((u) => u.includes('automerge'))).toEqual([]);
   });
 
   it('live: switching scope or closing warns once about unsaved rule edits', async () => {

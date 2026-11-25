@@ -1,7 +1,7 @@
 // @ts-nocheck
 // Local-first PR 7, the merge flow: the #137 gate for git-host merging, core merge() honouring the host's answer, and D1.
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -156,8 +156,29 @@ test('D1: turning auto-merge on is refused in an agent session, from an unverifi
     process.env.CLAUDECODE = '1';
     try { assert.throws(() => setAutoMerge('acme/app', true), /turning auto-merge on must come from you, not from an agent session/); assert.equal(setAutoMerge('acme/app', false).autoMerge, false); }
     finally { delete process.env.CLAUDECODE; }
-    assert.equal(setAutoMerge('acme/app', true).autoMerge, true);
+    let shown = '';
+    for (const wrong of ['yes', 'acme/appx', 'acme/ap', '']) // close is not the name: only the exact name turns it on
+      assert.throws(() => setAutoMerge('acme/app', true, () => wrong), /auto-merge stays off: what you typed did not match/, wrong);
+    assert.equal(projects()['acme/app'].autoMerge, false, 'nothing written');
+    assert.equal(setAutoMerge('acme/app', true, (p) => { shown = p; return 'acme/app'; }).autoMerge, true);
+    assert.match(shown, /merge with nobody asked[^]*Type acme\/app to turn it on \(anything else cancels\): $/);
+    assert.equal(setAutoMerge('acme/app', false, () => assert.fail('off only tightens: never asked')).autoMerge, false);
   } finally { io.gh = prev; }
+});
+
+// Unix only: a detached child there has no controlling terminal, so /dev/tty fails at once. On Windows a detached child gets a
+// console of its own, so CONIN$ opens and the read could wait for the test's timeout instead of failing.
+test('F automerge on and a relaxing F project set ask at the terminal: with none (an agent\'s shell), stdin can\'t answer them', { skip: process.platform === 'win32' && 'a detached child gets its own console on Windows' }, async () => {
+  const d = repo('tty'); project('acme/tty', { path: d, ci: 'github-actions' });
+  const detached = (...a) => new Promise((res) => { // no controlling terminal, as an agent's shell tool
+    const c = spawn(process.execPath, [path.join(HERE, 'factory.mjs'), ...a], { env: { ...process.env, ...ID, FACTORY_DIR: io.dir, FACTORY_GH: STUB }, detached: true, stdio: ['pipe', 'pipe', 'pipe'] });
+    let err = ''; c.stderr.on('data', (b) => { err += b; }); c.stdin.end('acme/tty\n'); c.on('close', (code) => res([code, err]));
+  });
+  for (const a of [['automerge', 'acme/tty', 'on'], ['project', 'set', 'acme/tty', 'ci', 'none', '--reason', 'x']]) {
+    const [code, err] = await detached(...a);
+    assert.deepEqual([code, /this needs your terminal, and this process has none: run the F command in your own terminal/.test(err)], [1, true], `${a.join(' ')}: ${err}`);
+  }
+  assert.deepEqual([projects()['acme/tty'].autoMerge, projects()['acme/tty'].ci], [undefined, 'github-actions'], 'nothing written');
 });
 
 // ---- the merge itself: F approve RUN --merge, core merge() honouring the host ----

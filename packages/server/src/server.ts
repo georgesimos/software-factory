@@ -118,7 +118,10 @@ export const UI_ROUTES: Record<string, (x: Body) => unknown> = {
     else setRule(scope, key, raw, { ...opts, page: true });
     return onboardConfig();
   },
-  '/onboard/automerge': ({ repo, on }) => { setAutoMerge(repo, on); return onboardConfig(); },
+  '/onboard/automerge': ({ repo, on }) => { // on is typed at the user's terminal (setAutoMerge asks there): never from the page
+    if (on === true) throw new Error(`turning auto-merge on is confirmed at your own terminal: run F automerge ${repo} on`);
+    setAutoMerge(repo, on); return onboardConfig();
+  },
   '/sessions': (x) => ({ session: launchSession(x).id }),
   '/runs': ({ issue, harness }) => startRun(issue, process.env, spawn, harness), // a harness other than claude-code is refused
   '/sessions/terminal': (x) => ({ session: terminalSession(x).id }),
