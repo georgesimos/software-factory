@@ -199,7 +199,7 @@ export const shownRule = (key: string, v: unknown) => v === undefined ? (Object.
 type Ask = (prompt: string) => string;
 // a loosening is typed at your terminal, as F automerge on and a relaxing F project set: a speed bump, not a boundary (humanOnly is the refusal)
 /** What a rule reads as now, for a prompt or the dialog: an expired one says so, and what applies instead. */
-export const shownNow = (key: string, old?: { value: unknown; until?: string }) =>
+export const shownNow = (key: string, old?: Pick<Rule, 'value' | 'until'>) =>
   old?.until && old.until < dayOf() ? `${shownRule(key, undefined)} (${shownRule(key, old.value)} expired on ${old.until})` : shownRule(key, old?.value);
 function typed(ask: Ask, scope: string, key: string, doing: string, old: Rule | undefined, to: unknown, until?: string, reason?: string) {
   if (ask(`${scope}: ${doing}\n${key}: ${shownNow(key, old)} -> ${shownRule(key, to)}${until ? ` until ${until}` : ''}${reason ? ` (${line(reason)})` : ''}\n\nThis relaxes what the factory checks before it merges.\n\nType ${scope} to confirm (anything else cancels): `).trim() !== scope)
