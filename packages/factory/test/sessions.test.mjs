@@ -722,6 +722,19 @@ test('terminal on Windows: npm\'s claude.cmd goes to node-pty as one cmd.exe lin
   s.stop(); await finished(s);
 });
 
+test('terminal on Windows: a pty whose harness exits by itself is closed, so ConPTY\'s pipes and worker don\'t outlive it', async () => {
+  const exiting = () => { // the harness quits at once; kill() only counts
+    const rec = { kills: 0 };
+    return { rec, spawn() { let exit; setTimeout(() => exit({ exitCode: 0 }), 5); return { pid: 7, onData() {}, onExit: (f) => { exit = f; }, write() {}, resize() {}, kill: () => { rec.kills++; } }; } };
+  };
+  const win = { platform: 'win32', env: { PATH: 'C:\\npm', PATHEXT: '.EXE;.CMD', ComSpec: 'C:\\Windows\\system32\\cmd.exe' }, isFile: (p) => p.toLowerCase() === 'c:\\npm\\claude.cmd' };
+  for (const [resolve, kills] of [[win, 1], [undefined, process.platform === 'win32' ? 1 : 0]]) { // elsewhere node-pty closes it, and a late kill could signal a reused pid
+    const pty = exiting(), s = startSession(claude, { mode: 'terminal' }, { cwd: home, env: stubEnv, modules: { [PTY]: pty }, resolve });
+    assert.equal((await finished(s)).at(-1).code, 0);
+    assert.equal(pty.rec.kills, kills, resolve ? 'win32' : process.platform);
+  }
+});
+
 test('a stop while node-pty or the SDK loads is kept: nothing starts', async () => {
   const pty = fakePty(), sdk = fakeSdk();
   const t = startSession(claude, { mode: 'terminal' }, { cwd: home, modules: { [PTY]: pty } }); t.stop();

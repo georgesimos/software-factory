@@ -157,7 +157,12 @@ async function terminal(s: Session, spec: LaunchSpec, { cwd, env, modules, resol
   s.stop = () => { stopped = true; killTree({ pid: p.pid, kill() {} }, process.platform, undefined, process.kill, true); try { p.kill(); } catch { /* gone */ } }; // the tree first, waited (taskkill /T on Windows walks it from the live root), then the pty
   if (p.pid > 0) onPid(p.pid); // a stand-in pty may have none: the claim stays pending (pid 0)
   p.onData((data: string) => emit(s, { type: 'output', data }));
-  p.onExit(({ exitCode, signal }: { exitCode: number; signal?: number }) => done(stopped ? 'stopped' : signal || exitCode));
+  p.onExit(({ exitCode, signal }: { exitCode: number; signal?: number }) => {
+    // ConPTY: node-pty holds the pseudo-console, its pipes and its output worker after the child exits, until kill() closes
+    // them. Elsewhere node-pty closes the pty itself, and a late kill() would signal a pid that may be reused.
+    if (!stopped && (resolve?.platform ?? process.platform) === 'win32') try { p.kill(); } catch { /* gone */ }
+    done(stopped ? 'stopped' : signal || exitCode);
+  });
 }
 
 // The harness's SDK in this process (it runs its own CLI binary as a child, with the host's env). Each SDK message is one
