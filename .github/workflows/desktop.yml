@@ -26,7 +26,6 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @software-factory/desktop test
-        continue-on-error: ${{ runner.os == 'Windows' }} # DIAG: the login-path fix is in #150
       - run: pnpm --filter @software-factory/desktop package
       - run: pnpm --filter @software-factory/desktop smoke
       - name: GUI e2e on the packaged build
