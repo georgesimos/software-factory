@@ -45,6 +45,9 @@ button.sf-pl-node:focus-visible { outline: 2px solid var(--sf-color-accent); out
 .sf-pl-lock { display: inline-flex; flex: none; color: var(--sf-color-ink-3); }
 .sf-pl-lock svg { width: 12px; height: 12px; }
 .sf-pl-label { overflow: hidden; text-overflow: ellipsis; }
+/* A step the steps.off rule turned off: in place, greyed and struck through (pipelines §8). */
+.sf-pl-canvas li[data-off] { border-style: dashed; background: var(--sf-color-sunken); box-shadow: none; color: var(--sf-color-ink-2); }
+.sf-pl-canvas li[data-off] .sf-pl-label { text-decoration: line-through; }
 .sf-pl-t { display: flex; align-items: center; justify-content: space-between; gap: var(--sf-space-1); font-weight: var(--sf-weight-medium); font-size: var(--sf-text-sm); white-space: nowrap; }
 .sf-pl-sub, .sf-pl-who { font-size: var(--sf-text-xs); color: var(--sf-color-ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sf-pl-who { color: var(--sf-color-ink-3); font-family: var(--sf-font-mono); }

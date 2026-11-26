@@ -57,12 +57,13 @@ const hotfixRun = sample(HF, 'Checkout 500 on an empty cart', 'escalated', 1.6, 
   ev(HF, 'approve', 'decided', { action: 'escalate' }), ev(HF, 'approve', 'escalated'),
 ]);
 
+const offBy = (reason: string, ...steps: string[]) => steps.map((step) => ({ step, scope: 'acme/shop', reason, by: 'acme' }));
 export interface SamplePipeline { id: string; name: string; meta: string; pipeline: Pipeline; cap: number; costCap: number; runs: Run[] }
 export const PIPELINES: SamplePipeline[] = [
   { id: 'hotfix', name: 'Hotfix', meta: 'label hotfix', cap: 1, costCap: 2, runs: [hotfixRun],
-    pipeline: { ...BUILT_IN, off: ['review.ux', 'review.ui', 'review.seo', 'review.docs'] } },
+    pipeline: { ...BUILT_IN, off: offBy('a hotfix has no new pages', 'review.ux', 'review.ui', 'review.seo', 'review.docs') } },
   { id: 'ui-first', name: 'UI-first', meta: 'files src/components/**', cap: 3, costCap: 5, runs: [uiRun],
-    pipeline: { ...BUILT_IN, axes: [...BUILT_IN.axes.slice(0, 2), { axis: 'ux', when: 'always' }, { axis: 'ui', when: 'always' }, ...BUILT_IN.axes.slice(4), { axis: 'a11y', when: ['**/*.tsx'] }], off: ['review.seo'] } },
-  { id: 'spike', name: 'Research spike', meta: 'label spike', cap: 2, costCap: 3, runs: [], pipeline: { ...BUILT_IN, off: ['review.seo', 'review.docs'] } },
+    pipeline: { ...BUILT_IN, axes: [...BUILT_IN.axes.slice(0, 2), { axis: 'ux', when: 'always' }, { axis: 'ui', when: 'always' }, ...BUILT_IN.axes.slice(4), { axis: 'a11y', when: ['**/*.tsx'] }], off: offBy('components have no SEO', 'review.seo') } },
+  { id: 'spike', name: 'Research spike', meta: 'label spike', cap: 2, costCap: 3, runs: [], pipeline: { ...BUILT_IN, off: offBy('a spike ships nothing', 'review.seo', 'review.docs') } },
   { id: 'default', name: 'Factory default', meta: 'every other issue', cap: 3, costCap: 5, runs: [], pipeline: BUILT_IN },
 ];

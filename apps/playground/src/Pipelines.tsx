@@ -1,12 +1,12 @@
-import { Button, Dialog, PipelineGraph, PipelineList, nodeLabel, type StepEditing, type StepRunner } from '@software-factory/design-system';
+import { Button, Dialog, PipelineGraph, PipelineList, nodeLabel, type PipelineOff, type StepEditing, type StepRunner } from '@software-factory/design-system';
 import { useState } from 'react';
 import { EFFORTS, MODELS, PIPELINES, PLAN, RUNNERS, RUNNER_STEPS } from './fixtures/pipelines.ts';
 
 /** acme/shop's sample pipelines, first match first and the default last, drawn by the same graph the dashboard uses. Edits stay in this page. */
 export function Pipelines() {
   const [id, setId] = useState(PIPELINES[0]!.id), [plan, setPlan] = useState(PLAN), [set, setSet] = useState<Record<string, StepRunner>>({});
-  const [picking, setPicking] = useState(''), [choice, setChoice] = useState(0);
-  const p = PIPELINES.find((x) => x.id === id)!;
+  const [picking, setPicking] = useState(''), [choice, setChoice] = useState(0), [offs, setOffs] = useState<Record<string, PipelineOff[]>>({});
+  const p = PIPELINES.find((x) => x.id === id)!, off = offs[id] ?? p.pipeline.off;
   const change = (step: string, x: StepRunner) => { // as the dashboard saves it: a harness tool carries no Claude model
     const own = Object.fromEntries(Object.entries(x).filter(([, v]) => v !== undefined)) as StepRunner, base = PLAN[step] ?? {};
     setSet({ ...set, [step]: own });
@@ -22,12 +22,13 @@ export function Pipelines() {
     onModel: (step, v) => change(step, { ...set[step], model: v || undefined }),
     onEffort: (step, v) => change(step, { ...set[step], effort: v || undefined }),
     onRunner: (step) => { setPicking(step); setChoice(0); },
-    status: Object.keys(set).length ? { text: 'Changed in this page only.' } : undefined,
+    onOff: (step, turn, reason) => setOffs({ ...offs, [id]: turn ? [...off, { step, scope: 'acme/shop', reason, by: 'you' }] : off.filter((o) => o.step !== step) }),
+    status: Object.keys(set).length || Object.keys(offs).length ? { text: 'Changed in this page only.' } : undefined,
   };
   return (
     <div className="sf-pl-cols pg-pipelines">
       <PipelineList items={PIPELINES} current={id} onPick={setId} />
-      <PipelineGraph name={`acme/shop · ${p.name}`} pipeline={p.pipeline} plan={plan} cap={p.cap} costCap={p.costCap} edit={edit} runs={p.runs} />
+      <PipelineGraph name={`acme/shop · ${p.name}`} pipeline={{ ...p.pipeline, off }} plan={plan} cap={p.cap} costCap={p.costCap} edit={edit} runs={p.runs} />
       <Dialog open={!!picking} onClose={() => setPicking('')} title={`Runner for ${nodeLabel(picking)}`} description="Sample runners: the dashboard offers its whole catalog here."
         footer={<><Button variant="ghost" onClick={() => setPicking('')}>Cancel</Button><Button variant="primary" onClick={() => { const { model, effort } = set[picking] ?? {}; change(picking, { ...RUNNERS[choice]!.runner, model, effort }); setPicking(''); }}>Save</Button></>}>
         <fieldset className="pg-pick"><legend className="sf-sr-only">Runner</legend>

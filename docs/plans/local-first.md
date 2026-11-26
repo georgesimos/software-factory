@@ -742,6 +742,13 @@ Only two PRs change GitHub behaviour, and both say so in their PR body:
        latest review or non-escalate decision, so re-running `F decide` after the human merged loses nothing.
      - Not here: the desktop dialog's "approve and merge" (5c's dialog approves specs only), and a revert on the git host
        (`F revert` still needs GitHub; with CI `local` or `none` a git project's postmerge is `skipped`, so it never asks for one).
+     - **After PR 7.** `F automerge on` and a relaxing `F project set` (`host github` to `git`, or a weaker `ci`) were guarded
+       only by `humanOnly`'s environment variables, which an agent can unset: it could turn auto-merge on, or move to the
+       git host and then use the pty approval. Both now also ask at the terminal (`ttyAsk`, type the project's name), the
+       same speed bump as `F approve`, not a boundary. `POST /onboard/automerge` refuses `on`, and the Setup page shows the
+       command instead. Turning auto-merge off, and every tightening change, still asks nothing.
+       A host change, either way, drops `autoMerge` from projects.json (and so does the first attach that makes a project
+       `git`): a `true` kept through `github` to `git` and back would have turned auto-merge on again with nobody asked.
 8. **Docs only.** A plugin guide for hosts, trackers and CI: how to write Bitbucket, GitLab, Jenkins or Jira as one file
    each against the contract tests, and why the factory doesn't ship them (nobody can test them).
 

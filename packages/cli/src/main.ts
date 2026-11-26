@@ -2,13 +2,13 @@ import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { COST_CAP } from '../../core/src/constants.ts';
+import { COST_CAP, isLocal } from '../../core/src/constants.ts';
 import { adapterCtx, approval, facts, intake, merge, postmerge, revert } from '../../core/src/github.ts';
 import { approveMerge, approveSpec } from '../../core/src/approve.ts';
 import { newItem } from '../../adapters/trackers/local.ts';
 import { closeMerged, setProject } from '../../core/src/projectset.ts';
 import { archive, io, read, record, runDir } from '../../core/src/log.ts';
-import { budget, budgetWhy, derive, getRun } from '../../core/src/derive.ts';
+import { budget, budgetWhy, derive, getRun, thisRun } from '../../core/src/derive.ts';
 import { DEFAULT_PRESET, PRESETS, applyPreset, availablePlan, catalog, setSkill, skills } from '../../core/src/skills.ts';
 import { decide, gate, reviewAxes, risk } from '../../core/src/gate.ts';
 import { demo } from '../../core/src/demo.ts';
@@ -21,7 +21,7 @@ import { loadShip, loadShipList, ship } from '../../core/src/ship.ts';
 import { claudeDir, onboardState, onboardText, setShip } from '../../core/src/onboard.ts';
 import { artifact, openSession, parseRun, render, startRun, ui } from '../../server/src/server.ts';
 import { refuseClaimed, unclaim } from '../../core/src/claim.ts';
-import { rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
+import { rules, runCaps, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
 import { note, takeNotes } from '../../core/src/notes.ts';
 import { ciStatus, escalate, openPr } from '../../core/src/changes.ts';
 import { comment, label, labels, similar, split } from '../../core/src/items.ts';
@@ -50,7 +50,8 @@ export async function main(argv: string[]) {
         const owned: Record<string, string> = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:passed': 'approve --merge', 'spec:decided': 'approve', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'build:opened': 'pr', 'intake:split': 'split', 'intake:decided': 'split', 'approve:closed': 'sync', 'idea:retired': 'retire' };
         const owner = owned[`${stage}:${status}`] || ({ gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop', ship: 'ship' } as Record<string, string>)[stage];
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
-        if (status === 'merged') throw new Error('"merged" is recorded by "merge" and "sync", not by hand'); // on any stage: derive() reads it as the run's outcome
+        const ender = ({ merged: '"merge" and "sync"', closed: '"sync"', reverted: '"revert"' } as Record<string, string>)[status];
+        if (ender) throw new Error(`"${status}" is recorded by ${ender}, not by hand`); // on any stage: they end a run (derive, thisRun)
         if (stage === 'review' && p.role !== 'verifier') throw new Error('axis verdicts are recorded by "review", not by hand; "event" only takes the verifier usage record ({"role":"verifier",…})');
         if (stage === 'note') throw new Error('"note" is recorded by "note" and "notes", not by hand');
         const typed = ['association', 'originAssociation', 'origin', 'author', 'sha', 'imported', 'source', 'action', 'harness', 'sessionId', 'hostSessionId', 'cwd', 'runner', 'localChecks', 'mergedBy',
@@ -88,7 +89,7 @@ export async function main(argv: string[]) {
         if (run === 'set' && scope && key && value !== undefined) out(setRule(scope, key, value, { reason, until }));
         else if (run === 'unset' && scope && key) out(unsetRule(scope, key, { reason }));
         else if (run && run !== 'set' && run !== 'unset') out(rules(run));
-        else throw new Error('usage: rules <owner/repo|default> | rules set <owner/repo|default> <ci|checks.commands|diffCap|deploy.preview|artifact|project.budgetUsd|project.maxIssuesPerSession|guide.<step>> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <owner/repo|default> <key> [--reason "…"]');
+        else throw new Error('usage: rules <owner/repo|default> | rules set <owner/repo|default> <ci|checks.commands|diffCap|deploy.preview|artifact|project.budgetUsd|project.maxIssuesPerSession|steps.off|run.loops|run.budgetUsd|guide.<step>> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <owner/repo|default> <key> [--reason "…"]');
         break;
       }
       case 'checks': out(localChecks(run)); break;
@@ -110,14 +111,21 @@ export async function main(argv: string[]) {
           files = git('-C', w.path, 'diff', '--name-only', range).split('\n').filter(Boolean);
         }
         const sha = w && fs.existsSync(w.path) ? git('-C', w.path, 'rev-parse', 'HEAD').trim() : undefined;
-        const axes = reviewAxes(r, files, skills(run.split(/[#:]/)[0] as string).extra); // split always has a first part
-        record(run, 'review', 'started', { axes, sha, range });
+        const repo = run.split(/[#:]/)[0] as string, extra = skills(repo).extra, rule = rules(repo).policy['steps.off']; // split always has a first part
+        // steps.off (pipelines §6): the run's first review fixes its list; later ones turn off only what is in it and still in the
+        // live rule. A run whose first review predates the rule has nothing off. This attempt only, as derive() and decide() read it.
+        const mine = thisRun(r.events);
+        const first = mine.find((e) => e.stage === 'review' && e.status === 'started'), live = (rule?.value as string[] | undefined) ?? [];
+        const off = first ? live.filter((k) => Array.isArray(first.off) && first.off.includes(k)) : live;
+        const all = reviewAxes(r, files, extra), axes = reviewAxes(r, files, extra, off), dropped = all.filter((a) => !axes.includes(a)).map((a) => `review.${a}`);
+        const offRule = dropped.length && rule ? { offRule: { reason: rule.reason, by: isLocal(rule) ? 'a local user (unverified)' : rule.setBy, ...(isLocal(rule) && { local: true }) } } : {};
+        record(run, 'review', 'started', { axes, sha, range, off, ...(dropped.length && { dropped }), ...offRule });
         out({ axes, range, files }); break;
       }
       case 'worktree': out(worktree(run, rest[0])); break;
       case 'deps': console.log(deps(run)); break;
       case 'gc': out(gc()); break;
-      case 'gate': { const { status, ...p } = gate(getRun(run)); record(run, 'gate', status, p, { fallback }); out({ status, ...p }); break; }
+      case 'gate': { const { status, ...p } = gate(getRun(run), runCaps(rules(run.split(/[#:]/)[0] as string).policy)); record(run, 'gate', status, p, { fallback }); out({ status, ...p }); break; }
       case 'intake': out(intake(run)); break;
       case 'sync': { // `sync` alone re-syncs every attached project
         const list: [string, string | undefined][] = run ? [[run, rest[0]]] : Object.entries(projects()).map(([k, v]) => [k, v.path]);
@@ -266,7 +274,7 @@ export async function main(argv: string[]) {
   start  <owner/repo#N>                   start the factory on an issue: a detached headless claude in the attached clone, logging to the run's folder; prints {pid, log}
   unclaim <owner/repo#N> [--force]        clear a run's claim.json when the process it names is gone (refused while it may live, unless --force)
   rules  <owner/repo>                     print the policy rules, warnings and per-step guidance that apply
-  rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, deploy.preview required|advisory|off, artifact https://claude.ai/artifact/<id> (owner/repo only), project.budgetUsd x, project.maxIssuesPerSession n, guide.<step> "text"
+  rules set <owner/repo|default> <key> <value> --reason "…" [--until YYYY-MM-DD]  ci required|advisory|skip, checks.commands '[…]', diffCap n, deploy.preview required|advisory|off, artifact https://claude.ai/artifact/<id> (owner/repo only), project.budgetUsd x, project.maxIssuesPerSession n, steps.off '["review.seo",…]' and run.loops n, run.budgetUsd x (owner/repo only; turning a step off or raising a cap is yours alone, typed at your terminal: it asks for the project's name), guide.<step> "text"
   rules unset <owner/repo|default> <key> [--reason "…"]  remove one (back to the global rule, or the built-in)
   checks <run>                            run the checks.commands rule in the worktree on its HEAD commit (the CI stand-in)
   note   <run> <step|next> -              record the user's one-shot note for a step (text on stdin; only from the user's own chat message)
@@ -296,10 +304,10 @@ export async function main(argv: string[]) {
   issues create <owner/repo> <file.json> [--yes]  validate and preview an issue batch; with --yes create it (idempotent by key)
   project <owner/repo>                    idea-to-app status: plan, milestones, next issue, dependency order, burn, loop
   close <owner/repo#N> --merged <sha>  a git project's escalated run you merged yourself (at the remote's UI): records the merge; the sha must be the base's commit that brought in the reviewed change; yours only, never an agent's
-  project set <owner/repo> host|ci|base <value>|--unset [--reason "…"]  a project's host (github|git), CI provider (github-actions|local|none) or base branch (git hosts; on origin when it has one; --unset: the host's own); yours only, never an agent's; a relaxing change needs --reason, and a verified login on a GitHub project
+  project set <owner/repo> host|ci|base <value>|--unset [--reason "…"]  a project's host (github|git), CI provider (github-actions|local|none) or base branch (git hosts; on origin when it has one; --unset: the host's own); yours only, never an agent's; a relaxing change needs --reason, is typed at your terminal, and a verified login on a GitHub project
   retire <owner/repo> --reason "<why>"     hide an idea that never got a repo (a leaked fixture) with a recorded event; the log is never rewritten
   loop   <owner/repo>                     next issue to build, or stop (first escalation, project budget, session cap, empty queue)
-  automerge <owner/repo> on|off           merge on the gates alone, or escalate for you to merge in GitHub (the default; a git project always asks); on is yours only, and on GitHub a verified login's
+  automerge <owner/repo> on|off           merge on the gates alone, or escalate for you to merge in GitHub (the default; a git project always asks); on is yours only (typed at your terminal), and on GitHub a verified login's
   archive [days=14]                       compact finished runs older than N days
   eval   [fixture]                        score intake on evals/golden with headless claude (costs tokens)
   state  <run>                            print derived run state

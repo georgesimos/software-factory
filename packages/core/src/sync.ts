@@ -104,7 +104,7 @@ export function attach(repo: string, repoPath: string, extra: Project = {}) {
   const why = prior && clash(repo, prior, url, repoPath);
   // a clone with no network origin keeps a local/ id: owner/name with no origin would be taken for GitHub
   if (why) throw new Error(`${repo} is already attached to ${why}, and ${repoPath} is a different repository: attach it under another id (F sync ${remoteParts(url) ? '<owner/name>' : 'local/<name>'} ${repoPath})`);
-  const first = !(prior?.path || prior?.host), fresh: Project = first && hostFor(url, repo) === 'git' ? { host: 'git', ...(remoteParts(url) && { remote: withoutUserinfo(url) }) } : {};
+  const first = !(prior?.path || prior?.host), fresh: Project = first && hostFor(url, repo) === 'git' ? { host: 'git', autoMerge: undefined, ...(remoteParts(url) && { remote: withoutUserinfo(url) }) } : {};
   const onGithub = hostOf(repo, fresh.host ?? prior?.host) === 'github';
   let ref: string | null = null, note: string | undefined; // before anything is written: a clone with no base branch is not attached
   if (!onGithub) try { ref = baseRef(repoPath, baseBranch(repo, repoPath, 'git')); } catch (e) {

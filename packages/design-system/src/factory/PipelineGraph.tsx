@@ -110,11 +110,11 @@ export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownNa
               const body: ReactNode = <>
                 <span className="sf-pl-t"><span className="sf-pl-label">{n.label}</span>{n.locked ? <>{' '}<span className="sf-pl-lock" title="Locked: every run has it"><LockIcon aria-hidden="true" /><span className="sf-sr-only">Locked</span></span></> : null}</span>
                 {' '}{st ? <span className="sf-pl-st"><span className="sf-pl-dot" data-status={st.status} aria-hidden="true" />{STEP_STATUS[st.status]}{st.note ? ` · ${st.note}` : ''}</span>
-                  : n.sub ? <span className="sf-pl-sub">{n.sub}</span> : null}
+                  : n.off ? <span className="sf-pl-sub">Off · {n.off.by ? `by ${n.off.by}` : 'by rule'}</span> : n.sub ? <span className="sf-pl-sub">{n.sub}</span> : null}
                 {n.runner ? <>{' '}<span className="sf-pl-who">{who(n.runner)}</span></> : null}
               </>;
               return (
-                <li key={n.id} aria-label={n.label} data-kind={n.kind} data-locked={n.locked || undefined} data-status={st?.status} data-open={open === n.id || undefined}
+                <li key={n.id} aria-label={n.off ? `${n.label}, turned off` : n.label} data-kind={n.kind} data-locked={n.locked || undefined} data-off={n.off ? true : undefined} data-status={st?.status} data-open={open === n.id || undefined}
                   style={{ left: x, top: y, width: W, height: H }}>
                   {n.kind === 'step' || n.kind === 'review' ? (
                     <button type="button" className="sf-pl-node" aria-expanded={open === n.id} aria-controls={open === n.id ? panelId : undefined}
@@ -176,7 +176,7 @@ function About({ name, p, cap, costCap }: { name: string; p: Pipeline; cap: numb
         <li>Locked: {p.locked.map(nodeLabel).join(', ')}</li>
         <li>Review axes: {p.axes.length - p.axes.filter((a) => Array.isArray(a.when)).length} built-in, {p.axes.filter((a) => Array.isArray(a.when)).length} yours</li>
         <li>The gate loops back to {p.loops.join(' and ')}, at most {cap} times, ${costCap} per run</li>
-        <li>Steps off: {p.off.length ? p.off.join(', ') : 'none'}</li>
+        <li>Steps off: {p.off.length ? p.off.map((o) => `${nodeLabel(o.step)}${o.by ? ` (by ${o.by}${o.reason ? `: ${o.reason}` : ''})` : ''}`).join(', ') : 'none'}</li>
         <li>Custom steps: {Object.values(p.custom).flat().length || 'none'}</li>
         {p.warnings.map((x) => <li key={x} data-bad>{x}</li>)}
       </ul>
