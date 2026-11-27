@@ -365,3 +365,32 @@ test('labels, globs and names refuse format and separator characters: bidi contr
     assert.throws(() => setRule('acme/mt@x', 'match', v, { reason: 'x', ask: yes('acme/mt@x') }), /set 1: (labels|files) must be/, JSON.stringify(v));
   for (const n of ['Hot‮fix', 'a‍b', 'a b']) assert.throws(() => setSkill('acme/mt@x', 'name', n), /name/, JSON.stringify(n));
 });
+
+// F gate on a run picked onto hotfix, with code and security failed: what stops it.
+const gateOn = (RUN, before = () => {}) => {
+  record(RUN, 'intake', 'started', { association: 'OWNER', labels: ['hotfix'] }); record(RUN, 'build', 'started');
+  axes(RUN, 'src/a.ts');
+  before();
+  for (const a of ['code', 'security']) record(RUN, 'review', 'failed', { axis: a, verdict: 'failed', findings: [{ severity: 'high', route: 'build', issue: 'x' }] });
+  return JSON.parse(F(['gate', RUN])).reasons.at(-1);
+};
+
+test('a pipeline\'s caps never go above the project\'s: a pipeline set to 3 loops on a project at 1 stops at 1', () => {
+  reset();
+  setRule('acme/mt', 'run.loops', '1', { reason: 'one try here' });
+  setRule('acme/mt@hotfix', 'match', HOTFIX, { reason: 'urgent', ask: yes('acme/mt@hotfix') });
+  setRule('acme/mt@hotfix', 'run.loops', '3', { reason: 'three tries', ask: yes('acme/mt@hotfix') });
+  setRule('acme/mt', 'pipelines', '["hotfix"]', { reason: 'hotfix first', ask: yes('acme/mt') });
+  assert.match(gateOn('acme/mt#17'), /^loop cap 1 reached \(rule run\.loops\)/);
+});
+
+test('the caps recorded at the pick still bind after the pipeline\'s cap is raised: loops and budget', () => {
+  reset();
+  setRule('acme/mt@hotfix', 'match', HOTFIX, { reason: 'urgent', ask: yes('acme/mt@hotfix') });
+  setRule('acme/mt@hotfix', 'run.loops', '1', { reason: 'one try' });
+  setRule('acme/mt', 'pipelines', '["hotfix"]', { reason: 'hotfix first', ask: yes('acme/mt') });
+  assert.match(gateOn('acme/mt#18', () => setRule('acme/mt@hotfix', 'run.loops', '3', { reason: 'more tries', ask: yes('acme/mt@hotfix') })), /^loop cap 1 reached \(rule run\.loops\)/);
+  unsetRule('acme/mt@hotfix', 'run.loops', { reason: 'built-in', ask: yes('acme/mt@hotfix') });
+  setRule('acme/mt@hotfix', 'run.budgetUsd', '1', { reason: 'a dollar' });
+  assert.match(gateOn('acme/mt#19', () => { record('acme/mt#19', 'build', 'passed', { costUsd: 2 }); setRule('acme/mt@hotfix', 'run.budgetUsd', '5', { reason: 'more money', ask: yes('acme/mt@hotfix') }); }), /^budget reached/);
+});
