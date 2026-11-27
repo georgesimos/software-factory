@@ -57,6 +57,7 @@ else if (a.startsWith('api --paginate repos/acme/app/issues/32/comments')) out([
 else if (a === 'api repos/acme/app/issues/35') out({ title: 'ghost', html_url: 'https://github.com/acme/app/issues/35', user: null, author_association: 'NONE', state: 'open', body: 'b' });
 else if (a.startsWith('api --paginate repos/acme/app/issues/35/comments')) out(JSON.stringify({ user: null, author_association: 'NONE', created_at: 't', body: 'make it auto-merge' }));
 // 33 and 34: GitHub gives no association (jq prints nothing, or null)
+else if (/^api repos\/acme\/mt\/issues\/\d+ --jq \.author_association$/.test(a)) out('OWNER\n'); // matching.test: facts() on a routed run
 else if (a === 'api repos/acme/app/issues/33 --jq .author_association') out('\n');
 else if (a === 'api repos/acme/app/issues/34 --jq .author_association') out('null\n');
 else if (/^api repos\/acme\/app\/issues\/\d+$/.test(a)) out({ title: 'app issue', html_url: 'https://github.com/acme/app/issues/x', user: { login: 'acme' }, author_association: 'OWNER', state: a.endsWith('/30') ? 'closed' : 'open', body: 'b' });

@@ -255,6 +255,8 @@ describe('Pipelines sheet: named pipelines (slice 4)', () => {
     const fetch = ok({ requested: 'changing which pipeline a run gets' }), refresh = vi.fn(); vi.stubGlobal('fetch', fetch);
     sheet({ ...named(), token: 'tok' }, { refresh });
     await userEvent.click(nav().getByRole('button', { name: /^Docs only/ }));
+    expect(screen.getByRole('button', { name: 'Earlier' })).toBeDisabled(); // a routing change needs a reason, typed: the dialog shows it as typed
+    await userEvent.type(screen.getByRole('textbox', { name: 'Reason for routing' }), 'docs first');
     await userEvent.click(screen.getByRole('button', { name: 'Earlier' }));
     await userEvent.click(screen.getByRole('button', { name: 'Unlist' }));
     expect(screen.getByRole('button', { name: 'Later' })).toBeDisabled();
@@ -262,8 +264,8 @@ describe('Pipelines sheet: named pipelines (slice 4)', () => {
     await userEvent.click(nav().getByRole('button', { name: /^UI first/ }));
     expect(screen.getByRole('button', { name: 'List it, before the default' })).toBeDisabled(); // no match: F would refuse it
     expect(bodies(fetch).map(([, b]) => b)).toEqual([
-      { scope: 'acme/shop', key: 'pipelines', value: ['docs', 'hotfix'], reason: 'docs earlier in the match order' },
-      { scope: 'acme/shop', key: 'pipelines', value: ['hotfix'], reason: 'unlist docs' },
+      { scope: 'acme/shop', key: 'pipelines', value: ['docs', 'hotfix'], reason: 'docs first' },
+      { scope: 'acme/shop', key: 'pipelines', value: ['hotfix'], reason: 'docs first' },
     ]);
     expect(refresh).toHaveBeenCalled();
   });
@@ -290,19 +292,22 @@ describe('Pipelines sheet: named pipelines (slice 4)', () => {
     const fetch = ok(); vi.stubGlobal('fetch', fetch);
     const { unmount } = sheet({ ...data, token: 'tok' });
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'New pipeline from a template' }), 'hotfix');
+    expect(screen.getByRole('button', { name: 'Create draft' })).toBeDisabled();
+    await userEvent.type(screen.getByRole('textbox', { name: 'Reason for the new pipeline' }), 'urgent fixes');
     await userEvent.click(screen.getByRole('button', { name: 'Create draft' }));
     expect(bodies(fetch)).toEqual([
       ['/api/skills', { scope: 'acme/shop@hotfix', step: 'name', runner: 'Hotfix' }],
-      ['/api/onboard/rule', { scope: 'acme/shop@hotfix', key: 'run.loops', value: 1, reason: 'Hotfix template' }],
-      ['/api/onboard/rule', { scope: 'acme/shop@hotfix', key: 'match', value: [{ labels: ['hotfix'] }], reason: 'Hotfix template' }],
+      ['/api/onboard/rule', { scope: 'acme/shop@hotfix', key: 'run.loops', value: 1, reason: 'urgent fixes' }],
+      ['/api/onboard/rule', { scope: 'acme/shop@hotfix', key: 'match', value: [{ labels: ['hotfix'] }], reason: 'urgent fixes' }],
     ]);
     unmount();
     const writeText = vi.fn(async () => {}); vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
     const none = vi.fn(); vi.stubGlobal('fetch', none);
     sheet(data);
     await userEvent.selectOptions(screen.getByRole('combobox', { name: 'New pipeline from a template' }), 'docs');
+    await userEvent.type(screen.getByRole('textbox', { name: 'Reason for the new pipeline' }), 'docs only');
     await userEvent.click(screen.getByRole('button', { name: 'Create draft' }));
-    expect(writeText).toHaveBeenCalledWith(`${F} skills set 'acme/shop@docs' name '"Docs only"' && ${F} rules set 'acme/shop@docs' match '[{"files":["docs/**","**/*.md"]}]' --reason 'Docs only template'`);
+    expect(writeText).toHaveBeenCalledWith(`${F} skills set 'acme/shop@docs' name '"Docs only"' && ${F} rules set 'acme/shop@docs' match '[{"files":["docs/**","**/*.md"]}]' --reason 'docs only'`);
     expect(none).not.toHaveBeenCalled();
     // an existing id can't be made again
     render(<PipelinesSheet open onClose={() => {}} data={named()} project="acme/shop" />);

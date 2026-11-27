@@ -61,7 +61,8 @@ export function PipelinesSheet({ open, onClose, data, project, onSaved = () => {
   const cur = named.find((p) => p.id === pid) ?? null, scope = cur ? `${repo}@${cur.id}` : repo, pl = cur ?? at?.pipeline;
   const listed = named.filter((p) => p.listed).map((p) => p.id);
   const { status, setStatus, save } = useSkillsSave(data.token, data.fCmd ?? undefined, onSaved), [pick, setPick] = useState<Pick | null>(null);
-  const S = data.skills!, plan = at?.plan ?? {}, [waiting, setWaiting] = useState(0), [tpl, setTpl] = useState('');
+  const S = data.skills!, plan = at?.plan ?? {}, [waiting, setWaiting] = useState(0), [tpl, setTpl] = useState(''), [tplWhy, setTplWhy] = useState('');
+  const [why, setWhy] = useState(''), routeWhy = why.trim(); // a routing change's reason, typed: the dialog shows it as typed
   const [said, setSaid] = useState<{ text: ReactNode; bad?: boolean }>({ text: '' }); // the routing section's own status line; a step's is in its panel
   useEffect(() => { // a requested change: re-read until the dialog's answer shows (or a minute or two passes)
     if (!waiting || !refresh) return;
@@ -99,23 +100,23 @@ export function PipelinesSheet({ open, onClose, data, project, onSaved = () => {
     const why = off ? reason : offs.find((o) => o.step === step)?.reason ?? ''; // a shorter list is still a set: it keeps the rule's reason
     return rule(scope, 'steps.off', next.length ? next : undefined, next.length ? why : '', 'Turning a review off or on', 'Turning a review off'); // nothing left off: unset, which only tightens
   };
-  const order = (next: string[], why: string) => rule(repo, 'pipelines', next.length ? next : undefined, why, 'Routing', 'Routing', setSaid);
-  const move = (id: string, by: number) => { const i = listed.indexOf(id), next = [...listed]; next.splice(i, 1); next.splice(i + by, 0, id); return order(next, `${id} ${by < 0 ? 'earlier' : 'later'} in the match order`); };
+  const order = (next: string[]) => rule(repo, 'pipelines', next.length ? next : undefined, routeWhy, 'Routing', 'Routing', setSaid);
+  const move = (id: string, by: number) => { const i = listed.indexOf(id), next = [...listed]; next.splice(i, 1); next.splice(i + by, 0, id); return order(next); };
   const create = async (id: string) => { // a draft: never matches until it is listed
     const t = TEMPLATES.find((x) => x.id === id);
     if (!t || named.some((p) => p.id === t.id)) return setSaid({ text: `${repo}@${id} already exists: pick it in the list.`, bad: true });
-    const sc = `${repo}@${t.id}`;
+    const sc = `${repo}@${t.id}`, reason = tplWhy.trim();
     if (!data.token) { // one command line for a terminal: name, then the cap (lowering it never asks), then the match
-      const cmd = [`${f} skills set ${shq(sc)} name ${shq(JSON.stringify(t.name))}`, ...(t.loops ? [`${f} rules set ${shq(sc)} run.loops ${t.loops} --reason ${shq(`${t.name} template`)}`] : []),
-        `${f} rules set ${shq(sc)} match ${shq(JSON.stringify(t.match))} --reason ${shq(`${t.name} template`)}`].join(' && ');
+      const cmd = [`${f} skills set ${shq(sc)} name ${shq(JSON.stringify(t.name))}`, ...(t.loops ? [`${f} rules set ${shq(sc)} run.loops ${t.loops} --reason ${shq(reason)}`] : []),
+        `${f} rules set ${shq(sc)} match ${shq(JSON.stringify(t.match))} --reason ${shq(reason)}`].join(' && ');
       const ok = await copy(cmd);
       return setSaid({ text: <>{ok ? 'Command copied: run it in your own terminal:' : 'Run this in your own terminal:'} <code>{cmd}</code></> });
     }
     try { onSaved(await post<SkillsData>('/skills', { scope: sc, step: 'name', runner: t.name }, data.token)); } // F skills set: a name is never a loosening
     catch (e) { return setSaid({ text: (e as Error).message, bad: true }); }
     setPid(t.id);
-    if (t.loops && !(await rule(sc, 'run.loops', t.loops, `${t.name} template`, 'A cap', 'A cap', setSaid))) return;
-    await rule(sc, 'match', t.match, `${t.name} template`, 'Routing', 'Routing', setSaid);
+    if (t.loops && !(await rule(sc, 'run.loops', t.loops, reason, 'A cap', 'A cap', setSaid))) return;
+    await rule(sc, 'match', t.match, reason, 'Routing', 'Routing', setSaid);
   };
   // Only F's runner keys change here; an extra axis is a list saved whole (its runner and its files together), in Skills.
   const edit: StepEditing = {
@@ -144,7 +145,8 @@ export function PipelinesSheet({ open, onClose, data, project, onSaved = () => {
                 <option value="">New pipeline from…</option>
                 {TEMPLATES.map((t) => <option key={t.id} value={t.id} disabled={named.some((p) => p.id === t.id)}>{t.name}: {t.what}</option>)}
               </Select>
-              <Button size="sm" disabled={!tpl} onClick={() => void create(tpl)}>Create draft</Button>
+              <Input aria-label="Reason for the new pipeline" value={tplWhy} placeholder="Reason (required)" onChange={(e) => setTplWhy(e.target.value)} />
+              <Button size="sm" disabled={!tpl || !tplWhy.trim()} onClick={() => void create(tpl)}>Create draft</Button>
             </div>
           </div>
           <PipelineGraph name={cur ? `${cur.name} (${scope})` : repo} pipeline={pl} plan={{ ...plan, ...Object.fromEntries((at.extra ?? []).map((x) => [`review.${x.axis}`, x])) }}
@@ -159,11 +161,12 @@ export function PipelinesSheet({ open, onClose, data, project, onSaved = () => {
               {cur.matchBy ? <> Match set by {cur.matchBy}: {cur.matchReason}.</> : null}
             </p>
             <div className="web-pl-row">
+              <Input aria-label="Reason for routing" value={why} placeholder="Reason (required)" onChange={(e) => setWhy(e.target.value)} />
               {cur.listed ? (<>
-                <Button size="sm" variant="ghost" disabled={listed.indexOf(cur.id) === 0} onClick={() => void move(cur.id, -1)}>Earlier</Button>
-                <Button size="sm" variant="ghost" disabled={listed.indexOf(cur.id) === listed.length - 1} onClick={() => void move(cur.id, 1)}>Later</Button>
-                <Button size="sm" variant="ghost" onClick={() => void order(listed.filter((x) => x !== cur.id), `unlist ${cur.id}`)}>Unlist</Button>
-              </>) : <Button size="sm" disabled={!cur.match} onClick={() => void order([...listed, cur.id], `list ${cur.id}`)}>List it, before the default</Button>}
+                <Button size="sm" variant="ghost" disabled={!routeWhy || listed.indexOf(cur.id) === 0} onClick={() => void move(cur.id, -1)}>Earlier</Button>
+                <Button size="sm" variant="ghost" disabled={!routeWhy || listed.indexOf(cur.id) === listed.length - 1} onClick={() => void move(cur.id, 1)}>Later</Button>
+                <Button size="sm" variant="ghost" disabled={!routeWhy} onClick={() => void order(listed.filter((x) => x !== cur.id))}>Unlist</Button>
+              </>) : <Button size="sm" disabled={!cur.match || !routeWhy} onClick={() => void order([...listed, cur.id])}>List it, before the default</Button>}
             </div>
             <MatchEditor p={cur} onSave={(m, reason) => void rule(scope, 'match', m, reason, 'Routing', 'Routing', setSaid)} />
           </>) : <p>The default pipeline takes every issue no listed pipeline matches{listed.length ? `: after ${listed.join(', ')}` : ''}. It is always last.</p>}

@@ -12,9 +12,10 @@ import { decide, gate } from '../../core/src/gate.ts';
 import { io, read, record } from '../../core/src/log.ts';
 import { loosens, ruleChange, rules, setRule, unsetRule } from '../../core/src/rules.ts';
 import { idClash, pick, pipelinesOf, routeOf, runLabels, uniqueIds } from '../../core/src/route.ts';
-import { readSkills, setSkill, skills, skillsFile } from '../../core/src/skills.ts';
+import { readSkills, setSkill, skills, skillsData, skillsFile } from '../../core/src/skills.ts';
 import { getRun } from '../../core/src/derive.ts';
 import { projects, projectsFile } from '../../core/src/workspace.ts';
+import { facts, intake } from '../../core/src/github.ts';
 import { getItem as ghItem } from '../../adapters/trackers/github-issues.ts';
 import { getItem as localItem } from '../../adapters/trackers/local.ts';
 import { guarded, uiHandle } from '../../server/src/server.ts';
@@ -51,6 +52,9 @@ test('a pipeline is an owner/repo@id scope: name and the rules match, steps.off,
     [() => setSkill('acme/mt@Hot', 'name', 'x'), /scope "acme\/mt@Hot"/],
   ]) assert.throws(fn, re);
   assert.equal(rules('acme/mt@hotfix').policy['steps.off'], undefined);
+  const data = skillsData(['acme/mt']);
+  assert.ok(data.scopes.includes('acme/mt') && !data.scopes.some((x) => x.includes('@')), 'a pipeline is its project\'s, never a project of its own');
+  assert.deepEqual(data.plans['acme/mt'].pipelines.map((p) => [p.id, p.name, p.listed]), [['hotfix', 'Hotfix', false]]);
 });
 
 test('match: 1-5 non-empty condition sets of labels, files and maxDiffLines; never a factory:* label; maxDiffLines refused on a git project', () => {
@@ -140,6 +144,10 @@ test('labels: the tracker gives them, intake records them, F event can\'t; read 
   fs.writeFileSync(path.join(issues, '3.md'), '---\ntitle: "x"\nstate: open\nlabels: ["spike"]\n---\n\nbody\n');
   assert.deepEqual(localItem({ git: () => '' }, { repo: 'local/x', path: dir, id: '3' }).labels, ['spike']);
   assert.throws(() => F(['event', 'acme/mt#1', 'build', 'started', '{"labels":["hotfix"]}']), /labels/);
+  execFileSync('git', ['init', '-q', dir]); // local items are untracked files in a repo
+  const before = projects(); fs.writeFileSync(projectsFile(), JSON.stringify({ ...before, 'acme/mt': { path: dir, tracker: 'local' } }));
+  try { intake('acme/mt#3'); } finally { fs.writeFileSync(projectsFile(), JSON.stringify(before)); }
+  assert.deepEqual(read().filter((e) => e.run === 'acme/mt#3' && e.stage === 'intake' && e.status === 'started').map((e) => e.labels), [['spike']], 'intake records them');
   const ev = (stage, status, x = {}) => ({ ts: 't', run: 'acme/mt#1', stage, status, ...x });
   assert.deepEqual(runLabels([ev('intake', 'started', { labels: ['a'] }), ev('build', 'started'), ev('intake', 'started', { labels: ['b'] })]), ['a'], 'a re-intake mid-run keeps the first');
   assert.deepEqual(runLabels([ev('intake', 'started', { labels: ['a'] }), ev('intake', 'needs-info'), ev('intake', 'started', { labels: ['b'] })]), ['b'], 'a resume after needs-info reads them again');
@@ -227,6 +235,7 @@ test('maxDiffLines holds only on a size F can trust: never with no count, and ne
   cfg['acme/gm'] = { rules: { pipelines: { value: ['small'], reason: 'x', setBy: 'acme', setAt: '2026-11-25T10:00:00Z' } } };
   fs.writeFileSync(skillsFile(), JSON.stringify(cfg));
   assert.equal(pick('acme/gm', { labels: [], files: ['a.ts'], diffLines: 1 }).pipeline, 'default', 'a hand edit on a git project never matches on size');
+  assert.ok(skills('acme/gm').pipeline.warnings.some((w) => /acme\/gm@small\.rules\.match: set 1's maxDiffLines never holds on a git project until #137/.test(w)), skills('acme/gm').pipeline.warnings.join('\n'));
   assert.equal(pick('acme/mt', { labels: [], files: [], diffLines: 1 }).pipeline, 'small');
   setRule('acme/mt@small', 'match', '[{"files":["docs/**"]}]', { reason: 'docs', ask: yes('acme/mt@small') });
   assert.equal(pick('acme/mt', { labels: [], files: [], diffLines: 1 }).pipeline, 'default', 'no files: files never holds');
@@ -270,4 +279,37 @@ test('ids are unique across a project and its pipelines: refused on write, dropp
   assert.deepEqual(kept, [{ owner: 'acme/mt', ids: ['lint', 'a11y'] }, { owner: 'acme/mt@hot', ids: ['smoke'] }, { owner: 'acme/mt@ui', ids: ['visual'] }]);
   assert.deepEqual(warnings, ['acme/mt@hot: "lint" is ignored: acme/mt already has it (ids are unique across a project and its pipelines)',
     'acme/mt@ui: "smoke" is ignored: acme/mt@hot already has it (ids are unique across a project and its pipelines)']);
+});
+
+test('the routes shown are the ones after the write: the typed prompt and the dialog never show the config the write replaces', () => {
+  reset();
+  setRule('acme/mt@hot', 'match', HOTFIX, { reason: 'urgent', ask: yes('acme/mt@hot') });
+  setRule('acme/mt', 'pipelines', '["hot"]', { reason: 'hotfix first', ask: yes('acme/mt') });
+  const row = (c) => c.routes.find((p) => p.id === 'hot');
+  assert.deepEqual(row(ruleChange('acme/mt@hot', 'steps.off', '["review.ux","review.ui"]', { reason: 'x' })).off, ['review.ui', 'review.ux']);
+  assert.equal(row(ruleChange('acme/mt@hot', 'run.loops', '1', { reason: 'x' })).caps.loops, 1);
+  let shown = '';
+  setRule('acme/mt@hot', 'steps.off', '["review.ux"]', { reason: 'urgent', ask: (p) => { shown = p; return 'acme/mt@hot'; } });
+  assert.match(shown, /\n  1\. hot: label hotfix; off review\.ux; loops 3, \$5\n/);
+  assert.deepEqual(row(ruleChange('acme/mt@hot', 'steps.off', undefined)).off, [], 'an unset too');
+  assert.deepEqual(ruleChange('acme/mt', 'pipelines', undefined).routes.map((p) => p.id), ['default'], 'unlisting all of them');
+});
+
+test('end to end: a local user\'s match makes F axes record a local pick that decide escalates; a cap lowered after the pick is read live', () => {
+  setupThree();
+  const cfg = readSkills(); cfg['acme/mt@ui'].rules.match = { ...cfg['acme/mt@ui'].rules.match, via: 'local', setBy: 'someone' };
+  fs.writeFileSync(skillsFile(), JSON.stringify(cfg));
+  const RUN = 'acme/mt#14';
+  record(RUN, 'intake', 'started', { association: 'OWNER', labels: [] }); record(RUN, 'build', 'started'); // no PR yet: facts() reads no diff
+  axes(RUN, 'web/a.ts'); record(RUN, 'build', 'started'); axes(RUN, 'web/a.ts'); // iteration 2, ui both times
+  const routed = read().filter((e) => e.run === RUN && e.status === 'routed');
+  assert.deepEqual(routed.map((e) => [e.pipeline, e.local]), [['ui', true], ['ui', true]]);
+  for (const a of ['code', 'security']) record(RUN, 'review', 'passed', { axis: a, verdict: 'passed', findings: [] });
+  setRule('acme/mt@ui', 'run.loops', '1', { reason: 'tighter now' }); // lowering: free, and after both picks
+  const r = { ...getRun(RUN), reviewedSha: 'abc' }, f = facts(r);
+  assert.deepEqual([r.route.local, r.route.caps.loops, f.pipelineCaps], [true, 3, { loops: 1, budgetUsd: 5 }]);
+  const d = decide(r, { autoMerge: true, association: 'OWNER', checks: 'pass', files: ['web/a.ts', 'web/a.test.ts'], additions: 1, deletions: 0, rules: rules('acme/mt').policy, pipelineCaps: f.pipelineCaps });
+  assert.equal(d.action, 'escalate');
+  assert.ok(d.reasons.some((x) => /routing needs a verified login/.test(x)), d.reasons.join('\n'));
+  assert.ok(d.reasons.includes('iteration 2 exceeds cap 1 (rule run.loops)'), d.reasons.join('\n'));
 });

@@ -7,7 +7,7 @@ import { gh } from './github.ts';
 import { git, hostFn, hostOf, projects, projectsFile } from './workspace.ts';
 import { humanOnly } from './projectset.ts';
 import { line, ttyAsk } from './approve.ts';
-import { NAME_OK, PIPELINE_KEYS, PIPELINE_RULES, diffLinesTrusted, isPipelineId, isPipelineScope, listedOf, matchProblem, matchText, pipelinesDiffer, pipelinesOf, runGets, splitScope } from './route.ts';
+import { type MatchSet, NAME_OK, PIPELINE_KEYS, PIPELINE_RULES, diffLinesTrusted, isPipelineId, isPipelineScope, listedOf, matchProblem, matchText, pipelinesDiffer, pipelinesOf, runGets, splitScope } from './route.ts';
 import { log, stateDir } from './log.ts';
 import type { Rule } from './types.ts';
 
@@ -217,17 +217,19 @@ export function ruleChange(scope: string, key: string, raw: unknown, { reason, u
     checkRules({ [key]: { value, reason, setBy: 'x', setAt: new Date().toISOString(), ...(until && { until }) } }, `rules ${scope}`); // the value and the reason, as writeSkills would
   }
   const old = cfg[scope]?.rules?.[key];
-  return { scope, key, stored: old?.value, ...(old?.until && { storedUntil: old.until }), value, ...(until && { until }), doing: loosens(scope, key, value, cfg, until), command: ruleCommand(scope, key, value, until), routes: routesFor(scope, key, value, cfg) };
+  return { scope, key, stored: old?.value, ...(old?.until && { storedUntil: old.until }), value, ...(until && { until }), doing: loosens(scope, key, value, cfg, until), command: ruleCommand(scope, key, value, until), routes: routesFor(scope, key, value, cfg, until) };
 }
 /** How the project's runs are routed after a write (§7.3), for the typed prompt and the dialog: each listed pipeline's match,
  *  what it turns off and its caps, then the default. Only for a routing write or a write to a pipeline; [] otherwise. */
-export function routesFor(scope: string, key: string, value: unknown, cfg: SkillsConfig) {
+export function routesFor(scope: string, key: string, value: unknown, cfg: SkillsConfig, until?: string) {
   const { project, id } = splitScope(scope);
   if (!id && key !== 'pipelines') return [];
-  const list = key === 'pipelines' ? (Array.isArray(value) ? value as string[] : []) : listedOf(project, cfg), named = Object.fromEntries(pipelinesOf(project, cfg).map((p) => [p.id, p]));
-  const row = (pid: string | null) => { const g = runGets(project, pid, cfg), p = pid ? named[pid] : null;
-    return { id: pid ?? 'default', name: pid ? p?.name ?? pid : 'the default', match: pid ? matchText(pid === id && key === 'match' ? value : p?.match) : 'every other issue', off: g.off, caps: g.caps }; };
-  return [...list.map(row), row(null)];
+  const after: SkillsConfig = structuredClone(cfg), r = (after[scope] ??= {}).rules ??= {}; // the config with the write applied, unset included
+  if (value === undefined) delete r[key]; else r[key] = { value, reason: '-', setBy: '-', setAt: new Date().toISOString(), ...(until && { until }) };
+  const named = Object.fromEntries(pipelinesOf(project, after).map((p) => [p.id, p]));
+  const row = (pid: string | null) => { const g = runGets(project, pid, after);
+    return { id: pid ?? 'default', name: pid ? named[pid]?.name ?? pid : 'the default', match: pid ? matchText(named[pid]?.match) : 'every other issue', off: g.off, caps: g.caps }; };
+  return [...listedOf(project, after).map(row), row(null)];
 }
 export const routesText = (routes: ReturnType<typeof routesFor>) => routes.length ? `Runs are then routed:\n${routes.map((p, i) => `  ${p.id === 'default' ? 'then the default' : `${i + 1}. ${p.id}`}: ${p.match}; ${p.off.length ? `off ${p.off.join(', ')}` : 'nothing off'}; loops ${p.caps.loops}, $${p.caps.budgetUsd}`).join('\n')}\n` : '';
 /** A rule's value as a person reads it: an unset cap is the built-in one. */
@@ -238,7 +240,7 @@ type Ask = (prompt: string) => string;
 export const shownNow = (key: string, old?: Pick<Rule, 'value' | 'until'>) =>
   old?.until && old.until < dayOf() ? `${shownRule(key, undefined)} (${shownRule(key, old.value)} expired on ${old.until})` : shownRule(key, old?.value);
 function typed(ask: Ask, scope: string, key: string, doing: string, old: Rule | undefined, to: unknown, until: string | undefined, reason: string | undefined, cfg: SkillsConfig) {
-  if (ask(`${scope}: ${doing}\n${key}: ${shownNow(key, old)} -> ${shownRule(key, to)}${until ? ` until ${until}` : ''}${reason ? ` (${line(reason)})` : ''}\n${routesText(routesFor(scope, key, to, cfg))}\nThis relaxes what the factory checks before it merges.\n\nType ${scope} to confirm (anything else cancels): `).trim() !== scope)
+  if (ask(`${scope}: ${doing}\n${key}: ${shownNow(key, old)} -> ${shownRule(key, to)}${until ? ` until ${until}` : ''}${reason ? ` (${line(reason)})` : ''}\n${routesText(routesFor(scope, key, to, cfg, until))}\nThis relaxes what the factory checks before it merges.\n\nType ${scope} to confirm (anything else cancels): `).trim() !== scope)
     throw new Error(`${scope}'s ${key} stays as it is: what you typed did not match`);
 }
 // page: the write comes from the dashboard's route, which may only request a guarded write (§5); core refuses it here too.
@@ -308,7 +310,10 @@ export function pipelinePass(cfg: unknown): unknown {
       if (where) { drop(where); continue; }
       if (!isObj(x)) { drop('it is not a rule'); continue; }
       let value = x.value;
-      if (key === 'match') { const why = matchProblem(value); if (why) { drop(`${why} (so it never matches)`); continue; } }
+      if (key === 'match') {
+        const why = matchProblem(value); if (why) { drop(`${why} (so it never matches)`); continue; }
+        if (!diffLinesTrusted(project)) (value as MatchSet[]).forEach((m, i) => { if (m.maxDiffLines !== undefined) warn(`: set ${i + 1}'s maxDiffLines never holds on a git project until #137 (a "* -diff" attribute reads as zero lines)`); }); // §7.2; pick() skips it
+      }
       if (key === 'steps.off' && Array.isArray(value)) {
         const extra = [...axes('default'), ...axes(project)], ok = (k: unknown) => typeof k === 'string' && (OPTIONAL_STEPS.includes(k) || k.startsWith('review.') && !isBuiltinAxis(k.slice(7)) && extra.includes(k.slice(7)));
         const keep = [...new Set(value.filter(ok))].slice(0, 10), gone = [...new Set(value.filter((k) => !keep.includes(k)))];
