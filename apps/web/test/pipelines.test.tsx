@@ -258,6 +258,12 @@ describe('Pipelines sheet: named pipelines (slice 4)', () => {
     expect(screen.getByRole('button', { name: 'Earlier' })).toBeDisabled(); // a routing change needs a reason, typed: the dialog shows it as typed
     await userEvent.type(screen.getByRole('textbox', { name: 'Reason for routing' }), 'docs first');
     await userEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+    expect(screen.getByRole('button', { name: 'Unlist' })).toBeDisabled(); // a reason is for one change: requested, it clears
+    await userEvent.type(screen.getByRole('textbox', { name: 'Reason for routing' }), 'docs done');
+    await userEvent.click(nav().getByRole('button', { name: /^Hotfix/ })); // and another pipeline never gets it
+    expect(screen.getByRole('textbox', { name: 'Reason for routing' })).toHaveValue('');
+    await userEvent.click(nav().getByRole('button', { name: /^Docs only/ }));
+    await userEvent.type(screen.getByRole('textbox', { name: 'Reason for routing' }), 'docs done');
     await userEvent.click(screen.getByRole('button', { name: 'Unlist' }));
     expect(screen.getByRole('button', { name: 'Later' })).toBeDisabled();
     expect(await screen.findByRole('status')).toHaveTextContent('Confirm it in the app’s dialog: nothing changes until you do.');
@@ -265,7 +271,7 @@ describe('Pipelines sheet: named pipelines (slice 4)', () => {
     expect(screen.getByRole('button', { name: 'List it, before the default' })).toBeDisabled(); // no match: F would refuse it
     expect(bodies(fetch).map(([, b]) => b)).toEqual([
       { scope: 'acme/shop', key: 'pipelines', value: ['docs', 'hotfix'], reason: 'docs first' },
-      { scope: 'acme/shop', key: 'pipelines', value: ['hotfix'], reason: 'docs first' },
+      { scope: 'acme/shop', key: 'pipelines', value: ['hotfix'], reason: 'docs done' },
     ]);
     expect(refresh).toHaveBeenCalled();
   });
@@ -300,6 +306,7 @@ describe('Pipelines sheet: named pipelines (slice 4)', () => {
       ['/api/onboard/rule', { scope: 'acme/shop@hotfix', key: 'run.loops', value: 1, reason: 'urgent fixes' }],
       ['/api/onboard/rule', { scope: 'acme/shop@hotfix', key: 'match', value: [{ labels: ['hotfix'] }], reason: 'urgent fixes' }],
     ]);
+    expect(screen.getByRole('textbox', { name: 'Reason for the new pipeline' })).toHaveValue('');
     unmount();
     const writeText = vi.fn(async () => {}); vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
     const none = vi.fn(); vi.stubGlobal('fetch', none);

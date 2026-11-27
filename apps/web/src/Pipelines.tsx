@@ -100,7 +100,7 @@ export function PipelinesSheet({ open, onClose, data, project, onSaved = () => {
     const why = off ? reason : offs.find((o) => o.step === step)?.reason ?? ''; // a shorter list is still a set: it keeps the rule's reason
     return rule(scope, 'steps.off', next.length ? next : undefined, next.length ? why : '', 'Turning a review off or on', 'Turning a review off'); // nothing left off: unset, which only tightens
   };
-  const order = (next: string[]) => rule(repo, 'pipelines', next.length ? next : undefined, routeWhy, 'Routing', 'Routing', setSaid);
+  const order = async (next: string[]) => { if (await rule(repo, 'pipelines', next.length ? next : undefined, routeWhy, 'Routing', 'Routing', setSaid)) setWhy(''); }; // a reason is for one change
   const move = (id: string, by: number) => { const i = listed.indexOf(id), next = [...listed]; next.splice(i, 1); next.splice(i + by, 0, id); return order(next); };
   const create = async (id: string) => { // a draft: never matches until it is listed
     const t = TEMPLATES.find((x) => x.id === id);
@@ -116,7 +116,7 @@ export function PipelinesSheet({ open, onClose, data, project, onSaved = () => {
     catch (e) { return setSaid({ text: (e as Error).message, bad: true }); }
     setPid(t.id);
     if (t.loops && !(await rule(sc, 'run.loops', t.loops, reason, 'A cap', 'A cap', setSaid))) return;
-    await rule(sc, 'match', t.match, reason, 'Routing', 'Routing', setSaid);
+    if (await rule(sc, 'match', t.match, reason, 'Routing', 'Routing', setSaid)) setTplWhy('');
   };
   // Only F's runner keys change here; an extra axis is a list saved whole (its runner and its files together), in Skills.
   const edit: StepEditing = {
@@ -132,14 +132,14 @@ export function PipelinesSheet({ open, onClose, data, project, onSaved = () => {
     onOpen: () => setStatus({ text: '' }), // the last save was about another step
     status,
   };
-  const pickRepo = (s: string) => { setPicked(s); setPid(DEFAULT); setStatus({ text: '' }); setSaid({ text: '' }); };
+  const pickRepo = (s: string) => { setPicked(s); setPid(DEFAULT); setStatus({ text: '' }); setSaid({ text: '' }); setWhy(''); };
   return (
     <Dialog open={open} onClose={onClose} variant="sheet" title="Pipelines" className="web-pl" description="The steps each issue goes through, and which issues go to which pipeline.">
       {!at?.pipeline || !pl ? <EmptyState title="No project attached">Attach a project with F sync to see its pipeline.</EmptyState> : (<>
         <div className="sf-pl-cols">
           <div className="web-pl-left">
             {scopes.length > 1 ? <Select aria-label="Project" value={repo} onChange={(e) => pickRepo(e.target.value)}>{scopes.map((s) => <option key={s} value={s}>{s}</option>)}</Select> : null}
-            <PipelineList items={items} current={cur ? cur.id : DEFAULT} onPick={(id) => { setPid(id); setStatus({ text: '' }); setSaid({ text: '' }); }} />
+            <PipelineList items={items} current={cur ? cur.id : DEFAULT} onPick={(id) => { setPid(id); setStatus({ text: '' }); setSaid({ text: '' }); setWhy(''); }} />
             <div className="web-pl-new">
               <Select aria-label="New pipeline from a template" value={tpl} onChange={(e) => setTpl(e.target.value)}>
                 <option value="">New pipeline from…</option>
