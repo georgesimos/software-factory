@@ -76,7 +76,9 @@ export interface Run {
 }
 export interface RunRoute {
   pipeline: string; name: string | null; set: number | null; text: string | null;
-  facts: { labels: string[]; files: string[]; diffLines: number | null };
+  /** the condition set the last pick matched; decide re-checks it on the reviewed change (undefined: none recorded) */
+  matched?: { labels?: string[]; files?: string[]; maxDiffLines?: number } | null | undefined;
+  facts: { labels: string[]; files: string[]; diffLines: number | null; fileCount?: number; truncated?: boolean };
   off: string[]; caps: { loops: number; budgetUsd: number }; local: boolean; picks: { pipeline: string; set: number | null; iteration: number }[];
 }
 

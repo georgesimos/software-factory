@@ -118,8 +118,9 @@ export async function main(argv: string[]) {
         // files under review and the PR's size. Recorded as review routed, which F event refuses; a second F axes reuses it.
         let mine = thisRun(r.events);
         if (!pickedThisIteration(mine)) {
-          const fx = { labels: runLabels(mine), files: files.slice(0, 200), diffLines: prDiffLines(r) }, p = pick(repo, fx);
-          record(run, 'review', 'routed', { pipeline: p.pipeline, ...(p.name && { name: p.name }), set: p.set, ...(p.text && { text: p.text }), iteration: r.iteration, facts: fx, off: p.off, caps: p.caps, ...(p.local && { local: true }) });
+          const fx = { labels: runLabels(mine), files, diffLines: prDiffLines(r) }, p = pick(repo, fx); // every changed file: a files term needs them all
+          const kept = { ...fx, files: files.slice(0, 200), ...(files.length > 200 && { fileCount: files.length, truncated: true }) }; // the record is bounded, and says so
+          record(run, 'review', 'routed', { pipeline: p.pipeline, ...(p.name && { name: p.name }), set: p.set, ...(p.text && { text: p.text }), ...(p.matched && { matched: p.matched }), iteration: r.iteration, facts: kept, off: p.off, caps: p.caps, ...(p.local && { local: true }) });
           mine = thisRun(getRun(run).events);
         }
         // The meet (§7.4, §6): the current pipeline's live steps.off, kept only where every pick of this run turned it off, and the

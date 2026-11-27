@@ -3,7 +3,7 @@ import { CAP, COST_CAP, DOCS, MAX_DIFF, SEO, SOURCE, TEST, TRUSTED, UI, blocking
 import { budget, budgetWhy, thisRun } from './derive.ts';
 import { AXIS_WHEN, BUILTIN_AXES, LOCKED_STEPS, isObj } from './skills.ts';
 import { runCaps } from './rules.ts';
-import { routeText } from './route.ts';
+import { holds, routeText } from './route.ts';
 import type { AxisReview, Deploy, LocalChecks, Metrics, Rule, Run } from './types.ts';
 
 /** An extra review axis from skills.json: added when a changed file matches one of its globs. */
@@ -139,6 +139,11 @@ export function decide(r: Run, f: Facts) {
   // The pick (§7.4, §7.6): name the pipeline when it isn't the default; a routing rule a local user set never counts toward a merge on GitHub.
   const rt = r.route;
   if (rt && rt.pipeline !== 'default' && !notes.some((n) => n.startsWith(`pipeline ${rt.pipeline}`))) notes.unshift(routeText(rt));
+  if (rt && rt.pipeline !== 'default') { // the pick, re-checked on the reviewed change: F axes may have run before a push grew it
+    const n = f.files?.length ?? 0, lines = f.additions !== undefined && f.deletions !== undefined ? f.additions + f.deletions : null;
+    const now = { labels: rt.facts?.labels ?? [], files: f.files ?? [], diffLines: lines, truncated: !git && n >= 100 }; // gh pr view lists at most 100 files
+    if (!rt.matched || !holds(rt.matched, now, !git)) why.push(`the pick no longer holds: ${routeText(rt)} was picked, but the reviewed change doesn't match it (${n}${now.truncated ? '+' : ''} files, ${lines ?? 'unknown'} lines): it is never merged on a stale pick`);
+  }
   if (rt?.local && !git) why.push('rule match or pipelines was set by a local user (unverified): routing needs a verified login (gh auth login) before the factory merges on its own');
   if (why.length) return { action: 'escalate', reasons: [...why, ...asks, ...notes] };
   const yes = r.reviewedSha && r.events?.findLast((e) => e.stage === 'approve' && e.status === 'passed' && e.sha === r.reviewedSha); // only a git project has asks

@@ -11,7 +11,7 @@ import { derive } from '../../core/src/derive.ts';
 import { decide, gate } from '../../core/src/gate.ts';
 import { io, read, record } from '../../core/src/log.ts';
 import { loosens, ruleChange, rules, setRule, unsetRule } from '../../core/src/rules.ts';
-import { idClash, pick, pipelinesOf, routeOf, runLabels, uniqueIds } from '../../core/src/route.ts';
+import { holds, idClash, pick, pipelinesOf, routeOf, runLabels, uniqueIds } from '../../core/src/route.ts';
 import { readSkills, setSkill, skills, skillsData, skillsFile } from '../../core/src/skills.ts';
 import { getRun } from '../../core/src/derive.ts';
 import { projects, projectsFile } from '../../core/src/workspace.ts';
@@ -197,10 +197,10 @@ test('a loop-back whose match changes only tightens: a step back on stays on, an
   assert.deepEqual(axes(RUN, 'web/page.html'), ['code', 'security', 'ux', 'ui', 'seo'], 'ui again: seo stays on');
   const r = getRun(RUN);
   assert.deepEqual([r.route.picks.map((p) => p.pipeline), r.route.off], [['ui', 'default', 'ui'], []]);
-  // and a cap: hotfix's 1 loop, met once, stays even after the labels move to the default (here, by a needs-info resume)
+  // and a cap: hotfix's 1 loop, met once, stays even after the run moves to the default (here, the owner unlists hotfix)
   const RUN2 = 'acme/mt#12';
   record(RUN2, 'intake', 'started', { association: 'OWNER', labels: ['hotfix'] }); record(RUN2, 'build', 'started'); axes(RUN2, 'src/a.ts');
-  record(RUN2, 'intake', 'needs-info'); record(RUN2, 'intake', 'started', { association: 'OWNER', labels: [] }); record(RUN2, 'build', 'started'); axes(RUN2, 'src/a.ts');
+  setRule('acme/mt', 'pipelines', '["ui"]', { reason: 'no more hotfixes', ask: yes('acme/mt') }); record(RUN2, 'build', 'started'); axes(RUN2, 'src/a.ts');
   const r2 = getRun(RUN2);
   assert.deepEqual([r2.route.pipeline, r2.route.caps.loops], ['default', 1]);
 });
@@ -312,4 +312,56 @@ test('end to end: a local user\'s match makes F axes record a local pick that de
   assert.equal(d.action, 'escalate');
   assert.ok(d.reasons.some((x) => /routing needs a verified login/.test(x)), d.reasons.join('\n'));
   assert.ok(d.reasons.includes('iteration 2 exceeds cap 1 (rule run.loops)'), d.reasons.join('\n'));
+});
+
+test('a files term matches on every changed file, never a cut-down list: 200 docs files then a component pick the default', () => {
+  reset();
+  setRule('acme/mt@docs', 'match', '[{"files":["docs/**"]}]', { reason: 'docs', ask: yes('acme/mt@docs') });
+  setRule('acme/mt@docs', 'steps.off', '["review.ux","review.ui"]', { reason: 'docs only', ask: yes('acme/mt@docs') });
+  setRule('acme/mt', 'pipelines', '["docs"]', { reason: 'docs first', ask: yes('acme/mt') });
+  const RUN = 'acme/mt#15', many = Array.from({ length: 200 }, (_, i) => `docs/p${String(i).padStart(3, '0')}.md`);
+  record(RUN, 'intake', 'started', { association: 'OWNER', labels: [] }); record(RUN, 'build', 'started');
+  const got = axes(RUN, ...many, 'web/Button.tsx');
+  assert.ok(got.includes('ux') && got.includes('ui'), got.join(', '));
+  const e = read().filter((x) => x.run === RUN && x.status === 'routed').at(-1);
+  assert.deepEqual([e.pipeline, e.facts.files.length, e.facts.fileCount, e.facts.truncated], ['default', 200, 201, true], 'the record says it is cut down');
+  assert.equal(holds({ files: ['docs/**'] }, { labels: [], files: ['docs/a.md'], diffLines: 1, truncated: true }), false, 'a files term never holds on a list marked truncated');
+});
+
+test('decide re-checks the pick on the reviewed change: a set that no longer holds escalates, and never merges on a stale pick', () => {
+  reset();
+  setRule('acme/mt@small', 'match', '[{"maxDiffLines":20},{"files":["docs/**"]}]', { reason: 'small', ask: yes('acme/mt@small') });
+  setRule('acme/mt@small', 'steps.off', '["review.ux","review.ui"]', { reason: 'small ones', ask: yes('acme/mt@small') });
+  setRule('acme/mt', 'pipelines', '["small"]', { reason: 'x', ask: yes('acme/mt') });
+  const RUN = 'acme/mt#16';
+  record(RUN, 'intake', 'started', { association: 'OWNER', labels: [] }); record(RUN, 'build', 'started');
+  record(RUN, 'build', 'opened', { pr: 'https://github.com/acme/mt/pull/16' });
+  axes(RUN, 'web/Button.tsx', 'web/Button.test.tsx'); // the stub's PR is 12 lines: set 1 holds
+  for (const a of ['code', 'security']) record(RUN, 'review', 'passed', { axis: a, verdict: 'passed', findings: [] });
+  const r = { ...getRun(RUN), reviewedSha: 'abc' };
+  assert.deepEqual([r.route.pipeline, r.route.set, r.route.matched], ['small', 0, { maxDiffLines: 20 }]);
+  const f = { autoMerge: true, association: 'OWNER', checks: 'pass', files: ['web/Button.tsx', 'web/Button.test.tsx'], additions: 10, deletions: 2, rules: rules('acme/mt').policy };
+  assert.equal(decide(r, f).action, 'merge', decide(r, f).reasons.join('\n'));
+  const stale = /^the pick no longer holds: pipeline small \(set 1: ≤ 20 lines\) was picked, but the reviewed change doesn't match it/;
+  const big = decide(r, { ...f, additions: 300 }); // pushed after F axes: the PR grew
+  assert.equal(big.action, 'escalate');
+  assert.ok(big.reasons.some((x) => stale.test(x)), big.reasons.join('\n'));
+  const docs = { ...r, route: { ...r.route, set: 1, text: 'files docs/**', matched: { files: ['docs/**'] } } };
+  assert.equal(decide(docs, { ...f, files: ['docs/a.md'] }).action, 'merge');
+  assert.ok(decide(docs, { ...f, files: ['docs/a.md', 'web/x.tsx'] }).reasons.some((x) => /^the pick no longer holds/.test(x)), 'a file outside it');
+  assert.ok(decide(docs, { ...f, files: Array.from({ length: 100 }, (_, i) => `docs/${i}.md`) }).reasons.some((x) => /^the pick no longer holds/.test(x)), 'GitHub lists at most 100 files: a full page may hide one');
+  assert.ok(decide({ ...r, route: { ...r.route, matched: undefined } }, f).reasons.some((x) => /^the pick no longer holds/.test(x)), 'a pick with no recorded set');
+});
+
+test('labels: only intake\'s needs-info re-reads them, and only before the first pick; after it, no intake changes them', () => {
+  const ev = (stage, status, x = {}) => ({ ts: 't', run: 'acme/mt#1', stage, status, ...x });
+  assert.deepEqual(runLabels([ev('intake', 'started', { labels: ['a'] }), ev('build', 'needs-info'), ev('intake', 'started', { labels: ['b'] })]), ['a'], 'another stage\'s needs-info');
+  assert.deepEqual(runLabels([ev('intake', 'started', { labels: ['a'] }), ev('review', 'routed', { pipeline: 'default' }), ev('intake', 'needs-info'), ev('intake', 'started', { labels: ['b'] })]), ['a'], 'after a pick');
+});
+
+test('labels, globs and names refuse format and separator characters: bidi controls, zero-width marks, line and paragraph separators', () => {
+  reset();
+  for (const v of ['[{"labels":["hot‮fix"]}]', '[{"labels":["hot​fix"]}]', '[{"files":["docs/ **"]}]', '[{"files":["docs/⁦**"]}]', '[{"labels":["a b"]}]'])
+    assert.throws(() => setRule('acme/mt@x', 'match', v, { reason: 'x', ask: yes('acme/mt@x') }), /set 1: (labels|files) must be/, JSON.stringify(v));
+  for (const n of ['Hot‮fix', 'a‍b', 'a b']) assert.throws(() => setSkill('acme/mt@x', 'name', n), /name/, JSON.stringify(n));
 });

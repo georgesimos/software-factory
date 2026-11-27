@@ -79,5 +79,8 @@ describe('RunDetail route (pipelines §7.4)', () => {
     cleanup();
     render(<RunDetail run={{ id: 'acme/app#3', title: 'Three', stage: 'review', route: { ...route, pipeline: 'default', name: null, set: null, text: null, facts: { labels: [], files: ['a.ts'], diffLines: null }, picks: [route.picks[1]] } } as Run} cap={3} costCap={5} />);
     expect(screen.getByText(/^Default pipeline/).textContent).toBe('Default pipeline · read no labels · 1 file');
+    cleanup();
+    render(<RunDetail run={{ id: 'acme/app#4', title: 'Four', stage: 'review', route: { ...route, pipeline: 'default', name: null, set: null, text: null, facts: { labels: [], files: Array(200).fill('a.ts'), fileCount: 201, truncated: true, diffLines: null }, picks: [route.picks[1]] } } as Run} cap={3} costCap={5} />);
+    expect(screen.getByText(/^Default pipeline/).textContent).toBe('Default pipeline · read no labels · 201 files (200 recorded)'); // a cut-down list never reads as complete
   });
 });

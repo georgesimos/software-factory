@@ -17,12 +17,14 @@ export const splitScope = (scope: string) => { const i = scope.indexOf('@'); ret
 /** What a pipeline scope may hold (§7.1). Custom steps and added review steps come with slice 5. */
 export const PIPELINE_KEYS = ['name', 'rules'];
 export const PIPELINE_RULES = ['match', 'steps.off', 'run.loops', 'run.budgetUsd'];
-export const NAME_OK = (v: unknown) => typeof v === 'string' && !!v.trim() && v.length <= 60 && !/[\x00-\x1f\x7f]/.test(v);
+/** Control, format (bidi, zero-width) and line/paragraph separator characters: refused in names, labels and globs, which the confirm dialog shows raw. */
+export const UNSAFE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
+export const NAME_OK = (v: unknown) => typeof v === 'string' && !!v.trim() && v.length <= 60 && !UNSAFE.test(v);
 
 /** One condition set (§7.2): every term holds (AND); a pipeline matches when any of its sets does (OR). */
 export interface MatchSet { labels?: string[]; files?: string[]; maxDiffLines?: number }
 const TERMS = ['labels', 'files', 'maxDiffLines'];
-const okGlob = (g: unknown) => { if (typeof g !== 'string' || !g || g.length > 200 || /[\x00-\x1f\x7f]/.test(g)) return false; try { path.matchesGlob('x', g); return true; } catch { return false; } };
+const okGlob = (g: unknown) => { if (typeof g !== 'string' || !g || g.length > 200 || UNSAFE.test(g)) return false; try { path.matchesGlob('x', g); return true; } catch { return false; } };
 /** null when v is a valid match, else why not. */
 export function matchProblem(v: unknown): string | null {
   if (!Array.isArray(v) || v.length < 1 || v.length > 5) return 'a JSON array of 1-5 condition sets';
@@ -31,7 +33,7 @@ export function matchProblem(v: unknown): string | null {
     if (!isObj(s) || !Object.keys(s).length) return `${at}: a set is an object with labels, files or maxDiffLines (an empty one would match everything)`;
     const bad = Object.keys(s).filter((k) => !TERMS.includes(k));
     if (bad.length) return `${at}: unknown terms ${bad.join(', ')} (labels, files, maxDiffLines)`;
-    if (s.labels !== undefined && !(Array.isArray(s.labels) && s.labels.length >= 1 && s.labels.length <= 10 && s.labels.every((l: unknown) => typeof l === 'string' && !!l.trim() && l.length <= 50 && !/[\x00-\x1f\x7f]/.test(l))))
+    if (s.labels !== undefined && !(Array.isArray(s.labels) && s.labels.length >= 1 && s.labels.length <= 10 && s.labels.every((l: unknown) => typeof l === 'string' && !!l.trim() && l.length <= 50 && !UNSAFE.test(l))))
       return `${at}: labels must be 1-10 label names`;
     if ((s.labels as string[] | undefined)?.some((l) => l.startsWith('factory:'))) return `${at}: factory:* labels are F's own, never a match`;
     if (s.files !== undefined && !(Array.isArray(s.files) && s.files.length >= 1 && s.files.length <= 20 && s.files.every(okGlob))) return `${at}: files must be 1-20 globs`;
@@ -69,10 +71,10 @@ const gets = (repo: string, id: string | null, cfg: SkillsConfig) => { const { o
 export const pipelinesDiffer = (repo: string, ids: (string | null)[], cfg: SkillsConfig = readSkills()) => new Set(ids.map((id) => gets(repo, id, cfg))).size > 1;
 
 /** The facts a pick matches on (§7.2): the labels intake recorded, the files F axes reviews, and the diff size facts() reads. */
-export interface RouteFacts { labels: string[]; files: string[]; diffLines: number | null }
+export interface RouteFacts { labels: string[]; files: string[]; diffLines: number | null; fileCount?: number; truncated?: boolean } // truncated: files is not every changed file
 export function holds(s: MatchSet, f: RouteFacts, trusted = true) {
   if (s.labels && !s.labels.every((l) => f.labels.includes(l))) return false;
-  if (s.files && !(f.files.length && f.files.every((x) => s.files!.some((g) => path.matchesGlob(x, g))))) return false; // every changed file, and at least one
+  if (s.files && (f.truncated || !(f.files.length && f.files.every((x) => s.files!.some((g) => path.matchesGlob(x, g)))))) return false; // every changed file, and at least one: never on a cut-down list
   if (s.maxDiffLines !== undefined && !(trusted && f.diffLines !== null && f.diffLines <= s.maxDiffLines)) return false;
   return true;
 }
@@ -85,16 +87,17 @@ export function pick(repo: string, f: RouteFacts, cfg: SkillsConfig = readSkills
     if (!p.match) continue; // none, or invalid: pipelinePass warned, and it never matches
     if (p.matchRule && isLocal(p.matchRule)) local = true;
     const set = p.match.findIndex((s) => holds(s, f, trusted));
-    if (set >= 0) return { pipeline: p.id, name: p.name, set, text: setText(p.match[set]!), ...runGets(repo, p.id, cfg), local };
+    if (set >= 0) return { pipeline: p.id, name: p.name, set, text: setText(p.match[set]!), matched: p.match[set]!, ...runGets(repo, p.id, cfg), local };
   }
-  return { pipeline: 'default', name: null, set: null, text: null, ...runGets(repo, null, cfg), local };
+  return { pipeline: 'default', name: null, set: null, text: null, matched: null, ...runGets(repo, null, cfg), local };
 }
 
 /** A run's labels (§7.4): read once, at intake; a resume after needs-info reads them again. events: this run's (thisRun). */
 export function runLabels(events: FactoryEvent[]) {
   let labels: string[] | undefined, parked = false;
   for (const e of events) {
-    if (e.status === 'needs-info') parked = true;
+    if (isRouted(e)) break; // once a run has picked, no later intake changes its labels
+    if (e.stage === 'intake' && e.status === 'needs-info') parked = true;
     if (e.stage === 'intake' && e.status === 'started') { if (labels === undefined || parked) labels = Array.isArray(e.labels) ? e.labels.filter((l): l is string => typeof l === 'string') : []; parked = false; }
   }
   return labels ?? [];
@@ -107,7 +110,7 @@ export function routeOf(events: FactoryEvent[]): RunRoute | null {
   const last = rs.at(-1)!, offs = rs.map((e) => (Array.isArray(e.off) ? e.off as string[] : []));
   const min = (k: 'loops' | 'budgetUsd', built: number) => Math.min(built, ...rs.map((e) => Number((e.caps as Record<string, number> | undefined)?.[k] ?? built)));
   return {
-    pipeline: String(last.pipeline), name: (last.name as string | null) ?? null, set: (last.set as number | null) ?? null, text: (last.text as string | null) ?? null, facts: last.facts as RouteFacts,
+    pipeline: String(last.pipeline), name: (last.name as string | null) ?? null, set: (last.set as number | null) ?? null, text: (last.text as string | null) ?? null, matched: (last.matched as MatchSet | undefined), facts: last.facts as RouteFacts,
     off: offs[0]!.filter((k) => offs.every((o) => o.includes(k))), caps: { loops: min('loops', CAP), budgetUsd: min('budgetUsd', COST_CAP) },
     local: rs.some((e) => e.local === true), picks: rs.map((e) => ({ pipeline: String(e.pipeline), set: (e.set as number | null) ?? null, iteration: e.iteration as number })),
   };

@@ -250,7 +250,7 @@ function useRunning(token: string | undefined, key: Run) {
 export function Route({ run: r }: { run: Run }) {
   const rt = r.route;
   if (!rt) return null;
-  const f = rt.facts, read = [f.labels.length ? `label${f.labels.length > 1 ? 's' : ''} ${f.labels.join(', ')}` : 'no labels', `${f.files.length} file${f.files.length === 1 ? '' : 's'}`, f.diffLines != null ? `${f.diffLines} lines` : null].filter(Boolean).join(' · ');
+  const f = rt.facts, read = [f.labels.length ? `label${f.labels.length > 1 ? 's' : ''} ${f.labels.join(', ')}` : 'no labels', f.truncated ? `${f.fileCount ?? `${f.files.length}+`} files (${f.files.length} recorded)` : `${f.files.length} file${f.files.length === 1 ? '' : 's'}`, f.diffLines != null ? `${f.diffLines} lines` : null].filter(Boolean).join(' · ');
   const path = rt.picks.map((p) => p.pipeline), moved = new Set(path).size > 1;
   return (
     <p className="web-route">
