@@ -439,7 +439,7 @@ export async function serve(port = 0) {
   });
 }
 export const ui = (port = 0) => serve(port).then(({ url }) => console.log(`factory ui: ${url}\nOnly this URL can change settings (skills.json, rules, projects). Ctrl-C to stop.`));
-export const runRepos = () => [...new Set([...Object.keys(derive(read())), ...readArchive().map((a) => a.id)].map((id) => id.split(/[#:]/)[0]!))]; // split() always gives a first part
+export const runRepos = () => [...new Set([...Object.keys(derive(read())), ...readArchive().map((a) => a.id)].map((id) => id.split(/[#:@]/)[0]!))]; // split() always gives a first part
 export function render() {
   const out = path.join(stateDir(), 'dashboard.html');
   fs.mkdirSync(stateDir(), { recursive: true });
@@ -510,7 +510,7 @@ export function pageData(extra: object = {}, { sheet = false, publish = false } 
   const all = read(), hidden = publish ? ofIds(privateIds(projects(), all.map((e) => e.run))) : () => false, now = Date.now();
   const events = all.filter((e) => !hidden(String(e.run)));
   const runs = runsData(events).filter((r) => !hidden(r.id));
-  const repoOf = (id: string) => id.split(/[#:]/)[0]!;
+  const repoOf = (id: string) => id.split(/[#:@]/)[0]!;
   const byProject: Record<string, ReturnType<typeof metrics>> = {};
   for (const p of new Set(runs.map((r) => repoOf(r.id)))) byProject[p] = metrics(runs.filter((r) => repoOf(r.id) === p));
   const ruleData: { rules: Record<string, ReturnType<typeof rules>>; ruleHistory: FactoryEvent[]; rulesError?: string } = { rules: {}, ruleHistory: events.filter((e) => e.stage === 'rules').slice(-100) };
@@ -569,7 +569,7 @@ export function residue(json: string, raw: RawPage, me = machine()) {
   const jsonOf = (x: string) => JSON.stringify(x).slice(1, -1), runs = raw.runs || [], left = [];
   const paths = [me.home, ...Object.values(me.projects).map((p) => p?.path), ...runs.flatMap((r) => [r.worktree, ...(r.sessions || []).map((s) => s.cwd)])];
   if (paths.some((p) => typeof p === 'string' && p.length > 3 && json.includes(jsonOf(p)))) left.push('a home, clone or worktree path');
-  const ids = new Set([...Object.keys(me.projects), ...runs.map((r) => String(r.id).split(/[#:]/)[0]!)]);
+  const ids = new Set([...Object.keys(me.projects), ...runs.map((r) => String(r.id).split(/[#:@]/)[0]!)]);
   // checked on json itself: a private id stripped below to spare the login check must still refuse the page
   if ([...privateIds(me.projects, runs.map((r) => r.id))].some((id) => new RegExp(String.raw`(?<![\w.\/\\-])${esc(id)}(?![\w.-])`).test(json))) left.push('a project that is not on GitHub');
   // git projects' origins, in any form: host, an optional :port, then / or : and the path (git.corp:2222/team/app, git.corp:team/app)
@@ -589,9 +589,9 @@ export function residue(json: string, raw: RawPage, me = machine()) {
 // this machine, another host's id a private server. They are left out, not renamed, since a stand-in would still say they exist.
 export const privateIds = (ps: Record<string, Project>, runIds: unknown[] = []) => new Set([
   ...Object.entries(ps).filter(([id, p]) => p?.host === 'git' || id.startsWith('local/')).map(([id]) => id),
-  ...runIds.map((r) => String(r).split(/[#:]/)[0]!).filter((id) => id.startsWith('local/')), // a run whose project was detached
+  ...runIds.map((r) => String(r).split(/[#:@]/)[0]!).filter((id) => id.startsWith('local/')), // a run whose project was detached
 ]); // shortcut: a detached git-host project with an owner/name id is published like a GitHub one; record the host on its events when detaching exists
-const ofIds = (priv: Set<string>) => (s: string) => priv.size > 0 && priv.has(s.split(/[#:]/)[0]!); // "id", "id#3", "id:branch"
+const ofIds = (priv: Set<string>) => (s: string) => priv.size > 0 && priv.has(s.split(/[#:@]/)[0]!); // "id", "id#3", "id:branch", "id@pipeline"
 // Drops every key, string and list item that belongs to a private project: a list item by its id, run, repo or scope.
 export function dropPrivate(v: unknown, mine: (s: string) => boolean): unknown {
   const owned = (x: unknown) => typeof x === 'string' ? mine(x)

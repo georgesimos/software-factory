@@ -246,10 +246,25 @@ function useRunning(token: string | undefined, key: Run) {
   return ids;
 }
 
+/** Which pipeline the run was routed to (pipelines §7.4): F axes' pick, with what it read; a run that met several keeps the strictest. */
+export function Route({ run: r }: { run: Run }) {
+  const rt = r.route;
+  if (!rt) return null;
+  const f = rt.facts, read = [f.labels.length ? `label${f.labels.length > 1 ? 's' : ''} ${f.labels.join(', ')}` : 'no labels', f.truncated ? `${f.fileCount ?? `${f.files.length}+`} files (${f.files.length} recorded)` : `${f.files.length} file${f.files.length === 1 ? '' : 's'}`, f.diffLines != null ? `${f.diffLines} lines` : null].filter(Boolean).join(' · ');
+  const path = rt.picks.map((p) => p.pipeline), moved = new Set(path).size > 1;
+  return (
+    <p className="web-route">
+      {rt.pipeline === 'default' ? 'Default pipeline' : <>Pipeline <b>{rt.name ?? rt.pipeline}</b>{rt.set != null ? ` · set ${rt.set + 1}: ${rt.text}` : ''}</>}
+      <span> · read {read}</span>
+      {moved ? <span> · picked {path.join(' → ')}: it keeps the strictest{rt.off.length ? `, ${rt.off.join(', ')} off` : ', nothing off'}</span> : null}
+    </p>
+  );
+}
 export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, href = (id) => '#' + encodeURIComponent(id), resume, token }:
   { run: Run; cap: number; costCap: number; now?: number; find?: (id: string) => Run | undefined; href?: (id: string) => string; resume?: Resume; token?: string }) {
   const d = formatDuration(r.durationMs ?? Date.parse(r.updated ?? '') - Date.parse(r.started ?? ''));
   const { costUsd, tokens } = spent(r), running = useRunning(token, r);
+  const budgetCap = Math.min(costCap, r.route?.caps.budgetUsd ?? costCap); // the pipeline meet only lowers it (§7.5)
   const src = r.burn ? (r.burn.measured ? 'measured' : 'reported') : '';
   const repo = repoOf(r.id), open = openInClaude(r);
   const closes = /^[\w.-]+\/[\w.-]+$/.test(repo) ? (r.issues ?? []).filter((n) => Number.isInteger(n) && n > 0) : [];
@@ -274,14 +289,14 @@ export function RunDetail({ run: r, cap, costCap, now, find = () => undefined, h
         {closes.map((n) => <Ext key={n} url={`https://github.com/${repo}/issues/${n}`}>Closes #{n}</Ext>)}
         {r.children?.length ? <Badge quiet>{r.children.length} runs</Badge> : null}
       </div>
-      <Section title="Pipeline"><StageTrack run={r} /></Section>
+      <Section title="Pipeline"><Route run={r} /><StageTrack run={r} /></Section>
       <Section title="Review"><ReviewMatrix run={r} /></Section>
       <Section title="Decision"><Decision run={r} /></Section>
       <Notes key={r.id} run={r} token={token} />
       <Section title="Run">
         <div className="web-facts">
-          <MetricStat size="sm" label="Iterations" value={`${r.iteration ?? 0} / ${cap}`} sub={r.loopbacks?.length ? `${r.loopbacks.length} loop-back${r.loopbacks.length > 1 ? 's' : ''}` : 'no loop-backs'} />
-          {costUsd != null ? <MetricStat size="sm" label="Cost" value={r.burn ? costText(r.burn.total) : formatMoney(costUsd)} {...(costCap > 0 ? { sub: `of ${formatMoney(costCap)} cap${src ? ` · ${src}` : ''}`, meter: costUsd / costCap } : {})} /> : null}
+          <MetricStat size="sm" label="Iterations" value={`${r.iteration ?? 0} / ${Math.min(cap, r.route?.caps.loops ?? cap)}`} sub={r.loopbacks?.length ? `${r.loopbacks.length} loop-back${r.loopbacks.length > 1 ? 's' : ''}` : 'no loop-backs'} />
+          {costUsd != null ? <MetricStat size="sm" label="Cost" value={r.burn ? costText(r.burn.total) : formatMoney(costUsd)} {...(budgetCap > 0 ? { sub: `of ${formatMoney(budgetCap)} cap${src ? ` · ${src}` : ''}`, meter: costUsd / budgetCap } : {})} /> : null}
           {tokens != null ? <MetricStat size="sm" label="Tokens" value={formatTokens(tokens)} sub={src || undefined} /> : null}
           {d ? <MetricStat size="sm" label="Duration" value={d.join('')} sub={r.started ? `since ${formatClock(r.started, now)}` : undefined} /> : null}
         </div>

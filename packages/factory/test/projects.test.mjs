@@ -14,6 +14,7 @@ import { clash, discover, sync } from '../../core/src/sync.ts';
 import { hostOf, projects, projectsFile, worktree } from '../../core/src/workspace.ts';
 import { approval, facts, intake, merge, openPRs, postmerge, relabelMerged, revert } from '../../core/src/github.ts';
 import { artifact, page, residue, runsData } from '../../server/src/server.ts';
+import { audit } from '../../core/src/rules.ts';
 
 setup();
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'factory-projects-'));
@@ -188,4 +189,11 @@ test('the published page leaves out every project not on GitHub; the backstop re
   for (const note of ['mirrored at https://gitlab.com/acme/thing', 'git@GitLab.com:acme/thing.git', 'ssh://gitlab.com:2222/acme/thing.git', 'gitlab.com:8443/acme/thing']) assert.throws(() => artifact(page({ note })), /a remote that is not on GitHub/, note);
   assert.deepEqual(residue(JSON.stringify({ runs: [{ id: 'acme/thing#2' }] }), { runs: [] }, { user: 'nobody-x', host: 'h', home: '/nowhere', projects: projects() }), ['a project that is not on GitHub']);
   assert.deepEqual(residue(JSON.stringify({ x: 'local/notesy and acme/things' }), { runs: [] }, { user: 'nobody-x', host: 'h', home: '/nowhere', projects: projects() }), []); // whole ids only
+});
+
+test("a private project's pipeline scope (local/x@id) is left out of the published page like the project", () => {
+  audit('local/notes@hot', 'set', { key: 'match', value: [{ labels: ['hotfix'] }], reason: 'urgent ones', by: 'someone' });
+  const pub = artifact();
+  assert.ok(!pub.includes('local/notes'), 'its rules history entry is dropped, not refused by the backstop');
+  assert.ok(page({}).includes('local/notes@hot'), 'the local page still has it');
 });

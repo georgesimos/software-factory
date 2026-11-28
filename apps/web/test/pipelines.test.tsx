@@ -11,6 +11,8 @@ const data = normData(state as unknown as FactoryData);
 const P = data.skills!.plans!['acme/shop']!.pipeline!;
 const plan = data.skills!.plans!['acme/shop']!.plan!;
 afterEach(() => { vi.unstubAllGlobals(); localStorage.clear(); });
+// Text goes in as one paste, not a keystroke per character: each keystroke re-renders the whole sheet, which is slow on a busy machine.
+const typeIn = async (el: HTMLElement, text: string) => { await userEvent.click(el); await userEvent.paste(text); };
 
 describe('pipeline graph (generated from F’s pipeline, never drawn by hand)', () => {
   it('chains F’s steps, fans the review axes out of build and into the verifier, branches intake, and loops the gate back', () => {
@@ -35,7 +37,7 @@ describe('Pipelines sheet', () => {
   it('names the project’s tracker and host, marks locked steps, and counts what it drew', () => {
     render(<PipelinesSheet open onClose={() => {}} data={data} project="acme/shop" />);
     const graph = screen.getByRole('list', { name: 'acme/shop pipeline' });
-    expect(within(screen.getByRole('navigation', { name: 'Pipelines' })).getAllByRole('button').map((b) => b.textContent)).toEqual(['acme/shop9 runs']); // attached projects only, never default
+    expect(within(screen.getByRole('navigation', { name: 'Pipelines' })).getAllByRole('button').map((b) => b.textContent)).toEqual(['Default9 runs']); // the project's pipelines: here only its default, which every issue goes to
     expect(within(graph).getByRole('listitem', { name: /Issue ready/ })).toHaveTextContent('GitHub Issues');
     expect(within(graph).getByRole('listitem', { name: /^Security review/ })).toHaveTextContent('Locked');
     expect(within(graph).getByRole('listitem', { name: /^UI review/ })).toHaveTextContent('when UI files change');
@@ -102,7 +104,7 @@ describe('Pipelines sheet: a step’s panel writes as the Skills sheet does; a r
     render(<PipelinesSheet open onClose={() => {}} data={{ ...data, token: 'tok' }} project="acme/shop" onSaved={onSaved} refresh={refresh} />);
     await userEvent.click(screen.getByRole('button', { name: /^Docs review/ }));
     const panel = screen.getByRole('complementary', { name: 'Docs review step' });
-    await userEvent.type(within(panel).getByRole('textbox', { name: 'Why turn Docs review off' }), 'no docs here');
+    await typeIn(within(panel).getByRole('textbox', { name: 'Why turn Docs review off' }), 'no docs here');
     await userEvent.click(within(panel).getByRole('button', { name: 'Turn off' }));
     expect(fetch).toHaveBeenCalledWith('/api/onboard/rule', expect.objectContaining({ method: 'POST', body: JSON.stringify({ scope: 'acme/shop', key: 'steps.off', value: ['review.docs'], reason: 'no docs here' }) }));
     expect(await within(panel).findByRole('status')).toHaveTextContent('Confirm it in the app’s dialog: nothing changes until you do.');
@@ -115,7 +117,7 @@ describe('Pipelines sheet: a step’s panel writes as the Skills sheet does; a r
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'turning a pipeline step off needs your confirmation outside the page: confirm it in the desktop app, or run in your own terminal: F rules set acme/shop steps.off \'["review.docs"]\' --reason "…"' }), { status: 400 })));
     sheet({ ...data, token: 'tok' });
     await userEvent.click(screen.getByRole('button', { name: /^Docs review/ }));
-    await userEvent.type(screen.getByRole('textbox', { name: 'Why turn Docs review off' }), "it's a CLI");
+    await typeIn(screen.getByRole('textbox', { name: 'Why turn Docs review off' }), "it's a CLI");
     await userEvent.click(screen.getByRole('button', { name: 'Turn off' }));
     const cmd = `${F} rules set 'acme/shop' 'steps.off' '["review.docs"]' --reason 'it'\\''s a CLI'`;
     expect(writeText).toHaveBeenCalledWith(cmd);
@@ -129,7 +131,7 @@ describe('Pipelines sheet: a step’s panel writes as the Skills sheet does; a r
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'a confirmation is already open in the desktop app: answer it, then ask again' }), { status: 400 })));
     render(<PipelinesSheet open onClose={() => {}} data={{ ...data, token: 'tok' }} project="acme/shop" onSaved={() => {}} refresh={refresh} />);
     await userEvent.click(screen.getByRole('button', { name: /^Docs review/ }));
-    await userEvent.type(screen.getByRole('textbox', { name: 'Why turn Docs review off' }), 'no docs');
+    await typeIn(screen.getByRole('textbox', { name: 'Why turn Docs review off' }), 'no docs');
     await userEvent.click(screen.getByRole('button', { name: 'Turn off' }));
     expect(await screen.findByRole('status')).toHaveTextContent(/^a confirmation is already open in the desktop app: answer it, then ask again$/);
     expect([writeText.mock.calls.length, refresh.mock.calls.length]).toEqual([0, 0]);
@@ -143,7 +145,7 @@ describe('Pipelines sheet: a step’s panel writes as the Skills sheet does; a r
     const { unmount } = sheet(one);
     expect(screen.getByRole('listitem', { name: 'SEO review, turned off' })).toHaveTextContent('Off · by acme');
     await userEvent.click(screen.getByRole('button', { name: /^Docs review/ }));
-    await userEvent.type(screen.getByRole('textbox', { name: 'Why turn Docs review off' }), 'no docs');
+    await typeIn(screen.getByRole('textbox', { name: 'Why turn Docs review off' }), 'no docs');
     await userEvent.click(screen.getByRole('button', { name: 'Turn off' }));
     expect(writeText).toHaveBeenLastCalledWith(`${F} rules set 'acme/shop' 'steps.off' '["review.seo","review.docs"]' --reason 'no docs'`);
     expect(fetch).not.toHaveBeenCalled();
@@ -183,7 +185,7 @@ describe('Pipelines sheet: a step’s panel writes as the Skills sheet does; a r
     await userEvent.click(screen.getByRole('button', { name: /^Build/ }));
     await userEvent.click(screen.getByRole('button', { name: 'Change runner' }));
     const pick = screen.getByRole('dialog', { name: 'Runner for Build' });
-    await userEvent.type(within(pick).getByRole('textbox', { name: 'Skill name' }), 'fast-build');
+    await typeIn(within(pick).getByRole('textbox', { name: 'Skill name' }), 'fast-build');
     await userEvent.click(within(pick).getByRole('button', { name: 'Save' }));
     expect(fetch).toHaveBeenCalledWith('/api/skills', expect.objectContaining({ body: JSON.stringify({ scope: 'acme/shop', step: 'build', runner: { use: 'skill', name: 'fast-build', model: 'sonnet' } }) }));
   });
@@ -207,5 +209,117 @@ describe('Pipelines sheet: a step’s panel writes as the Skills sheet does; a r
     expect(within(graph).getByRole('listitem', { name: /^Watch main/ })).toHaveTextContent('reverted');
     expect(within(graph).getByRole('listitem', { name: /^Docs review/ })).toHaveTextContent('Skipped');
     expect(screen.getByText('#43 · Merged · $3.84 of $5 · 2 of 3 loops')).toBeInTheDocument();
+  });
+});
+
+describe('Pipelines sheet: named pipelines (slice 4)', () => {
+  const F = 'node ~/.claude/skills/software-factory/factory.mjs';
+  const hot = { ...P, id: 'hotfix', name: 'Hotfix', listed: true, match: [{ labels: ['hotfix'] }], matchBy: 'acme', matchReason: 'urgent ones', off: [{ step: 'review.ux', scope: 'acme/shop@hotfix', reason: 'urgent', by: 'acme' }], caps: { loops: 1, budgetUsd: 5 } };
+  const docs = { ...P, id: 'docs', name: 'Docs only', listed: true, match: [{ files: ['docs/**'], maxDiffLines: 40 }] };
+  const draft = { ...P, id: 'ui', name: 'UI first', listed: false, match: null };
+  const history = [
+    { ts: '2026-11-20T10:00:00Z', run: 'acme/shop@hotfix', stage: 'rules', status: 'set', key: 'match', value: [{ labels: ['hotfix'] }], setBy: 'acme', reason: 'urgent ones' },
+    { ts: '2026-11-21T10:00:00Z', run: 'acme/shop', stage: 'rules', status: 'set', key: 'pipelines', value: ['hotfix', 'docs'], setBy: 'acme', reason: 'hotfix first' },
+    { ts: '2026-11-22T10:00:00Z', run: 'acme/shop@docs', stage: 'rules', status: 'set', key: 'match', value: [{ files: ['docs/**'] }], setBy: 'acme', reason: 'docs' },
+  ];
+  const named = (d: FactoryData = data): FactoryData => ({ ...d, ruleHistory: [...(d.ruleHistory ?? []), ...history] as FactoryData['ruleHistory'],
+    skills: { ...d.skills, plans: { ...d.skills!.plans, 'acme/shop': { ...d.skills!.plans!['acme/shop'], pipelines: [hot, docs, draft] } } } });
+  const sheet = (d: FactoryData, x: { refresh?: () => void } = {}) => render(<PipelinesSheet open onClose={() => {}} data={d} project="acme/shop" onSaved={() => {}} {...x} />);
+  const nav = () => within(screen.getByRole('navigation', { name: 'Pipelines' }));
+  const ok = (extra = {}) => vi.fn(async () => new Response(JSON.stringify({ skills: data.skills, ...extra }), { status: 200 }));
+  const bodies = (f: ReturnType<typeof vi.fn>) => f.mock.calls.map(([url, o]) => [url, JSON.parse((o as { body: string }).body)]);
+
+  it('lists the pipelines in match order with the default last; a draft says it never matches; each draws its own steps', async () => {
+    sheet(named());
+    expect(nav().getAllByRole('button').map((b) => b.textContent)).toEqual(['Hotfix1. label hotfix', 'Docs only2. files docs/** · ≤ 40 lines', 'UI firstdraft: not listed, never matches', 'Defaultevery other issue']);
+    expect(screen.getByText(/The default pipeline takes every issue no listed pipeline matches: after hotfix, docs\. It is always last\./)).toBeInTheDocument();
+    await userEvent.click(nav().getByRole('button', { name: /^Hotfix/ }));
+    expect(screen.getByRole('list', { name: 'Hotfix (acme/shop@hotfix) pipeline' })).toBeInTheDocument();
+    expect(screen.getByRole('listitem', { name: 'UX review, turned off' })).toHaveTextContent('Off · by acme');
+    expect(screen.getByText('loops ≤ 1 · $5 / run')).toBeInTheDocument();
+    expect(screen.getByText(/Checked 1 of 2, before the default\. Match set by acme: urgent ones\./)).toBeInTheDocument();
+    // its history: its own scope and the project's order, never another pipeline's
+    const log = within(screen.getByRole('region', { name: 'Rule changes' }));
+    expect(log.getAllByRole('listitem').map((li) => li.textContent)).toEqual([expect.stringMatching(/set pipelines = \["hotfix","docs"\] · acme\/shop · by acme · hotfix first/), expect.stringMatching(/set match = .* · acme\/shop@hotfix · by acme · urgent ones/)]);
+  });
+
+  it('turning a step off on a named pipeline writes its own scope; under the desktop app it is only requested', async () => {
+    const fetch = ok({ requested: 'turning a pipeline step off' }); vi.stubGlobal('fetch', fetch);
+    sheet({ ...named(), token: 'tok' });
+    await userEvent.click(nav().getByRole('button', { name: /^Hotfix/ }));
+    await userEvent.click(screen.getByRole('button', { name: /^Docs review/ }));
+    await typeIn(screen.getByRole('textbox', { name: 'Why turn Docs review off' }), 'hotfixes');
+    await userEvent.click(screen.getByRole('button', { name: 'Turn off' }));
+    expect(bodies(fetch)).toEqual([['/api/onboard/rule', { scope: 'acme/shop@hotfix', key: 'steps.off', value: ['review.ux', 'review.docs'], reason: 'hotfixes' }]]);
+  });
+
+  it('listing, reordering and unlisting are one pipelines write each, requested like any routing change', async () => {
+    const fetch = ok({ requested: 'changing which pipeline a run gets' }), refresh = vi.fn(); vi.stubGlobal('fetch', fetch);
+    sheet({ ...named(), token: 'tok' }, { refresh });
+    await userEvent.click(nav().getByRole('button', { name: /^Docs only/ }));
+    expect(screen.getByRole('button', { name: 'Earlier' })).toBeDisabled(); // a routing change needs a reason, typed: the dialog shows it as typed
+    await typeIn(screen.getByRole('textbox', { name: 'Reason for routing' }), 'docs first');
+    await userEvent.click(screen.getByRole('button', { name: 'Earlier' }));
+    expect(screen.getByRole('button', { name: 'Unlist' })).toBeDisabled(); // a reason is for one change: requested, it clears
+    await typeIn(screen.getByRole('textbox', { name: 'Reason for routing' }), 'docs done');
+    await userEvent.click(nav().getByRole('button', { name: /^Hotfix/ })); // and another pipeline never gets it
+    expect(screen.getByRole('textbox', { name: 'Reason for routing' })).toHaveValue('');
+    await userEvent.click(nav().getByRole('button', { name: /^Docs only/ }));
+    await typeIn(screen.getByRole('textbox', { name: 'Reason for routing' }), 'docs done');
+    await userEvent.click(screen.getByRole('button', { name: 'Unlist' }));
+    expect(screen.getByRole('button', { name: 'Later' })).toBeDisabled();
+    expect(await screen.findByRole('status')).toHaveTextContent('Confirm it in the app’s dialog: nothing changes until you do.');
+    await userEvent.click(nav().getByRole('button', { name: /^UI first/ }));
+    expect(screen.getByRole('button', { name: 'List it, before the default' })).toBeDisabled(); // no match: F would refuse it
+    expect(bodies(fetch).map(([, b]) => b)).toEqual([
+      { scope: 'acme/shop', key: 'pipelines', value: ['docs', 'hotfix'], reason: 'docs first' },
+      { scope: 'acme/shop', key: 'pipelines', value: ['hotfix'], reason: 'docs done' },
+    ]);
+    expect(refresh).toHaveBeenCalled();
+  });
+
+  it('the match editor saves the sets whole, with a reason; plain F ui copies the command instead', async () => {
+    const writeText = vi.fn(async () => {}); vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'changing which pipeline a run gets needs your confirmation outside the page: confirm it in the desktop app, or run in your own terminal' }), { status: 400 })));
+    sheet({ ...named(), token: 'tok' });
+    await userEvent.click(nav().getByRole('button', { name: /^Hotfix/ }));
+    const form = within(screen.getByRole('form', { name: 'Match for Hotfix' }));
+    expect(form.getByRole('button', { name: 'Save match' })).toBeDisabled();
+    await userEvent.click(form.getByRole('button', { name: 'Add a set' }));
+    const files = form.getAllByRole('textbox', { name: 'Files' });
+    await typeIn(files[1]!, 'docs/**, *.md');
+    await typeIn(form.getAllByRole('textbox', { name: 'At most' })[1]!, '40');
+    await typeIn(form.getByRole('textbox', { name: 'Reason for the match' }), "docs aren't urgent");
+    await userEvent.click(form.getByRole('button', { name: 'Save match' }));
+    const cmd = `${F} rules set 'acme/shop@hotfix' 'match' '[{"labels":["hotfix"]},{"files":["docs/**","*.md"],"maxDiffLines":40}]' --reason 'docs aren'\\''t urgent'`;
+    expect(writeText).toHaveBeenCalledWith(cmd);
+    expect(await screen.findByRole('status')).toHaveTextContent('Routing needs your confirmation outside the page, and this is plain F ui. Command copied: run it in your own terminal:');
+  });
+
+  it('a template creates a draft: its name, a lower cap and its match, in that order; a read-only page copies them as one line', async () => {
+    const fetch = ok(); vi.stubGlobal('fetch', fetch);
+    const { unmount } = sheet({ ...data, token: 'tok' });
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'New pipeline from a template' }), 'hotfix');
+    expect(screen.getByRole('button', { name: 'Create draft' })).toBeDisabled();
+    await typeIn(screen.getByRole('textbox', { name: 'Reason for the new pipeline' }), 'urgent fixes');
+    await userEvent.click(screen.getByRole('button', { name: 'Create draft' }));
+    expect(bodies(fetch)).toEqual([
+      ['/api/skills', { scope: 'acme/shop@hotfix', step: 'name', runner: 'Hotfix' }],
+      ['/api/onboard/rule', { scope: 'acme/shop@hotfix', key: 'run.loops', value: 1, reason: 'urgent fixes' }],
+      ['/api/onboard/rule', { scope: 'acme/shop@hotfix', key: 'match', value: [{ labels: ['hotfix'] }], reason: 'urgent fixes' }],
+    ]);
+    expect(screen.getByRole('textbox', { name: 'Reason for the new pipeline' })).toHaveValue('');
+    unmount();
+    const writeText = vi.fn(async () => {}); vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    const none = vi.fn(); vi.stubGlobal('fetch', none);
+    sheet(data);
+    await userEvent.selectOptions(screen.getByRole('combobox', { name: 'New pipeline from a template' }), 'docs');
+    await typeIn(screen.getByRole('textbox', { name: 'Reason for the new pipeline' }), 'docs only');
+    await userEvent.click(screen.getByRole('button', { name: 'Create draft' }));
+    expect(writeText).toHaveBeenCalledWith(`${F} skills set 'acme/shop@docs' name '"Docs only"' && ${F} rules set 'acme/shop@docs' match '[{"files":["docs/**","**/*.md"]}]' --reason 'docs only'`);
+    expect(none).not.toHaveBeenCalled();
+    // an existing id can't be made again
+    render(<PipelinesSheet open onClose={() => {}} data={named()} project="acme/shop" />);
+    expect(screen.getAllByRole('option', { name: /^Hotfix:/ }).at(-1)).toBeDisabled();
   });
 });

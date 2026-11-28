@@ -15,7 +15,7 @@ export interface Item {
 export interface Created { key: string; id: string; url?: string; created: boolean }
 export interface OpenIssue { id: string; title: string; labels: string[]; key?: string | null; body?: string }
 /** One item as intake reads it, never model-typed. association: the author's standing on the tracker (GitHub's author_association). */
-export interface TrackerItem { id: string; title: string; url?: string; author: string; association: string; state: string; isChangeRequest: boolean; body?: string | null }
+export interface TrackerItem { id: string; title: string; url?: string; author: string; association: string; state: string; isChangeRequest: boolean; body?: string | null; labels?: string[] }
 export interface Comment { author: string; association: string; created_at: string; body?: string | null }
 export interface Tracker {
   id: string;

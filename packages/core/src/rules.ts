@@ -7,6 +7,7 @@ import { gh } from './github.ts';
 import { git, hostFn, hostOf, projects, projectsFile } from './workspace.ts';
 import { humanOnly } from './projectset.ts';
 import { line, ttyAsk } from './approve.ts';
+import { type MatchSet, NAME_OK, PIPELINE_KEYS, PIPELINE_RULES, diffLinesTrusted, isPipelineId, isPipelineScope, listedOf, matchProblem, matchText, pipelinesDiffer, pipelinesOf, runGets, splitScope } from './route.ts';
 import { log, stateDir } from './log.ts';
 import type { Rule } from './types.ts';
 
@@ -46,8 +47,18 @@ export const RULES: Record<string, [check: (v: unknown) => boolean, want: string
   'steps.off': [(v) => Array.isArray(v) && v.length >= 1 && v.length <= 10 && new Set(v).size === v.length && v.every(offKey), 'a JSON array of 1-10 distinct optional review steps (review.<axis>); F rules unset turns them all back on'],
   'run.loops': [(v) => int(v) && v >= 1 && v <= CAP, `an integer 1-${CAP} (it can only lower the loop cap)`],
   'run.budgetUsd': [(v) => typeof v === 'number' && v > 0 && v <= COST_CAP, `dollars, above 0 and at most ${COST_CAP} (it can only lower the run budget)`],
+  // §7: a pipeline's match conditions (owner/repo@id only) and the project's named pipelines in match order. Routing is guarded (loosens()).
+  match: [(v) => matchProblem(v) === null, 'a JSON array of 1-5 condition sets, each with labels, files (globs) or maxDiffLines'],
+  pipelines: [(v) => Array.isArray(v) && v.length >= 1 && v.length <= 10 && new Set(v).size === v.length && v.every(isPipelineId), 'a JSON array of 1-10 distinct pipeline ids in match order (the default pipeline is always last and never listed)'],
 };
-const PER_PROJECT = ['artifact', 'steps.off', 'run.loops', 'run.budgetUsd'];
+const PER_PROJECT = ['artifact', 'steps.off', 'run.loops', 'run.budgetUsd', 'pipelines', 'match'];
+// Where a rule may live (§7.1): match only on a pipeline, pipelines only on the project, a pipeline holds only PIPELINE_RULES.
+const misplaced = (scope: string, key: string) => {
+  const { project, id } = splitScope(scope);
+  if (!id) return key === 'match' && scope !== 'default' ? `match is a pipeline's rule: set it on ${project}@<id>` : null;
+  if (key === 'pipelines') return `pipelines is the project's rule: set it on ${project}`;
+  return PIPELINE_RULES.includes(key) ? null : `${key} is the project's rule: a pipeline holds ${PIPELINE_RULES.slice(0, -1).join(', ')} and ${PIPELINE_RULES.at(-1)}`;
+};
 export const RUN_CAPS: Record<string, number> = { 'run.loops': CAP, 'run.budgetUsd': COST_CAP };
 /** A run's caps: the lower of the project's rule and the built-in (§7.5). The per-run minimum across pipelines is slice 4's. */
 export const runCaps = (policy: Record<string, Rule> = {}) => ({
@@ -89,8 +100,9 @@ export function checkGuide(v: unknown, at: string): void {
 }
 // Project rule over global, per key. An expired rule stops applying (the global one, or the built-in, takes over) and warns.
 export function rules(repo: string, cfg: SkillsConfig = readSkills(), now = Date.now()): { repo: string; policy: Record<string, Rule>; guide: Record<string, string[]>; expired: Rule[]; warnings: string[] } {
-  const today = dayOf(now), policy: Record<string, Rule> = {}, expired: Rule[] = [], warnings: string[] = passWarnings.filter(([s]) => s === repo || s === 'default').map(([, w]) => w);
-  for (const scope of [...new Set([repo, 'default'])]) {
+  const mine = (s: string) => s === repo || (!isPipelineScope(repo) && (s === 'default' || s.startsWith(`${repo}@`)));
+  const today = dayOf(now), policy: Record<string, Rule> = {}, expired: Rule[] = [], warnings: string[] = passWarnings.filter(([s]) => mine(s)).map(([, w]) => w);
+  for (const scope of isPipelineScope(repo) ? [repo] : [...new Set([repo, 'default'])]) { // a pipeline inherits nothing: its steps.off is its own (§7.1)
     for (const [key, x] of Object.entries(cfg[scope]?.rules || {})) {
       const what = `${key}=${JSON.stringify(x.value)} (${scope}: ${x.reason})`;
       if (key === 'artifact' && scope === 'default') { warnings.push(`${what} is ignored: artifact is a per-repo opt-in`); continue; } // hand-edited skills.json
@@ -148,11 +160,15 @@ export function audit(scope: string, status: string, e: Record<string, unknown>,
   fs.appendFileSync(log(), JSON.stringify({ ts: new Date().toISOString(), ...e, run: scope, stage, status }) + '\n');
   dashboard.render();
 }
-export const checkScope = (scope: string) => { if (scope !== 'default' && !(typeof scope === 'string' && /^[\w.-]+\/[\w.-]+$/.test(scope))) throw new Error(`scope "${scope}" must be "default" or owner/repo`); };
+export const checkScope = (scope: string) => { if (scope !== 'default' && !(typeof scope === 'string' && (/^[\w.-]+\/[\w.-]+$/.test(scope) || isPipelineScope(scope)))) throw new Error(`scope "${scope}" must be "default", owner/repo or owner/repo@<pipeline id>`); };
 // docs/plans/pipelines.md §5: what a rule write loosens, or null. The CLI, the page's route and the desktop dialog all ask this.
 // Any steps.off set (a smaller list is still a set); a cap set above what applies now, or unset (back up to the built-in), or
 // set to expire before the stored one does (when it lapses, the cap goes back up).
 export function loosens(scope: string, key: string, value: unknown, cfg: SkillsConfig = readSkills(), until?: string): string | null {
+  if (key === 'pipelines' || key === 'match') { // routing (§7.3): guarded while any two pipelines it touches differ in what a run gets
+    const { project, id } = splitScope(scope), ids = new Set<string | null>([null, ...listedOf(project, cfg), ...(key === 'pipelines' && Array.isArray(value) ? value : []), ...(id ? [id] : [])]);
+    return pipelinesDiffer(project, [...ids], cfg) ? 'changing which pipeline a run gets' : null;
+  }
   if (key === 'steps.off') return value === undefined ? null : 'turning a pipeline step off';
   if (!Object.hasOwn(RUN_CAPS, key)) return null;
   const built = RUN_CAPS[key]!, old = cfg[scope]?.rules?.[key], live = old && !(old.until && old.until < dayOf()), now = live ? Math.min(built, Number(old.value)) : built;
@@ -168,11 +184,20 @@ function prepare(scope: string, key: string, raw: unknown, until: string | undef
   checkScope(scope);
   if (!Object.hasOwn(RULES, key)) checkRules({ [key]: {} }, `rules ${scope}`); // throws the unknown-rule message
   if (PER_PROJECT.includes(key) && scope === 'default') throw new Error(key === 'artifact' ? 'artifact is a per-repo opt-in: set it on owner/repo, not default' : `${key} is a per-project rule: set it on owner/repo, not default`);
+  const where = misplaced(scope, key), { project } = splitScope(scope);
+  if (where) throw new Error(where);
   let value: unknown = raw;
   if (['diffCap', 'project.budgetUsd', 'project.maxIssuesPerSession', 'run.loops', 'run.budgetUsd'].includes(key)) value = Number(raw);
-  if (key === 'checks.commands' || key === 'steps.off') { try { value = JSON.parse(String(raw)); } catch { value = [raw]; } } // JSON.parse makes a string of raw anyway
+  if (key === 'checks.commands' || key === 'steps.off' || key === 'pipelines' || key === 'match') { try { value = JSON.parse(String(raw)); } catch { value = [raw]; } } // JSON.parse makes a string of raw anyway
+  if (key === 'match') {
+    const why = matchProblem(value);
+    if (why) throw new Error(`match: ${why}`);
+    if (!diffLinesTrusted(project) && (value as { maxDiffLines?: number }[]).some((s) => s.maxDiffLines !== undefined)) throw new Error(`maxDiffLines is refused on a git project until #137: ${project}'s diff size can't be trusted (a "* -diff" attribute reads as zero lines)`);
+  }
+  if (key === 'pipelines' && !RULES.pipelines![0](value)) throw new Error(`pipelines: must be ${RULES.pipelines![1]}`);
+  if (key === 'pipelines' && Array.isArray(value)) for (const id of value) if (isPipelineId(id) && !cfg[`${project}@${id}`]?.rules?.match) throw new Error(`${project}@${id} has no match: set one first (F rules set ${project}@${id} match '[…]' --reason "…")`);
   if (key === 'steps.off' && Array.isArray(value)) {
-    const extra = [...(cfg.default?.['axes.extra'] || []), ...(cfg[scope]?.['axes.extra'] || [])].map((x) => x.axis);
+    const extra = [...(cfg.default?.['axes.extra'] || []), ...(cfg[project]?.['axes.extra'] || [])].map((x) => x.axis); // a pipeline's: the project's
     for (const k of value) {
       if (LOCKED_STEPS.includes(k)) throw new Error(`${k} is locked: F always runs ${LOCKED_STEPS.join(', ')}`);
       if (offKey(k) && !OPTIONAL_STEPS.includes(k) && !extra.includes(k.slice(7))) throw new Error(`${k}: ${scope} has no extra axis ${k.slice(7)} (F skills set ${scope} axes.extra)`);
@@ -192,17 +217,30 @@ export function ruleChange(scope: string, key: string, raw: unknown, { reason, u
     checkRules({ [key]: { value, reason, setBy: 'x', setAt: new Date().toISOString(), ...(until && { until }) } }, `rules ${scope}`); // the value and the reason, as writeSkills would
   }
   const old = cfg[scope]?.rules?.[key];
-  return { scope, key, stored: old?.value, ...(old?.until && { storedUntil: old.until }), value, ...(until && { until }), doing: loosens(scope, key, value, cfg, until), command: ruleCommand(scope, key, value, until) };
+  return { scope, key, stored: old?.value, ...(old?.until && { storedUntil: old.until }), value, ...(until && { until }), doing: loosens(scope, key, value, cfg, until), command: ruleCommand(scope, key, value, until), routes: routesFor(scope, key, value, cfg, until) };
 }
+/** How the project's runs are routed after a write (§7.3), for the typed prompt and the dialog: each listed pipeline's match,
+ *  what it turns off and its caps, then the default. Only for a routing write or a write to a pipeline; [] otherwise. */
+export function routesFor(scope: string, key: string, value: unknown, cfg: SkillsConfig, until?: string) {
+  const { project, id } = splitScope(scope);
+  if (!id && key !== 'pipelines') return [];
+  const after: SkillsConfig = structuredClone(cfg), r = (after[scope] ??= {}).rules ??= {}; // the config with the write applied, unset included
+  if (value === undefined) delete r[key]; else r[key] = { value, reason: '-', setBy: '-', setAt: new Date().toISOString(), ...(until && { until }) };
+  const named = Object.fromEntries(pipelinesOf(project, after).map((p) => [p.id, p]));
+  const row = (pid: string | null) => { const g = runGets(project, pid, after);
+    return { id: pid ?? 'default', name: pid ? named[pid]?.name ?? pid : 'the default', match: pid ? matchText(named[pid]?.match) : 'every other issue', off: g.off, caps: g.caps }; };
+  return [...listedOf(project, after).map(row), row(null)];
+}
+export const routesText = (routes: ReturnType<typeof routesFor>) => routes.length ? `Runs are then routed:\n${routes.map((p, i) => `  ${p.id === 'default' ? 'then the default' : `${i + 1}. ${p.id}`}: ${p.match}; ${p.off.length ? `off ${p.off.join(', ')}` : 'nothing off'}; loops ${p.caps.loops}, $${p.caps.budgetUsd}`).join('\n')}\n` : '';
 /** A rule's value as a person reads it: an unset cap is the built-in one. */
-export const shownRule = (key: string, v: unknown) => v === undefined ? (Object.hasOwn(RUN_CAPS, key) ? `the built-in (${RUN_CAPS[key]})` : 'nothing') : Array.isArray(v) ? v.join(', ') : String(v);
+export const shownRule = (key: string, v: unknown) => v === undefined ? (Object.hasOwn(RUN_CAPS, key) ? `the built-in (${RUN_CAPS[key]})` : 'nothing') : key === 'match' ? matchText(v) : Array.isArray(v) ? v.join(', ') : String(v);
 type Ask = (prompt: string) => string;
 // a loosening is typed at your terminal, as F automerge on and a relaxing F project set: a speed bump, not a boundary (humanOnly is the refusal)
 /** What a rule reads as now, for a prompt or the dialog: an expired one says so, and what applies instead. */
 export const shownNow = (key: string, old?: Pick<Rule, 'value' | 'until'>) =>
   old?.until && old.until < dayOf() ? `${shownRule(key, undefined)} (${shownRule(key, old.value)} expired on ${old.until})` : shownRule(key, old?.value);
-function typed(ask: Ask, scope: string, key: string, doing: string, old: Rule | undefined, to: unknown, until?: string, reason?: string) {
-  if (ask(`${scope}: ${doing}\n${key}: ${shownNow(key, old)} -> ${shownRule(key, to)}${until ? ` until ${until}` : ''}${reason ? ` (${line(reason)})` : ''}\n\nThis relaxes what the factory checks before it merges.\n\nType ${scope} to confirm (anything else cancels): `).trim() !== scope)
+function typed(ask: Ask, scope: string, key: string, doing: string, old: Rule | undefined, to: unknown, until: string | undefined, reason: string | undefined, cfg: SkillsConfig) {
+  if (ask(`${scope}: ${doing}\n${key}: ${shownNow(key, old)} -> ${shownRule(key, to)}${until ? ` until ${until}` : ''}${reason ? ` (${line(reason)})` : ''}\n${routesText(routesFor(scope, key, to, cfg, until))}\nThis relaxes what the factory checks before it merges.\n\nType ${scope} to confirm (anything else cancels): `).trim() !== scope)
     throw new Error(`${scope}'s ${key} stays as it is: what you typed did not match`);
 }
 // page: the write comes from the dashboard's route, which may only request a guarded write (§5); core refuses it here too.
@@ -219,7 +257,7 @@ export function setRule(scope: string, key: string, raw: unknown, { reason, unti
   }
   const who = whoami();
   if (step === null) { guard(who, s.rules?.[key], key); guardShadow(who, scope, cfg.default?.rules?.[key], key, value); const rule = { value, reason, ...stamp(who), setAt: new Date().toISOString(), ...(until && { until }) };
-    if (doing) { checkRules({ [key]: rule }, `rules ${scope}`); typed(ask, scope, key, doing, s.rules?.[key], value, until, reason); } // checked first: never ask about a write that would fail
+    if (doing) { checkRules({ [key]: rule }, `rules ${scope}`); typed(ask, scope, key, doing, s.rules?.[key], value, until, reason, cfg); } // checked first: never ask about a write that would fail
     s.rules = { ...s.rules, [key]: rule }; }
   cfg[scope] = s;
   writeSkills(cfg); // validates the whole config first
@@ -236,7 +274,7 @@ export function unsetRule(scope: string, key: string, { reason, page, ask = ttyA
   if (doing) humanOnly(doing);
   const who = whoami();
   if (bag === 'rules') guard(who, cur[k] as Rule, k);
-  if (doing) typed(ask, scope, k, doing, cur[k] as Rule, undefined, undefined, reason);
+  if (doing) typed(ask, scope, k, doing, cur[k] as Rule, undefined, undefined, reason, cfg);
   const without = <T,>(m: Record<string, T> = {}) => { const { [k]: _gone, ...left } = m; return left; }; // a copy without k
   if (bag === 'guide') s.guide = without(s.guide); else s.rules = without(s.rules);
   if (!Object.keys(s[bag] ?? {}).length) delete s[bag];
@@ -253,17 +291,31 @@ export function pipelinePass(cfg: unknown): unknown {
   passWarnings = [];
   if (!isObj(cfg)) return cfg;
   const axes = (scope: string) => { const s = cfg[scope], x = isObj(s) ? s['axes.extra'] : undefined; return Array.isArray(x) ? x.map((a: unknown) => (isObj(a) ? a.axis : null)) : []; };
-  return Object.fromEntries(Object.entries(cfg).map(([scope, s]) => {
-    if (!isObj(s) || !isObj(s.rules)) return [scope, s];
+  const out = Object.fromEntries(Object.entries(cfg).map(([scope, s0]) => {
+    if (!isObj(s0)) return [scope, s0];
+    const pipe = isPipelineScope(scope), { project } = splitScope(scope), s: Record<string, unknown> = { ...s0 };
+    const ignore = (k: string, why: string) => { delete s[k]; passWarnings.push([scope, `skills.json ${scope}.${k} is ignored: ${why}`]); };
+    // §7.1: a pipeline holds a name and its rules; only a pipeline has a name
+    for (const k of Object.keys(s)) {
+      if (pipe && !PIPELINE_KEYS.includes(k)) ignore(k, 'a pipeline holds name and rules (match, steps.off, run.loops, run.budgetUsd); runners, guidance and extra axes are the project\'s');
+      else if (k === 'name' && (!pipe || !NAME_OK(s.name))) ignore(k, pipe ? 'a name is 1-60 characters of text' : 'only a pipeline (owner/repo@id) has a name');
+    }
+    if (!isObj(s.rules)) return [scope, s];
     const r: Record<string, unknown> = { ...s.rules };
-    for (const key of ['steps.off', ...Object.keys(RUN_CAPS)].filter((k) => Object.hasOwn(r, k))) {
+    for (const key of [...PER_PROJECT.filter((k) => k !== 'artifact'), ...Object.keys(r).filter((k) => pipe && !PIPELINE_RULES.includes(k))].filter((k, i, a) => Object.hasOwn(r, k) && a.indexOf(k) === i)) {
       const at = `skills.json ${scope}.rules.${key}`, warn = (w: string) => passWarnings.push([scope, `${at}${w}`]), x = r[key];
       const drop = (why: string) => { delete r[key]; warn(` is ignored: ${why}`); };
       if (scope === 'default') { drop('it is a per-project rule'); continue; }
+      const where = misplaced(scope, key);
+      if (where) { drop(where); continue; }
       if (!isObj(x)) { drop('it is not a rule'); continue; }
       let value = x.value;
+      if (key === 'match') {
+        const why = matchProblem(value); if (why) { drop(`${why} (so it never matches)`); continue; }
+        if (!diffLinesTrusted(project)) (value as MatchSet[]).forEach((m, i) => { if (m.maxDiffLines !== undefined) warn(`: set ${i + 1}'s maxDiffLines never holds on a git project until #137 (a "* -diff" attribute reads as zero lines)`); }); // §7.2; pick() skips it
+      }
       if (key === 'steps.off' && Array.isArray(value)) {
-        const extra = [...axes('default'), ...axes(scope)], ok = (k: unknown) => typeof k === 'string' && (OPTIONAL_STEPS.includes(k) || k.startsWith('review.') && !isBuiltinAxis(k.slice(7)) && extra.includes(k.slice(7)));
+        const extra = [...axes('default'), ...axes(project)], ok = (k: unknown) => typeof k === 'string' && (OPTIONAL_STEPS.includes(k) || k.startsWith('review.') && !isBuiltinAxis(k.slice(7)) && extra.includes(k.slice(7)));
         const keep = [...new Set(value.filter(ok))].slice(0, 10), gone = [...new Set(value.filter((k) => !keep.includes(k)))];
         if (gone.length) warn(`: ignoring ${gone.map(String).join(', ')}: only an optional review step or an extra axis that exists can be off (F always runs ${LOCKED_STEPS.join(', ')})`);
         if (!keep.length) { drop('nothing in it can be turned off'); continue; }
@@ -274,4 +326,9 @@ export function pipelinePass(cfg: unknown): unknown {
     }
     return [scope, { ...s, rules: r }];
   }));
+  for (const scope of Object.keys(out).filter(isPipelineScope)) { // a pipeline nobody listed is a draft: it never matches
+    const { project, id } = splitScope(scope), o = out[project], list = isObj(o) && isObj(o.rules) && isObj(o.rules.pipelines) ? o.rules.pipelines.value : [];
+    if (!(Array.isArray(list) && list.includes(id))) passWarnings.push([scope, `skills.json ${scope} is not listed in ${project}'s pipelines, so it never matches`]);
+  }
+  return out;
 }

@@ -24,7 +24,7 @@ const finish = (c: Cell) => Object.assign(c, {
 });
 // Cache reads over all prompt tokens, from split tokens only.
 const hitRatio = (c: Cell) => { const p = c.input + c.cacheRead + c.cacheWrite; return p ? +(c.cacheRead / p).toFixed(3) : null; };
-export const repoOf = (id: string) => id.split(/[#:]/)[0] as string; // split always has a first part
+export const repoOf = (id: string) => id.split(/[#:@]/)[0] as string; // split always has a first part
 const day = (ts: unknown) => String(ts).slice(0, 10); // UTC: every ts here is an ISO string from toISOString()
 
 // runs: withMeasured(derive(events), …) when the caller already has it (sheetMetrics() asks for many projects and ranges); read only.

@@ -83,8 +83,9 @@ export const dependencies = (item: OpenIssue) => [...new Set([...String(item.bod
 // The issue itself, so title, author and association are never model-typed. GitHub serves pull requests here too.
 // A deleted account's user is null: its author is '', never a name that could match the reporter's.
 export function getItem({ gh }: Ctx, { repo, id }: { repo: string; id: string }): TrackerItem {
-  const i: { pull_request?: unknown; state: string; title: string; html_url: string; user: { login: string } | null; author_association: string; body?: string | null } = JSON.parse(gh('api', `repos/${repo}/issues/${id}`));
-  return { id, title: i.title, url: i.html_url, author: i.user?.login ?? '', association: i.author_association, state: i.state, isChangeRequest: !!i.pull_request, body: i.body };
+  const i: { pull_request?: unknown; state: string; title: string; html_url: string; user: { login: string } | null; author_association: string; body?: string | null; labels?: ({ name?: string } | string)[] } = JSON.parse(gh('api', `repos/${repo}/issues/${id}`));
+  const labels = (i.labels ?? []).map((l) => (typeof l === 'string' ? l : l?.name)).filter((l): l is string => typeof l === 'string'); // pipelines §7.2: read once, here, by F
+  return { id, title: i.title, url: i.html_url, author: i.user?.login ?? '', association: i.author_association, state: i.state, isChangeRequest: !!i.pull_request, body: i.body, labels };
 }
 export const comments = ({ gh }: Ctx, { repo, id }: { repo: string; id: string }): Comment[] =>
   (gh('api', '--paginate', `repos/${repo}/issues/${id}/comments`, '--jq', '.[]').split('\n').filter(Boolean).map((l) => JSON.parse(l)) as { user: { login: string } | null; author_association: string; created_at: string; body?: string | null }[])

@@ -909,6 +909,11 @@ export function worktreeTest(cli) {
   const a2 = JSON.parse(cli(['axes', R], '', env2));
   assert.deepEqual(a2.files, ['src/c.ts']);
   assert.deepEqual(a2.axes, ['code', 'security', 'ui']);
+  assert.deepEqual(read().filter((e) => e.run === R && e.status === 'routed').at(-1).facts.files, ['src/b.tsx', 'src/c.ts'], 'the pick reads the whole change, as decide\'s re-pick does');
+  // A rename lists both names: a files term and the sensitive-path check see where a file came from.
+  cli(['event', R, 'build', 'started'], '', env2);
+  g(w.path, 'mv', 'src/b.tsx', 'b.md'); g(w.path, 'commit', '-qm', 'mv');
+  assert.deepEqual(JSON.parse(cli(['axes', R], '', env2)).files, ['b.md', 'src/b.tsx']);
   // Unpushed work survives the end of the run...
   cli(['event', R, 'approve', 'escalated'], '', env2);
   assert.ok(fs.existsSync(w.path), 'unpushed worktree must be kept');

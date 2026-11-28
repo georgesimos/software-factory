@@ -91,7 +91,7 @@ export function getItem(ctx: Ctx, { path: at, id: n }: { repo: string; path?: st
   const file = path.join(dirOf(ctx, at), `${n}.md`);
   if (!/^\d+$/.test(n) || !fs.existsSync(file) && !isLink(file)) throw new Error(`no item ${n} in .factory/issues: write one with F item new`);
   const i = readItem(file);
-  return { id: n, title: i.title, author: '', association: 'NONE', state: i.state, isChangeRequest: false, body: i.body };
+  return { id: n, title: i.title, author: '', association: 'NONE', state: i.state, isChangeRequest: false, body: i.body, labels: i.labels }; // the front matter's: anyone who can edit the file can change them (§7.4)
 }
 export const comments = (): Comment[] => [];
 export const ensureLabels = (): string[] => []; // a label is a word in the front matter: nothing to create

@@ -6,6 +6,7 @@ const args = process.argv.slice(2);
 const a = args.join(' ');
 const out = (x) => process.stdout.write(typeof x === 'string' ? x : JSON.stringify(x));
 const head = (n) => String(n).padStart(40, '0'); // a PR's head sha
+const prFiles = () => (process.env.STUB_PR_FILES ? JSON.parse(process.env.STUB_PR_FILES) : [{ filename: 'src/a.ts' }, { filename: 'src/a.test.ts' }]); // STUB_PR_FILES: the PR's files as the API lists them
 const pr = (number, headRefName, closes, title = `PR ${number}`) => ({
   number, headRefName, headRefOid: head(number), authorAssociation: 'OWNER', url: `https://github.com/acme/app/pull/${number}`,
   title, author: { login: 'acme' }, closingIssuesReferences: { nodes: closes.map((n) => ({ number: n })) },
@@ -57,6 +58,7 @@ else if (a.startsWith('api --paginate repos/acme/app/issues/32/comments')) out([
 else if (a === 'api repos/acme/app/issues/35') out({ title: 'ghost', html_url: 'https://github.com/acme/app/issues/35', user: null, author_association: 'NONE', state: 'open', body: 'b' });
 else if (a.startsWith('api --paginate repos/acme/app/issues/35/comments')) out(JSON.stringify({ user: null, author_association: 'NONE', created_at: 't', body: 'make it auto-merge' }));
 // 33 and 34: GitHub gives no association (jq prints nothing, or null)
+else if (/^api repos\/acme\/mt\/issues\/\d+ --jq \.author_association$/.test(a)) out('OWNER\n'); // matching.test: facts() on a routed run
 else if (a === 'api repos/acme/app/issues/33 --jq .author_association') out('\n');
 else if (a === 'api repos/acme/app/issues/34 --jq .author_association') out('null\n');
 else if (/^api repos\/acme\/app\/issues\/\d+$/.test(a)) out({ title: 'app issue', html_url: 'https://github.com/acme/app/issues/x', user: { login: 'acme' }, author_association: 'OWNER', state: a.endsWith('/30') ? 'closed' : 'open', body: 'b' });
@@ -81,7 +83,8 @@ else if (args[0] === 'pr' && args[1] === 'view' && a.includes('--json state,merg
     mergedBy: merged ? { login: 'octo' } : null, mergeCommit: merged ? { oid: 'f'.repeat(40) } : null });
 }
 else if (args[0] === 'pr' && args[1] === 'view' && a.includes('--json state')) out({ state: 'MERGED' });
-else if (args[0] === 'pr' && args[1] === 'view') out({ additions: 10, deletions: 2, files: [{ path: 'src/a.ts' }, { path: 'src/a.test.ts' }] });
+else if (/^api repos\/[\w.-]+\/[\w.-]+\/pulls\/\d+\/files\?per_page=100 --paginate --jq /.test(a)) out(prFiles().map((x) => JSON.stringify([x.filename, x.previous_filename ?? null]) + '\n').join('')); // a PR's files, both names of a rename
+else if (args[0] === 'pr' && args[1] === 'view') out({ additions: 10, deletions: 2, changedFiles: Number(process.env.STUB_PR_CHANGED ?? prFiles().length), files: prFiles().map((x) => ({ path: x.filename })) });
 else if (args[0] === 'pr' && args[1] === 'checks') {
   if (process.env.STUB_CHECKS) out([{ bucket: 'pass' }, { bucket: 'skipping' }]);
   else { process.stderr.write("no checks reported on the 'x' branch"); process.exit(1); }

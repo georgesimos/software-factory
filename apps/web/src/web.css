@@ -19,6 +19,8 @@
 .web-d-bar { display: flex; align-items: center; gap: var(--sf-space-2); flex-wrap: wrap; }
 .web-d-title { margin: 18px 0 0; font: var(--sf-weight-medium) var(--sf-text-2xl) / var(--sf-leading-tight) var(--sf-font-sans); letter-spacing: var(--sf-tracking-tight); overflow-wrap: anywhere; }
 .web-d-spec { margin: var(--sf-space-2-5) 0 0; color: var(--sf-color-ink-2); font-size: 14.5px; max-width: 60ch; }
+.web-route { margin: 0 0 var(--sf-space-2); font-size: var(--sf-text-sm); color: var(--sf-color-ink-2); }
+.web-route span { color: var(--sf-color-ink-3); }
 .web-d-meta { margin-top: 14px; display: flex; flex-wrap: wrap; gap: var(--sf-space-1) 14px; font: var(--sf-text-sm) var(--sf-font-mono); color: var(--sf-color-ink-3); }
 .web-links { margin-top: 18px; display: flex; flex-wrap: wrap; gap: var(--sf-space-2); align-items: center; }
 .web-links a { display: inline-flex; align-items: center; gap: var(--sf-space-1-5); height: 30px; padding: 0 var(--sf-space-2-5); border: 1px solid var(--sf-color-line); border-radius: var(--sf-radius-md); font-size: var(--sf-text-md); text-decoration: none; }
@@ -272,3 +274,16 @@
 
 /* Pipelines (docs/plans/pipelines.md): a project list, F's pipeline as a graph, and what it checks */
 .sf-dialog.web-pl[data-variant="sheet"] { width: min(1280px, 100vw); } /* the graph's own styles are the design system's (PipelineGraph.css) */
+/* Named pipelines (pipelines §7): the project picker, templates and the routing section under the graph */
+.web-pl-left { display: grid; gap: var(--sf-space-3); align-content: start; }
+.web-pl-new { display: grid; gap: var(--sf-space-2); }
+.web-pl-route { margin-top: var(--sf-space-5); display: grid; gap: var(--sf-space-3); max-width: 880px; }
+.web-pl-route p { margin: 0; color: var(--sf-color-ink-2); font-size: var(--sf-text-sm); }
+.web-pl-row { display: flex; flex-wrap: wrap; gap: var(--sf-space-2); align-items: center; }
+.web-pl-row .sf-input { flex: 1 1 220px; }
+.web-pl-match { display: grid; gap: var(--sf-space-3); }
+.web-pl-match fieldset { display: grid; grid-template-columns: 1fr 1fr 120px; gap: var(--sf-space-2); margin: 0; padding: var(--sf-space-3); border: 1px solid var(--sf-color-line); border-radius: var(--sf-radius-md); }
+.web-pl-match legend { display: flex; gap: var(--sf-space-2); align-items: center; padding: 0 var(--sf-space-1); font-size: var(--sf-text-sm); color: var(--sf-color-ink-2); }
+.web-pl-match label { display: grid; gap: 4px; font-size: var(--sf-text-xs); color: var(--sf-color-ink-3); }
+@media (max-width: 700px) { .web-pl-match fieldset { grid-template-columns: 1fr; } }
+.web-pl-said { margin: 0; font-size: var(--sf-text-sm); color: var(--sf-color-ink-2); } .web-pl-said[data-bad] { color: var(--sf-color-bad); } .web-pl-said code { word-break: break-all; }

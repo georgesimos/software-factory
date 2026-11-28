@@ -3,6 +3,7 @@ import { CAP, COST_CAP, DOCS, MAX_DIFF, SEO, SOURCE, TEST, TRUSTED, UI, blocking
 import { budget, budgetWhy, thisRun } from './derive.ts';
 import { AXIS_WHEN, BUILTIN_AXES, LOCKED_STEPS, isObj } from './skills.ts';
 import { runCaps } from './rules.ts';
+import { pick, routeText } from './route.ts';
 import type { AxisReview, Deploy, LocalChecks, Metrics, Rule, Run } from './types.ts';
 
 /** An extra review axis from skills.json: added when a changed file matches one of its globs. */
@@ -10,6 +11,10 @@ export interface ExtraAxis { axis: string; when: string[] }
 /** What facts() reads from GitHub (github.ts), or {} for an imported run. */
 export interface Facts {
   association?: string; autoMerge?: boolean; checks?: string; additions?: number; deletions?: number; files?: string[];
+  /** runCapsOf(): the caps of the pipeline the run is on now, read live (§7.5); the meet with r.route's is decide's. */
+  pipelineCaps?: { loops: number; budgetUsd: number };
+  /** The host listed fewer files than the change has: then no files term holds, and decide escalates. */
+  filesTruncated?: boolean;
   rules?: Record<string, Rule>; deploys?: Deploy[];
   /** The CI provider that gave checks (absent: github-actions, as before providers); ciDetail: its one-line why; ciBroken: it
    *  couldn't answer (unknown, wrong host, threw), which escalates under every ci rule; host: the project's (absent: github). */
@@ -106,7 +111,7 @@ export function decide(r: Run, f: Facts) {
   if (lines > cap) why.push(`diff is ${lines} lines (max ${cap}${cap < MAX_DIFF ? ` by rule diffCap, ${by(pol.diffCap as Rule)}` : ''})`);
   const sens = (f.files || []).filter(sensitive);
   if (sens.length) why.push(`touches sensitive paths: ${sens.join(', ')}`);
-  const caps = runCaps(pol);
+  const rc = runCaps(pol), caps = { loops: Math.min(rc.loops, r.route?.caps.loops ?? CAP, f.pipelineCaps?.loops ?? CAP), budgetUsd: Math.min(rc.budgetUsd, r.route?.caps.budgetUsd ?? COST_CAP, f.pipelineCaps?.budgetUsd ?? COST_CAP) }; // §7.5: only ever the lowest
   if (r.iteration > caps.loops) why.push(`iteration ${r.iteration} exceeds cap ${caps.loops}${caps.loops < CAP ? ' (rule run.loops)' : ''}`);
   const b = budget(r, caps.budgetUsd);
   if (b.over) why.push(`run budget exceeded ${budgetWhy(b)}`);
@@ -128,10 +133,22 @@ export function decide(r: Run, f: Facts) {
     .filter((e) => e.stage === 'review' && e.status === 'started' && Array.isArray(e.dropped) && e.dropped.length && isObj(e.offRule));
   const seen = new Set<string>();
   for (const e of offs) {
-    const o = e.offRule as { reason?: string; by?: string; local?: boolean }, line = `${(e.dropped as string[]).join(', ')} off by rule steps.off, set by ${o.by}: ${o.reason}`;
+    const o = e.offRule as { reason?: string; by?: string; local?: boolean; scope?: string; route?: string };
+    const line = `${o.route ? `${o.route}: ` : ''}${(e.dropped as string[]).join(', ')} off by rule steps.off${o.scope ? ` on ${o.scope}` : ''}, set by ${o.by}: ${o.reason}`;
     if (!seen.has(line)) { seen.add(line); notes.push(line); }
     if (o.local && !git && !why.some((w) => w.startsWith('rule steps.off'))) why.push(`rule steps.off was set by ${o.by}: a rule that removes a review needs a verified login (gh auth login) before the factory merges on its own`);
   }
+  // The pick (§7.4, §7.6): name the pipeline when it isn't the default; a routing rule a local user set never counts toward a merge on GitHub.
+  const rt = r.route;
+  if (rt && rt.pipeline !== 'default' && !notes.some((n) => n.startsWith(`pipeline ${rt.pipeline}`))) notes.unshift(routeText(rt));
+  if (f.filesTruncated) why.push(`the PR's file list is cut down (${f.files?.length ?? 0} listed): the pick and the sensitive-path check can't see every file`);
+  // the pick, run again on the reviewed change: F axes may have picked on other files, or before a push changed it
+  const size = f.additions !== undefined && f.deletions !== undefined ? f.additions + f.deletions : null;
+  const now = rt && pick(r.id.split(/[#:@]/)[0] as string, { labels: rt.facts?.labels ?? [], files: f.files ?? [], diffLines: size, truncated: !!f.filesTruncated });
+  if (rt && now) {
+    if (now.pipeline !== rt.pipeline || now.set !== rt.set) why.push(`the pick no longer holds: ${routeText(rt)} was picked, but the reviewed change picks ${routeText(now)} (${f.files?.length ?? 0} files, ${size ?? 'unknown'} lines): it is never merged on a stale pick`);
+  }
+  if ((rt?.local || now?.local) && !git) why.push('rule match or pipelines was set by a local user (unverified): routing needs a verified login (gh auth login) before the factory merges on its own');
   if (why.length) return { action: 'escalate', reasons: [...why, ...asks, ...notes] };
   const yes = r.reviewedSha && r.events?.findLast((e) => e.stage === 'approve' && e.status === 'passed' && e.sha === r.reviewedSha); // only a git project has asks
   if (asks.length && !yes) return { action: 'await-approval', reasons: [...asks, ...notes] };
