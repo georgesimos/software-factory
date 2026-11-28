@@ -287,7 +287,7 @@ Read the JSON reply:
    ```
 
    - `F` records a pass only when the word, the `verdict` and the findings all say so: a high or medium finding fails the step.
-   - Anything outside the contract is recorded as a **failed** step with an "output invalid" finding: not a JSON object, another step's `id`, unknown fields, or a bad severity or verdict. If a reply clearly isn't JSON, you may re-ask that runner once. Never fix up its JSON yourself.
+   - Anything outside the contract is recorded as a **failed** step with a "reviewer output invalid" finding: not a JSON object, another step's `id`, unknown fields, or a bad severity or verdict. If a reply clearly isn't JSON, you may re-ask that runner once. Never fix up its JSON yourself.
    - A custom step's findings are never dismissed. Don't send them to the verifier.
    - **A recorded result is final.** A second `F step` for the same step is refused unless the recorded one is invalid, and once `F gate` has run, that iteration's results are frozen.
 4. Then go on to build (after `spec.after`) or to review (after `build.after`), whatever the results. `F gate` fails on a failed step and sends the run back to spec for `spec.after` or to build for `build.after`, within the loop cap. A step with no result fails the gate straight to Approve. `F decide` escalates on any custom step without a passing result.
