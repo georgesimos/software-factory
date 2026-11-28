@@ -116,7 +116,7 @@ export async function main(argv: string[]) {
         out({ slot, due, steps: steps.map((c) => ({ id: c.id, ...plan[c.id] })), ...(due.length && { record: `F step ${run} <id> passed|failed -` }) }); break;
       }
       case 'step': { // step <run> <id> passed|failed - : one custom step's result, the runner's raw reply on stdin; invalid output is a failure
-        if (rest[2] !== '-') throw new Error('usage: step <run> <id> passed|failed -   (the runner\'s reply on stdin)');
+        if (rest.at(-1) !== '-') throw new Error('usage: step <run> <id> passed|failed [--tokens n] [--model id] [--usage json] [--cost-usd x] -   (the runner\'s reply on stdin)');
         const { status, payload } = stepFromText(run, rest[0]!, rest[1]!, fs.readFileSync(0, 'utf8'));
         usageFlags(rest, payload as Record<string, unknown>);
         record(run, 'custom', status, payload, { fallback });
@@ -311,9 +311,11 @@ export async function main(argv: string[]) {
   deps   <run>                            cheapest node_modules for the worktree
   axes   <run> [changed files...]         pick + record review axes (default: worktree diff since last review)
   review <run> <axis> [--tokens n] [--cost-usd x] [--model id] [--usage json] [--fallback why]  record a reviewer's raw reply from stdin (invalid = failed review)
+  steps  <run> spec.after|build.after [changed files...]  the custom steps due now, recorded (run after the spec passes, and after build passes)
+  step   <run> <id> passed|failed [--tokens n] [--cost-usd x] [--model id] [--usage json] [--fallback why] -  record a custom step's raw reply from stdin (invalid = failed)
   skills <owner/repo>                     print who runs each step (default, skill, brief or provider)
-  skills set <owner/repo|default> <step> <json>  configure one step (intake, spec, build, review.<axis>, verifier, postmerge, axes.extra)
-  skills unset <owner/repo|default> <step>       drop a step's choice (a project then inherits the global one)
+  skills set <owner/repo|default> <step> <json> [--reason why]  configure one step (intake, spec, build, review.<axis>, verifier, postmerge, axes.extra, steps.custom, axes.on); removing a custom step or an added review needs a reason and your typed confirmation
+  skills unset <owner/repo|default> <step> [--reason why]       drop a step's choice (a project then inherits the global one)
   skills preset <name> [owner/repo|default]  set every Claude-run step's model, effort and fallback from a preset; a project only on steps it sets (${Object.keys(PRESETS).join(', ')}; built-in: ${DEFAULT_PRESET})
   skills catalog [owner/repo...]          every runner on this machine: built-in, harness tools, global, project, your briefs
   ui     [port]                           serve the dashboard on 127.0.0.1 with a token, so the Skills sheet and setup wizard can save

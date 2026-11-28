@@ -237,6 +237,12 @@ test('F step has F review\'s contract: output outside it records a failure, neve
   assert.equal(step(RUN, 'smoke', 'failed', reply('smoke', 'passed')).status, 'failed', 'the word failed: a failure, whatever the reply says');
   assert.throws(() => json(['step', RUN, 'smoke', 'ok', '-'], reply('smoke')), /usage: step <run> <id> passed\|failed -/);
   assert.throws(() => step(RUN, 'smoke'), /a failed result for custom step "smoke" is already recorded/);
+  // the runner's usage comes from its flags, as for F review, before the stdin dash; never from the reply
+  const r = 'acme/cs#2b';
+  start(r); json(['steps', r, 'spec.after']);
+  assert.equal(json(['step', r, 'lint', 'passed', '--tokens', '1200', '--model', 'claude-sonnet-5-5', '-'], JSON.stringify({ id: 'lint', verdict: 'passed', findings: [], tokens: 9 })).status, 'passed');
+  assert.deepEqual([custom(r, 'passed')[0].tokens, custom(r, 'passed')[0].model], [1200, 'claude-sonnet-5-5']);
+  assert.throws(() => json(['step', r, 'smoke', 'passed', '--tokens', '5'], reply('smoke')), /usage: step <run> <id> passed\|failed/, 'no dash: no reply read');
 });
 
 test('build.after: F steps picks first, matches when on the whole change; F axes refuses while a due step has no result; the gate routes a failure back to build', () => {
