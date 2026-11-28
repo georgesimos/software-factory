@@ -30,6 +30,7 @@ jobs:
       - run: pnpm --filter @software-factory/desktop smoke
       - name: GUI e2e on the packaged build
         if: runner.os == 'Linux'
+        timeout-minutes: 10 # it takes under a minute: a hang fails here, not at the job's 6 hours
         working-directory: apps/desktop
         env:
           DESKTOP_EXE: ${{ github.workspace }}/apps/desktop/out/Software Factory-linux-x64/software-factory
