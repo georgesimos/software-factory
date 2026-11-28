@@ -634,9 +634,10 @@ function fakePty(spawnError, pid) {
   return { rec, spawn(file, args, opts) {
     if (spawnError) throw new Error(spawnError);
     Object.assign(rec, { file, args, cwd: opts.cwd, env: opts.env });
-    let data, exit;
+    let data, onExit, gone = false;
+    const exit = (e) => { if (!gone) { gone = true; onExit(e); } }; // a child ends once, as a real one does
     setTimeout(() => data('ready\r\n'), 5);
-    return { pid, onData: (f) => { data = f; }, onExit: (f) => { exit = f; }, write: (x) => { (rec.writes ||= []).push(x); data(`echo:${x}`); if (x === 'exit\r') exit({ exitCode: 0 }); }, resize: (c, r) => { rec.size = [c, r]; }, kill: () => exit({ exitCode: null }),
+    return { pid, onData: (f) => { data = f; }, onExit: (f) => { onExit = f; }, write: (x) => { (rec.writes ||= []).push(x); data(`echo:${x}`); if (x === 'exit\r') exit({ exitCode: 0 }); }, resize: (c, r) => { rec.size = [c, r]; }, kill: () => exit({ exitCode: null }),
       _agent: { _useConpty: true, _useConptyDll: false, _pty: 1, _inSocket: {}, _outSocket: {}, _ptyNative: { kill: () => exit({ exitCode: null }) }, _conoutSocketWorker: { dispose() {} } } }; // on win32 closePty's close ends the child
   } };
 }
@@ -758,6 +759,14 @@ test('terminal on Windows: a pty of another shape (winpty, the conpty dll, anoth
     assert.equal((await finished(s)).at(-1).code, 0);
     assert.deepEqual([pty.rec.closes, pty.rec.disposes, pty.rec.pidKills], [[], 0, 0], JSON.stringify(agent));
   }
+});
+
+test('terminal on Windows: a harness that exits by itself through the stand-in pty ends once, with its own code', async () => {
+  const pty = fakePty(undefined, 7), s = startSession(claude, { mode: 'terminal' }, { cwd: home, env: stubEnv, modules: { [PTY]: pty }, resolve: winResolve });
+  await new Promise((r) => setTimeout(r, 20));
+  s.write('exit\r');
+  const events = await finished(s);
+  assert.deepEqual(events.filter((e) => e.type === 'exit').map((e) => e.code), [0]);
 });
 
 test('a stop while node-pty or the SDK loads is kept: nothing starts', async () => {
