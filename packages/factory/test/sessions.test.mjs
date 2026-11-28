@@ -634,9 +634,11 @@ function fakePty(spawnError, pid) {
   return { rec, spawn(file, args, opts) {
     if (spawnError) throw new Error(spawnError);
     Object.assign(rec, { file, args, cwd: opts.cwd, env: opts.env });
-    let data, exit;
+    let data, onExit, gone = false;
+    const exit = (e) => { if (!gone) { gone = true; onExit(e); } }; // a child ends once, as a real one does
     setTimeout(() => data('ready\r\n'), 5);
-    return { pid, onData: (f) => { data = f; }, onExit: (f) => { exit = f; }, write: (x) => { (rec.writes ||= []).push(x); data(`echo:${x}`); if (x === 'exit\r') exit({ exitCode: 0 }); }, resize: (c, r) => { rec.size = [c, r]; }, kill: () => exit({ exitCode: null }) };
+    return { pid, onData: (f) => { data = f; }, onExit: (f) => { onExit = f; }, write: (x) => { (rec.writes ||= []).push(x); data(`echo:${x}`); if (x === 'exit\r') exit({ exitCode: 0 }); }, resize: (c, r) => { rec.size = [c, r]; }, kill: () => exit({ exitCode: null }),
+      _agent: { _useConpty: true, _useConptyDll: false, _pty: 1, _inSocket: {}, _outSocket: {}, _ptyNative: { kill: () => exit({ exitCode: null }) }, _conoutSocketWorker: { dispose() {} } } }; // on win32 closePty's close ends the child
   } };
 }
 test('terminalSession(): a person\'s own harness in the desktop app\'s pane, in the attached clone or the run\'s worktree', async () => {
@@ -720,6 +722,74 @@ test('terminal on Windows: npm\'s claude.cmd goes to node-pty as one cmd.exe lin
   assert.equal(pty.rec.env.NoDefaultCurrentDirectoryInExePath, '1'); // the shim's bare `node` is never taken from the worktree
   assert.equal(pty.rec.env.PATH, stubEnv.PATH); // merged over the host's env, not instead of it
   s.stop(); await finished(s);
+});
+
+// A stand-in for node-pty 1.1.0's ConPTY terminal. kill() is node-pty's own, which kills the pids in the console's process
+// list (and the shell's old pid after 5 s); closePty uses the agent's native close and output worker instead.
+// ready: false is a terminal whose output pipe hasn't connected yet; rec.term.ready() connects it, running what was deferred.
+const conpty = (pid, exitAfter, agent = {}, { ready = true } = {}) => {
+  const rec = { pidKills: 0, closes: [], disposes: 0 };
+  return { rec, spawn() {
+    let onExit, gone = false;
+    const exit = (e) => { if (!gone) { gone = true; onExit(e); } };
+    if (exitAfter) setTimeout(() => exit({ exitCode: 0 }), exitAfter);
+    const _agent = agent && { _useConpty: true, _useConptyDll: false, _pty: 3, _inSocket: {}, _outSocket: {}, _ptyNative: { kill: (id, dll) => { rec.closes.push([id, dll]); if (term._isReady) exit({ exitCode: null }); } }, _conoutSocketWorker: { dispose: () => { rec.disposes++; } }, ...agent };
+    const term = rec.term = { pid, _agent, _isReady: ready, _deferreds: [], _close() {}, onData() {}, onExit: (f) => { onExit = f; }, write() {}, resize() {}, kill: () => { rec.pidKills++; },
+      _deferNoArgs(fn) { if (this._isReady) fn.call(this); else this._deferreds.push({ run: () => fn.call(this) }); },
+      ready() { this._isReady = true; this._deferreds.forEach((d) => d.run()); this._deferreds = []; } };
+    return term;
+  } };
+};
+const winResolve = { platform: 'win32', env: { PATH: 'C:\\npm', PATHEXT: '.EXE;.CMD', ComSpec: 'C:\\Windows\\system32\\cmd.exe' }, isFile: (p) => p.toLowerCase() === 'c:\\npm\\claude.cmd' };
+
+test('terminal on Windows: a pty whose harness exits by itself is closed (ConPTY keeps its pipes and worker until then), never through a pid kill', async () => {
+  const linux = { platform: 'linux', env: stubEnv, isFile: () => true }; // both resolved, so the host's platform never matters
+  for (const [resolve, closes] of [[winResolve, [[3, false]]], [linux, []]]) { // elsewhere node-pty closes it, and a late kill could signal a reused pid
+    const pty = conpty(7, 5), s = startSession(claude, { mode: 'terminal' }, { cwd: home, env: stubEnv, modules: { [PTY]: pty }, resolve });
+    assert.equal((await finished(s)).at(-1).code, 0);
+    assert.deepEqual([pty.rec.closes, pty.rec.disposes, pty.rec.pidKills], [closes, closes.length, 0], resolve.platform);
+  }
+});
+
+test('terminal on Windows: a stop kills the tree, then closes the pty without node-pty\'s pid kill', async () => {
+  const pty = conpty(0), s = startSession(claude, { mode: 'terminal' }, { cwd: home, env: stubEnv, modules: { [PTY]: pty }, resolve: winResolve }); // pid 0: no tree to kill here
+  await new Promise((r) => setTimeout(r, 20));
+  s.stop();
+  assert.deepEqual([pty.rec.closes, pty.rec.disposes, pty.rec.pidKills], [[[3, false]], 1, 0]);
+});
+
+test('terminal on Windows: a stop before the pty is ready closes it once ready, as node-pty does, and ends stopped', async () => {
+  const pty = conpty(0, 0, {}, { ready: false }), s = startSession(claude, { mode: 'terminal' }, { cwd: home, env: stubEnv, modules: { [PTY]: pty }, resolve: winResolve });
+  await new Promise((r) => setTimeout(r, 20));
+  s.stop();
+  assert.deepEqual([pty.rec.closes, pty.rec.disposes], [[], 0], 'nothing closed before ready: the output worker must connect first');
+  pty.rec.term.ready();
+  assert.equal((await finished(s)).at(-1).code, 'stopped');
+  assert.deepEqual([pty.rec.closes, pty.rec.disposes, pty.rec.pidKills], [[[3, false]], 1, 0]);
+});
+
+test('terminal on Windows: a stop before a pty that never gets ready still ends stopped, never through a pid kill', async () => {
+  const pty = conpty(0, 0, {}, { ready: false }), s = startSession(claude, { mode: 'terminal' }, { cwd: home, env: stubEnv, modules: { [PTY]: pty }, resolve: winResolve });
+  await new Promise((r) => setTimeout(r, 20));
+  s.stop();
+  assert.equal((await finished(s)).at(-1).code, 'stopped');
+  assert.deepEqual([pty.rec.closes, pty.rec.disposes, pty.rec.pidKills], [[], 0, 0]);
+});
+
+test('terminal on Windows: a pty of another shape (winpty, the conpty dll, another node-pty) is left open, never pid-killed', async () => {
+  for (const agent of [null, { _useConpty: false }, { _useConptyDll: true }, { _ptyNative: {} }, { _conoutSocketWorker: undefined }]) {
+    const pty = conpty(7, 5, agent), s = startSession(claude, { mode: 'terminal' }, { cwd: home, env: stubEnv, modules: { [PTY]: pty }, resolve: winResolve });
+    assert.equal((await finished(s)).at(-1).code, 0);
+    assert.deepEqual([pty.rec.closes, pty.rec.disposes, pty.rec.pidKills], [[], 0, 0], JSON.stringify(agent));
+  }
+});
+
+test('terminal on Windows: a harness that exits by itself through the stand-in pty ends once, with its own code', async () => {
+  const pty = fakePty(undefined, 7), s = startSession(claude, { mode: 'terminal' }, { cwd: home, env: stubEnv, modules: { [PTY]: pty }, resolve: winResolve });
+  await new Promise((r) => setTimeout(r, 20));
+  s.write('exit\r');
+  const events = await finished(s);
+  assert.deepEqual(events.filter((e) => e.type === 'exit').map((e) => e.code), [0]);
 });
 
 test('a stop while node-pty or the SDK loads is kept: nothing starts', async () => {

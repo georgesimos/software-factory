@@ -139,6 +139,29 @@ const load = async (modules: Record<string, any>, name: string, what: string): P
 const onPath = (file: string, env: NodeJS.ProcessEnv) => /[\\/]/.test(file) ? fs.existsSync(file)
   : process.platform !== 'win32' && String(env.PATH || '').split(path.delimiter).some((d) => d && fs.existsSync(path.join(d, file)));
 
+// Closes a pty whose child has exited, or whose tree was just killed. On ConPTY, node-pty's kill() forks a helper that
+// lists the console's processes and kills each pid; with the child gone that helper fails, and after 5 s node-pty kills the
+// shell's old pid, which Windows may have given to another process. So on Windows this is only the rest of kill(): the
+// native close (ClosePseudoConsole, by handle) and the output worker's dispose. Elsewhere it is kill().
+// shortcut: node-pty 1.1.0's private fields (apps/desktop pins it exactly); recheck them before an upgrade. Any other shape
+// (winpty, the conpty dll) closes nothing: a leak, which the Windows smoke catches as a hang, never a stray kill.
+export function closePty(p: any, platform: string = process.platform) {
+  if (platform !== 'win32') return void p.kill();
+  const a = p._agent;
+  if (!a?._useConpty || a._useConptyDll || !a._conoutSocketWorker) return;
+  // Not ready: the output pipe isn't connected, so a close now would leave the exit unwired and nothing draining the
+  // console. node-pty's kill() waits for ready too.
+  if (p._isReady === false) return void p._deferNoArgs?.(() => closePty(p, platform));
+  p._close?.();
+  a._inSocket.readable = false; a._outSocket.readable = false;
+  a._ptyNative.kill(a._pty, false);
+  a._conoutSocketWorker.dispose();
+}
+
+// A stop before a ConPTY is ready: closePty waits for ready, and a tree killed first may never get there, so the session
+// ends after this long anyway (with no pid kill).
+const NOT_READY_MS = 3_000;
+
 // An interactive harness in a pseudo-terminal (ConPTY on Windows). Output is raw terminal data for xterm.js; input and
 // resize come back through write() and resize(). Exit: 'stopped' after stop(), else the signal, else the exit code.
 async function terminal(s: Session, spec: LaunchSpec, { cwd, env, modules, resolve, done, onPid }: Ctx) {
@@ -146,7 +169,7 @@ async function terminal(s: Session, spec: LaunchSpec, { cwd, env, modules, resol
   s.stop = () => { stopped = true; }; // a stop while node-pty loads
   const pty = await load(modules, 'node-pty', 'terminal mode');
   if (stopped) return done('stopped');
-  const c = resolveSpec(spec, env, resolve);
+  const c = resolveSpec(spec, env, resolve), platform = resolve?.platform ?? process.platform;
   let p: any; // node-pty's IPty
   // A .cmd shim's cmd.exe line goes to node-pty as one string: given an array, node-pty quotes each argument again.
   try { p = pty.spawn(c.file, c.windowsVerbatimArguments ? c.args.join(' ') : c.args, { name: 'xterm-256color', cols: 120, rows: 32, cwd, env: { ...env, ...c.env } }); } catch (e) {
@@ -154,10 +177,15 @@ async function terminal(s: Session, spec: LaunchSpec, { cwd, env, modules, resol
   }
   s.write = (data: string) => { if (!stopped) p.write(data); }; // a stopped pty may already be gone
   s.resize = (cols: number, rows: number) => { if (!stopped) p.resize(cols, rows); };
-  s.stop = () => { stopped = true; killTree({ pid: p.pid, kill() {} }, process.platform, undefined, process.kill, true); try { p.kill(); } catch { /* gone */ } }; // the tree first, waited (taskkill /T on Windows walks it from the live root), then the pty
+  s.stop = () => { stopped = true; killTree({ pid: p.pid, kill() {} }, process.platform, undefined, process.kill, true); if (platform === 'win32' && p._isReady === false) setTimeout(() => done('stopped'), NOT_READY_MS); try { closePty(p, platform); } catch { /* gone */ } }; // the tree first, waited (taskkill /T on Windows walks it from the live root), then the pty
   if (p.pid > 0) onPid(p.pid); // a stand-in pty may have none: the claim stays pending (pid 0)
   p.onData((data: string) => emit(s, { type: 'output', data }));
-  p.onExit(({ exitCode, signal }: { exitCode: number; signal?: number }) => done(stopped ? 'stopped' : signal || exitCode));
+  p.onExit(({ exitCode, signal }: { exitCode: number; signal?: number }) => {
+    // ConPTY: node-pty holds the pseudo-console, its pipes and its output worker after the child exits, until they are
+    // closed. Elsewhere node-pty closes the pty itself, and a late kill() would signal a pid that may be reused.
+    if (!stopped && platform === 'win32') try { closePty(p, platform); } catch { /* gone */ }
+    done(stopped ? 'stopped' : signal || exitCode);
+  });
 }
 
 // The harness's SDK in this process (it runs its own CLI binary as a child, with the host's env). Each SDK message is one
