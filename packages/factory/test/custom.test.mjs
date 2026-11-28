@@ -118,6 +118,8 @@ test('on read a broken steps.custom or axes.on is dropped whole with a warning: 
   const { droppedFor } = await import('../../core/src/rules.ts');
   readSkills();
   assert.equal(droppedFor('acme/cs').length, 3);
+  start('acme/cs#50');
+  assert.match(decideOn('acme/cs#50', ['src/a.ts']).reasons.join('\n'), /acme\/cs\.steps\.custom is ignored: .*: a check the owner asked for is missing, so the factory doesn't merge on its own/);
   assert.deepEqual(skills('acme/cs').pipeline.warnings.filter((x) => /steps\.custom/.test(x)).map((x) => x.match(/acme\/cs\S*/)[0]), ['acme/cs@hot.steps.custom', 'acme/cs.steps.custom'], 'the page shows the project\'s and its pipelines\'');
 });
 
@@ -243,6 +245,7 @@ test('F step has F review\'s contract: output outside it records a failure, neve
   start(r); json(['steps', r, 'spec.after']);
   assert.equal(json(['step', r, 'lint', 'passed', '--tokens', '1200', '--model', 'claude-sonnet-5-5', '-'], JSON.stringify({ id: 'lint', verdict: 'passed', findings: [], tokens: 9 })).status, 'passed');
   assert.deepEqual([custom(r, 'passed')[0].tokens, custom(r, 'passed')[0].model], [1200, 'claude-sonnet-5-5']);
+  assert.equal(getRun(r).stage, 'intake', 'a result never moves the stage either');
   assert.throws(() => json(['step', r, 'smoke', 'passed', '--tokens', '5'], reply('smoke')), /usage: step <run> <id> passed\|failed/, 'no dash: no reply read');
 });
 
@@ -254,6 +257,7 @@ test('build.after: F steps picks first, matches when on the whole change; F axes
   assert.throws(() => F(['axes', RUN, 'src/a.ts', 'src/a.test.ts']), /acme\/cs#3 has build\.after custom steps \(smoke\) that were never started: run F steps acme\/cs#3 build\.after/);
   assert.equal(read().filter((e) => e.run === RUN && e.status === 'routed').length, 1, 'F axes picked before it refused: the pick is once per iteration');
   assert.deepEqual(json(['steps', RUN, 'build.after', 'src/a.ts', 'src/a.test.ts']).due, ['smoke'], 'e2e runs only when apps/web changes');
+  assert.equal(getRun(RUN).stage, 'build', 'custom started never moves the stage');
   assert.throws(() => F(['axes', RUN, 'src/a.ts', 'src/a.test.ts']), /build\.after custom step smoke has no result/);
   step(RUN, 'smoke', 'failed');
   assert.deepEqual(JSON.parse(F(['axes', RUN, 'src/a.ts', 'src/a.test.ts'])).axes, ['code', 'security'], 'a failed step doesn\'t hold review up: the gate sends it back');
@@ -262,6 +266,7 @@ test('build.after: F steps picks first, matches when on the whole change; F axes
   assert.deepEqual([g.status, g.next, g.reasons], ['failed', 'build', ['custom step smoke (build.after) failed: back to build']]);
   // iteration 2: smoke failed last time, so it is due again, whatever the files; a gated phase is frozen
   assert.throws(() => step(RUN, 'smoke'), /iteration 1 is already gated; its custom steps are frozen/);
+  assert.throws(() => F(['steps', RUN, 'build.after', 'src/a.ts']), /acme\/cs#3 is already gated: run F steps after the next build/);
   record(RUN, 'build', 'started');
   assert.deepEqual(json(['steps', RUN, 'build.after', 'apps/web/Button.tsx']).due, ['e2e', 'smoke'], 'e2e now, and smoke again');
   step(RUN, 'e2e'); step(RUN, 'smoke');
@@ -416,4 +421,20 @@ test('a custom step only adds work: every one passing never stands in for a requ
   assert.deepEqual([g.status, g.next], ['failed', 'build']);
   assert.ok(!/custom steps passed/.test(g.reasons.join(' ')), 'their passes say nothing when the gate fails');
   assert.equal(decideOn(RUN, ['src/a.ts']).action, 'escalate');
+});
+
+test('a failed step with a when stays due on the next build even when the new change doesn\'t match it; a pipeline\'s spec.after never runs, even hand-written', async () => {
+  reset();
+  setSkill('acme/cs', 'steps.custom', [E2E], { ask: no });
+  const RUN = 'acme/cs#41';
+  start(RUN); record(RUN, 'build', 'started');
+  assert.deepEqual(json(['steps', RUN, 'build.after', 'apps/web/x.tsx']).due, ['e2e']);
+  step(RUN, 'e2e', 'failed');
+  pass(RUN, JSON.parse(F(['axes', RUN, 'apps/web/x.tsx'])).axes);
+  assert.equal(json(['gate', RUN]).next, 'build');
+  record(RUN, 'build', 'started');
+  assert.deepEqual(json(['steps', RUN, 'build.after', 'src/a.ts']).due, ['e2e'], 'carried: it failed on this run');
+  const { customOf } = await import('../../core/src/custom.ts');
+  const cfg = { 'acme/cs': { 'steps.custom': [SMOKE] }, 'acme/cs@hot': { name: 'Hot', rules: { match: { value: [{ labels: ['hotfix'] }] } }, 'steps.custom': [LINT, { ...SMOKE, id: 'quick' }] } };
+  assert.deepEqual(Object.fromEntries(Object.entries(customOf('acme/cs', ['hot'], cfg)).map(([k, v]) => [k, v.map((c) => c.id)])), { 'spec.after': [], 'build.after': ['smoke', 'quick'] });
 });
