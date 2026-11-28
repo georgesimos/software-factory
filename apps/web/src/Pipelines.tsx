@@ -1,9 +1,9 @@
-import { Button, Dialog, EmptyState, Input, PipelineGraph, PipelineList, Select, repoOf, shq, type StepEditing } from '@software-factory/design-system';
+import { Button, Dialog, EmptyState, Input, PipelineGraph, PipelineList, Select, repoOf, shq, type CustomSlot, type CustomStep, type StepEditing } from '@software-factory/design-system';
 import { useEffect, useState, type ReactNode } from 'react';
 import { CAP, COST_CAP, post, type FactoryData, type MatchSet, type NamedPipeline, type SkillsData } from './data.ts';
 import { RuleLog } from './Rules.tsx';
 import { Picker, copy, runnerPick, useSkillsSave, type Pick } from './Skills.tsx';
-import { F_CMD, editStep, runnerFrom, runnerName, stepChoices } from './skillsModel.ts';
+import { F_CMD, editStep, runnerFrom, runnerName, skillCommand, stepChoices } from './skillsModel.ts';
 
 // The steps each issue goes through, per project, drawn from F's own `pipeline` (F skills) by the design system's graph.
 // A step's panel changes who runs it through the Skills sheet's write path (POST /api/skills, or the copied F skills set
@@ -20,6 +20,12 @@ const TEMPLATES: { id: string; name: string; match: MatchSet[]; loops?: number; 
   { id: 'docs', name: 'Docs only', match: [{ files: ['docs/**', '**/*.md'] }], what: 'changes only to docs' },
   { id: 'ui', name: 'UI first', match: [{ files: ['src/components/**', '**/*.css'] }], what: 'changes only to components and styles' },
 ];
+// A new custom step's id, from its runner's name: lowercase, and new among the ids the pipeline already has.
+const newId = (r: { name?: string; path?: string }, taken: string[]) => {
+  const base = ((r.name ?? (r.path ?? '').split(/[\\/]/).pop()?.replace(/\.md$/, '') ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^[^a-z]+|-+$/g, '').slice(0, 28)) || 'step';
+  let id = base; for (let n = 2; taken.includes(id); n++) id = `${base}-${n}`;
+  return id;
+};
 const list = (s: string) => s.split(',').map((x) => x.trim()).filter(Boolean);
 const setText = (s: MatchSet) => [s.labels?.length && `label${s.labels.length > 1 ? 's' : ''} ${s.labels.join(', ')}`, s.files?.length && `files ${s.files.join(', ')}`, s.maxDiffLines && `≤ ${s.maxDiffLines} lines`].filter(Boolean).join(' · ');
 const matchText = (m: MatchSet[] | null) => (m?.length ? m.map(setText).join(' or ') : 'no match: never matches');
@@ -132,14 +138,45 @@ export function PipelinesSheet({ open, onClose, data, project, onSaved = () => {
     onOpen: () => setStatus({ text: '' }), // the last save was about another step
     status,
   };
-  const pickRepo = (s: string) => { setPicked(s); setPid(DEFAULT); setStatus({ text: '' }); setSaid({ text: '' }); setWhy(''); };
+  // Custom steps (slice 5): the scope's own steps.custom list, saved whole through POST /api/skills. Adding is free; removing
+  // one is guarded, so the page only requests it (the desktop confirms), or gives the command for a terminal.
+  const [added, setAdded] = useState<{ text: ReactNode; bad?: boolean }>({ text: '' });
+  const own = ((S.config?.[scope] as Record<string, unknown> | undefined)?.['steps.custom'] ?? []) as CustomStep[];
+  const writeSteps = async (next: CustomStep[], reason: string, say: Say) => {
+    const runner = next.length ? next : null, cmd = `${skillCommand(scope, 'steps.custom', runner, f)}${reason ? ` --reason ${shq(reason)}` : ''}`;
+    const terminal = async (lead: string) => { const ok = await copy(cmd); say({ text: <>{lead} {ok ? 'Command copied: run it in your own terminal:' : 'Run this in your own terminal:'} <code>{cmd}</code></> }); };
+    if (!data.token) return terminal('Custom steps are saved by F, not this page.');
+    try {
+      const x = await post<SkillsData & { requested?: string }>('/skills', { scope, step: 'steps.custom', runner, ...(reason && { reason }) }, data.token);
+      onSaved(x);
+      say({ text: x.requested ? 'Confirm it in the app’s dialog: nothing changes until you do.' : 'Saved.' });
+      if (x.requested && refresh) { refresh(); setWaiting((n) => n + 1); }
+    } catch (e) {
+      const m = (e as Error).message;
+      if (/needs your confirmation outside the page/.test(m)) return terminal('Removing a custom step needs your confirmation outside the page, and this is plain F ui.');
+      say({ text: m, bad: true });
+    }
+  };
+  const addAt = (slot: CustomSlot, index: number) => setPick({ title: `a custom step after ${slot === 'spec.after' ? 'spec' : 'build'}`, step: 'steps.custom', current: null,
+    done: ({ runner }) => {
+      const shown = pl?.custom?.[slot] ?? [], taken = [at?.pipeline, ...named].flatMap((x) => [...Object.values(x?.custom ?? {}).flat().map((y) => y.id), ...(x?.axes ?? []).map((y) => y.axis)]); // one namespace: the project and all its pipelines (§7.1)
+      const c = { id: newId(runner, [...taken, ...own.map((x) => x.id)]), slot, ...runner } as CustomStep;
+      const before = own.findIndex((x) => x.id === shown[index]?.id), after = own.findIndex((x) => x.id === shown[index - 1]?.id); // place it among the scope's own steps
+      const i = before >= 0 ? before : after >= 0 ? after + 1 : own.length;
+      void writeSteps([...own.slice(0, i), c, ...own.slice(i)], '', setAdded);
+    } });
+  edit.onRemove = (id, reason) => {
+    if (!own.some((x) => x.id === id)) return setStatus({ text: `${id} is set on ${cur ? repo : 'default'}, not here: remove it there.`, bad: true });
+    void writeSteps(own.filter((x) => x.id !== id), reason, setStatus);
+  };
+  const pickRepo = (s: string) => { setPicked(s); setPid(DEFAULT); setStatus({ text: '' }); setSaid({ text: '' }); setAdded({ text: '' }); setWhy(''); };
   return (
     <Dialog open={open} onClose={onClose} variant="sheet" title="Pipelines" className="web-pl" description="The steps each issue goes through, and which issues go to which pipeline.">
       {!at?.pipeline || !pl ? <EmptyState title="No project attached">Attach a project with F sync to see its pipeline.</EmptyState> : (<>
         <div className="sf-pl-cols">
           <div className="web-pl-left">
             {scopes.length > 1 ? <Select aria-label="Project" value={repo} onChange={(e) => pickRepo(e.target.value)}>{scopes.map((s) => <option key={s} value={s}>{s}</option>)}</Select> : null}
-            <PipelineList items={items} current={cur ? cur.id : DEFAULT} onPick={(id) => { setPid(id); setStatus({ text: '' }); setSaid({ text: '' }); setWhy(''); }} />
+            <PipelineList items={items} current={cur ? cur.id : DEFAULT} onPick={(id) => { setPid(id); setStatus({ text: '' }); setSaid({ text: '' }); setAdded({ text: '' }); setWhy(''); }} />
             <div className="web-pl-new">
               <Select aria-label="New pipeline from a template" value={tpl} onChange={(e) => setTpl(e.target.value)}>
                 <option value="">New pipeline from…</option>
@@ -151,7 +188,7 @@ export function PipelinesSheet({ open, onClose, data, project, onSaved = () => {
           </div>
           <PipelineGraph name={cur ? `${cur.name} (${scope})` : repo} pipeline={pl} plan={{ ...plan, ...Object.fromEntries((at.extra ?? []).map((x) => [`review.${x.axis}`, x])) }}
             runnerName={(r) => runnerName(S, repo, r)} cap={pl.caps?.loops ?? data.cap ?? CAP} costCap={pl.caps?.budgetUsd ?? data.costCap ?? COST_CAP}
-            edit={edit} runs={runs.filter((r) => (r.route?.pipeline ?? DEFAULT) === (cur ? cur.id : DEFAULT))} />
+            edit={edit} adds={{ slots: cur ? ['build.after'] : ['spec.after', 'build.after'], onAdd: addAt, status: added }} runs={runs.filter((r) => (r.route?.pipeline ?? DEFAULT) === (cur ? cur.id : DEFAULT))} />
         </div>
         <section className="web-pl-route" aria-label="Routing">
           <h2 className="sf-label">Routing</h2>

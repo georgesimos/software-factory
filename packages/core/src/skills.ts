@@ -2,8 +2,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { hostOf, ls, projects, trackerOf } from './workspace.ts';
-import { audit, checkGuide, checkRules, checkScope, pipelinePass, rules, runCaps, whoami } from './rules.ts';
-import { NAME_OK, PIPELINE_KEYS, PIPELINE_RULES, isPipelineScope, pipelinesOf, runGets } from './route.ts';
+import { audit, checkGuide, checkRules, checkScope, pageRefusal, pipelinePass, rules, runCaps, stamp, whoami } from './rules.ts';
+import { humanOnly } from './projectset.ts';
+import { line, ttyAsk } from './approve.ts';
+import { NAME_OK, PIPELINE_KEYS, PIPELINE_RULES, SLOTS, addedOf, allOf, isPipelineScope, okGlob, ownersOf, pipelinesOf, runGets, splitScope, type CustomStep, type Slot } from './route.ts';
+import { customOf } from './custom.ts';
 import { harnesses, type Harness } from '../../adapters/harnesses/index.ts';
 import { stateDir } from './log.ts';
 import type { ExtraAxis } from './gate.ts';
@@ -24,10 +27,12 @@ export const OPTIONAL_STEPS = BUILTIN_AXES.filter((a) => !REQUIRED_AXES.includes
 // When axesFor (gate.ts) selects each built-in axis: always, or when a UI, SEO or docs file changes. axesFor reads this table,
 // so the Pipelines page and the engine can't disagree.
 export const AXIS_WHEN: Record<BuiltinAxis, 'always' | 'ui' | 'seo' | 'docs'> = { code: 'always', security: 'always', ux: 'ui', ui: 'ui', seo: 'seo', docs: 'docs' };
-/** The pipeline's structure for the Pipelines page (docs/plans/pipelines.md §6). custom stays empty until slice 5. */
-export function pipeline(repo: string, extra: ExtraAxis[] = [], rl: { policy: Record<string, Rule>; warnings: string[] } = { policy: {}, warnings: [] }) {
+/** The pipeline's structure for the Pipelines page (docs/plans/pipelines.md §6). adds: its custom steps by slot and the axes it
+ *  always reviews (axes.on, a pipeline's only). */
+export function pipeline(repo: string, extra: ExtraAxis[] = [], rl: { policy: Record<string, Rule>; warnings: string[] } = { policy: {}, warnings: [] },
+  adds: { custom: Record<Slot, CustomStep[]>; on: string[] } = { custom: { 'spec.after': [], 'build.after': [] }, on: [] }) {
   const attached = !!projects()[repo], host = attached ? hostOf(repo) : null;
-  const warnings: string[] = rl.warnings.filter((w) => /\.rules\.(steps\.off|run\.|match|pipelines)|@|\.name is ignored/.test(w)); // pipelinePass's, about pipelines
+  const warnings: string[] = rl.warnings.filter((w) => /\.rules\.(steps\.off|run\.|match|pipelines)|@|\.name is ignored|\.steps\.custom|\.axes\.on/.test(w)); // pipelinePass's, about pipelines
   const o = rl.policy['steps.off'], offBy = o && (isLocal(o) ? 'a local user (unverified)' : o.setBy); // never the OS user (§6)
   let tracker: string | null = null;
   if (host) try { const t = trackerOf(repo); tracker = t === 'local' ? null : t; } catch (e) { warnings.push((e as Error).message); } // local: no tracker yet (5b)
@@ -35,9 +40,9 @@ export function pipeline(repo: string, extra: ExtraAxis[] = [], rl: { policy: Re
     host, tracker, locked: LOCKED_STEPS, optional: OPTIONAL_STEPS,
     steps: ['intake', 'spec', 'build', 'review', 'verifier', 'gate', 'merge', 'watch'],
     intake: ['pass', 'split', 'needs-info', 'reject'], loops: ['spec', 'build'], // intake's outcomes; where the gate loops back to
-    axes: [...BUILTIN_AXES.map((axis) => ({ axis, when: AXIS_WHEN[axis] as string | string[] })), ...extra.map((x) => ({ axis: x.axis, when: x.when }))],
+    axes: [...BUILTIN_AXES.map((axis) => ({ axis, when: (adds.on.includes(`review.${axis}`) ? 'always' : AXIS_WHEN[axis]) as string | string[] })), ...extra.map((x) => ({ axis: x.axis, when: x.when }))],
     off: o ? (o.value as string[]).map((step) => ({ step, scope: (o.scope ?? repo) as string, reason: o.reason, by: offBy as string, ...(o.until && { until: o.until }) })) : [],
-    caps: runCaps(rl.policy), custom: { 'spec.after': [], 'build.after': [] }, warnings,
+    caps: runCaps(rl.policy), custom: adds.custom, on: adds.on, warnings,
   };
 }
 export const isBuiltinAxis = (a: unknown): a is BuiltinAxis => BUILTIN_AXES.some((x) => x === a);
@@ -47,7 +52,7 @@ export interface StepRunner { use: string; name?: string; path?: string; harness
 /** An extra review axis (axes.extra): a runner plus gate's axis and the globs that select it. */
 export interface ExtraAxisRunner extends StepRunner, ExtraAxis {}
 /** One scope of skills.json ("default" or owner/repo): a runner per step, extra axes, rules and guidance. */
-export type ScopeConfig = Partial<Record<StepKey, StepRunner>> & { 'axes.extra'?: ExtraAxisRunner[]; rules?: Record<string, Rule>; guide?: Record<string, string> };
+export type ScopeConfig = Partial<Record<StepKey, StepRunner>> & { 'axes.extra'?: ExtraAxisRunner[]; 'steps.custom'?: CustomStep[]; 'axes.on'?: string[]; name?: string; rules?: Record<string, Rule>; guide?: Record<string, string> };
 export type SkillsConfig = Record<string, ScopeConfig>;
 /** An entry of the Skills sheet's runner picker. */
 export interface CatalogItem { source: string; group: string; name: string; kind: string; desc: string; runner: StepRunner }
@@ -94,11 +99,34 @@ export function checkRunner(s: unknown, at: string, more: string[] = [], platfor
   if (fb !== undefined && !(Array.isArray(fb) && list.length >= 1 && list.length <= 3 && list.every((m) => has(ids, m)) && new Set(list).size === list.length && !list.includes(s.model)))
     throw new Error(`${at}: fallback must be 1-3 distinct ${h.label} models (${ids.join('|')}), not the model itself`);
 }
+// A custom step's id: a new lowercase name, never one of F's steps, axes or decisions (pipelines §4).
+const RESERVED = [...new Set([...STEP_KEYS, ...BUILTIN_AXES, ...LOCKED_STEPS, 'review', 'default', 'custom'])];
+export function checkCustom(v: unknown, at: string): void {
+  if (!Array.isArray(v) || v.length > 10) throw new Error(`${at}: must be an array of at most 10 custom steps {id, slot, use, …}`);
+  const seen = new Set<unknown>(), list: unknown[] = v;
+  for (const x of list) {
+    checkRunner(x, at, ['id', 'slot', 'when']);
+    const id = x.id, step = `${at}: custom step "${String(id)}"`;
+    if (typeof id !== 'string' || !/^[a-z][a-z0-9-]{0,30}$/.test(id) || RESERVED.includes(id)) throw new Error(`${at}: custom step id "${String(id)}" must be a new lowercase name, not one of F's steps or axes (${RESERVED.join(', ')})`);
+    if (seen.has(id)) throw new Error(`${step} is listed twice`);
+    seen.add(id);
+    if (!SLOTS.some((sl) => sl === x.slot)) throw new Error(`${step}: slot must be ${SLOTS.join(' or ')}`);
+    if (x.use === 'default') throw new Error(`${step} has no built-in brief; use a skill, brief or provider`);
+    if (x.when !== undefined && x.slot !== 'build.after') throw new Error(`${step}: when is for build.after only (a spec.after step runs before there is a diff, so it is always due)`);
+    const when: unknown = x.when;
+    if (when !== undefined && !(Array.isArray(when) && when.length >= 1 && when.length <= 20 && when.every(okGlob))) throw new Error(`${step}: when must be 1-20 globs`);
+  }
+}
 export function checkStep(key: string, v: unknown, at: string): void {
   if (key === 'rules') return checkRules(v, at);
   if (key === 'guide') return checkGuide(v, at);
+  if (key === 'steps.custom') return checkCustom(v, at);
+  if (key === 'axes.on') { // §7.1: optional built-in axes a pipeline always reviews
+    if (!(Array.isArray(v) && v.length >= 1 && v.length <= OPTIONAL_STEPS.length && new Set(v).size === v.length && v.every((k) => OPTIONAL_STEPS.includes(k)))) throw new Error(`${at}: must be 1-${OPTIONAL_STEPS.length} distinct optional review steps (${OPTIONAL_STEPS.join(', ')})`);
+    return;
+  }
   if (key !== 'axes.extra') {
-    if (!isStepKey(key)) throw new Error(`${at}: unknown step "${key}" (${STEP_KEYS.join('|')}|axes.extra)`);
+    if (!isStepKey(key)) throw new Error(`${at}: unknown step "${key}" (${STEP_KEYS.join('|')}|axes.extra|steps.custom)`);
     return checkRunner(v, at);
   }
   if (!Array.isArray(v)) throw new Error(`${at}: must be an array of {axis, when, use, …}`);
@@ -121,16 +149,25 @@ export function checkSkills(cfg: unknown): asserts cfg is SkillsConfig {
     for (const [k, v] of Object.entries(steps)) {
       const at = `skills.json ${scope}.${k}`;
       if (k === 'name') { if (!pipe) throw new Error(`${at}: only a pipeline (owner/repo@id) has a name`); if (!NAME_OK(v)) throw new Error(`${at}: a name is 1-60 characters of text`); continue; }
-      if (pipe && !PIPELINE_KEYS.includes(k)) throw new Error(k === 'steps.custom' && Array.isArray(v) && v.some((x) => isObj(x) && x.slot === 'spec.after')
-        ? `${at}: spec.after custom steps are the project's only: a pipeline is picked after build (docs/plans/pipelines.md §7.4)`
-        : `${at}: a pipeline holds name and rules (match, steps.off, run.loops, run.budgetUsd); runners, guidance and extra axes are the project's`);
+      if (pipe && !PIPELINE_KEYS.includes(k)) throw new Error(`${at}: ${PIPELINE_HOLDS}`);
+      if (pipe && k === 'steps.custom' && Array.isArray(v) && v.some((x) => isObj(x) && x.slot === 'spec.after')) throw new Error(`${at}: spec.after custom steps are the project's only: a pipeline is picked after build (docs/plans/pipelines.md §7.4)`);
+      if (!pipe && k === 'axes.on') throw new Error(`${at}: axes.on is a pipeline's (owner/repo@id): on a project, set the axis's runner as review.<axis>`);
       checkStep(k, v, at);
       if (k === 'rules' && isObj(v)) for (const key of Object.keys(v)) { // where each rule may live (§7.1)
         if (pipe ? !PIPELINE_RULES.includes(key) : key === 'match' || (scope === 'default' && key === 'pipelines')) throw new Error(`${at}.${key}: ${pipe ? `${key} is the project's rule` : key === 'match' ? 'match is a pipeline\'s rule' : 'pipelines is a per-project rule'}`);
       }
     }
   }
+  // §7.1: one id namespace per project, custom steps and extra axes together, across the project and all its pipelines
+  for (const project of new Set(Object.keys(cfg).filter((s) => s !== 'default').map((s) => splitScope(s).project))) {
+    const { owners, dropped } = ownersOf(project, cfg), x = dropped[0];
+    if (x) throw new Error(`skills.json ${x.owner}: "${x.id}" is already ${x.first}'s: ids are unique across a project and its pipelines`);
+    const p = owners[0]!, both = p.custom.find((c) => p.extra.some((e) => e.axis === c.id)); // owners[0]: the project
+    if (both) throw new Error(`skills.json ${project}: "${both.id}" is both a custom step and an extra axis: ids are unique across a project and its pipelines`);
+  }
 }
+/** What a pipeline scope may hold, as the refusals say it (§7.1). */
+export const PIPELINE_HOLDS = 'a pipeline holds name, rules (match, steps.off, run.loops, run.budgetUsd), build.after custom steps (steps.custom), axes.on and its own extra axes (axes.extra); runners and guidance are the project\'s';
 // On read, a model, effort or fallback the harness no longer offers is dropped with a warning instead of failing every
 // command; setSkill and applyPreset still refuse them, since writeSkills checks strictly. The next write saves the drop.
 const warned = new Set<string>();
@@ -158,7 +195,7 @@ export function dropUnknownModels(cfg: unknown): unknown {
   };
   return Object.fromEntries(Object.entries(cfg).map(([scope, steps]) => [scope, !isObj(steps) ? steps
     : Object.fromEntries(Object.entries(steps).map(([k, v]) => [k, k === 'rules' || k === 'guide' ? v
-      : k === 'axes.extra' ? (Array.isArray(v) ? v.map((x: unknown) => drop(x, `${scope}.${k}`)) : v) : drop(v, `${scope}.${k}`)]))]));
+      : k === 'axes.extra' || k === 'steps.custom' ? (Array.isArray(v) ? v.map((x: unknown) => drop(x, `${scope}.${k}`)) : v) : drop(v, `${scope}.${k}`)]))]));
 }
 export function readSkills(): SkillsConfig {
   try {
@@ -190,9 +227,10 @@ export function skills(repo: string, cfg: SkillsConfig = readSkills()) {
   const extra = all.filter((x, i) => all.findLastIndex((y) => y.axis === x.axis) === i);
   const rl = rules(repo, cfg);
   // §7.1: the project's named pipelines, listed ones in match order then drafts, each drawn like the default (which is `pipeline`)
-  const pipelines = repo ? pipelinesOf(repo, cfg).map((p) => ({ id: p.id, name: p.name, listed: p.listed, match: p.match, ...(p.matchRule && { matchBy: p.matchRule.setBy, matchReason: p.matchRule.reason }),
-    ...pipeline(repo, extra, rules(p.scope, cfg)), caps: runGets(repo, p.id, cfg).caps })) : [];
-  return { repo, plan, extra, required: REQUIRED_AXES, guide: rl.guide, pipeline: pipeline(repo, extra, rl), pipelines };
+  const pipelines = repo ? pipelinesOf(repo, cfg).map((p) => { const a = addedOf(repo, [p.id], cfg);
+    return { id: p.id, name: p.name, listed: p.listed, match: p.match, ...(p.matchRule && { matchBy: p.matchRule.setBy, matchReason: p.matchRule.reason }),
+      ...pipeline(repo, [...extra, ...a.extra], rules(p.scope, cfg), { custom: customOf(repo, [p.id], cfg), on: a.on }), caps: runGets(repo, p.id, cfg).caps }; }) : [];
+  return { repo, plan, extra, required: REQUIRED_AXES, guide: rl.guide, pipeline: pipeline(repo, extra, rl, { custom: customOf(repo, [], cfg), on: [] }), pipelines };
 }
 export function writeSkills(cfg: unknown): asserts cfg is SkillsConfig {
   checkSkills(cfg);
@@ -200,16 +238,73 @@ export function writeSkills(cfg: unknown): asserts cfg is SkillsConfig {
   fs.writeFileSync(skillsFile() + '.tmp', JSON.stringify(cfg, null, 2));
   fs.renameSync(skillsFile() + '.tmp', skillsFile());
 }
+// docs/plans/pipelines.md §5, §7.3: the skills writes that take a check away. Adding or reordering custom steps, or adding a
+// review step, only adds checks above the built-in floor; removing one (or moving it, or narrowing when it runs) is guarded.
+export const GUARDED_SKILLS = ['steps.custom', 'axes.on', 'axes.extra'];
+type Cfg = Record<string, Record<string, unknown>>;
+const applied = (cfg: Cfg, scope: string, key: string, value: unknown) => {
+  const out: Cfg = { ...cfg }, next: Record<string, unknown> = { ...cfg[scope], [key]: value };
+  if (value === undefined) delete next[key];
+  if (Object.keys(next).length) out[scope] = next; else delete out[scope];
+  return out;
+};
+const listOf = (x: unknown) => (Array.isArray(x) ? x.filter(isObj) : []);
+/** What a skills write takes away, or null. Compared on what runs: a project's custom steps are default's with its own in place. */
+export function skillLoosens(scope: string, key: string, value: unknown, cfg: Cfg = readSkills()): string | null {
+  if (!GUARDED_SKILLS.includes(key) || (key === 'axes.extra' && !isPipelineScope(scope))) return null; // a project's extra axes: the known gap (§5)
+  const after = applied(cfg, scope, key, value);
+  if (key === 'steps.custom') {
+    const eff = (c: Cfg) => (scope === 'default' || isPipelineScope(scope) ? listOf(c[scope]?.['steps.custom'])
+      : listOf(c[scope]?.['steps.custom']).reduce((a: Record<string, unknown>[], x) => { const i = a.findIndex((y) => y.id === x.id); if (i >= 0) a[i] = x; else a.push(x); return a; }, [...listOf(c.default?.['steps.custom'])]));
+    const next = eff(after);
+    for (const o of eff(cfg)) {
+      const n = next.find((x) => x.id === o.id);
+      if (!n || n.slot !== o.slot) return 'removing a custom step';
+      if (n.when !== undefined && JSON.stringify(n.when) !== JSON.stringify(o.when)) return 'narrowing when a custom step runs'; // no when: every change, the widest
+    }
+    return null;
+  }
+  if (key === 'axes.on') { const next = (after[scope]?.['axes.on'] as unknown[] | undefined) ?? []; return ((cfg[scope]?.['axes.on'] as unknown[] | undefined) ?? []).every((k) => next.includes(k)) ? null : 'removing an added review step'; }
+  const next = listOf(after[scope]?.['axes.extra']); // a pipeline's own extra axes
+  return listOf(cfg[scope]?.['axes.extra']).every((o) => next.some((n) => n.axis === o.axis && JSON.stringify(n.when) === JSON.stringify(o.when))) ? null : 'removing an added review step';
+}
+/** A guarded skills value as people read it: the ids or axes it holds. */
+export const shownSkill = (key: string, v: unknown) => {
+  const xs = Array.isArray(v) ? v.map((x) => (isObj(x) ? `${x.id ?? x.axis}${x.slot ? ` (${x.slot}${Array.isArray(x.when) ? `, when ${x.when.join(', ')}` : ''})` : Array.isArray(x.when) ? ` (when ${x.when.join(', ')})` : ''}` : String(x))) : [];
+  return xs.length ? xs.join(', ') : 'nothing';
+};
+const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+/** The terminal command for a skills write, built from checked values only. */
+export const skillCommand = (scope: string, key: string, value: unknown) => value === undefined ? `F skills unset ${scope} ${key} --reason "…"` : `F skills set ${scope} ${key} ${shq(JSON.stringify(value))} --reason "…"`;
+/** F's own reading of a skills write, without writing: the stored value, the new one, what it takes away and the command.
+ *  The page's route asks it before requesting; the desktop dialog shows it, and asks again on confirm. */
+export function skillChange(scope: string, key: string, value: unknown, cfg: Cfg = readSkills()) {
+  checkScope(scope);
+  if (value === undefined && !Object.hasOwn(cfg[scope] ?? {}, key)) throw new Error(`no ${key} set for ${scope}`);
+  checkSkills(applied(cfg, scope, key, value)); // never ask about a write that would fail
+  return { scope, key, stored: cfg[scope]?.[key], value, doing: skillLoosens(scope, key, value, cfg), command: skillCommand(scope, key, value) };
+}
 // value === undefined removes the step from that scope, so a project inherits the global choice again.
-export function setSkill(scope: string, key: string, value: unknown): ScopeConfig {
+// page: the write comes from the dashboard's route, which may only request a guarded one (§5); ask: the typed confirmation.
+export function setSkill(scope: string, key: string, value: unknown, { reason, page, ask = ttyAsk }: { reason?: string; page?: boolean; ask?: (prompt: string) => string } = {}): ScopeConfig {
   if (key === 'rules' || key === 'guide') throw new Error(`"${key}" is set with "rules set", which records who changed it and why`);
   checkScope(scope); // a string: POST bodies pass scope through
-  const cfg: Record<string, Record<string, unknown>> = readSkills(), next: Record<string, unknown> = { ...cfg[scope], [key]: value }; // unchecked until writeSkills
-  cfg[scope] = next;
-  if (value === undefined) { if (!isStepKey(key) && key !== 'axes.extra' && key !== 'name') throw new Error(`unknown step "${key}"`); delete next[key]; }
-  if (!Object.keys(next).length) delete cfg[scope];
-  writeSkills(cfg);
-  return cfg[scope] || {};
+  if (value === undefined && !isStepKey(key) && key !== 'name' && !GUARDED_SKILLS.includes(key)) throw new Error(`unknown step "${key}"`);
+  const cfg: Cfg = readSkills(), after = applied(cfg, scope, key, value), doing = skillLoosens(scope, key, value, cfg); // after: unchecked until checkSkills
+  if (doing && page) throw pageRefusal(doing, skillCommand(scope, key, value));
+  if (doing) humanOnly(doing);
+  checkSkills(after); // checked first: never ask about a write that would fail
+  let who: ReturnType<typeof whoami> | undefined;
+  if (doing) {
+    if (typeof reason !== 'string' || !reason.trim() || reason.length > 200) throw new Error(`${doing} needs a reason (--reason "…", at most 200 characters)`);
+    who = whoami(doing);
+    if (ask(`${scope}: ${doing}\n${key}: ${shownSkill(key, cfg[scope]?.[key])} -> ${shownSkill(key, value)} (${line(reason)})\n\nThis relaxes what the factory checks before it merges.\n\nType ${scope} to confirm (anything else cancels): `).trim() !== scope)
+      throw new Error(`${scope}'s ${key} stays as it is: what you typed did not match`);
+  }
+  writeSkills(after);
+  const named = (v: unknown) => (Array.isArray(v) ? v.map((x) => (isObj(x) && typeof x.path === 'string' ? { ...x, path: x.path.split(/[\\/]/).pop() } : x)) : v); // a brief by its file name: a local path never goes in an event
+  if (doing && who) audit(scope, value === undefined ? 'unset' : 'set', { key, ...(value !== undefined && { value: named(value) }), reason, ...stamp(who) }); // the rules audit trail, as a rule write
+  return after[scope] || {};
 }
 // The preset's model, effort and fallback on each step of a scope, keeping who runs the step. Non-Claude runners are skipped.
 // A project gets them only on steps it already sets; the rest keep inheriting global (and its preset) as it changes.
@@ -259,10 +354,12 @@ export function availablePlan(plan: Record<string, StepRunner> | StepRunner[], v
     return [k, { ...rest, ...(left[0] && { model: left[0] }), ...(left.length > 1 && { fallback: left.slice(1) }), modelFallback }];
   }));
 }
-// Every step the session runs, keyed like the plan: built-in steps and extra axes as review.<axis>, after the version check.
+// Every step the session runs, keyed like the plan: built-in steps and extra axes as review.<axis> (a pipeline's own too), custom
+// steps as custom.<id>, after the version check.
 export const resolvedSteps = (repo: string) => {
-  const { plan, extra } = skills(repo);
-  return availablePlan({ ...plan, ...Object.fromEntries(extra.map(({ axis, when: _w, ...x }) => [`review.${axis}`, x])) });
+  const { plan, extra } = skills(repo), all = allOf(repo);
+  return availablePlan({ ...plan, ...Object.fromEntries([...extra, ...all.extra].map(({ axis, when: _w, ...x }) => [`review.${axis}`, x as StepRunner])),
+    ...Object.fromEntries(all.custom.map(({ id, slot: _s, when: _w, ...x }) => [`custom.${id}`, x])) });
 };
 
 // Every runner the picker can offer, by where it comes from. Descriptions come from front matter and are display-only.

@@ -3,7 +3,8 @@ import { CAP, COST_CAP, DOCS, MAX_DIFF, SEO, SOURCE, TEST, TRUSTED, UI, blocking
 import { budget, budgetWhy, thisRun } from './derive.ts';
 import { AXIS_WHEN, BUILTIN_AXES, LOCKED_STEPS, isObj } from './skills.ts';
 import { runCaps } from './rules.ts';
-import { pick, routeText } from './route.ts';
+import { pick, routeText, type Slot } from './route.ts';
+import { customCheck } from './custom.ts';
 import type { AxisReview, Deploy, LocalChecks, Metrics, Rule, Run } from './types.ts';
 
 /** An extra review axis from skills.json: added when a changed file matches one of its globs. */
@@ -15,6 +16,9 @@ export interface Facts {
   pipelineCaps?: { loops: number; budgetUsd: number };
   /** The host listed fewer files than the change has: then no files term holds, and decide escalates. */
   filesTruncated?: boolean;
+  /** pipelines §3-§4, read live: each slot's configured custom steps (for a slot F steps never recorded), the steps due on this
+   *  change (spec.after's, and build.after's whose when matches files), and the checks pipelinePass dropped (droppedFor). */
+  custom?: { live: Record<Slot, string[]>; due: string[]; dropped: string[] };
   rules?: Record<string, Rule>; deploys?: Deploy[];
   /** The CI provider that gave checks (absent: github-actions, as before providers); ciDetail: its one-line why; ciBroken: it
    *  couldn't answer (unknown, wrong host, threw), which escalates under every ci rule; host: the project's (absent: github). */
@@ -39,31 +43,36 @@ export function localResult(lc: LocalChecks | undefined, cmds: unknown, sha: str
 }
 
 // off: the steps.off list F axes resolved for this run (review.<axis>). A locked axis is never dropped, whatever the list says.
-export function axesFor(files: string[], extra: ExtraAxis[] = [], off: string[] = []) {
+// on: the axes a pipeline the run met always reviews (axes.on, pipelines §7.1); they only add, and steps.off never drops them.
+export function axesFor(files: string[], extra: ExtraAxis[] = [], off: string[] = [], forced: string[] = []) {
   const on = { ui: UI, seo: SEO, docs: DOCS };
   const axes: string[] = BUILTIN_AXES.filter((a) => AXIS_WHEN[a] === 'always' || files.some((f) => on[AXIS_WHEN[a] as keyof typeof on].test(f))); // skills.ts's table, which the Pipelines page shows
   for (const x of extra) if (files.some((f) => x.when.some((g) => path.matchesGlob(f, g)))) axes.push(x.axis); // user axes only add, never replace. shortcut: path.matchesGlob needs Node >= 22.5 (experimental before 24); swap in a small glob regex if older Node matters
-  return axes.filter((a) => !off.includes(`review.${a}`) || LOCKED_STEPS.includes(`review.${a}`));
+  const kept = axes.filter((a) => !off.includes(`review.${a}`) || LOCKED_STEPS.includes(`review.${a}`));
+  return [...kept, ...BUILTIN_AXES.filter((a) => forced.includes(`review.${a}`) && !kept.includes(a))];
 }
 // Loop-backs re-review only what the new commits touch, plus every axis that failed last time.
-export function reviewAxes(r: Run, files: string[], extra: ExtraAxis[] = [], off: string[] = []) {
+export function reviewAxes(r: Run, files: string[], extra: ExtraAxis[] = [], off: string[] = [], on: string[] = []) {
   const prev = Math.max(-1, ...Object.keys(r.axes || {}).map(Number).filter((i) => i < r.iteration));
   // prev is one of r.axes' keys
   const failed = prev < 0 ? [] : ((r.axes as Record<number, string[]>)[prev] as string[]).filter((a) => r.reviews[prev]?.[a]?.verdict !== 'passed');
-  return [...new Set([...axesFor(files, extra, off), ...failed])];
+  return [...new Set([...axesFor(files, extra, off, on), ...failed])];
 }
-// caps: runCaps() of the project's rules; the built-in ones when none apply.
-export function gate(r: Run, caps = { loops: CAP, budgetUsd: COST_CAP }) {
+// caps: runCaps() of the project's rules; the built-in ones when none apply. live: each slot's configured custom steps (custom.ts).
+export function gate(r: Run, caps = { loops: CAP, budgetUsd: COST_CAP }, live: Partial<Record<Slot, string[]>> = {}) {
+  // Custom steps first (pipelines §3): one with no result doesn't refuse, which would strand the run: it fails to approve, which escalates.
+  const c = customCheck(r, live);
+  if (c.missing.length) return { status: 'failed', next: 'approve', reasons: c.missing.map((id) => `custom step ${id} has no result`) };
   const expected = r.axes?.[r.iteration];
   if (!expected) throw new Error(`no review axes recorded for iteration ${r.iteration}; run "axes" first`);
   const rev = r.reviews[r.iteration] || {};
   const missing = expected.filter((a) => !rev[a]);
   if (missing.length) throw new Error(`missing review verdicts: ${missing.join(', ')}`);
   const failed = expected.filter((a) => (rev[a] as AxisReview).verdict !== 'passed'); // none missing: checked above
-  if (!failed.length) return { status: 'passed', next: 'approve', reasons: [`all axes passed: ${expected.join(', ')}`] };
+  if (!failed.length && !c.failed.length) return { status: 'passed', next: 'approve', reasons: [`all axes passed: ${expected.join(', ')}${c.passed.length ? `; custom steps passed: ${c.passed.join(', ')}` : ''}`] };
   const findings = failed.flatMap((a) => (rev[a] as AxisReview).findings.filter(blocking));
-  const route = findings.some((f) => f.route === 'spec') ? 'spec' : 'build';
-  const reasons = failed.map((a) => `${a}: ${(rev[a] as AxisReview).findings.filter(blocking).length} blocking finding(s)`);
+  const route = findings.some((f) => f.route === 'spec') || c.failed.some((x) => x.slot === 'spec.after') ? 'spec' : 'build'; // a custom failure goes back by its slot
+  const reasons = [...failed.map((a) => `${a}: ${(rev[a] as AxisReview).findings.filter(blocking).length} blocking finding(s)`), ...c.failed.map((x) => `custom step ${x.id} (${x.slot}) failed: back to ${x.slot === 'spec.after' ? 'spec' : 'build'}`)];
   if (r.iteration >= caps.loops) return { status: 'failed', next: 'approve', reasons: [...reasons, `loop cap ${caps.loops} reached${caps.loops < CAP ? ' (rule run.loops)' : ''}`] };
   const b = budget(r, caps.budgetUsd);
   if (b.over) return { status: 'failed', next: 'approve', reasons: [...reasons, `budget reached ${budgetWhy(b)}`] };
@@ -149,6 +158,13 @@ export function decide(r: Run, f: Facts) {
     if (now.pipeline !== rt.pipeline || now.set !== rt.set) why.push(`the pick no longer holds: ${routeText(rt)} was picked, but the reviewed change picks ${routeText(now)} (${f.files?.length ?? 0} files, ${size ?? 'unknown'} lines): it is never merged on a stale pick`);
   }
   if ((rt?.local || now?.local) && !git) why.push('rule match or pipelines was set by a local user (unverified): routing needs a verified login (gh auth login) before the factory merges on its own');
+  // Custom steps (pipelines §3-§4): every one due on the reviewed change passed, from the run's own records; a dropped list or
+  // duplicate never merges silently. The due list is read again from fresh facts, so a push after F steps can't skip one.
+  const cc = customCheck(r, f.custom?.live);
+  for (const id of cc.missing) why.push(`custom step ${id} has no result`);
+  for (const x of cc.failed) why.push(`custom step ${x.id} (${x.slot}) failed`);
+  for (const id of f.custom?.due ?? []) if (!cc.passed.includes(id) && !cc.missing.includes(id) && !cc.failed.some((x) => x.id === id)) why.push(`custom step ${id} is due on the reviewed change but has no passing result`);
+  for (const w of f.custom?.dropped ?? []) why.push(`${w}: a check the owner asked for is missing, so the factory doesn't merge on its own`);
   if (why.length) return { action: 'escalate', reasons: [...why, ...asks, ...notes] };
   const yes = r.reviewedSha && r.events?.findLast((e) => e.stage === 'approve' && e.status === 'passed' && e.sha === r.reviewedSha); // only a git project has asks
   if (asks.length && !yes) return { action: 'await-approval', reasons: [...asks, ...notes] };

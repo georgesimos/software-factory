@@ -22,7 +22,9 @@ import { claudeDir, onboardState, onboardText, setShip } from '../../core/src/on
 import { artifact, openSession, parseRun, render, startRun, ui } from '../../server/src/server.ts';
 import { refuseClaimed, unclaim } from '../../core/src/claim.ts';
 import { rules, setAutoMerge, setRule, unsetRule } from '../../core/src/rules.ts';
-import { pick, pickedThisIteration, routeOf, routeText, runCapsOf, runGets, runLabels } from '../../core/src/route.ts';
+import { SLOTS, addedOf, pick, pickedThisIteration, routeOf, routeText, runCapsOf, runGets, runLabels, type Slot } from '../../core/src/route.ts';
+import { customCleared, customOf, dueOn, pickedOf, runCustom, stepFromText, stepsDue } from '../../core/src/custom.ts';
+import type { Run } from '../../core/src/types.ts';
 import { note, takeNotes } from '../../core/src/notes.ts';
 import { ciStatus, escalate, openPr } from '../../core/src/changes.ts';
 import { comment, label, labels, similar, split } from '../../core/src/items.ts';
@@ -30,7 +32,43 @@ import { withMeasured } from '../../core/src/burn.ts';
 import { installCli, linkSkill, open } from '../../core/src/platform.ts';
 import { pathToFileURL } from 'node:url';
 
-const GATED = new Set(['event', 'review', 'checks', 'notes', 'axes', 'worktree', 'deps', 'gate', 'intake', 'decide', 'merge', 'approval', 'postmerge', 'revert', 'close', 'pr', 'ci', 'escalate', 'label', 'comment', 'split']);
+const GATED = new Set(['event', 'review', 'step', 'steps', 'checks', 'notes', 'axes', 'worktree', 'deps', 'gate', 'intake', 'decide', 'merge', 'approval', 'postmerge', 'revert', 'close', 'pr', 'ci', 'escalate', 'label', 'comment', 'split']);
+// The run's change, as F axes reads it: with no files given, the review range since the last reviewed commit (or the base), and
+// the whole change from the base, which the pick and custom steps' when read (decide's re-pick does too).
+function changeOf(run: string, r: Run, given: string[]) {
+  const w = wtInfo(run);
+  let files = given, range: string | null = null, whole = given;
+  if (!files.length) {
+    if (!w) throw new Error(`no worktree for ${run}; pass changed files or run "worktree" first`);
+    const base = baseRef(w.repoPath, w.base as string), diff = (from: string) => git('-C', w.path, 'diff', '--name-only', '--no-renames', `${from}...HEAD`).split('\n').filter(Boolean); // a rename under both names
+    range = `${r.reviewedSha || base}...HEAD`; // a full ref: a planted tag or branch can't empty the diff
+    files = diff(r.reviewedSha || base); whole = r.reviewedSha ? diff(base) : files;
+  }
+  const sha = w && fs.existsSync(w.path) ? git('-C', w.path, 'rev-parse', 'HEAD').trim() : undefined;
+  return { files, range, whole, sha };
+}
+// The pick (pipelines §7.4): once per iteration, by the first of F steps build.after and F axes, after build and before review,
+// from the labels intake recorded, the run's whole change and the PR's size. Recorded as review routed, which F event refuses.
+function pickOnce(run: string, r: Run, whole: string[]) {
+  const mine = thisRun(r.events);
+  if (pickedThisIteration(mine)) return mine;
+  const repo = run.split(/[#:@]/)[0] as string, fx = { labels: runLabels(mine), files: whole, diffLines: prDiffLines(r) }, p = pick(repo, fx); // every changed file: a files term needs them all
+  const kept = { ...fx, files: whole.slice(0, 200), ...(whole.length > 200 && { fileCount: whole.length, truncated: true }) }; // the record is bounded, and says so
+  record(run, 'review', 'routed', { pipeline: p.pipeline, ...(p.name && { name: p.name }), set: p.set, ...(p.text && { text: p.text }), iteration: r.iteration, facts: kept, off: p.off, caps: p.caps, ...(p.local && { local: true }) });
+  return thisRun(getRun(run).events);
+}
+// A runner's usage from the orchestrator's flags, kept even when the reply is invalid; never from the reply's own text.
+function usageFlags(rest: string[], payload: Record<string, unknown>) {
+  for (const k of ['tokens', 'costUsd', 'usage', 'model']) delete payload[k];
+  for (const [flag, k] of [['--tokens', 'tokens'], ['--cost-usd', 'costUsd']] as const) {
+    const i = rest.indexOf(flag), v = i < 0 ? undefined : Number(rest[i + 1]);
+    if (i >= 0 && !(v! >= 0)) throw new Error(`${flag} needs a number`);
+    if (i >= 0) payload[k] = v;
+  }
+  const mi = rest.indexOf('--model'), ui = rest.indexOf('--usage'); // record() validates both, as for "F event"; usage replaces --tokens with its sum
+  if (mi >= 0) payload.model = rest[mi + 1];
+  if (ui >= 0) { try { payload.usage = JSON.parse(rest[ui + 1]!); } catch { throw new Error('--usage needs JSON like {"input":1,"output":2,"cacheRead":3,"cacheWrite":4}'); } }
+}
 export async function main(argv: string[]) {
   // shortcut: the words are typed as present; a missing one is undefined at run time, and the command's own check (or its
   // callee's) reports it, as before typing. Index into rest the same way (rest[i]!).
@@ -49,7 +87,7 @@ export async function main(argv: string[]) {
       case 'event': {
         const [stage, status] = rest as [string, string], p = json(rest[2]); // as argv above: record() checks them
         const owned: Record<string, string> = { 'intake:started': 'intake', 'review:started': 'axes', 'approve:decided': 'merge', 'approve:passed': 'approve --merge', 'spec:decided': 'approve', 'approve:merged': 'merge', 'approve:reverted': 'revert', 'build:opened': 'pr', 'intake:split': 'split', 'intake:decided': 'split', 'approve:closed': 'sync', 'idea:retired': 'retire' };
-        const owner = owned[`${stage}:${status}`] || ({ gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop', ship: 'ship' } as Record<string, string>)[stage];
+        const owner = owned[`${stage}:${status}`] || ({ gate: 'gate', rules: 'rules', idea: 'new', plan: 'new', repo: 'new', issues: 'issues create', loop: 'loop', ship: 'ship', custom: status === 'started' ? 'steps' : 'step' } as Record<string, string>)[stage];
         if (status === 'routed') throw new Error('"routed" is recorded by "axes", not by hand'); // on any stage: the pick is F's (pipelines §7.6)
         if (owner) throw new Error(`"${stage} ${status}" is recorded by "${owner}", not by hand`);
         const ender = ({ merged: '"merge" and "sync"', closed: '"sync"', reverted: '"revert"' } as Record<string, string>)[status];
@@ -63,26 +101,36 @@ export async function main(argv: string[]) {
       }
       case 'review': { // raw reviewer output on stdin, from any runner; invalid output is recorded as a failed review
         const { status, payload } = reviewFromText(run, rest[0]!, fs.readFileSync(0, 'utf8'));
-        for (const k of ['tokens', 'costUsd', 'usage', 'model']) delete payload[k]; // usage comes from the orchestrator's flags, never the reviewer's own text
-        for (const [flag, k] of [['--tokens', 'tokens'], ['--cost-usd', 'costUsd']] as const) { // the orchestrator's usage numbers, kept even when the reply is invalid
-          const i = rest.indexOf(flag), v = i < 0 ? undefined : Number(rest[i + 1]);
-          if (i >= 0 && !(v! >= 0)) throw new Error(`${flag} needs a number`);
-          if (i >= 0) payload[k] = v;
-        }
-        const mi = rest.indexOf('--model'), ui = rest.indexOf('--usage'); // record() validates both, as for "F event"; usage replaces --tokens with its sum
-        if (mi >= 0) payload.model = rest[mi + 1];
-        if (ui >= 0) { try { payload.usage = JSON.parse(rest[ui + 1]!); } catch { throw new Error('--usage needs JSON like {"input":1,"output":2,"cacheRead":3,"cacheWrite":4}'); } }
+        usageFlags(rest, payload);
         record(run, 'review', status, payload, { fallback });
         out({ status, findings: payload.findings }); break;
       }
-      case 'skills': { // skills <owner/repo> | skills set|unset <owner/repo|default> <step> [json] | skills preset <name> [scope] | skills catalog [owner/repo]
+      case 'steps': { // steps <run> spec.after|build.after [changed files...]: the custom steps due now, recorded as custom started (pipelines §3)
+        const slot = rest[0] as Slot;
+        if (!SLOTS.includes(slot)) throw new Error(`usage: steps <run> ${SLOTS.join('|')} [changed files...]`);
+        const r = getRun(run);
+        let whole: string[] = [];
+        if (slot === 'build.after') { whole = changeOf(run, r, rest.slice(1)).whole; pickOnce(run, r, whole); } // the first of F steps build.after and F axes picks
+        const now = getRun(run), { due, steps } = stepsDue(now, slot, whole), plan = availablePlan(Object.fromEntries(steps.map(({ id, slot: _s, when: _w, ...x }) => [id, x])));
+        record(run, 'custom', 'started', { slot, ids: due, iteration: slot === 'spec.after' ? now.iteration + 1 : now.iteration });
+        out({ slot, due, steps: steps.map((c) => ({ id: c.id, ...plan[c.id] })), ...(due.length && { record: `F step ${run} <id> passed|failed -` }) }); break;
+      }
+      case 'step': { // step <run> <id> passed|failed - : one custom step's result, the runner's raw reply on stdin; invalid output is a failure
+        if (rest.at(-1) !== '-') throw new Error('usage: step <run> <id> passed|failed [--tokens n] [--model id] [--usage json] [--cost-usd x] -   (the runner\'s reply on stdin)');
+        const { status, payload } = stepFromText(run, rest[0]!, rest[1]!, fs.readFileSync(0, 'utf8'));
+        usageFlags(rest, payload as Record<string, unknown>);
+        record(run, 'custom', status, payload, { fallback });
+        out({ status, findings: payload.findings }); break;
+      }
+      case 'skills': { // skills <owner/repo> | skills set|unset <owner/repo|default> <step> [json] [--reason "…"] | skills preset <name> [scope] | skills catalog [owner/repo]
         if (run === 'catalog') { out(catalog(rest)); break; }
-        if (run === 'unset') { out(setSkill(rest[0] as string, rest[1] as string, undefined)); break; } // argv boundary: setSkill's scope check refuses a missing scope
+        const ri = rest.indexOf('--reason'), reason = ri < 0 ? undefined : rest.splice(ri, 2)[1] ?? ''; // removing a custom or added review step needs one (pipelines §5)
+        if (run === 'unset') { out(setSkill(rest[0] as string, rest[1] as string, undefined, { reason })); break; } // argv boundary: setSkill's scope check refuses a missing scope
         if (run === 'preset') { out(applyPreset(rest[0], rest[1])); break; }
         if (run !== 'set') { const k = skills(run || ''); out({ ...k, plan: availablePlan(k.plan), extra: Object.values(availablePlan(k.extra)) }); break; }
         const [scope, key, spec] = rest;
         if (!scope || !key || !spec) throw new Error('usage: skills set <owner/repo|default> <step> <json runner>');
-        out(setSkill(scope, key, json(spec))); break;
+        out(setSkill(scope, key, json(spec), { reason })); break;
       }
       case 'rules': { // rules <owner/repo> | rules set <scope> <key> <value> --reason "…" [--until YYYY-MM-DD] | rules unset <scope> <key> [--reason "…"]
         const flag = (f: string) => { const i = rest.indexOf(f); return i < 0 ? undefined : rest.splice(i, 2)[1] ?? ''; };
@@ -105,31 +153,16 @@ export async function main(argv: string[]) {
         out(setAutoMerge(run, rest[0] === 'on')); break;
       }
       case 'axes': { // no files: diff the run's worktree since the last reviewed commit (or the base branch)
-        const r = getRun(run), w = wtInfo(run);
-        let files = rest, range = null, whole = rest;
-        if (!files.length) {
-          if (!w) throw new Error(`no worktree for ${run}; pass changed files or run "worktree" first`);
-          const base = baseRef(w.repoPath, w.base as string), diff = (from: string) => git('-C', w.path, 'diff', '--name-only', '--no-renames', `${from}...HEAD`).split('\n').filter(Boolean); // a rename under both names
-          range = `${r.reviewedSha || base}...HEAD`; // a full ref: a planted tag or branch can't empty the diff
-          files = diff(r.reviewedSha || base); whole = r.reviewedSha ? diff(base) : files; // the pick reads the run's whole change, as decide's re-pick does
-        }
-        const sha = w && fs.existsSync(w.path) ? git('-C', w.path, 'rev-parse', 'HEAD').trim() : undefined;
-        const repo = run.split(/[#:@]/)[0] as string, extra = skills(repo).extra; // split always has a first part
-        // The pick (pipelines §7.4): once per iteration, here, after build and before review, from the labels intake recorded, the
-        // files under review and the PR's size. Recorded as review routed, which F event refuses; a second F axes reuses it.
-        let mine = thisRun(r.events);
-        if (!pickedThisIteration(mine)) {
-          const fx = { labels: runLabels(mine), files: whole, diffLines: prDiffLines(r) }, p = pick(repo, fx); // every changed file: a files term needs them all
-          const kept = { ...fx, files: whole.slice(0, 200), ...(whole.length > 200 && { fileCount: whole.length, truncated: true }) }; // the record is bounded, and says so
-          record(run, 'review', 'routed', { pipeline: p.pipeline, ...(p.name && { name: p.name }), set: p.set, ...(p.text && { text: p.text }), iteration: r.iteration, facts: kept, off: p.off, caps: p.caps, ...(p.local && { local: true }) });
-          mine = thisRun(getRun(run).events);
-        }
+        const r = getRun(run), { files, range, whole, sha } = changeOf(run, r, rest);
+        const repo = run.split(/[#:@]/)[0] as string; // split always has a first part
+        const mine = pickOnce(run, r, whole), picked = pickedOf(mine), added = addedOf(repo, picked), extra = [...skills(repo).extra, ...added.extra]; // a pipeline met adds its own axes
+        customCleared({ id: run, events: mine }, 'build.after', customOf(repo, picked)['build.after'].filter((c) => dueOn(c, whole)).map((c) => c.id), 'run F axes'); // §3: review waits for them
         // The meet (§7.4, §6): the current pipeline's live steps.off, kept only where every pick of this run turned it off, and the
         // run's first review's list too (a run whose first review predates the rule has nothing off). It only ever shrinks.
         const route = routeOf(mine)!, cur = runGets(repo, route.pipeline === 'default' ? null : route.pipeline), rule = cur.offRule;
         const first = mine.find((e) => e.stage === 'review' && e.status === 'started');
         const off = ((rule?.value as string[] | undefined) ?? []).filter((k) => route.off.includes(k) && (!first || (Array.isArray(first.off) && first.off.includes(k))));
-        const all = reviewAxes(r, files, extra), axes = reviewAxes(r, files, extra, off), dropped = all.filter((a) => !axes.includes(a)).map((a) => `review.${a}`);
+        const all = reviewAxes(r, files, extra, [], added.on), axes = reviewAxes(r, files, extra, off, added.on), dropped = all.filter((a) => !axes.includes(a)).map((a) => `review.${a}`);
         const named = route.pipeline !== 'default' ? { scope: `${repo}@${route.pipeline}`, route: routeText(route) } : {};
         const offRule = dropped.length && rule ? { offRule: { reason: rule.reason, by: isLocal(rule) ? 'a local user (unverified)' : rule.setBy, ...(isLocal(rule) && { local: true }), ...named } } : {};
         record(run, 'review', 'started', { axes, sha, range, off, ...(dropped.length && { dropped }), ...offRule });
@@ -138,7 +171,7 @@ export async function main(argv: string[]) {
       case 'worktree': out(worktree(run, rest[0])); break;
       case 'deps': console.log(deps(run)); break;
       case 'gc': out(gc()); break;
-      case 'gate': { const g = getRun(run); const { status, ...p } = gate(g, runCapsOf(g)); record(run, 'gate', status, p, { fallback }); out({ status, ...p }); break; }
+      case 'gate': { const g = getRun(run), c = runCustom(g), ids = (x: { id: string }[]) => x.map((y) => y.id); const { status, ...p } = gate(g, runCapsOf(g), { 'spec.after': ids(c['spec.after']), 'build.after': ids(c['build.after']) }); record(run, 'gate', status, p, { fallback }); out({ status, ...p }); break; }
       case 'intake': out(intake(run)); break;
       case 'sync': { // `sync` alone re-syncs every attached project
         const list: [string, string | undefined][] = run ? [[run, rest[0]]] : Object.entries(projects()).map(([k, v]) => [k, v.path]);
@@ -278,9 +311,11 @@ export async function main(argv: string[]) {
   deps   <run>                            cheapest node_modules for the worktree
   axes   <run> [changed files...]         pick + record review axes (default: worktree diff since last review)
   review <run> <axis> [--tokens n] [--cost-usd x] [--model id] [--usage json] [--fallback why]  record a reviewer's raw reply from stdin (invalid = failed review)
+  steps  <run> spec.after|build.after [changed files...]  the custom steps due now, recorded (run after the spec passes, and after build passes)
+  step   <run> <id> passed|failed [--tokens n] [--cost-usd x] [--model id] [--usage json] [--fallback why] -  record a custom step's raw reply from stdin (invalid = failed)
   skills <owner/repo>                     print who runs each step (default, skill, brief or provider)
-  skills set <owner/repo|default> <step> <json>  configure one step (intake, spec, build, review.<axis>, verifier, postmerge, axes.extra)
-  skills unset <owner/repo|default> <step>       drop a step's choice (a project then inherits the global one)
+  skills set <owner/repo|default> <step> <json> [--reason why]  configure one step (intake, spec, build, review.<axis>, verifier, postmerge, axes.extra, steps.custom, axes.on); removing a custom step or an added review needs a reason and your typed confirmation
+  skills unset <owner/repo|default> <step> [--reason why]       drop a step's choice (a project then inherits the global one)
   skills preset <name> [owner/repo|default]  set every Claude-run step's model, effort and fallback from a preset; a project only on steps it sets (${Object.keys(PRESETS).join(', ')}; built-in: ${DEFAULT_PRESET})
   skills catalog [owner/repo...]          every runner on this machine: built-in, harness tools, global, project, your briefs
   ui     [port]                           serve the dashboard on 127.0.0.1 with a token, so the Skills sheet and setup wizard can save

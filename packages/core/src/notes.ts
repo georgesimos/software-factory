@@ -15,7 +15,7 @@ const runOf = (run: string): Run | undefined => { const runs = derive(read()); r
 // Whether a step already ran, by the events it records: the verifier is a review usage record, postmerge follows "approve merged".
 const ran = (r: Run, step: string) => r.events.some((e) => (step === 'verifier' ? e.stage === 'review' && e.role === 'verifier'
   : step === 'postmerge' ? e.stage === 'approve' && e.status === 'merged'
-  : step.startsWith('review.') ? e.stage === 'review' && e.axis === step.slice(7) : e.stage === step));
+  : step.startsWith('review.') ? e.stage === 'review' && e.axis === step.slice(7) : step.startsWith('custom.') ? e.stage === 'custom' && e.status !== 'started' && e.id === step.slice(7) : e.stage === step));
 // review.<axis> must be built in or in this repo's axes.extra
 const checkAxis = (run: string, step: string, at: string) => {
   const axis = step.startsWith('review.') && step.slice(7), repo = run.split('#')[0] as string; // split always has a first part

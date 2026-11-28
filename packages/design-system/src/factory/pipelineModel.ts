@@ -4,16 +4,23 @@
 
 /** A step's runner in skills.json (core's checkRunner). Extra axes add `axis` and `when`. */
 export interface StepRunner { use?: string; name?: string; path?: string; harness?: string; model?: string; effort?: string; fallback?: string[]; axis?: string; when?: string[] }
+/** Where a custom step runs (core's SLOTS): after the spec is written, or after the build's checks pass. */
+export type CustomSlot = 'spec.after' | 'build.after';
+export const CUSTOM_SLOTS: CustomSlot[] = ['spec.after', 'build.after'];
+/** A custom step (core's steps.custom): an id, its slot, a runner and, at build.after, the files it runs on. */
+export interface CustomStep extends StepRunner { id: string; slot: CustomSlot }
 /** A step the steps.off rule turned off (core's pipeline().off): who set it and why. `by` is a login, never an OS user name. */
 export interface PipelineOff { step: string; scope?: string; reason?: string; by?: string; until?: string }
 /** A pipeline as F resolves it (core's skills.ts pipeline()): the graph draws only this. */
 export interface Pipeline {
   host: string | null; tracker: string | null; locked: string[]; optional: string[]; steps: string[]; intake: string[]; loops: string[];
-  axes: { axis: string; when: string | string[] }[]; off: PipelineOff[]; custom: Record<string, StepRunner[]>; warnings: string[];
+  axes: { axis: string; when: string | string[] }[]; off: PipelineOff[]; custom: Partial<Record<CustomSlot, CustomStep[]>>; warnings: string[];
+  /** The review axes this pipeline adds (axes.on), on every change. */
+  on?: string[];
   /** The caps a run gets: the lower of the project's rules and F's built-in ones. */
   caps?: { loops: number; budgetUsd: number };
 }
-export interface PipelineNode { id: string; label: string; sub?: string; locked: boolean; runner?: StepRunner; col: number; row: number; kind: 'step' | 'outcome' | 'review' | 'start'; off?: PipelineOff }
+export interface PipelineNode { id: string; label: string; sub?: string; locked: boolean; runner?: StepRunner; col: number; row: number; kind: 'step' | 'outcome' | 'review' | 'start' | 'custom'; off?: PipelineOff; slot?: CustomSlot }
 export interface PipelineEdge { from: string; to: string; label?: string; loop?: boolean }
 
 const LABEL: Record<string, string> = { intake: 'Intake', spec: 'Spec', build: 'Build', verifier: 'Verifier', postmerge: 'Post-merge', gate: 'Gate', merge: 'Merge', watch: 'Watch main' };
@@ -36,7 +43,7 @@ export function pipelineGraph(p: Pipeline, plan: Record<string, StepRunner> = {}
   let prev: string[] = [];
   for (const s of p.steps) {
     if (s === 'review') {
-      for (const a of p.axes) { const k = `review.${a.axis}`; add(k, nodeLabel(k), 'review', whenText(a.when), k, p.off.find((o) => o.step === k)); } // an axis turned off stays in place, marked
+      for (const a of p.axes) { const k = `review.${a.axis}`; add(k, nodeLabel(k), 'review', `${p.on?.includes(k) ? 'added by this pipeline · ' : ''}${whenText(a.when)}`, k, p.off.find((o) => o.step === k)); } // an axis turned off stays in place, marked
       for (const a of p.axes) for (const f of prev) edges.push({ from: f, to: `review.${a.axis}` });
       prev = p.axes.map((a) => `review.${a.axis}`);
       continue;
@@ -44,6 +51,13 @@ export function pipelineGraph(p: Pipeline, plan: Record<string, StepRunner> = {}
     add(s, nodeLabel(s), 'step', SUB[s]);
     for (const f of prev) edges.push({ from: f, to: s, ...(f === 'intake' && { label: 'pass' }) });
     prev = [s];
+    const slot = s === 'spec' ? 'spec.after' : s === 'build' ? 'build.after' : null; // custom steps, in order, between it and the next step
+    for (const c of slot ? p.custom?.[slot] ?? [] : []) {
+      const k = `custom.${c.id}`;
+      nodes.push({ id: k, label: c.id, kind: 'custom', locked: false, slot: c.slot, runner: c, sub: c.when ? whenText(c.when) : slot === 'spec.after' ? 'after the spec' : 'every change' });
+      for (const f of prev) edges.push({ from: f, to: k });
+      prev = [k];
+    }
     if (s === 'intake') for (const o of p.intake.filter((x) => x !== 'pass')) {
       const [id, label] = OUTCOME[o] ?? [o, o];
       add(id, label, 'outcome');
@@ -61,13 +75,27 @@ export function pipelineGraph(p: Pipeline, plan: Record<string, StepRunner> = {}
   return { nodes: placed, edges };
 }
 
+/** Where a "+" can add a custom step: each connection from spec, or build, through its custom steps to the next step (one
+ *  to the reviews, not one per axis), as the slot and the position in that slot's list. */
+export function addPoints({ nodes, edges }: { nodes: PipelineNode[]; edges: PipelineEdge[] }, slots: CustomSlot[]) {
+  const out: { from: string; to: string; slot: CustomSlot; index: number }[] = [];
+  for (const slot of slots) {
+    const chain = [slot === 'spec.after' ? 'spec' : 'build', ...nodes.filter((n) => n.slot === slot).map((n) => n.id)];
+    if (!nodes.some((n) => n.id === chain[0])) continue;
+    const next = edges.find((e) => !e.loop && e.from === chain.at(-1))?.to;
+    if (!next) continue;
+    [...chain.slice(1), next].forEach((to, index) => out.push({ from: chain[index]!, to, slot, index }));
+  }
+  return out;
+}
+
 // ---- a run drawn on its pipeline ----
 export type StepStatus = 'passed' | 'failed' | 'skipped' | 'pending' | 'running' | 'stopped';
 export const STEP_STATUS: Record<StepStatus, string> = { passed: 'Passed', failed: 'Failed', skipped: 'Skipped', pending: 'Not reached', running: 'Running', stopped: 'Stopped' };
 /** One step's latest result in a run. `review`: a review axis's verdict, with findings outranking the status word as in F. */
 export interface StepResult { status: StepStatus; note?: string; tokens?: number; ms?: number; review?: { verdict: 'passed' | 'failed'; findings: number; blocking: number; dismissed: number } }
 /** The few event fields the overlay reads (core's FactoryEvent): nothing else of an event reaches the page. */
-export interface StepEvent { ts?: string; stage?: string; status?: string; axis?: string; axes?: string[]; role?: string; next?: string; tokens?: number; findings?: { severity?: string; dismissed?: unknown }[] }
+export interface StepEvent { ts?: string; stage?: string; status?: string; axis?: string; axes?: string[]; role?: string; next?: string; tokens?: number; findings?: { severity?: string; dismissed?: unknown }[]; slot?: string; ids?: string[]; id?: string }
 /** Steps by node id, the forward edges the run took (`from>to`), and how often the gate looped back to each step. */
 export interface RunOverlay { steps: Record<string, StepResult>; taken: string[]; loops: Record<string, number> }
 
@@ -104,7 +132,7 @@ export function runOverlay({ nodes, edges }: { nodes: PipelineNode[]; edges: Pip
   let ended = false, blocking = 0; // blocking: this iteration's undismissed high and medium findings, so the verifier had work
   for (const e of events) {
     const { stage, status = '' } = e;
-    if (!['intake', 'spec', 'build', 'review', 'gate', 'approve'].includes(stage ?? '')) continue; // notes, deploys, rules: not steps
+    if (!['intake', 'spec', 'build', 'review', 'gate', 'approve', 'custom'].includes(stage ?? '')) continue; // notes, deploys, rules: not steps
     if (!steps.ready) put('ready', 'passed');
     ended = ENDED.has(status) || (ended && !(stage === 'intake' && status === 'started'));
     if (stage === 'intake' || stage === 'spec') {
@@ -125,11 +153,14 @@ export function runOverlay({ nodes, edges }: { nodes: PipelineNode[]; edges: Pip
       const fs = e.findings ?? [], n = fs.filter(blocks).length, verdict = n ? 'failed' : 'passed';
       blocking += n;
       end(`review.${e.axis}`, e, verdict, { review: { verdict, findings: fs.length, blocking: n, dismissed: fs.filter((f) => f.dismissed).length } });
+    } else if (stage === 'custom') { // F steps: the slot's due steps run, the rest are skipped; F step: one result
+      if (status === 'started') { for (const n of nodes) if (n.slot === e.slot) (e.ids ?? []).includes(n.id.slice(7)) ? begin(n.id, e) : put(n.id, 'skipped'); }
+      else end(`custom.${e.id}`, e, ...recorded(status));
     } else if (stage === 'gate') {
       if (!steps.verifier && ids.has('verifier')) { put('verifier', 'skipped', { note: blocking ? 'no record' : 'nothing blocking to verify' }); reached.add('verifier'); } // the run went through it
       const back = e.next === 'spec' || e.next === 'build' ? e.next : '';
       put('gate', status === 'passed' ? 'passed' : 'failed', status === 'passed' ? {} : { note: back ? `back to ${back}` : 'to you' });
-      if (back === 'spec') reset([...after, 'build']); // back before build: build and everything after it run again
+      if (back === 'spec') reset([...after, 'build', ...nodes.filter((n) => n.slot === 'spec.after').map((n) => n.id)]); // back before build: build and everything after it run again
       if (back) { loops[back] = (loops[back] ?? 0) + 1; put(back, 'running', { note: 'sent back by the gate' }); delete since[back]; }
     } else if (stage === 'approve') {
       if (status === 'reverted') put('watch', 'failed', { note: 'reverted' });

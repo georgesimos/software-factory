@@ -1,6 +1,6 @@
 // Sample pipelines for acme/shop, in the shape F's pipeline() sends. Made up for the playground: the default plus three named
 // ones, each a variation the owner could approve (fewer optional reviews, lower caps, an added review); every one keeps the
-// locked steps and the gate's loop-backs, and no named pipeline has a custom step. Two have a sample run for "Show a run…".
+// locked steps and the gate's loop-backs; the default has two custom steps (CUSTOM), the named ones none. Two have a sample run for "Show a run…".
 import type { Pipeline, Run, RunEvent, StepRunner } from '@software-factory/design-system';
 
 const LOCKED = ['intake', 'spec', 'build', 'review.code', 'review.security', 'verifier', 'gate', 'merge', 'watch'];
@@ -9,6 +9,11 @@ const BUILT_IN: Pipeline = {
   steps: ['intake', 'spec', 'build', 'review', 'verifier', 'gate', 'merge', 'watch'], intake: ['pass', 'split', 'needs-info', 'reject'], loops: ['spec', 'build'],
   axes: [{ axis: 'code', when: 'always' }, { axis: 'security', when: 'always' }, { axis: 'ux', when: 'ui' }, { axis: 'ui', when: 'ui' }, { axis: 'seo', when: 'seo' }, { axis: 'docs', when: 'docs' }],
   off: [], custom: { 'spec.after': [], 'build.after': [] }, warnings: [],
+};
+/** The default pipeline's own custom steps (slice 5): a spec check, and an end-to-end run when the web app changes. */
+export const CUSTOM: Pipeline['custom'] = {
+  'spec.after': [{ id: 'spec-lint', slot: 'spec.after', use: 'skill', name: 'spec-lint' }],
+  'build.after': [{ id: 'e2e', slot: 'build.after', use: 'brief', path: '~/.claude/factory/briefs/e2e.md', when: ['apps/web/**'] }],
 };
 const r = (model: string, effort = 'high'): StepRunner => ({ use: 'default', model, effort });
 export const PLAN: Record<string, StepRunner> = {
@@ -65,5 +70,5 @@ export const PIPELINES: SamplePipeline[] = [
   { id: 'ui-first', name: 'UI-first', meta: 'files src/components/**', cap: 3, costCap: 5, runs: [uiRun],
     pipeline: { ...BUILT_IN, axes: [...BUILT_IN.axes.slice(0, 2), { axis: 'ux', when: 'always' }, { axis: 'ui', when: 'always' }, ...BUILT_IN.axes.slice(4), { axis: 'a11y', when: ['**/*.tsx'] }], off: offBy('components have no SEO', 'review.seo') } },
   { id: 'spike', name: 'Research spike', meta: 'label spike', cap: 2, costCap: 3, runs: [], pipeline: { ...BUILT_IN, off: offBy('a spike ships nothing', 'review.seo', 'review.docs') } },
-  { id: 'default', name: 'Factory default', meta: 'every other issue', cap: 3, costCap: 5, runs: [], pipeline: BUILT_IN },
+  { id: 'default', name: 'Factory default', meta: 'every other issue', cap: 3, costCap: 5, runs: [], pipeline: { ...BUILT_IN, custom: CUSTOM } },
 ];

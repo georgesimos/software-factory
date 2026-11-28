@@ -113,3 +113,11 @@ button.sf-pl-node:focus-visible { outline: 2px solid var(--sf-color-accent); out
 .sf-pl-result p { display: flex; align-items: center; gap: var(--sf-space-1); }
 @media (max-width: 1000px) { .sf-pl-cols { grid-template-columns: minmax(0, 1fr); } .sf-pl-list { grid-auto-flow: column; grid-auto-columns: minmax(160px, 1fr); overflow-x: auto; } }
 @media (max-width: 600px) { .sf-pl-scroll, .sf-pl-bar + .sf-pl-scroll { height: 55dvh; min-height: 280px; } .sf-pl-pct { display: none; } .sf-pl-map { width: 112px; height: auto; } } /* a phone: the graph scrolls in a window under the list, and the page still scrolls past it */
+/* Custom steps (pipelines slice 5): an accent edge on the left, so they read apart from F's. */
+.sf-pl-canvas li[data-kind="custom"] { border-left: 4px solid var(--sf-color-accent); }
+/* n8n's "+" on a connection: where a custom step can go. */
+.sf-pl-add { position: absolute; z-index: 1; width: 20px; height: 20px; padding: 0; border: 1.5px solid var(--sf-color-line-2); border-radius: 6px;
+  background: var(--sf-color-surface); color: var(--sf-color-ink-2); font: inherit; font-size: 14px; line-height: 1; cursor: pointer; }
+.sf-pl-add:hover { border-color: var(--sf-color-accent); color: var(--sf-color-accent); }
+.sf-pl-add:focus-visible { outline: 2px solid var(--sf-color-accent); outline-offset: 1px; }
+.sf-pl-main > .sf-pl-status { padding: var(--sf-space-2) var(--sf-space-3) 0; } /* the "+" result, under the canvas */

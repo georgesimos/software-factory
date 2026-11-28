@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import { setup } from '../../../packages/factory/test/setup.mjs';
 import { io, read } from '../../../packages/core/src/log.ts';
 import { rules, setRule, unsetRule } from '../../../packages/core/src/rules.ts';
-import { skillsFile } from '../../../packages/core/src/skills.ts';
+import { readSkills, setSkill, skillsFile } from '../../../packages/core/src/skills.ts';
 import { projectsFile } from '../../../packages/core/src/workspace.ts';
 import { confirmRule, requestRule } from '../src/rule-confirm.ts';
 
@@ -125,4 +125,34 @@ test('a routing request reads as routing and shows how runs are then routed; a r
   assert.equal(await confirmRule({ scope: 'acme/app@hot', key: 'match', raw: '[{"labels":["hotfix"]},{"files":["docs/**"]}]', unset: false, reason: 'docs too' }, show), null);
   assert.match(r.seen.at(-1).detail, /the rule changed while the dialog was open/);
   assert.equal(rules('acme/app@hot').policy.match.value.length, 1, 'nothing written');
+});
+
+test('a guarded skills write (pipelines slice 5): removing a custom step or an added review reads as that, and confirm writes through setSkill, audited', async () => {
+  const LINT = { id: 'lint', slot: 'spec.after', use: 'skill', name: 'spec-lint' }, SMOKE = { id: 'smoke', slot: 'build.after', use: 'skill', name: 'smoke' };
+  setSkill('acme/app', 'steps.custom', [LINT, SMOKE]);
+  const s = stub([1]);
+  await confirmRule({ scope: 'acme/app', key: 'steps.custom', raw: JSON.stringify([LINT]), unset: false, reason: 'smoke is flaky', skill: true }, s.show);
+  assert.deepEqual([s.seen[0].type, s.seen[0].message, s.seen[0].buttons, s.seen[0].defaultId], ['warning', 'Remove custom steps for acme/app?', ['Cancel', 'Remove them'], 0]);
+  assert.equal(s.seen[0].detail, 'Project: acme/app\nSetting: steps.custom\nNow: lint (spec.after), smoke (build.after)\nAfter: lint (spec.after)\n\n'
+    + 'The factory stops running these checks on this project from its next run. It is audited.\n\nReason, as typed on the page: smoke is flaky');
+  assert.deepEqual(readSkills()['acme/app']['steps.custom'].map((x) => x.id), ['lint']);
+  const ev = read().filter((e) => e.stage === 'rules').at(-1);
+  assert.deepEqual([ev.key, ev.reason, ev.setBy], ['steps.custom', 'smoke is flaky', 'stub-user']);
+  const c = stub([0]);
+  assert.equal(await confirmRule({ scope: 'acme/app', key: 'steps.custom', unset: true, reason: 'none', skill: true }, c.show), null, 'cancel');
+  assert.deepEqual(readSkills()['acme/app']['steps.custom'].map((x) => x.id), ['lint']);
+  const r = stub([1]); // changed while the dialog is open: refused
+  const show = async (box) => { if (box.type === 'warning') setSkill('acme/app', 'steps.custom', [LINT, SMOKE]); return r.show(box); };
+  assert.equal(await confirmRule({ scope: 'acme/app', key: 'steps.custom', unset: true, reason: 'none', skill: true }, show), null);
+  assert.match(r.seen.at(-1).detail, /changed while the dialog was open/);
+  const t = stub([1]); // adding asks nothing
+  assert.equal(await confirmRule({ scope: 'acme/app', key: 'steps.custom', raw: JSON.stringify([LINT, SMOKE, { ...SMOKE, id: 'more' }]), reason: 'x', skill: true }, t.show), null);
+  assert.match(t.seen[0].detail, /needs no confirmation/);
+  setRule('acme/app@hot', 'match', '[{"labels":["hotfix"]}]', { reason: 'urgent', ask: () => 'acme/app@hot' });
+  setSkill('acme/app@hot', 'axes.on', ['review.ux']);
+  const a = stub([1]);
+  await confirmRule({ scope: 'acme/app@hot', key: 'axes.on', unset: true, reason: 'not needed', skill: true }, a.show);
+  assert.deepEqual([a.seen[0].message, a.seen[0].buttons[1]], ['Remove added reviews for acme/app@hot?', 'Remove them']);
+  assert.match(a.seen[0].detail, /^Project: acme\/app@hot\nSetting: axes\.on\nNow: review\.ux\nAfter: nothing\n/);
+  assert.equal(readSkills()['acme/app@hot']['axes.on'], undefined);
 });

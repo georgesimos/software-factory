@@ -8,6 +8,7 @@ import { withMeasured } from './burn.ts';
 import { derive, validateReview, validateUsage } from './derive.ts';
 import { harnesses } from '../../adapters/harnesses/index.ts';
 import { specApproved, specAsked, specCleared } from './approve.ts';
+import { customCleared, runCustom } from './custom.ts';
 import type { FactoryEvent, Run } from './types.ts';
 
 // The dashboard renderer, registered by packages/server when it loads. Core alone (no server) skips the render.
@@ -45,6 +46,7 @@ export function record(run: string, stage: string, status: string, payload: Part
   if (stage === 'spec' && status === 'passed') specApproved(run, payload); // a local item's spec: only after F approve
   if (stage === 'spec' && status === 'awaiting-approval') payload = specAsked(run, payload); // and F hashes what is asked
   if (stage === 'build' && status === 'started') specCleared(run, 'start building'); // and nothing builds before it passed
+  if (stage === 'build' && status === 'started') { const r = derive(read())[run]; if (r) customCleared(r, 'spec.after', runCustom(r)['spec.after'].map((c) => c.id), 'record "build started"'); } // nor before its spec.after steps have results (pipelines §3)
   if (stage === 'review' && payload.role !== undefined) {
     if (payload.role !== 'verifier' || payload.axis !== undefined) throw new Error('role must be "verifier", without an axis');
     const extra = Object.keys(payload).filter((k) => !VERIFIER_KEYS.includes(k));
@@ -54,7 +56,7 @@ export function record(run: string, stage: string, status: string, payload: Part
   const { hostSessionId: _forged, ...own } = payload; payload = own; // the desktop session comes from the environment, never a payload
   const me = stage === 'ship' ? null : harnesses.find((h) => h.current?.()); // the harness F runs inside, if any; lets the UI link back to the driving session
   const host = me?.id === 'claude-code' ? process.env.CLAUDE_CODE_HOST_SESSION_ID : undefined; // the Claude desktop app's id for that session (#26); CLAUDE_CODE_SESSION_ID is the CLI transcript's
-  const ev = { ts: new Date().toISOString(), ...payload, ...(me ? { harness: me.id, sessionId: (me.current as () => string)(), ...(host && HOST_ID.test(host) && { hostSessionId: host }), cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback, payload.role)), run, stage, status };
+  const ev = { ts: new Date().toISOString(), ...payload, ...(me ? { harness: me.id, sessionId: (me.current as () => string)(), ...(host && HOST_ID.test(host) && { hostSessionId: host }), cwd: process.cwd() } : {}), ...(cli && runnerStamp(run, stage, payload.axis, cli.fallback, payload.role, payload.id)), run, stage, status };
   fs.mkdirSync(stateDir(), { recursive: true });
   fs.appendFileSync(log(), JSON.stringify(ev) + '\n');
   if (TERMINAL.includes(status) || status === 'needs-info') { // a finished (or parked) run gives back its worktree

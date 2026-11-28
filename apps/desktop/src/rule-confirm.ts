@@ -1,4 +1,5 @@
 import { routesText, ruleChange, setRule, shownNow, shownRule as shown, unsetRule, type RuleRequest } from '../../../packages/core/src/rules.ts';
+import { setSkill, shownSkill, skillChange } from '../../../packages/core/src/skills.ts';
 import type { ShowBox } from './approve-menu.ts';
 
 // A guarded rule write the page requested (docs/plans/pipelines.md §5: turning a step off, raising a cap), confirmed in a native
@@ -16,6 +17,12 @@ const WORDS: Record<string, [message: (scope: string) => string, button: string,
   pipelines: [(s) => `Change how issues are routed for ${s}?`, 'Change routing', 'Issues may go to a pipeline that runs fewer reviews or has other caps, from their next review. It is audited.'],
   match: [(s) => `Change how issues are routed for ${s.split('@')[0]}?`, 'Change routing', 'Issues may go to a pipeline that runs fewer reviews or has other caps, from their next review. It is audited.'],
 };
+// skills.json keys (slice 5, req.skill): removing what a project or pipeline added, through setSkill
+const SKILL_WORDS: Record<string, [message: (scope: string) => string, button: string, meaning: string]> = {
+  'steps.custom': [(s) => `Remove custom steps for ${s}?`, 'Remove them', 'The factory stops running these checks on this project from its next run. It is audited.'],
+  'axes.on': [(s) => `Remove added reviews for ${s}?`, 'Remove them', 'The factory stops running these reviews on this pipeline from its next review. Code and security reviews always run. It is audited.'],
+  'axes.extra': [(s) => `Remove added reviews for ${s}?`, 'Remove them', 'The factory stops running these reviews on this pipeline from its next review. Code and security reviews always run. It is audited.'],
+};
 const clean = (s: unknown) => String(s ?? '').replace(/[\x00-\x1f\x7f-\x9f​-‏‪-‮⁦-⁩]/g, ' ').slice(0, 200);
 
 /** The server's guarded.request: false while a dialog is open, so the route refuses rather than answering "requested". */
@@ -28,6 +35,7 @@ export async function confirmRule(req: RuleRequest, show: ShowBox) {
   if (open) return null;
   open = true;
   try {
+    if (req.skill) return await confirmSkill(req, show);
     const raw = req.unset ? undefined : req.raw, at = { reason: req.reason, until: req.until };
     const c = ruleChange(req.scope, req.key, raw, at), w = WORDS[c.key];
     if (!c.doing || !w) throw new Error(`${c.key} needs no confirmation: nothing to do here`); // the route only requests what loosens
@@ -43,4 +51,15 @@ export async function confirmRule(req: RuleRequest, show: ShowBox) {
     await show({ type: 'error', title: 'Rule change', message: 'Nothing was changed.', detail: (e as Error).message, buttons: ['OK'] });
     return null;
   } finally { open = false; }
+}
+async function confirmSkill(req: RuleRequest, show: ShowBox) {
+  const value = req.unset || req.raw === undefined ? undefined : JSON.parse(req.raw);
+  const c = skillChange(req.scope, req.key, value), w = SKILL_WORDS[c.key];
+  if (!c.doing || !w) throw new Error(`${c.key} needs no confirmation: nothing to do here`);
+  const ok = (await show({ type: 'warning', title: 'Confirm a pipeline change', message: w[0](c.scope),
+    detail: `Project: ${c.scope}\nSetting: ${c.key}\nNow: ${shownSkill(c.key, c.stored)}\nAfter: ${shownSkill(c.key, c.value)}\n\n${w[2]}\n\nReason, as typed on the page: ${clean(req.reason)}`,
+    buttons: ['Cancel', w[1]], defaultId: 0, cancelId: 0, noLink: true })).response === 1;
+  if (!ok) return null;
+  if (JSON.stringify(skillChange(req.scope, req.key, value).stored) !== JSON.stringify(c.stored)) throw new Error('the setting changed while the dialog was open: nothing was written. Request it again to see the new value.');
+  return setSkill(c.scope, c.key, value, { reason: req.reason, ask: () => c.scope }); // the dialog was the confirmation
 }

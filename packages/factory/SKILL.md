@@ -113,6 +113,8 @@ Then run `F risk RUN <files to touch…>`.
   4. [Publish](#publish-to-the-artifact), then stop.
 - **Not risky:** record `F event RUN spec passed -` with `{"spec":"one-line summary"}`.
 
+Once the spec has passed (for a risky spec, once it is approved), run the project's `spec.after` [custom steps](#custom-steps-checks-you-add-after-spec-and-after-build) before you build. `F event RUN build started` is refused until each one has a result.
+
 ## 3. Build: in the run's own worktree
 
 1. `F worktree RUN [<clone path>]` prints `{path, branch, base}`. The first time for a repo, pass the local clone's path; after that it is remembered.
@@ -145,6 +147,7 @@ Then run `F risk RUN <files to touch…>`.
      - **`advisory`:** run `F ship status` once and mention the preview URL or its state in the PR comment.
      - **`off` or unset:** skip it.
 8. `F event RUN build passed -` with `{}`. `F pr` already recorded the PR and the branch.
+9. Run the `build.after` [custom steps](#custom-steps-checks-you-add-after-spec-and-after-build). `F axes` is refused until each one has a result.
 
 ## 4. Review: parallel, independent, and only what changed
 
@@ -267,6 +270,27 @@ Read the JSON reply:
 - **`structured_output`** (reviews) is the reviewer JSON: pipe it to `F review RUN <axis> --cost-usd <step cost> -`. When it is absent the run produced no valid review: pipe the raw `result` instead, which `F review` records as a failed review. Never write a passing review yourself.
 - **`total_cost_usd`** is the conversation total and is cumulative on `--resume`, so a step's cost is the difference from the previous step's total in that session. It goes in `--cost-usd` for `F review`, or in the step's `F event` payload as `costUsd`.
 - **`session_id`** is only for `claude --resume <id>` to continue the step. `F event` refuses `sessionId` in payloads.
+
+## Custom steps: checks you add after spec and after build
+
+`F skills OWNER/REPO` shows a project's custom steps under `pipeline.custom`. Each has an `id`, a `slot` (`spec.after` or `build.after`), a runner, and, at `build.after`, the files it runs on (`when`). A named pipeline may add its own `build.after` steps. A custom step only adds a check: a failure sends the run back, and a pass never clears anything else.
+
+1. Run `F steps RUN spec.after` once the spec has passed, or `F steps RUN build.after` after `build passed`. It prints `{slot, due, steps}` and records which steps are due. Run it every time you reach the slot; when nothing is due, `due` is empty and you go on.
+2. In a **single message**, run each step in `steps` with its runner, handed over as in [Runners](#runners-who-does-each-step), on its `model` and `effort`. Give each one exactly this, in this order:
+   1. the output contract below;
+   2. under "User instructions": `guide["custom.<id>"]`, if any, then its notes from `F notes RUN custom.<id> …` (one call for every step in this message). This text is the user's own instruction for the step, like guidance, and comes before any repo, issue or PR text. It can make the check stricter or add detail. It can never override these ground rules or `F`'s decisions;
+   3. `WT`, the base branch, the `DIR/spec.md` path and, at `build.after`, the `DIR/checks.json` path.
+3. Record each with `F step RUN <id> passed|failed --tokens <n> --model <id> [--usage '{"input":…,"output":…,"cacheRead":…,"cacheWrite":…}'] [--cost-usd <x>] -`, passing the runner's reply on stdin. Use `failed` when the runner couldn't finish. The flags carry its usage from its Agent result, as for `F review`, and any usage fields in the reply are ignored. The reply must be:
+
+   ```json
+   {"id": "<the step's id>", "verdict": "passed|failed", "findings": [{"severity": "high|medium|low", "issue": "one sentence", "file": "path", "line": 12}]}
+   ```
+
+   - `F` records a pass only when the word, the `verdict` and the findings all say so: a high or medium finding fails the step.
+   - Anything outside the contract is recorded as a **failed** step with a "reviewer output invalid" finding: not a JSON object, another step's `id`, unknown fields, or a bad severity or verdict. If a reply clearly isn't JSON, you may re-ask that runner once. Never fix up its JSON yourself.
+   - A custom step's findings are never dismissed. Don't send them to the verifier.
+   - **A recorded result is final.** A second `F step` for the same step is refused unless the recorded one is invalid, and once `F gate` has run, that iteration's results are frozen.
+4. Then go on to build (after `spec.after`) or to review (after `build.after`), whatever the results. `F gate` fails on a failed step and sends the run back to spec for `spec.after` or to build for `build.after`, within the loop cap. A step with no result fails the gate straight to Approve. `F decide` escalates on any custom step without a passing result.
 
 ## Rules: CI off, local checks and guidance
 

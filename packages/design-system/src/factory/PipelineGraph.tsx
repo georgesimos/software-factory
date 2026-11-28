@@ -3,7 +3,7 @@ import { Button } from '../components/Button.tsx';
 import { LockIcon } from '../components/icons.tsx';
 import { Select } from '../components/Input.tsx';
 import { OUTCOME_LABEL, formatMoney, outcomeOf, type Run } from './model.ts';
-import { STEP_STATUS, nodeLabel, pipelineGraph, runOverlay, trackerName, type Pipeline, type PipelineEdge, type PipelineNode, type RunOverlay, type StepRunner } from './pipelineModel.ts';
+import { STEP_STATUS, addPoints, nodeLabel, pipelineGraph, runOverlay, trackerName, type CustomSlot, type Pipeline, type PipelineEdge, type PipelineNode, type RunOverlay, type StepRunner } from './pipelineModel.ts';
 import { PipelineStepPanel, type StepEditing } from './PipelineStepPanel.tsx';
 
 // One pipeline as a node graph, with its checks beside it. Presentational: it takes F's pipeline as props and draws only that.
@@ -25,11 +25,13 @@ export interface PipelineGraphProps {
   edit?: StepEditing;
   /** This pipeline's runs, for "Show a run…". */
   runs?: Run[];
+  /** A "+" on the connections a custom step can go on, at these slots; onAdd gets the slot and the position in its list. */
+  adds?: { slots: CustomSlot[]; onAdd: (slot: CustomSlot, index: number) => void; status?: { text: ReactNode; bad?: boolean } };
 }
 const runName = (id: string) => id.replace(/^[^#:]*/, '') || id; // #7: the project is the page's
 const ownName = (r: StepRunner) => (!r.use || r.use === 'default' ? 'Factory default' : r.name ?? r.use);
 
-export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownName, cap, costCap, edit, runs: all = [] }: PipelineGraphProps) {
+export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownName, cap, costCap, edit, runs: all = [], adds }: PipelineGraphProps) {
   const g = pipelineGraph(p, plan), { nodes, edges } = g, uid = useId().replace(/[^\w-]/g, ''), panelId = `${uid}-panel`;
   const runs = all.filter((r) => !r.archived); // an archived run keeps only its last few events: its other steps would show as never reached
   const [picked, setPicked] = useState(''), [open, setOpen] = useState(''), buttons = useRef<Record<string, HTMLButtonElement | null>>({});
@@ -116,7 +118,7 @@ export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownNa
               return (
                 <li key={n.id} aria-label={n.off ? `${n.label}, turned off` : n.label} data-kind={n.kind} data-locked={n.locked || undefined} data-off={n.off ? true : undefined} data-status={st?.status} data-open={open === n.id || undefined}
                   style={{ left: x, top: y, width: W, height: H }}>
-                  {n.kind === 'step' || n.kind === 'review' ? (
+                  {n.kind === 'step' || n.kind === 'review' || n.kind === 'custom' ? (
                     <button type="button" className="sf-pl-node" aria-expanded={open === n.id} aria-controls={open === n.id ? panelId : undefined}
                       ref={(b) => { buttons.current[n.id] = b; }} onClick={() => { if (open !== n.id) edit?.onOpen?.(n.id); setOpen(open === n.id ? '' : n.id); }}>{body}</button>
                   ) : <div className="sf-pl-node">{body}</div>}
@@ -124,6 +126,11 @@ export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownNa
               );
             })}
           </ol>
+          {adds ? addPoints(g, adds.slots).map((x) => { // n8n's "+" halfway along a connection: a real button, so the keyboard reaches it
+            const a = at.get(x.from)!, b = at.get(x.to)!, said = (id: string) => (id.startsWith('review.') ? 'Review' : nodes.find((n) => n.id === id)!.label);
+            return <button key={`${x.from}>${x.to}`} type="button" className="sf-pl-add" aria-label={`Add a custom step between ${said(x.from)} and ${said(x.to)}`}
+              style={{ left: (a.x + W + b.x) / 2 - 10, top: (a.y + b.y + H) / 2 - 10 }} onClick={() => adds.onAdd(x.slot, x.index)}>+</button>;
+          }) : null}
         </div></div></div>
         <div className="sf-pl-zoom" role="group" aria-label="Zoom">
           <Button size="sm" variant="ghost" aria-label="Zoom out" onClick={() => z(zoom - 0.1)}>−</Button>
@@ -133,6 +140,7 @@ export function PipelineGraph({ name, pipeline: p, plan = {}, runnerName = ownNa
         </div>
         <MiniMap nodes={nodes} at={at} w={w} h={h} view={view} o={o} open={open} onMove={centre} />
         </div>
+        {adds?.status?.text ? <p className="sf-pl-status" role="status" data-bad={adds.status.bad || undefined}>{adds.status.text}</p> : null}
         <p className="sf-pl-foot"><span>{warn ? `${warn} warning${warn === 1 ? '' : 's'}` : 'Valid'} · {nodes.length} steps · {edges.length} connections</span>
           <span>{run && o ? runFoot(run, o, cap, costCap) : `loops ≤ ${cap} · $${costCap} / run`}</span></p>
       </div>
@@ -177,7 +185,8 @@ function About({ name, p, cap, costCap }: { name: string; p: Pipeline; cap: numb
         <li>Review axes: {p.axes.length - p.axes.filter((a) => Array.isArray(a.when)).length} built-in, {p.axes.filter((a) => Array.isArray(a.when)).length} yours</li>
         <li>The gate loops back to {p.loops.join(' and ')}, at most {cap} times, ${costCap} per run</li>
         <li>Steps off: {p.off.length ? p.off.map((o) => `${nodeLabel(o.step)}${o.by ? ` (by ${o.by}${o.reason ? `: ${o.reason}` : ''})` : ''}`).join(', ') : 'none'}</li>
-        <li>Custom steps: {Object.values(p.custom).flat().length || 'none'}</li>
+        <li>Custom steps: {Object.values(p.custom ?? {}).flat().map((c) => `${c.id} (after ${c.slot === 'spec.after' ? 'spec' : 'build'})`).join(', ') || 'none'}</li>
+        {p.on?.length ? <li>Added reviews: {p.on.map(nodeLabel).join(', ')}</li> : null}
         {p.warnings.map((x) => <li key={x} data-bad>{x}</li>)}
       </ul>
       <p className="sf-pl-note">Click a step to see who runs it, and to change that. Issues labelled factory:ready{p.tracker ? ` in ${trackerName(p.tracker)}` : ''} start here.</p>

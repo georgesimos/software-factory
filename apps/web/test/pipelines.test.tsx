@@ -323,3 +323,64 @@ describe('Pipelines sheet: named pipelines (slice 4)', () => {
     expect(screen.getAllByRole('option', { name: /^Hotfix:/ }).at(-1)).toBeDisabled();
   });
 });
+
+describe('Pipelines sheet: custom steps (slice 5)', () => {
+  const F = 'node ~/.claude/skills/software-factory/factory.mjs';
+  const LINT = { id: 'lint', slot: 'spec.after' as const, use: 'skill', name: 'spec-lint' }, SMOKE = { id: 'smoke', slot: 'build.after' as const, use: 'skill', name: 'smoke' };
+  const hot = { ...P, id: 'hotfix', name: 'Hotfix', listed: true, match: [{ labels: ['hotfix'] }], custom: { 'spec.after': [LINT], 'build.after': [SMOKE] } };
+  const docs = { ...P, id: 'docs', name: 'Docs', listed: true, match: [{ files: ['docs/**'] }], custom: { 'spec.after': [LINT], 'build.after': [SMOKE, { id: 'e2e', slot: 'build.after' as const, use: 'skill', name: 'e2e' }] } };
+  const withSteps = (d: FactoryData = data): FactoryData => ({ ...d, skills: { ...d.skills, config: { ...d.skills!.config, 'acme/shop': { ...d.skills!.config!['acme/shop'], 'steps.custom': [LINT, SMOKE] } },
+    plans: { ...d.skills!.plans, 'acme/shop': { ...d.skills!.plans!['acme/shop'], pipeline: { ...P, custom: { 'spec.after': [LINT], 'build.after': [SMOKE] } }, pipelines: [hot, docs] } } } });
+  const sheet = (d: FactoryData, x: { refresh?: () => void } = {}) => render(<PipelinesSheet open onClose={() => {}} data={d} project="acme/shop" onSaved={() => {}} {...x} />);
+  const bodies = (f: ReturnType<typeof vi.fn>) => f.mock.calls.map(([url, o]) => [url, JSON.parse((o as { body: string }).body)]);
+
+  it('a "+" after build opens the runner picker and adds the step in place, free: no reason, no dialog', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify(data.skills), { status: 200 })); vi.stubGlobal('fetch', fetch);
+    sheet({ ...withSteps(), token: 'tok' });
+    await userEvent.click(screen.getByRole('button', { name: 'Add a custom step between Build and smoke' }));
+    const pick = screen.getByRole('dialog', { name: 'Runner for a custom step after build' });
+    await typeIn(within(pick).getByRole('textbox', { name: 'Skill name' }), 'E2E Tests');
+    await userEvent.click(within(pick).getByRole('button', { name: 'Save' }));
+    expect(bodies(fetch)).toEqual([['/api/skills', { scope: 'acme/shop', step: 'steps.custom', runner: [LINT, { id: 'e2e-tests', slot: 'build.after', use: 'skill', name: 'E2E Tests' }, SMOKE] }]]);
+    expect(await screen.findByText('Saved.')).toBeInTheDocument();
+  });
+  it('a named pipeline adds only after build, to its own list, with an id new across the project and all its pipelines', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify(data.skills), { status: 200 })); vi.stubGlobal('fetch', fetch);
+    sheet({ ...withSteps(), token: 'tok' });
+    await userEvent.click(within(screen.getByRole('navigation', { name: 'Pipelines' })).getByRole('button', { name: /^Hotfix/ }));
+    expect(screen.getAllByRole('button', { name: /^Add a custom step/ }).map((b) => b.getAttribute('aria-label'))).toEqual(['Add a custom step between Build and smoke', 'Add a custom step between smoke and Review']);
+    await userEvent.click(screen.getByRole('button', { name: 'Add a custom step between smoke and Review' }));
+    await typeIn(within(screen.getByRole('dialog', { name: /Runner for/ })).getByRole('textbox', { name: 'Skill name' }), 'e2e');
+    await userEvent.click(within(screen.getByRole('dialog', { name: /Runner for/ })).getByRole('button', { name: 'Save' }));
+    expect(bodies(fetch)).toEqual([['/api/skills', { scope: 'acme/shop@hotfix', step: 'steps.custom', runner: [{ id: 'e2e-2', slot: 'build.after', use: 'skill', name: 'e2e' }] }]], 'e2e is the docs pipeline\'s');
+  });
+  it('removing one under the desktop app is only requested, with its reason, and the page waits for the dialog', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({ ...data.skills, requested: 'removing a custom step' }), { status: 200 })); vi.stubGlobal('fetch', fetch);
+    const refresh = vi.fn();
+    sheet({ ...withSteps(), token: 'tok' }, { refresh });
+    await userEvent.click(screen.getByRole('button', { name: /^smoke/ }));
+    const panel = screen.getByRole('complementary', { name: 'smoke step' });
+    await typeIn(within(panel).getByRole('textbox', { name: 'Why remove smoke' }), 'flaky');
+    await userEvent.click(within(panel).getByRole('button', { name: 'Remove' }));
+    expect(bodies(fetch)).toEqual([['/api/skills', { scope: 'acme/shop', step: 'steps.custom', runner: [LINT], reason: 'flaky' }]]);
+    expect(await within(panel).findByRole('status')).toHaveTextContent('Confirm it in the app’s dialog: nothing changes until you do.');
+    expect(refresh).toHaveBeenCalled();
+  });
+  it('removing one under plain F ui or on a read-only page copies the command, reason and all; the last one unsets', async () => {
+    const writeText = vi.fn(async () => {}); vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'removing a custom step needs your confirmation outside the page: run in your own terminal: F skills set …' }), { status: 400 })));
+    const { unmount } = sheet({ ...withSteps(), token: 'tok' });
+    await userEvent.click(screen.getByRole('button', { name: /^smoke/ }));
+    await typeIn(screen.getByRole('textbox', { name: 'Why remove smoke' }), 'flaky');
+    await userEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('Removing a custom step needs your confirmation outside the page, and this is plain F ui.');
+    expect(writeText).toHaveBeenLastCalledWith(`${F} skills set 'acme/shop' 'steps.custom' '${JSON.stringify([LINT])}' --reason 'flaky'`);
+    unmount();
+    const d = withSteps(), one = { ...d, skills: { ...d.skills, config: { ...d.skills!.config, 'acme/shop': { ...d.skills!.config!['acme/shop'], 'steps.custom': [SMOKE] } } } };
+    sheet(one);
+    await userEvent.click(screen.getByRole('button', { name: /^smoke/ }));
+    await typeIn(screen.getByRole('textbox', { name: 'Why remove smoke' }), 'done');
+    await userEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(writeText).toHaveBeenLastCalledWith(`${F} skills unset 'acme/shop' 'steps.custom' --reason 'done'`);
+  });
+});

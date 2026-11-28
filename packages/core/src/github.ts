@@ -12,7 +12,9 @@ import { gitTooOld } from '../../adapters/hosts/git.ts';
 import { prNumber } from '../../adapters/hosts/github.ts';
 import { current, pending } from './approve.ts';
 import { createHash } from 'node:crypto';
-import { rules } from './rules.ts';
+import { droppedFor, rules } from './rules.ts';
+import { dueOn, runCustom } from './custom.ts';
+import { readSkills } from './skills.ts';
 import { runCapsOf } from './route.ts';
 import type { Facts } from './gate.ts';
 import type { Comment } from '../../adapters/trackers/index.ts';
@@ -110,13 +112,18 @@ export function facts(r: Run): Facts {
     shipTrack([{ run: r.id, repo, sha: r.reviewedSha, path: projects()[repo]?.path }]);
     dep.deploys = derive(read())[r.id]?.deploys || [];
   }
-  if (!(onGit ? r.reviewedSha : r.pr)) return { ...who, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy, ...(r.route && { pipelineCaps: runCapsOf(r) }), ...dep, ...on };
+  const custom = (files: string[]) => { // pipelines §3-§4, live: what is configured and due on this change, and what was dropped
+    const cfg = readSkills(), steps = runCustom(r, cfg), ids = (x: { id: string }[]) => x.map((c) => c.id);
+    const c = { live: { 'spec.after': ids(steps['spec.after']), 'build.after': ids(steps['build.after']) }, due: [...ids(steps['spec.after']), ...ids(steps['build.after'].filter((x) => dueOn(x, files)))], dropped: droppedFor(repo) };
+    return c.live['spec.after'].length || c.live['build.after'].length || c.dropped.length ? { custom: c } : {}; // none: GitHub's facts keep their keys (decide still reads the run's records)
+  };
+  if (!(onGit ? r.reviewedSha : r.pr)) return { ...who, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy, ...(r.route && { pipelineCaps: runCapsOf(r) }), ...custom([]), ...dep, ...on };
   const diff: { additions: number; deletions: number; files: { path: string }[]; truncated?: boolean } = onGit ? gitDiff(repo, r.reviewedSha as string) : prDiff(repo, r.pr as string);
   // the project's CI provider on the reviewed commit; ci=skip doesn't read it, but a provider that can't answer still escalates
   const local = (sha?: string) => localResult(r.localChecks, policy['checks.commands']?.value, sha);
   const c = policy.ci?.value === 'skip' ? { ci: undefined, state: 'skipped', broken: ciBroken(repo) } : ciChecks(repo, { path: projects()[repo]?.path, sha: r.reviewedSha, changeRequest: r.pr }, local);
   const ci = { ...(c.ci && c.ci !== 'github-actions' && { ci: c.ci }), ...('detail' in c && c.detail && { ciDetail: c.detail }), ...(c.broken && { ciBroken: c.broken }) }; // GitHub's, as before: no extra keys
-  return { ...who, autoMerge, checks: c.state, ...ci, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), ...(diff.truncated && { filesTruncated: true }), rules: policy, ...(r.route && { pipelineCaps: runCapsOf(r) }), ...dep, ...on }; // a routed run: its pipeline's live caps
+  return { ...who, autoMerge, checks: c.state, ...ci, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), ...(diff.truncated && { filesTruncated: true }), rules: policy, ...(r.route && { pipelineCaps: runCapsOf(r) }), ...custom(diff.files.map((f) => f.path)), ...dep, ...on }; // a routed run: its pipeline's live caps
 }
 // A GitHub PR's diff. Its files from the files API, which gives a rename's old name too (pr view gives only the new one, and at
 // most 100); the totals and the file count from pr view. Fewer files listed than the PR has (the API stops at 3000) is truncated.
