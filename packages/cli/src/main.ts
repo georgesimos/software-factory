@@ -106,11 +106,12 @@ export async function main(argv: string[]) {
       }
       case 'axes': { // no files: diff the run's worktree since the last reviewed commit (or the base branch)
         const r = getRun(run), w = wtInfo(run);
-        let files = rest, range = null;
+        let files = rest, range = null, whole = rest;
         if (!files.length) {
           if (!w) throw new Error(`no worktree for ${run}; pass changed files or run "worktree" first`);
-          range = `${r.reviewedSha || baseRef(w.repoPath, w.base as string)}...HEAD`; // a full ref: a planted tag or branch can't empty the diff
-          files = git('-C', w.path, 'diff', '--name-only', '--no-renames', range).split('\n').filter(Boolean);  // a rename under both names
+          const base = baseRef(w.repoPath, w.base as string), diff = (from: string) => git('-C', w.path, 'diff', '--name-only', '--no-renames', `${from}...HEAD`).split('\n').filter(Boolean); // a rename under both names
+          range = `${r.reviewedSha || base}...HEAD`; // a full ref: a planted tag or branch can't empty the diff
+          files = diff(r.reviewedSha || base); whole = r.reviewedSha ? diff(base) : files; // the pick reads the run's whole change, as decide's re-pick does
         }
         const sha = w && fs.existsSync(w.path) ? git('-C', w.path, 'rev-parse', 'HEAD').trim() : undefined;
         const repo = run.split(/[#:@]/)[0] as string, extra = skills(repo).extra; // split always has a first part
@@ -118,8 +119,8 @@ export async function main(argv: string[]) {
         // files under review and the PR's size. Recorded as review routed, which F event refuses; a second F axes reuses it.
         let mine = thisRun(r.events);
         if (!pickedThisIteration(mine)) {
-          const fx = { labels: runLabels(mine), files, diffLines: prDiffLines(r) }, p = pick(repo, fx); // every changed file: a files term needs them all
-          const kept = { ...fx, files: files.slice(0, 200), ...(files.length > 200 && { fileCount: files.length, truncated: true }) }; // the record is bounded, and says so
+          const fx = { labels: runLabels(mine), files: whole, diffLines: prDiffLines(r) }, p = pick(repo, fx); // every changed file: a files term needs them all
+          const kept = { ...fx, files: whole.slice(0, 200), ...(whole.length > 200 && { fileCount: whole.length, truncated: true }) }; // the record is bounded, and says so
           record(run, 'review', 'routed', { pipeline: p.pipeline, ...(p.name && { name: p.name }), set: p.set, ...(p.text && { text: p.text }), iteration: r.iteration, facts: kept, off: p.off, caps: p.caps, ...(p.local && { local: true }) });
           mine = thisRun(getRun(run).events);
         }

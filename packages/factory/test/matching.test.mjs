@@ -396,10 +396,11 @@ test('the caps recorded at the pick still bind after the pipeline\'s cap is rais
 
 // decide on a run F axes picked from the files it was given, with the reviewed PR's files read through facts() (STUB_PR_FILES).
 const onPr = (files, fn) => { process.env.STUB_PR_FILES = JSON.stringify(files); try { return fn(); } finally { delete process.env.STUB_PR_FILES; } };
-const decided = (RUN, given, prFiles, extra = {}) => {
+const decided = (RUN, given, prFiles, extra = {}, between = () => {}) => {
   record(RUN, 'intake', 'started', { association: 'OWNER', labels: [] }); record(RUN, 'build', 'started');
   record(RUN, 'build', 'opened', { pr: `https://github.com/acme/mt/pull/${RUN.split('#')[1]}` });
   for (const a of axes(RUN, ...given)) record(RUN, 'review', 'passed', { axis: a, verdict: 'passed', findings: [] });
+  between();
   const r = { ...getRun(RUN), reviewedSha: 'abc' };
   return onPr(prFiles, () => { const f = facts(r); return { r, f, d: decide(r, { autoMerge: true, association: 'OWNER', checks: 'pass', files: f.files, filesTruncated: f.filesTruncated, additions: 10, deletions: 2, rules: rules('acme/mt').policy, ...extra }) }; });
 };
@@ -442,4 +443,17 @@ test('on GitHub a renamed file counts under both names: for the pick, its re-che
   assert.ok(out.reasons.includes('touches sensitive paths: .github/workflows/ci.yml'), out.reasons.join('\n'));
   process.env.STUB_PR_CHANGED = '3';
   try { assert.equal(decided('acme/mt#26', ['docs/a.md'], [{ filename: 'docs/a.md' }]).f.filesTruncated, true, 'fewer files listed than the PR has'); } finally { delete process.env.STUB_PR_CHANGED; }
+});
+
+test('the re-pick counts a local user\'s routing rule too: a match widened after the pick by an unverified user escalates on GitHub', () => {
+  reset();
+  setRule('acme/mt@docs', 'match', '[{"files":["docs/**"]}]', { reason: 'docs', ask: yes('acme/mt@docs') });
+  setRule('acme/mt@docs', 'steps.off', '["review.ux","review.ui"]', { reason: 'docs only', ask: yes('acme/mt@docs') });
+  setRule('acme/mt', 'pipelines', '["docs"]', { reason: 'docs first', ask: yes('acme/mt') });
+  const widen = () => { const cfg = readSkills(); cfg['acme/mt@docs'].rules.match = { ...cfg['acme/mt@docs'].rules.match, value: [{ files: ['**'] }], via: 'local', setBy: 'someone' }; fs.writeFileSync(skillsFile(), JSON.stringify(cfg)); };
+  const { r, d } = decided('acme/mt#27', ['docs/x.md'], API, {}, widen);
+  assert.deepEqual([r.route.pipeline, r.route.local], ['docs', false], 'picked before the local edit');
+  assert.equal(d.action, 'escalate', d.reasons.join('\n'));
+  assert.ok(d.reasons.some((x) => /routing needs a verified login/.test(x)), d.reasons.join('\n'));
+  assert.equal(d.reasons.some((x) => /^the pick no longer holds/.test(x)), false, 'the same pipeline and set');
 });

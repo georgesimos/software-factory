@@ -142,12 +142,13 @@ export function decide(r: Run, f: Facts) {
   const rt = r.route;
   if (rt && rt.pipeline !== 'default' && !notes.some((n) => n.startsWith(`pipeline ${rt.pipeline}`))) notes.unshift(routeText(rt));
   if (f.filesTruncated) why.push(`the PR's file list is cut down (${f.files?.length ?? 0} listed): the pick and the sensitive-path check can't see every file`);
-  if (rt) { // the pick, run again on the reviewed change: F axes may have picked on other files, or before a push changed it
-    const lines = f.additions !== undefined && f.deletions !== undefined ? f.additions + f.deletions : null;
-    const now = pick(r.id.split(/[#:@]/)[0] as string, { labels: rt.facts?.labels ?? [], files: f.files ?? [], diffLines: lines, truncated: !!f.filesTruncated });
-    if (now.pipeline !== rt.pipeline || now.set !== rt.set) why.push(`the pick no longer holds: ${routeText(rt)} was picked, but the reviewed change picks ${routeText(now)} (${f.files?.length ?? 0} files, ${lines ?? 'unknown'} lines): it is never merged on a stale pick`);
+  // the pick, run again on the reviewed change: F axes may have picked on other files, or before a push changed it
+  const size = f.additions !== undefined && f.deletions !== undefined ? f.additions + f.deletions : null;
+  const now = rt && pick(r.id.split(/[#:@]/)[0] as string, { labels: rt.facts?.labels ?? [], files: f.files ?? [], diffLines: size, truncated: !!f.filesTruncated });
+  if (rt && now) {
+    if (now.pipeline !== rt.pipeline || now.set !== rt.set) why.push(`the pick no longer holds: ${routeText(rt)} was picked, but the reviewed change picks ${routeText(now)} (${f.files?.length ?? 0} files, ${size ?? 'unknown'} lines): it is never merged on a stale pick`);
   }
-  if (rt?.local && !git) why.push('rule match or pipelines was set by a local user (unverified): routing needs a verified login (gh auth login) before the factory merges on its own');
+  if ((rt?.local || now?.local) && !git) why.push('rule match or pipelines was set by a local user (unverified): routing needs a verified login (gh auth login) before the factory merges on its own');
   if (why.length) return { action: 'escalate', reasons: [...why, ...asks, ...notes] };
   const yes = r.reviewedSha && r.events?.findLast((e) => e.stage === 'approve' && e.status === 'passed' && e.sha === r.reviewedSha); // only a git project has asks
   if (asks.length && !yes) return { action: 'await-approval', reasons: [...asks, ...notes] };
