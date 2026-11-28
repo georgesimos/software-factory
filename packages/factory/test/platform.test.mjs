@@ -156,6 +156,13 @@ test('a script override (FACTORY_GH=stub.mjs) runs under this node on every OS',
   for (const platform of ['win32', 'darwin']) assert.deepEqual(command('C:\\t\\gh-stub.mjs', ['pr', 'a b'], { ...win, platform }), { file: process.execPath, args: ['C:\\t\\gh-stub.mjs', 'pr', 'a b'] });
 });
 
+test('a script override under Electron runs its binary as Node: else the packaged app starts a second app, not the script', () => {
+  for (const platform of ['win32', 'linux']) {
+    assert.deepEqual(command('/t/git-stub.mjs', ['version'], { platform, electron: '39.2.0' }), { file: process.execPath, args: ['/t/git-stub.mjs', 'version'], env: { ELECTRON_RUN_AS_NODE: '1' } });
+    assert.equal(command('/t/git-stub.mjs', ['version'], { platform, electron: undefined }).env, undefined, 'plain node needs nothing');
+  }
+});
+
 const ENTRY = path.join(import.meta.dirname, '..', 'factory.mjs');
 
 test('factory help, --help and -h list every command and exit 0; an unknown command prints the list and exits 1', () => {

@@ -29,7 +29,9 @@ const pj = path.join(env.FACTORY_DIR, 'projects.json');
 fs.writeFileSync(pj, JSON.stringify({ ...(fs.existsSync(pj) ? JSON.parse(fs.readFileSync(pj, 'utf8')) : {}), 'acme/shop': { path: clone } }));
 
 const EXE = process.env.DESKTOP_EXE; // a packaged build's binary (scripts/smoke.mjs prints where), else the dev build
-const ARGS = EXE ? [] : [APP];
+// A fake microphone and camera: without a device (CI's Xvfb has none), getUserMedia fails NotFoundError before the app's
+// permission handler is asked, and the media check below would test nothing.
+const ARGS = [...(EXE ? [] : [APP]), '--use-fake-device-for-media-stream'];
 const app = await _electron.launch({ ...(EXE && { executablePath: EXE }), args: ARGS, cwd: APP, env });
 const errors = [];
 let origin, leftPid = 0;
