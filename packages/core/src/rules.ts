@@ -206,7 +206,7 @@ function prepare(scope: string, key: string, raw: unknown, until: string | undef
   if (until !== undefined && !(isDay(until) && until >= dayOf())) throw new Error('--until must be YYYY-MM-DD, today or later');
   return value;
 }
-export interface RuleRequest { scope: string; key: string; raw?: string; unset?: boolean; reason?: string; until?: string }
+export interface RuleRequest { scope: string; key: string; raw?: string; unset?: boolean; reason?: string; until?: string; skill?: boolean } // skill: a skills.json key (setSkill), not a rule
 /** F's own reading of a rule write, without writing: the stored value, the new one (undefined: unset), what it loosens and the
  *  command for a terminal. The page's route asks it before requesting; the desktop dialog shows it, and asks again on confirm. */
 export function ruleChange(scope: string, key: string, raw: unknown, { reason, until }: { reason?: string; until?: string } = {}, cfg: SkillsConfig = readSkills()) {

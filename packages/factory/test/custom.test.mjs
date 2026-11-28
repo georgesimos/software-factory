@@ -12,6 +12,7 @@ import { loosens, rules, setRule } from '../../core/src/rules.ts';
 import { readSkills, setSkill, skillChange, skills, skillsFile } from '../../core/src/skills.ts';
 import { projects, projectsFile } from '../../core/src/workspace.ts';
 import { setup } from './setup.mjs';
+import { guarded, uiHandle } from '../../server/src/server.ts';
 
 setup();
 const STUB = path.join(HERE, 'test', 'gh-stub.mjs');
@@ -359,4 +360,24 @@ test('a pipeline the run met adds its build.after steps and its review steps, an
   assert.equal(getRun(RUN).route.pipeline, 'default');
   step(RUN, 'smoke');
   assert.deepEqual(JSON.parse(F(['axes', RUN, 'src/components/B.tsx', 'src/api.ts'])).axes, ['code', 'security', 'ux', 'ui', 'a11y', 'seo'], 'the added review steps stay due');
+});
+
+test('over HTTP POST /api/skills writes a runner or an added step freely; a guarded one is only requested from the desktop, or refused with the command', () => {
+  reset();
+  const tok = 's'.repeat(32), ctx = { token: tok, port: 4545 }, H = { host: '127.0.0.1:4545', origin: 'http://127.0.0.1:4545', 'content-type': 'application/json', 'x-factory-token': tok };
+  const post = (body) => JSON.parse(uiHandle({ method: 'POST', url: '/api/skills', headers: H, body: JSON.stringify(body) }, ctx).body);
+  assert.equal(post({ scope: 'acme/cs', step: 'steps.custom', runner: [LINT, E2E] }).error, undefined, 'adding is free');
+  assert.deepEqual(readSkills()['acme/cs']['steps.custom'].map((x) => x.id), ['lint', 'e2e']);
+  assert.equal(post({ scope: 'acme/cs', step: 'review.code', runner: { use: 'skill', name: 'my-review' } }).error, undefined, 'who runs a step: the same route, unguarded');
+  assert.match(post({ scope: 'acme/cs', step: 'steps.custom', runner: [LINT], reason: 'slow' }).error, /^removing a custom step needs your confirmation outside the page: .*F skills set acme\/cs steps\.custom '\[\{"id":"lint"/);
+  assert.match(post({ scope: 'acme/cs', step: 'steps.custom', runner: null, reason: 'slow' }).error, /F skills unset acme\/cs steps\.custom --reason/);
+  const asked = []; guarded.request = (x) => { asked.push(x); return true; };
+  try {
+    assert.equal(post({ scope: 'acme/cs', step: 'steps.custom', runner: [LINT], reason: 'slow' }).requested, 'removing a custom step');
+    assert.match(post({ scope: 'acme/cs', step: 'steps.custom', runner: [{ ...SMOKE, id: 'Bad' }], reason: 'x' }).error, /custom step id "Bad"/, 'checked before any dialog');
+    guarded.request = () => false;
+    assert.match(post({ scope: 'acme/cs', step: 'steps.custom', runner: [LINT], reason: 'slow' }).error, /a confirmation is already open/);
+  } finally { delete guarded.request; }
+  assert.deepEqual(asked, [{ scope: 'acme/cs', key: 'steps.custom', raw: JSON.stringify([LINT]), unset: false, reason: 'slow', skill: true }]);
+  assert.deepEqual(readSkills()['acme/cs']['steps.custom'].map((x) => x.id), ['lint', 'e2e'], 'nothing removed over HTTP');
 });
