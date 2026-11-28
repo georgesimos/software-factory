@@ -726,13 +726,18 @@ test('terminal on Windows: npm\'s claude.cmd goes to node-pty as one cmd.exe lin
 
 // A stand-in for node-pty 1.1.0's ConPTY terminal. kill() is node-pty's own, which kills the pids in the console's process
 // list (and the shell's old pid after 5 s); closePty uses the agent's native close and output worker instead.
-const conpty = (pid, exitAfter, agent = {}) => {
+// ready: false is a terminal whose output pipe hasn't connected yet; rec.term.ready() connects it, running what was deferred.
+const conpty = (pid, exitAfter, agent = {}, { ready = true } = {}) => {
   const rec = { pidKills: 0, closes: [], disposes: 0 };
   return { rec, spawn() {
-    let exit;
+    let onExit, gone = false;
+    const exit = (e) => { if (!gone) { gone = true; onExit(e); } };
     if (exitAfter) setTimeout(() => exit({ exitCode: 0 }), exitAfter);
-    const _agent = agent && { _useConpty: true, _useConptyDll: false, _pty: 3, _inSocket: {}, _outSocket: {}, _ptyNative: { kill: (id, dll) => rec.closes.push([id, dll]) }, _conoutSocketWorker: { dispose: () => { rec.disposes++; } }, ...agent };
-    return { pid, _agent, _close() {}, onData() {}, onExit: (f) => { exit = f; }, write() {}, resize() {}, kill: () => { rec.pidKills++; } };
+    const _agent = agent && { _useConpty: true, _useConptyDll: false, _pty: 3, _inSocket: {}, _outSocket: {}, _ptyNative: { kill: (id, dll) => { rec.closes.push([id, dll]); if (term._isReady) exit({ exitCode: null }); } }, _conoutSocketWorker: { dispose: () => { rec.disposes++; } }, ...agent };
+    const term = rec.term = { pid, _agent, _isReady: ready, _deferreds: [], _close() {}, onData() {}, onExit: (f) => { onExit = f; }, write() {}, resize() {}, kill: () => { rec.pidKills++; },
+      _deferNoArgs(fn) { if (this._isReady) fn.call(this); else this._deferreds.push({ run: () => fn.call(this) }); },
+      ready() { this._isReady = true; this._deferreds.forEach((d) => d.run()); this._deferreds = []; } };
+    return term;
   } };
 };
 const winResolve = { platform: 'win32', env: { PATH: 'C:\\npm', PATHEXT: '.EXE;.CMD', ComSpec: 'C:\\Windows\\system32\\cmd.exe' }, isFile: (p) => p.toLowerCase() === 'c:\\npm\\claude.cmd' };
@@ -751,6 +756,24 @@ test('terminal on Windows: a stop kills the tree, then closes the pty without no
   await new Promise((r) => setTimeout(r, 20));
   s.stop();
   assert.deepEqual([pty.rec.closes, pty.rec.disposes, pty.rec.pidKills], [[[3, false]], 1, 0]);
+});
+
+test('terminal on Windows: a stop before the pty is ready closes it once ready, as node-pty does, and ends stopped', async () => {
+  const pty = conpty(0, 0, {}, { ready: false }), s = startSession(claude, { mode: 'terminal' }, { cwd: home, env: stubEnv, modules: { [PTY]: pty }, resolve: winResolve });
+  await new Promise((r) => setTimeout(r, 20));
+  s.stop();
+  assert.deepEqual([pty.rec.closes, pty.rec.disposes], [[], 0], 'nothing closed before ready: the output worker must connect first');
+  pty.rec.term.ready();
+  assert.equal((await finished(s)).at(-1).code, 'stopped');
+  assert.deepEqual([pty.rec.closes, pty.rec.disposes, pty.rec.pidKills], [[[3, false]], 1, 0]);
+});
+
+test('terminal on Windows: a stop before a pty that never gets ready still ends stopped, never through a pid kill', async () => {
+  const pty = conpty(0, 0, {}, { ready: false }), s = startSession(claude, { mode: 'terminal' }, { cwd: home, env: stubEnv, modules: { [PTY]: pty }, resolve: winResolve });
+  await new Promise((r) => setTimeout(r, 20));
+  s.stop();
+  assert.equal((await finished(s)).at(-1).code, 'stopped');
+  assert.deepEqual([pty.rec.closes, pty.rec.disposes, pty.rec.pidKills], [[], 0, 0]);
 });
 
 test('terminal on Windows: a pty of another shape (winpty, the conpty dll, another node-pty) is left open, never pid-killed', async () => {

@@ -149,11 +149,18 @@ export function closePty(p: any, platform: string = process.platform) {
   if (platform !== 'win32') return void p.kill();
   const a = p._agent;
   if (!a?._useConpty || a._useConptyDll || !a._conoutSocketWorker) return;
+  // Not ready: the output pipe isn't connected, so a close now would leave the exit unwired and nothing draining the
+  // console. node-pty's kill() waits for ready too.
+  if (p._isReady === false) return void p._deferNoArgs?.(() => closePty(p, platform));
   p._close?.();
   a._inSocket.readable = false; a._outSocket.readable = false;
   a._ptyNative.kill(a._pty, false);
   a._conoutSocketWorker.dispose();
 }
+
+// A stop before a ConPTY is ready: closePty waits for ready, and a tree killed first may never get there, so the session
+// ends after this long anyway (with no pid kill).
+const NOT_READY_MS = 3_000;
 
 // An interactive harness in a pseudo-terminal (ConPTY on Windows). Output is raw terminal data for xterm.js; input and
 // resize come back through write() and resize(). Exit: 'stopped' after stop(), else the signal, else the exit code.
@@ -170,7 +177,7 @@ async function terminal(s: Session, spec: LaunchSpec, { cwd, env, modules, resol
   }
   s.write = (data: string) => { if (!stopped) p.write(data); }; // a stopped pty may already be gone
   s.resize = (cols: number, rows: number) => { if (!stopped) p.resize(cols, rows); };
-  s.stop = () => { stopped = true; killTree({ pid: p.pid, kill() {} }, process.platform, undefined, process.kill, true); try { closePty(p, platform); } catch { /* gone */ } }; // the tree first, waited (taskkill /T on Windows walks it from the live root), then the pty
+  s.stop = () => { stopped = true; killTree({ pid: p.pid, kill() {} }, process.platform, undefined, process.kill, true); if (platform === 'win32' && p._isReady === false) setTimeout(() => done('stopped'), NOT_READY_MS); try { closePty(p, platform); } catch { /* gone */ } }; // the tree first, waited (taskkill /T on Windows walks it from the live root), then the pty
   if (p.pid > 0) onPid(p.pid); // a stand-in pty may have none: the claim stays pending (pid 0)
   p.onData((data: string) => emit(s, { type: 'output', data }));
   p.onExit(({ exitCode, signal }: { exitCode: number; signal?: number }) => {
