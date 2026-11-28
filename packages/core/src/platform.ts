@@ -8,7 +8,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import type { ExecFileSyncOptions, ExecFileSyncOptionsWithStringEncoding, SpawnSyncOptions } from 'node:child_process';
 
 type Env = Record<string, string | undefined>;
-export interface Resolve { platform?: NodeJS.Platform; env?: Env; isFile?: (p: string) => boolean }
+export interface Resolve { platform?: NodeJS.Platform; env?: Env; isFile?: (p: string) => boolean; electron?: string } // electron: this process's Electron version, if any
 // env: added to the spawn's env (callers merge it over their own).
 export interface Command { file: string; args: string[]; windowsVerbatimArguments?: boolean; env?: Env }
 
@@ -28,8 +28,10 @@ function findOnPath(cmd: string, env: Env, isFile: (p: string) => boolean, skip?
 }
 
 // The file and argv to hand to execFile/spawn for `cmd args` on this platform.
-export function command(cmd: string, args: string[] = [], { platform = process.platform, env = process.env, isFile = isFileSync }: Resolve = {}): Command {
-  if (/\.[cm]?js$/i.test(cmd)) return { file: process.execPath, args: [cmd, ...args] }; // a script override (FACTORY_GH=stub.mjs) runs under this node: no shebang on Windows
+export function command(cmd: string, args: string[] = [], { platform = process.platform, env = process.env, isFile = isFileSync, electron = process.versions.electron }: Resolve = {}): Command {
+  // A script override (FACTORY_GH=stub.mjs) runs under this node: no shebang on Windows. Under Electron that binary is the app
+  // itself, which runs a script only as Node: else it starts a second app that waits on this one (and Linux then kills this).
+  if (/\.[cm]?js$/i.test(cmd)) return { file: process.execPath, args: [cmd, ...args], ...(electron && { env: { ELECTRON_RUN_AS_NODE: '1' } }) };
   if (platform !== 'win32') return { file: cmd, args };
   const file = findOnPath(cmd, env, isFile);
   // Not found: never hand the bare name to spawn, which on Windows looks in the current folder (maybe an untrusted clone) first.
