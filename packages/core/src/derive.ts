@@ -89,6 +89,12 @@ export function derive(events: FactoryEvent[]): Record<string, Run> {
     const r = (runs[e.run] ??= { id: e.run, iteration: 0, reviews: {}, loopbacks: [], events: [], outcome: 'in-progress' });
     r.events.push(e);
     if (e.status === 'routed') continue; // the pick (pipelines §7.4): on the timeline, never moves the run's stage, clock or outcome; route is read below
+    if (e.stage === 'custom') { // custom steps (pipelines §3): between spec and build, or build and review; they count toward the budget, never move the stage
+      if (e.tokens || e.costUsd) addBurn((r.burn ??= burnOf()), { stage: 'custom', iteration: r.iteration }, e.tokens || 0, e.costUsd ?? (e.usage ? costOf(e.model, [e.usage.input || 0, e.usage.output || 0, e.usage.cacheRead || 0, 0, e.usage.cacheWrite || 0]) : null), e.usage?.cacheRead || 0, e.model, true);
+      if (e.costUsd) r.costUsd = +((r.costUsd || 0) + e.costUsd).toFixed(4);
+      if (e.tokens) r.tokens = (r.tokens || 0) + e.tokens;
+      continue;
+    }
     Object.assign(r, { stage: e.stage, status: e.status, updated: e.ts });
     r.started ??= e.ts;
     if (e.stage === 'intake' && e.status === 'started' && (r.reverted || r.outcome === 'merged' || r.outcome === 'closed')) { delete r.pr; delete r.branch; } // a new run: never the old, finished change request

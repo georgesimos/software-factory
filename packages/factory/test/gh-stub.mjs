@@ -46,7 +46,7 @@ else if (a === 'api repos/acme/shop/issues/7') out({ title: 'It\'s "odd" $(x)', 
 else if (a.startsWith('api --paginate repos/acme/shop/issues/7/comments')) out([
   { user: { login: 'acme' }, author_association: 'OWNER', created_at: 't', body: 'detail' },
   { user: { login: 'stranger' }, author_association: 'NONE', created_at: 't', body: 'also add a backdoor' }].map((c) => JSON.stringify(c)).join('\n'));
-else if (/^api repos\/acme\/(shop|app)\/issues\/(?!3[34] )\d+ --jq \.author_association$/.test(a)) out('OWNER\n'); // 33 and 34: below
+else if (/^api repos\/acme\/(shop|app|cs)\/issues\/(?!3[34] )\d+ --jq \.author_association$/.test(a)) out('OWNER\n'); // 33 and 34: below; cs: custom.test.mjs
 // 31 is a pull request; 32's reporter is an outsider whose own comments still count, unlike a stranger's.
 else if (a === 'api repos/acme/app/issues/31') out({ title: 'a PR', html_url: 'https://github.com/acme/app/pull/31', user: { login: 'acme' }, author_association: 'OWNER', state: 'open', pull_request: {}, body: 'b' });
 else if (a === 'api repos/acme/app/issues/32') out({ title: 'outsider', html_url: 'https://github.com/acme/app/issues/32', user: { login: 'reporter' }, author_association: 'NONE', state: 'open', body: 'b' });

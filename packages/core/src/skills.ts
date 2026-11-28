@@ -5,7 +5,8 @@ import { hostOf, ls, projects, trackerOf } from './workspace.ts';
 import { audit, checkGuide, checkRules, checkScope, pageRefusal, pipelinePass, rules, runCaps, stamp, whoami } from './rules.ts';
 import { humanOnly } from './projectset.ts';
 import { line, ttyAsk } from './approve.ts';
-import { NAME_OK, PIPELINE_KEYS, PIPELINE_RULES, SLOTS, isPipelineScope, okGlob, ownersOf, pipelinesOf, runGets, splitScope, type CustomStep, type Slot } from './route.ts';
+import { NAME_OK, PIPELINE_KEYS, PIPELINE_RULES, SLOTS, addedOf, allOf, isPipelineScope, okGlob, ownersOf, pipelinesOf, runGets, splitScope, type CustomStep, type Slot } from './route.ts';
+import { customOf } from './custom.ts';
 import { harnesses, type Harness } from '../../adapters/harnesses/index.ts';
 import { stateDir } from './log.ts';
 import type { ExtraAxis } from './gate.ts';
@@ -26,10 +27,12 @@ export const OPTIONAL_STEPS = BUILTIN_AXES.filter((a) => !REQUIRED_AXES.includes
 // When axesFor (gate.ts) selects each built-in axis: always, or when a UI, SEO or docs file changes. axesFor reads this table,
 // so the Pipelines page and the engine can't disagree.
 export const AXIS_WHEN: Record<BuiltinAxis, 'always' | 'ui' | 'seo' | 'docs'> = { code: 'always', security: 'always', ux: 'ui', ui: 'ui', seo: 'seo', docs: 'docs' };
-/** The pipeline's structure for the Pipelines page (docs/plans/pipelines.md §6). custom stays empty until slice 5. */
-export function pipeline(repo: string, extra: ExtraAxis[] = [], rl: { policy: Record<string, Rule>; warnings: string[] } = { policy: {}, warnings: [] }) {
+/** The pipeline's structure for the Pipelines page (docs/plans/pipelines.md §6). adds: its custom steps by slot and the axes it
+ *  always reviews (axes.on, a pipeline's only). */
+export function pipeline(repo: string, extra: ExtraAxis[] = [], rl: { policy: Record<string, Rule>; warnings: string[] } = { policy: {}, warnings: [] },
+  adds: { custom: Record<Slot, CustomStep[]>; on: string[] } = { custom: { 'spec.after': [], 'build.after': [] }, on: [] }) {
   const attached = !!projects()[repo], host = attached ? hostOf(repo) : null;
-  const warnings: string[] = rl.warnings.filter((w) => /\.rules\.(steps\.off|run\.|match|pipelines)|@|\.name is ignored/.test(w)); // pipelinePass's, about pipelines
+  const warnings: string[] = rl.warnings.filter((w) => /\.rules\.(steps\.off|run\.|match|pipelines)|@|\.name is ignored|\.steps\.custom|\.axes\.on/.test(w)); // pipelinePass's, about pipelines
   const o = rl.policy['steps.off'], offBy = o && (isLocal(o) ? 'a local user (unverified)' : o.setBy); // never the OS user (§6)
   let tracker: string | null = null;
   if (host) try { const t = trackerOf(repo); tracker = t === 'local' ? null : t; } catch (e) { warnings.push((e as Error).message); } // local: no tracker yet (5b)
@@ -37,9 +40,9 @@ export function pipeline(repo: string, extra: ExtraAxis[] = [], rl: { policy: Re
     host, tracker, locked: LOCKED_STEPS, optional: OPTIONAL_STEPS,
     steps: ['intake', 'spec', 'build', 'review', 'verifier', 'gate', 'merge', 'watch'],
     intake: ['pass', 'split', 'needs-info', 'reject'], loops: ['spec', 'build'], // intake's outcomes; where the gate loops back to
-    axes: [...BUILTIN_AXES.map((axis) => ({ axis, when: AXIS_WHEN[axis] as string | string[] })), ...extra.map((x) => ({ axis: x.axis, when: x.when }))],
+    axes: [...BUILTIN_AXES.map((axis) => ({ axis, when: (adds.on.includes(`review.${axis}`) ? 'always' : AXIS_WHEN[axis]) as string | string[] })), ...extra.map((x) => ({ axis: x.axis, when: x.when }))],
     off: o ? (o.value as string[]).map((step) => ({ step, scope: (o.scope ?? repo) as string, reason: o.reason, by: offBy as string, ...(o.until && { until: o.until }) })) : [],
-    caps: runCaps(rl.policy), custom: { 'spec.after': [], 'build.after': [] }, warnings,
+    caps: runCaps(rl.policy), custom: adds.custom, on: adds.on, warnings,
   };
 }
 export const isBuiltinAxis = (a: unknown): a is BuiltinAxis => BUILTIN_AXES.some((x) => x === a);
@@ -224,9 +227,10 @@ export function skills(repo: string, cfg: SkillsConfig = readSkills()) {
   const extra = all.filter((x, i) => all.findLastIndex((y) => y.axis === x.axis) === i);
   const rl = rules(repo, cfg);
   // §7.1: the project's named pipelines, listed ones in match order then drafts, each drawn like the default (which is `pipeline`)
-  const pipelines = repo ? pipelinesOf(repo, cfg).map((p) => ({ id: p.id, name: p.name, listed: p.listed, match: p.match, ...(p.matchRule && { matchBy: p.matchRule.setBy, matchReason: p.matchRule.reason }),
-    ...pipeline(repo, extra, rules(p.scope, cfg)), caps: runGets(repo, p.id, cfg).caps })) : [];
-  return { repo, plan, extra, required: REQUIRED_AXES, guide: rl.guide, pipeline: pipeline(repo, extra, rl), pipelines };
+  const pipelines = repo ? pipelinesOf(repo, cfg).map((p) => { const a = addedOf(repo, [p.id], cfg);
+    return { id: p.id, name: p.name, listed: p.listed, match: p.match, ...(p.matchRule && { matchBy: p.matchRule.setBy, matchReason: p.matchRule.reason }),
+      ...pipeline(repo, [...extra, ...a.extra], rules(p.scope, cfg), { custom: customOf(repo, [p.id], cfg), on: a.on }), caps: runGets(repo, p.id, cfg).caps }; }) : [];
+  return { repo, plan, extra, required: REQUIRED_AXES, guide: rl.guide, pipeline: pipeline(repo, extra, rl, { custom: customOf(repo, [], cfg), on: [] }), pipelines };
 }
 export function writeSkills(cfg: unknown): asserts cfg is SkillsConfig {
   checkSkills(cfg);
@@ -349,10 +353,12 @@ export function availablePlan(plan: Record<string, StepRunner> | StepRunner[], v
     return [k, { ...rest, ...(left[0] && { model: left[0] }), ...(left.length > 1 && { fallback: left.slice(1) }), modelFallback }];
   }));
 }
-// Every step the session runs, keyed like the plan: built-in steps and extra axes as review.<axis>, after the version check.
+// Every step the session runs, keyed like the plan: built-in steps and extra axes as review.<axis> (a pipeline's own too), custom
+// steps as custom.<id>, after the version check.
 export const resolvedSteps = (repo: string) => {
-  const { plan, extra } = skills(repo);
-  return availablePlan({ ...plan, ...Object.fromEntries(extra.map(({ axis, when: _w, ...x }) => [`review.${axis}`, x])) });
+  const { plan, extra } = skills(repo), all = allOf(repo);
+  return availablePlan({ ...plan, ...Object.fromEntries([...extra, ...all.extra].map(({ axis, when: _w, ...x }) => [`review.${axis}`, x as StepRunner])),
+    ...Object.fromEntries(all.custom.map(({ id, slot: _s, when: _w, ...x }) => [`custom.${id}`, x])) });
 };
 
 // Every runner the picker can offer, by where it comes from. Descriptions come from front matter and are display-only.

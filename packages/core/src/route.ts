@@ -176,3 +176,15 @@ export function ownersOf(project: string, cfg: Record<string, unknown> = readSki
   const owners = raw.map((o, i) => { const ok = new Set(kept[i]!.ids); return { ...o, custom: o.custom.filter((c) => ok.has(c.id)), extra: o.extra.filter((x) => ok.has(x.axis)) }; });
   return { owners, warnings, dropped };
 }
+/** The review steps the pipelines a run met add (§7.1, §7.4): their own extra axes next to the project's, and the axes.on
+ *  axes they always review. A union: once a run met a pipeline, what it adds stays due for the run. */
+export function addedOf(repo: string, pipelines: string[] = [], cfg: SkillsConfig = readSkills()) {
+  const { owners } = ownersOf(repo, cfg), mine = pipelines.map((id) => owners.find((o) => o.owner === `${repo}@${id}`)).filter((o) => !!o);
+  return { extra: mine.flatMap((o) => o.extra) as unknown as { axis: string; when: string[] }[], on: [...new Set(mine.flatMap((o) => o.on))] };
+}
+/** Every custom step and extra axis a project's runs may meet, by id: ids are unique across the project and its pipelines, so
+ *  the runner a step's records name is never ambiguous. */
+export function allOf(repo: string, cfg: SkillsConfig = readSkills()) {
+  const { owners } = ownersOf(repo, cfg);
+  return { custom: owners.flatMap((o) => o.custom), extra: owners.slice(1).flatMap((o) => o.extra) }; // owners[0]'s extra: skills().extra already
+}

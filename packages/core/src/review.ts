@@ -3,6 +3,7 @@ import { blocking } from './constants.ts';
 import { harnesses } from '../../adapters/harnesses/index.ts';
 import { read } from './log.ts';
 import { resolvedSteps, skills, type ExtraAxisRunner, type StepRunner } from './skills.ts';
+import { allOf } from './route.ts';
 import type { Runner } from './types.ts';
 
 // Pinned unattended flags come from the harness that runs the skill (claude-code.ts: `claude -p`), so F names no harness.
@@ -22,12 +23,13 @@ export function headlessArgs({ share = 1, ...opts }: { share?: number; budget?: 
   return h.headlessArgs!(opts); // found by it
 }
 // F, not the payload, says who did the work. Default runners leave events unchanged; a fallback can only downgrade to default.
-export function runnerStamp(run: string, stage: string, axis?: string, fallback?: unknown, role?: string): { runner?: Runner } {
-  const key = stage === 'review' ? (role === 'verifier' ? 'verifier' : axis && `review.${axis}`) : stage === 'gate' ? 'verifier' : ['intake', 'spec', 'build'].includes(stage) ? stage : null;
+export function runnerStamp(run: string, stage: string, axis?: string, fallback?: unknown, role?: string, id?: unknown): { runner?: Runner } {
+  const key = stage === 'review' ? (role === 'verifier' ? 'verifier' : axis && `review.${axis}`) : stage === 'gate' ? 'verifier' : ['intake', 'spec', 'build'].includes(stage) ? stage : stage === 'custom' && typeof id === 'string' ? `custom.${id}` : null;
   if (!key) return {};
-  const { plan, extra } = skills(run.split(/[#:@]/)[0] as string); // split always has a first part
-  const found: StepRunner & Partial<ExtraAxisRunner> = plan[key] || extra.find((x) => x.axis === axis) || { use: 'default' };
-  const { axis: _a, when: _w, ...runner } = found;
+  const repo = run.split(/[#:@]/)[0] as string, { plan, extra } = skills(repo), all = allOf(repo); // split always has a first part
+  const found: StepRunner & Partial<ExtraAxisRunner> & { id?: string; slot?: string } = plan[key as keyof typeof plan] || [...extra, ...all.extra].find((x) => x.axis === axis) as ExtraAxisRunner | undefined
+    || (stage === 'custom' ? all.custom.find((c) => c.id === id) : undefined) || { use: 'default' };
+  const { axis: _a, when: _w, id: _i, slot: _s, ...runner } = found;
   if (fallback) return { runner: { use: 'default', fallback: { from: runner, reason: String(fallback).slice(0, 200) } } };
   return runner.use === 'default' && !runner.model ? {} : { runner }; // the configured model; the payload's `model` is the measured one
 }
