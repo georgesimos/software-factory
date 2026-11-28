@@ -14,8 +14,8 @@ export const PIPELINE_SCOPE = /^[\w.-]+\/[\w.-]+@[a-z][a-z0-9-]{0,30}$/;
 export const isPipelineScope = (s: unknown): s is string => typeof s === 'string' && PIPELINE_SCOPE.test(s) && isPipelineId(s.slice(s.indexOf('@') + 1));
 /** owner/repo@id → {project: owner/repo, id}; any other scope → {project: scope, id: null}. */
 export const splitScope = (scope: string) => { const i = scope.indexOf('@'); return i < 0 ? { project: scope, id: null } : { project: scope.slice(0, i), id: scope.slice(i + 1) }; };
-/** What a pipeline scope may hold (§7.1). Custom steps and added review steps come with slice 5. */
-export const PIPELINE_KEYS = ['name', 'rules'];
+/** What a pipeline scope may hold (§7.1): a name, its rules, its own build.after custom steps and its added review steps. */
+export const PIPELINE_KEYS = ['name', 'rules', 'steps.custom', 'axes.on', 'axes.extra'];
 export const PIPELINE_RULES = ['match', 'steps.off', 'run.loops', 'run.budgetUsd'];
 /** Control, format (bidi, zero-width) and line/paragraph separator characters: refused in names, labels and globs, which the confirm dialog shows raw. */
 export const UNSAFE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
@@ -24,7 +24,7 @@ export const NAME_OK = (v: unknown) => typeof v === 'string' && !!v.trim() && v.
 /** One condition set (§7.2): every term holds (AND); a pipeline matches when any of its sets does (OR). */
 export interface MatchSet { labels?: string[]; files?: string[]; maxDiffLines?: number }
 const TERMS = ['labels', 'files', 'maxDiffLines'];
-const okGlob = (g: unknown) => { if (typeof g !== 'string' || !g || g.length > 200 || UNSAFE.test(g)) return false; try { path.matchesGlob('x', g); return true; } catch { return false; } };
+export const okGlob = (g: unknown) => { if (typeof g !== 'string' || !g || g.length > 200 || UNSAFE.test(g)) return false; try { path.matchesGlob('x', g); return true; } catch { return false; } };
 /** null when v is a valid match, else why not. */
 export function matchProblem(v: unknown): string | null {
   if (!Array.isArray(v) || v.length < 1 || v.length > 5) return 'a JSON array of 1-5 condition sets';
@@ -64,7 +64,9 @@ export function pipelinesOf(repo: string, cfg: SkillsConfig = readSkills()) {
 export function runGets(repo: string, id: string | null, cfg: SkillsConfig = readSkills()) {
   const proj = rules(repo, cfg).policy, own = id ? rules(`${repo}@${id}`, cfg).policy : proj;
   const cap = (k: string, built: number) => Math.min(built, Number(proj[k]?.value ?? built), Number(own[k]?.value ?? built));
-  return { off: [...((own['steps.off']?.value as string[] | undefined) ?? [])].sort(), offRule: own['steps.off'], caps: { loops: cap('run.loops', CAP), budgetUsd: cap('run.budgetUsd', COST_CAP) }, custom: [] as string[], axesOn: [] as string[], extra: [] as string[] };
+  const { owners } = ownersOf(repo, cfg), p = owners[0]!, mine = id ? owners.find((o) => o.owner === `${repo}@${id}`) : undefined; // owners[0]: the project, always
+  return { off: [...((own['steps.off']?.value as string[] | undefined) ?? [])].sort(), offRule: own['steps.off'], caps: { loops: cap('run.loops', CAP), budgetUsd: cap('run.budgetUsd', COST_CAP) },
+    custom: [...p.custom, ...(mine?.custom ?? [])].map((c) => c.id), axesOn: [...(mine?.on ?? [])].sort(), extra: [...p.extra, ...(mine?.extra ?? [])].map((x) => x.axis) };
 }
 const gets = (repo: string, id: string | null, cfg: SkillsConfig) => { const { offRule: _r, ...g } = runGets(repo, id, cfg); return JSON.stringify(g); };
 /** True while any two of these pipelines (null: the default) differ in anything a run gets: then routing is a loosening (§7.3). */
@@ -126,20 +128,51 @@ export function runCapsOf(r: Pick<Run, 'id' | 'route'>, cfg: SkillsConfig = read
   return { loops: Math.min(now.loops, r.route?.caps.loops ?? CAP), budgetUsd: Math.min(now.budgetUsd, r.route?.caps.budgetUsd ?? COST_CAP) };
 }
 /** §7.1: custom-step ids and extra-axis names are unique across a project and all its pipelines, since the meet unions them.
- *  owners: the project first, then its pipelines in `pipelines` order, then drafts. Slice 5 feeds it the store's lists. */
+ *  owners: the project first, then its pipelines in `pipelines` order, then drafts (ownersOf). */
 export interface IdOwner { owner: string; ids: string[] }
 /** Read side: a duplicate is dropped with a warning, keeping the first owner's copy (the project's, then the first pipeline's). */
 export function uniqueIds(owners: IdOwner[]) {
-  const seen = new Map<string, string>(), warnings: string[] = [];
+  const seen = new Map<string, string>(), warnings: string[] = [], dropped: { owner: string; id: string; first: string }[] = [];
   const kept = owners.map(({ owner, ids }) => ({ owner, ids: ids.filter((id) => {
     const first = seen.get(id);
-    if (first !== undefined) { warnings.push(`${owner}: "${id}" is ignored: ${first} already has it (ids are unique across a project and its pipelines)`); return false; }
+    if (first !== undefined) { warnings.push(`${owner}: "${id}" is ignored: ${first} already has it (ids are unique across a project and its pipelines)`); dropped.push({ owner, id, first }); return false; }
     seen.set(id, owner); return true;
   }) }));
-  return { kept, warnings };
+  return { kept, warnings, dropped };
 }
 /** Write side: why `owner` can't take `id` (another owner has it), or null. Its own ids don't count: a rewrite of its list. */
 export const idClash = (owners: IdOwner[], owner: string, id: string) => {
   const o = owners.find((x) => x.owner !== owner && x.ids.includes(id));
   return o ? `"${id}" is already ${o.owner}'s: ids are unique across a project and its pipelines` : null;
 };
+
+/** docs/plans/pipelines.md §3: the fixed points a custom step runs at, and where a failure there sends the run (by the gate). */
+export const SLOTS = ['spec.after', 'build.after'] as const;
+export type Slot = (typeof SLOTS)[number];
+export const SLOT_ROUTE: Record<Slot, 'spec' | 'build'> = { 'spec.after': 'spec', 'build.after': 'build' };
+/** One custom step (steps.custom): an id, its slot, a runner (never the built-in brief) and, at build.after, the globs it runs for. */
+export interface CustomStep { id: string; slot: Slot; when?: string[]; use: string; name?: string; path?: string; harness?: string; model?: string; effort?: string; fallback?: string[] }
+interface ExtraEntry { axis: string; when: string[]; use: string; [k: string]: unknown }
+/** What one owner of a project's ids adds to a run: the project (default's lists, then its own, the same id replacing in place)
+ *  or one pipeline. */
+export interface Owner { owner: string; custom: CustomStep[]; extra: ExtraEntry[]; on: string[] }
+const objs = <T,>(x: unknown) => (Array.isArray(x) ? x.filter(isObj) : []) as T[];
+const inPlace = <T extends Record<string, unknown>>(a: T[], b: T[], k: string) => { const out = [...a]; for (const x of b) { const i = out.findIndex((y) => y[k] === x[k]); if (i >= 0) out[i] = x; else out.push(x); } return out; };
+/** The pipelines of a project in id order: listed ones as the stored `pipelines` rule lists them (expired or not, so the order
+ *  never flips), then drafts. Read straight from the store, so pipelinePass can use it before rules() can. */
+const orderOf = (project: string, cfg: Record<string, unknown>) => {
+  const p = cfg[project], v = isObj(p) && isObj(p.rules) && isObj(p.rules.pipelines) ? p.rules.pipelines.value : [];
+  const listed = (Array.isArray(v) ? v : []).filter((id) => isPipelineId(id) && isObj(cfg[`${project}@${id}`])) as string[];
+  return [...listed, ...Object.keys(cfg).filter((s) => isPipelineScope(s) && splitScope(s).project === project && !listed.includes(splitScope(s).id as string)).map((s) => splitScope(s).id as string)];
+};
+/** Every owner of a project's ids (§7.1), with a duplicate dropped from the later owner (uniqueIds): the project first, then its
+ *  pipelines. dropped: what was dropped, which decide escalates on (a check the owner asked for never merges silently). */
+export function ownersOf(project: string, cfg: Record<string, unknown> = readSkills()) {
+  const at = (s: string) => (isObj(cfg[s]) ? cfg[s] as Record<string, unknown> : {});
+  const d = at('default'), p = at(project);
+  const raw: Owner[] = [{ owner: project, custom: inPlace(objs<CustomStep>(d['steps.custom']), objs<CustomStep>(p['steps.custom']), 'id'), extra: inPlace(objs<ExtraEntry>(d['axes.extra']), objs<ExtraEntry>(p['axes.extra']), 'axis'), on: [] },
+    ...orderOf(project, cfg).map((id) => { const s = at(`${project}@${id}`), on = s['axes.on']; return { owner: `${project}@${id}`, custom: objs<CustomStep>(s['steps.custom']), extra: objs<ExtraEntry>(s['axes.extra']), on: Array.isArray(on) ? on.filter((x): x is string => typeof x === 'string') : [] }; })];
+  const { kept, warnings, dropped } = uniqueIds(raw.map((o) => ({ owner: o.owner, ids: [...new Set([...o.custom.map((c) => c.id), ...o.extra.map((x) => x.axis)])] })));
+  const owners = raw.map((o, i) => { const ok = new Set(kept[i]!.ids); return { ...o, custom: o.custom.filter((c) => ok.has(c.id)), extra: o.extra.filter((x) => ok.has(x.axis)) }; });
+  return { owners, warnings, dropped };
+}

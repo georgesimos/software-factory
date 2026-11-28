@@ -1,13 +1,13 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import { CAP, COST_CAP, MAX_DIFF, MAX_ISSUES_PER_SESSION, PROJECT_BUDGET_USD, isLocal } from './constants.ts';
-import { LOCKED_STEPS, OPTIONAL_STEPS, STEP_KEYS, isBuiltinAxis, isObj, isStepKey, readSkills, writeSkills, type ScopeConfig, type SkillsConfig } from './skills.ts';
+import { LOCKED_STEPS, OPTIONAL_STEPS, PIPELINE_HOLDS, STEP_KEYS, checkStep, isBuiltinAxis, isObj, isStepKey, readSkills, writeSkills, type ScopeConfig, type SkillsConfig } from './skills.ts';
 import { dashboard } from './log.ts';
 import { gh } from './github.ts';
 import { git, hostFn, hostOf, projects, projectsFile } from './workspace.ts';
 import { humanOnly } from './projectset.ts';
 import { line, ttyAsk } from './approve.ts';
-import { type MatchSet, NAME_OK, PIPELINE_KEYS, PIPELINE_RULES, diffLinesTrusted, isPipelineId, isPipelineScope, listedOf, matchProblem, matchText, pipelinesDiffer, pipelinesOf, runGets, splitScope } from './route.ts';
+import { type MatchSet, NAME_OK, PIPELINE_KEYS, PIPELINE_RULES, diffLinesTrusted, isPipelineId, isPipelineScope, listedOf, matchProblem, matchText, ownersOf, pipelinesDiffer, pipelinesOf, runGets, splitScope } from './route.ts';
 import { log, stateDir } from './log.ts';
 import type { Rule } from './types.ts';
 
@@ -133,7 +133,7 @@ export function whoami(doing = 'changing the rule', at = { user: () => os.userIn
   if (!LOCAL_BY.test(user)) throw new Error(`cannot tell who is ${doing}: no verified gh login, and there is no OS user name`);
   return { by: user, via: 'local' };
 }
-const stamp = (who: { by: string; via: Via }) => ({ setBy: who.by, ...(who.via === 'local' && { via: who.via }) }); // a GitHub login is stored as before: no via
+export const stamp = (who: { by: string; via: Via }) => ({ setBy: who.by, ...(who.via === 'local' && { via: who.via }) }); // a GitHub login is stored as before: no via
 // A local (unverified) user can't replace or remove a rule a verified login set: that could only ever loosen it. An expired
 // one no longer applies (rules()), so anyone may clear or replace it. The message never names the local user (DOMAIN\user).
 const live = (old: Rule | undefined): old is Rule => !!old && !isLocal(old) && !(old.until && old.until < dayOf());
@@ -178,7 +178,7 @@ export function loosens(scope: string, key: string, value: unknown, cfg: SkillsC
 // The terminal command for a rule write, built only from checked values (scope, key, value, until), never page text.
 const ruleCommand = (scope: string, key: string, value: unknown, until?: string) => value === undefined ? `F rules unset ${scope} ${key}`
   : `F rules set ${scope} ${key} ${typeof value === 'number' ? value : `'${JSON.stringify(value)}'`} --reason "…"${until ? ` --until ${until}` : ''}`;
-const pageRefusal = (doing: string, cmd: string) => new Error(`${doing} needs your confirmation outside the page: confirm it in the desktop app, or run in your own terminal: ${cmd}`);
+export const pageRefusal = (doing: string, cmd: string) => new Error(`${doing} needs your confirmation outside the page: confirm it in the desktop app, or run in your own terminal: ${cmd}`);
 // Everything setRule checks before asking who you are: the scope, the key, the value as stored, until, and steps.off's own rules.
 function prepare(scope: string, key: string, raw: unknown, until: string | undefined, cfg: SkillsConfig) {
   checkScope(scope);
@@ -197,7 +197,7 @@ function prepare(scope: string, key: string, raw: unknown, until: string | undef
   if (key === 'pipelines' && !RULES.pipelines![0](value)) throw new Error(`pipelines: must be ${RULES.pipelines![1]}`);
   if (key === 'pipelines' && Array.isArray(value)) for (const id of value) if (isPipelineId(id) && !cfg[`${project}@${id}`]?.rules?.match) throw new Error(`${project}@${id} has no match: set one first (F rules set ${project}@${id} match '[…]' --reason "…")`);
   if (key === 'steps.off' && Array.isArray(value)) {
-    const extra = [...(cfg.default?.['axes.extra'] || []), ...(cfg[project]?.['axes.extra'] || [])].map((x) => x.axis); // a pipeline's: the project's
+    const extra = [...(cfg.default?.['axes.extra'] || []), ...(cfg[project]?.['axes.extra'] || []), ...(scope !== project ? cfg[scope]?.['axes.extra'] || [] : [])].map((x) => x.axis); // a pipeline's: the project's and its own
     for (const k of value) {
       if (LOCKED_STEPS.includes(k)) throw new Error(`${k} is locked: F always runs ${LOCKED_STEPS.join(', ')}`);
       if (offKey(k) && !OPTIONAL_STEPS.includes(k) && !extra.includes(k.slice(7))) throw new Error(`${k}: ${scope} has no extra axis ${k.slice(7)} (F skills set ${scope} axes.extra)`);
@@ -287,18 +287,29 @@ export function unsetRule(scope: string, key: string, { reason, page, ask = ttyA
 // docs/plans/pipelines.md §4, lenient on read: before checkSkills, a hand-edited steps.off or cap that F would refuse on write
 // is fixed or dropped with a warning (rules().warnings), never a throw. Turning fewer steps off and a lower cap only tighten.
 export let passWarnings: [scope: string, warning: string][] = [];
+/** The checks pipelinePass dropped (a broken steps.custom or axes.on, a duplicate id): decide escalates while any is reported (§4). */
+export let passDropped: [scope: string, warning: string][] = [];
+/** The dropped checks a project's runs may have lost: default's, the project's and its pipelines'. Read after readSkills(). */
+export const droppedFor = (repo: string) => passDropped.filter(([s]) => s === 'default' || s === repo || s.startsWith(`${repo}@`)).map(([, w]) => w);
 export function pipelinePass(cfg: unknown): unknown {
-  passWarnings = [];
+  passWarnings = []; passDropped = [];
   if (!isObj(cfg)) return cfg;
   const axes = (scope: string) => { const s = cfg[scope], x = isObj(s) ? s['axes.extra'] : undefined; return Array.isArray(x) ? x.map((a: unknown) => (isObj(a) ? a.axis : null)) : []; };
   const out = Object.fromEntries(Object.entries(cfg).map(([scope, s0]) => {
     if (!isObj(s0)) return [scope, s0];
     const pipe = isPipelineScope(scope), { project } = splitScope(scope), s: Record<string, unknown> = { ...s0 };
-    const ignore = (k: string, why: string) => { delete s[k]; passWarnings.push([scope, `skills.json ${scope}.${k} is ignored: ${why}`]); };
-    // §7.1: a pipeline holds a name and its rules; only a pipeline has a name
+    const ignore = (k: string, why: string, check = false) => { delete s[k]; const w = `skills.json ${scope}.${k} is ignored: ${why}`; passWarnings.push([scope, w]); if (check) passDropped.push([scope, w]); };
+    // §7.1: a pipeline holds a name, its rules, its build.after custom steps and its added review steps; only a pipeline has a name
     for (const k of Object.keys(s)) {
-      if (pipe && !PIPELINE_KEYS.includes(k)) ignore(k, 'a pipeline holds name and rules (match, steps.off, run.loops, run.budgetUsd); runners, guidance and extra axes are the project\'s');
+      if (pipe && !PIPELINE_KEYS.includes(k)) ignore(k, PIPELINE_HOLDS, k === 'steps.custom');
       else if (k === 'name' && (!pipe || !NAME_OK(s.name))) ignore(k, pipe ? 'a name is 1-60 characters of text' : 'only a pipeline (owner/repo@id) has a name');
+      else if (k === 'axes.on' && !pipe) ignore(k, 'axes.on is a pipeline\'s (owner/repo@id)');
+      else if (k === 'steps.custom' || k === 'axes.on') { // §4: a broken list is dropped whole, and decide escalates while it is
+        try {
+          checkStep(k, s[k], `skills.json ${scope}.${k}`);
+          if (pipe && k === 'steps.custom' && (s[k] as { slot?: unknown }[]).some((x) => x.slot === 'spec.after')) throw new Error('spec.after custom steps are the project\'s only');
+        } catch (e) { ignore(k, `${(e as Error).message.replace(/^skills\.json \S+: /, '')}, so ${k === 'axes.on' ? 'it adds no reviews' : 'that scope runs the built-in pipeline'}`, true); }
+      }
     }
     if (!isObj(s.rules)) return [scope, s];
     const r: Record<string, unknown> = { ...s.rules };
@@ -315,7 +326,7 @@ export function pipelinePass(cfg: unknown): unknown {
         if (!diffLinesTrusted(project)) (value as MatchSet[]).forEach((m, i) => { if (m.maxDiffLines !== undefined) warn(`: set ${i + 1}'s maxDiffLines never holds on a git project until #137 (a "* -diff" attribute reads as zero lines)`); }); // §7.2; pick() skips it
       }
       if (key === 'steps.off' && Array.isArray(value)) {
-        const extra = [...axes('default'), ...axes(project)], ok = (k: unknown) => typeof k === 'string' && (OPTIONAL_STEPS.includes(k) || k.startsWith('review.') && !isBuiltinAxis(k.slice(7)) && extra.includes(k.slice(7)));
+        const extra = [...axes('default'), ...axes(project), ...(pipe ? axes(scope) : [])], ok = (k: unknown) => typeof k === 'string' && (OPTIONAL_STEPS.includes(k) || k.startsWith('review.') && !isBuiltinAxis(k.slice(7)) && extra.includes(k.slice(7)));
         const keep = [...new Set(value.filter(ok))].slice(0, 10), gone = [...new Set(value.filter((k) => !keep.includes(k)))];
         if (gone.length) warn(`: ignoring ${gone.map(String).join(', ')}: only an optional review step or an extra axis that exists can be off (F always runs ${LOCKED_STEPS.join(', ')})`);
         if (!keep.length) { drop('nothing in it can be turned off'); continue; }
@@ -326,6 +337,15 @@ export function pipelinePass(cfg: unknown): unknown {
     }
     return [scope, { ...s, rules: r }];
   }));
+  // §7.1: a custom-step id or extra-axis name two owners of a project hold is dropped from the later one, keeping the project's,
+  // then the first pipeline's in `pipelines` order. Only a pipeline's copy is ever dropped: the project is the first owner.
+  for (const project of new Set(Object.keys(out).filter((x) => x !== 'default').map((x) => splitScope(x).project))) {
+    for (const d of ownersOf(project, out).dropped) {
+      const sc = out[d.owner] as Record<string, unknown>, w = `skills.json ${d.owner}: "${d.id}" is ignored: ${d.first} already has it (ids are unique across a project and its pipelines)`;
+      for (const k of ['steps.custom', 'axes.extra']) if (Array.isArray(sc[k])) { sc[k] = (sc[k] as Record<string, unknown>[]).filter((x) => x.id !== d.id && x.axis !== d.id); if (!(sc[k] as unknown[]).length) delete sc[k]; }
+      passWarnings.push([d.owner, w]); passDropped.push([d.owner, w]);
+    }
+  }
   for (const scope of Object.keys(out).filter(isPipelineScope)) { // a pipeline nobody listed is a draft: it never matches
     const { project, id } = splitScope(scope), o = out[project], list = isObj(o) && isObj(o.rules) && isObj(o.rules.pipelines) ? o.rules.pipelines.value : [];
     if (!(Array.isArray(list) && list.includes(id))) passWarnings.push([scope, `skills.json ${scope} is not listed in ${project}'s pipelines, so it never matches`]);

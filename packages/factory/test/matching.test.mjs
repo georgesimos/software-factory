@@ -39,10 +39,9 @@ test('a pipeline is an owner/repo@id scope: name and the rules match, steps.off,
   assert.equal(readSkills()['acme/mt@hotfix'].name, 'Hotfix');
   assert.deepEqual(rules('acme/mt@hotfix').policy.match.value, [{ labels: ['hotfix'] }]);
   for (const [fn, re] of [
-    [() => setSkill('acme/mt@hotfix', 'review.ui', { use: 'default' }), /a pipeline holds name and rules/],
-    [() => setSkill('acme/mt@hotfix', 'axes.extra', [{ axis: 'a11y', when: ['*.tsx'], use: 'skill', name: 'a11y' }]), /a pipeline holds name and rules/],
+    [() => setSkill('acme/mt@hotfix', 'review.ui', { use: 'default' }), /a pipeline holds name, rules .*; runners and guidance are the project's/],
     [() => setSkill('acme/mt@hotfix', 'steps.custom', [{ id: 'lint', slot: 'spec.after', use: 'skill', name: 'lint' }]), /spec\.after custom steps are the project's only/],
-    [() => setRule('acme/mt@hotfix', 'guide.build', 'x', { reason: 'x' }), /a pipeline holds name and rules/],
+    [() => setRule('acme/mt@hotfix', 'guide.build', 'x', { reason: 'x' }), /a pipeline holds name, rules/],
     [() => setRule('acme/mt@hotfix', 'ci', 'skip', { reason: 'x' }), /ci is the project's rule: a pipeline holds match, steps\.off, run\.loops and run\.budgetUsd/],
     [() => setRule('acme/mt', 'match', HOTFIX, { reason: 'x' }), /match is a pipeline's rule: set it on acme\/mt@<id>/],
     [() => setRule('acme/mt@hotfix', 'pipelines', '["hotfix"]', { reason: 'x' }), /pipelines is the project's rule: set it on acme\/mt/],
@@ -101,7 +100,7 @@ test('on read, a hand edit F would refuse is dropped with a warning; an @id scop
   assert.deepEqual(Object.keys(s['acme/mt@hand']).sort(), ['name', 'rules']);
   assert.deepEqual(Object.keys(s['acme/mt@hand'].rules), []);
   assert.equal(s['acme/mt'].rules.match, undefined); assert.equal(s['acme/mt'].name, undefined); assert.equal(s.default?.rules?.pipelines, undefined);
-  for (const re of [/acme\/mt@hand\.review\.ui is ignored: a pipeline holds name and rules/, /acme\/mt@hand\.rules\.ci is ignored/, /acme\/mt@hand\.rules\.match is ignored: set 1/, /acme\/mt\.rules\.match is ignored/, /acme\/mt\.name is ignored/])
+  for (const re of [/acme\/mt@hand\.review\.ui is ignored: a pipeline holds name, rules/, /acme\/mt@hand\.rules\.ci is ignored/, /acme\/mt@hand\.rules\.match is ignored: set 1/, /acme\/mt\.rules\.match is ignored/, /acme\/mt\.name is ignored/])
     assert.match(w, re);
   assert.equal(rules('acme/mt@hand').policy['steps.off'], undefined, 'the project\'s list is the default pipeline\'s only');
   reset();
