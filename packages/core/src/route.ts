@@ -157,7 +157,7 @@ interface ExtraEntry { axis: string; when: string[]; use: string; [k: string]: u
  *  or one pipeline. */
 export interface Owner { owner: string; custom: CustomStep[]; extra: ExtraEntry[]; on: string[] }
 const objs = <T,>(x: unknown) => (Array.isArray(x) ? x.filter(isObj) : []) as T[];
-const inPlace = <T extends Record<string, unknown>>(a: T[], b: T[], k: string) => { const out = [...a]; for (const x of b) { const i = out.findIndex((y) => y[k] === x[k]); if (i >= 0) out[i] = x; else out.push(x); } return out; };
+const inPlace = <T extends object>(a: T[], b: T[], k: keyof T) => { const out = [...a]; for (const x of b) { const i = out.findIndex((y) => y[k] === x[k]); if (i >= 0) out[i] = x; else out.push(x); } return out; };
 /** The pipelines of a project in id order: listed ones as the stored `pipelines` rule lists them (expired or not, so the order
  *  never flips), then drafts. Read straight from the store, so pipelinePass can use it before rules() can. */
 const orderOf = (project: string, cfg: Record<string, unknown>) => {

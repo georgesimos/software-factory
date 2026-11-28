@@ -21,6 +21,8 @@ export interface StepEditing {
   /** Turn an optional review step off (with the reason given) or back on. The host only requests it: F's steps.off rule is
    *  guarded, so the desktop app confirms it in its own dialog, and elsewhere the host gives the command (pipelines §5). */
   onOff?: (step: string, off: boolean, reason: string) => void;
+  /** Remove a custom step (by its id), with the reason given. Guarded like onOff: the host only requests it. */
+  onRemove?: (id: string, reason: string) => void;
   /** A step's panel opened: the host clears the last change's status, which was about another step. */
   onOpen?: (step: string) => void;
   /** The last change's result: saved, the command to run, or why it failed. */
@@ -53,10 +55,11 @@ export const PipelineStepPanel = forwardRef<HTMLHeadingElement, PipelineStepPane
         <h3 ref={head} tabIndex={-1}>{label}</h3>
         <IconButton label="Close step" size="sm" onClick={onClose}><CloseIcon /></IconButton>
       </div>
-      <p>{n.locked ? <><Badge quiet>Locked</Badge> Every run has it; it can’t be turned off.</> : <><Badge quiet>Optional</Badge> Not on F’s locked list.</>}</p>
+      <p>{n.kind === 'custom' ? <><Badge quiet>Custom</Badge> Your custom step, after {n.slot === 'spec.after' ? 'spec' : 'build'}. It only adds a check: a failure sends the run back, a pass never clears anything else.</>
+        : n.locked ? <><Badge quiet>Locked</Badge> Every run has it; it can’t be turned off.</> : <><Badge quiet>Optional</Badge> Not on F’s locked list.</>}</p>
       {n.off ? <p className="sf-pl-note">Turned off by rule steps.off, set by {n.off.by ?? 'someone'}{n.off.until ? ` until ${n.off.until}` : ''}{n.off.reason ? `: ${n.off.reason}` : ''}</p> : null}
       <dl className="sf-pl-dl">
-        {row('Runs', n.kind === 'review' ? n.sub : n.sub ? `every issue · ${n.sub}` : 'every issue')}
+        {row('Runs', n.kind === 'review' || n.kind === 'custom' ? n.sub : n.sub ? `every issue · ${n.sub}` : 'every issue')}
         {r ? <>
           {row('Runner', r.use === 'brief' ? file(r.path) : runnerName(r))}
           {row('Kind', KIND[r.use || 'default'] ?? r.use)}
@@ -77,7 +80,14 @@ export const PipelineStepPanel = forwardRef<HTMLHeadingElement, PipelineStepPane
           </Select></label> : null}
           <Button size="sm" onClick={() => edit!.onRunner(n.id)}>Change runner</Button>
         </div>
-      ) : edit ? <p className="sf-pl-note">Who runs it changes in Skills.</p> : null}
+      ) : edit && n.kind !== 'custom' ? <p className="sf-pl-note">Who runs it changes in Skills.</p> : null}
+      {edit?.onRemove && n.kind === 'custom' ? (
+        <div className="sf-pl-edit">
+          <label>Why remove it<Input aria-label={`Why remove ${label}`} value={why} maxLength={200} onChange={(x) => setWhy(x.target.value)} /></label>
+          <Button size="sm" disabled={!why.trim()} onClick={() => edit.onRemove!(label, why.trim())}>Remove</Button>
+          <p className="sf-pl-note">Removing a custom step is yours alone: the desktop app asks you to confirm it, and elsewhere you get the command to run in a terminal.</p>
+        </div>
+      ) : null}
       {edit?.onOff && n.kind === 'review' && !n.locked ? (
         <div className="sf-pl-edit">
           {n.off ? <Button size="sm" onClick={() => edit.onOff!(n.id, false, '')}>Turn back on</Button> : <>
