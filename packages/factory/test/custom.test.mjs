@@ -12,7 +12,8 @@ import { loosens, rules, setRule } from '../../core/src/rules.ts';
 import { readSkills, setSkill, skillChange, skills, skillsFile } from '../../core/src/skills.ts';
 import { projects, projectsFile } from '../../core/src/workspace.ts';
 import { setup } from './setup.mjs';
-import { guarded, uiHandle } from '../../server/src/server.ts';
+import { artifact, guarded, uiHandle } from '../../server/src/server.ts';
+import os from 'node:os';
 
 setup();
 const STUB = path.join(HERE, 'test', 'gh-stub.mjs');
@@ -386,4 +387,33 @@ test('over HTTP POST /api/skills writes a runner or an added step freely; a guar
   } finally { delete guarded.request; }
   assert.deepEqual(asked, [{ scope: 'acme/cs', key: 'steps.custom', raw: JSON.stringify([LINT]), unset: false, reason: 'slow', skill: true }]);
   assert.deepEqual(readSkills()['acme/cs']['steps.custom'].map((x) => x.id), ['lint', 'e2e'], 'nothing removed over HTTP');
+});
+
+test('a brief\'s local path never leaves the machine: the audit keeps only its file name, and the published page has none', () => {
+  reset();
+  const home = path.join(os.homedir(), 'briefs', 'e2e.md'), E = { id: 'e2e', slot: 'build.after', use: 'brief', path: home };
+  setSkill('acme/cs', 'steps.custom', [E, SMOKE], { ask: no });
+  setSkill('acme/cs', 'steps.custom', [E], { reason: 'smoke moved to CI', ask: yes('acme/cs') });
+  const audit = read().findLast((e) => e.stage === 'rules' && e.run === 'acme/cs');
+  assert.deepEqual(audit.value, [{ id: 'e2e', slot: 'build.after', use: 'brief', path: 'e2e.md' }]);
+  assert.ok(!JSON.stringify(read()).includes(os.homedir()), 'no event has it');
+  assert.equal(readSkills()['acme/cs']['steps.custom'][0].path, home, 'the store keeps it: F reads the brief from there');
+  assert.ok(!artifact().includes(os.homedir()));
+});
+
+test('a custom step only adds work: every one passing never stands in for a required review, never passes the gate and never lets decide merge', () => {
+  reset();
+  setSkill('acme/cs', 'steps.custom', [LINT, SMOKE], { ask: no });
+  const RUN = 'acme/cs#40';
+  start(RUN); json(['steps', RUN, 'spec.after']); step(RUN, 'lint');
+  record(RUN, 'build', 'started');
+  json(['steps', RUN, 'build.after', 'src/a.ts']); step(RUN, 'smoke');
+  F(['axes', RUN, 'src/a.ts']);
+  record(RUN, 'review', 'passed', { axis: 'code', verdict: 'passed', findings: [] });
+  assert.throws(() => F(['gate', RUN]), /security/, 'a required review with no result: no gate at all');
+  record(RUN, 'review', 'failed', { axis: 'security', verdict: 'failed', findings: [{ severity: 'high', issue: 'an injection', route: 'build' }] });
+  const g = json(['gate', RUN]);
+  assert.deepEqual([g.status, g.next], ['failed', 'build']);
+  assert.ok(!/custom steps passed/.test(g.reasons.join(' ')), 'their passes say nothing when the gate fails');
+  assert.equal(decideOn(RUN, ['src/a.ts']).action, 'escalate');
 });

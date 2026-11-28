@@ -328,8 +328,9 @@ describe('Pipelines sheet: custom steps (slice 5)', () => {
   const F = 'node ~/.claude/skills/software-factory/factory.mjs';
   const LINT = { id: 'lint', slot: 'spec.after' as const, use: 'skill', name: 'spec-lint' }, SMOKE = { id: 'smoke', slot: 'build.after' as const, use: 'skill', name: 'smoke' };
   const hot = { ...P, id: 'hotfix', name: 'Hotfix', listed: true, match: [{ labels: ['hotfix'] }], custom: { 'spec.after': [LINT], 'build.after': [SMOKE] } };
+  const docs = { ...P, id: 'docs', name: 'Docs', listed: true, match: [{ files: ['docs/**'] }], custom: { 'spec.after': [LINT], 'build.after': [SMOKE, { id: 'e2e', slot: 'build.after' as const, use: 'skill', name: 'e2e' }] } };
   const withSteps = (d: FactoryData = data): FactoryData => ({ ...d, skills: { ...d.skills, config: { ...d.skills!.config, 'acme/shop': { ...d.skills!.config!['acme/shop'], 'steps.custom': [LINT, SMOKE] } },
-    plans: { ...d.skills!.plans, 'acme/shop': { ...d.skills!.plans!['acme/shop'], pipeline: { ...P, custom: { 'spec.after': [LINT], 'build.after': [SMOKE] } }, pipelines: [hot] } } } });
+    plans: { ...d.skills!.plans, 'acme/shop': { ...d.skills!.plans!['acme/shop'], pipeline: { ...P, custom: { 'spec.after': [LINT], 'build.after': [SMOKE] } }, pipelines: [hot, docs] } } } });
   const sheet = (d: FactoryData, x: { refresh?: () => void } = {}) => render(<PipelinesSheet open onClose={() => {}} data={d} project="acme/shop" onSaved={() => {}} {...x} />);
   const bodies = (f: ReturnType<typeof vi.fn>) => f.mock.calls.map(([url, o]) => [url, JSON.parse((o as { body: string }).body)]);
 
@@ -343,15 +344,15 @@ describe('Pipelines sheet: custom steps (slice 5)', () => {
     expect(bodies(fetch)).toEqual([['/api/skills', { scope: 'acme/shop', step: 'steps.custom', runner: [LINT, { id: 'e2e-tests', slot: 'build.after', use: 'skill', name: 'E2E Tests' }, SMOKE] }]]);
     expect(await screen.findByText('Saved.')).toBeInTheDocument();
   });
-  it('a named pipeline adds only after build, to its own list', async () => {
+  it('a named pipeline adds only after build, to its own list, with an id new across the project and all its pipelines', async () => {
     const fetch = vi.fn(async () => new Response(JSON.stringify(data.skills), { status: 200 })); vi.stubGlobal('fetch', fetch);
     sheet({ ...withSteps(), token: 'tok' });
     await userEvent.click(within(screen.getByRole('navigation', { name: 'Pipelines' })).getByRole('button', { name: /^Hotfix/ }));
     expect(screen.getAllByRole('button', { name: /^Add a custom step/ }).map((b) => b.getAttribute('aria-label'))).toEqual(['Add a custom step between Build and smoke', 'Add a custom step between smoke and Review']);
     await userEvent.click(screen.getByRole('button', { name: 'Add a custom step between smoke and Review' }));
-    await typeIn(within(screen.getByRole('dialog', { name: /Runner for/ })).getByRole('textbox', { name: 'Skill name' }), 'smoke');
+    await typeIn(within(screen.getByRole('dialog', { name: /Runner for/ })).getByRole('textbox', { name: 'Skill name' }), 'e2e');
     await userEvent.click(within(screen.getByRole('dialog', { name: /Runner for/ })).getByRole('button', { name: 'Save' }));
-    expect(bodies(fetch)).toEqual([['/api/skills', { scope: 'acme/shop@hotfix', step: 'steps.custom', runner: [{ id: 'smoke-2', slot: 'build.after', use: 'skill', name: 'smoke' }] }]]);
+    expect(bodies(fetch)).toEqual([['/api/skills', { scope: 'acme/shop@hotfix', step: 'steps.custom', runner: [{ id: 'e2e-2', slot: 'build.after', use: 'skill', name: 'e2e' }] }]], 'e2e is the docs pipeline\'s');
   });
   it('removing one under the desktop app is only requested, with its reason, and the page waits for the dialog', async () => {
     const fetch = vi.fn(async () => new Response(JSON.stringify({ ...data.skills, requested: 'removing a custom step' }), { status: 200 })); vi.stubGlobal('fetch', fetch);

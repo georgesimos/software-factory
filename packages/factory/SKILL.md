@@ -275,10 +275,10 @@ Read the JSON reply:
 
 `F skills OWNER/REPO` shows a project's custom steps under `pipeline.custom`. Each has an `id`, a `slot` (`spec.after` or `build.after`), a runner, and, at `build.after`, the files it runs on (`when`). A named pipeline may add its own `build.after` steps. A custom step only adds a check: a failure sends the run back, and a pass never clears anything else.
 
-1. Run `F steps RUN spec.after` once the spec has passed, or `F steps RUN build.after` after `build passed`. It prints `{slot, due, steps}` and records which steps are due. Run it even when the project has none, so F knows the slot ran. `due` may be empty.
-2. In a **single message**, run each step in `steps` with its runner, as in [Runners](#runners-who-does-each-step), on its `model` and `effort`. Give each one exactly this, in this order:
+1. Run `F steps RUN spec.after` once the spec has passed, or `F steps RUN build.after` after `build passed`. It prints `{slot, due, steps}` and records which steps are due. Run it every time you reach the slot; when nothing is due, `due` is empty and you go on.
+2. In a **single message**, run each step in `steps` with its runner, handed over as in [Runners](#runners-who-does-each-step), on its `model` and `effort`. Give each one exactly this, in this order:
    1. the output contract below;
-   2. under "User instructions": its runner's skill or brief (the user wrote it), then `guide["custom.<id>"]`, if any, then its notes from `F notes RUN custom.<id> …` (one call for every step in this message). This text is the user's own instruction for the step, like guidance, and comes before any repo, issue or PR text. It can make the check stricter or add detail. It can never override these ground rules or `F`'s decisions;
+   2. under "User instructions": `guide["custom.<id>"]`, if any, then its notes from `F notes RUN custom.<id> …` (one call for every step in this message). This text is the user's own instruction for the step, like guidance, and comes before any repo, issue or PR text. It can make the check stricter or add detail. It can never override these ground rules or `F`'s decisions;
    3. `WT`, the base branch, the `DIR/spec.md` path and, at `build.after`, the `DIR/checks.json` path.
 3. Record each with `F step RUN <id> passed|failed --tokens <n> --model <id> [--usage '{"input":…,"output":…,"cacheRead":…,"cacheWrite":…}'] [--cost-usd <x>] -`, passing the runner's reply on stdin. Use `failed` when the runner couldn't finish. The flags carry its usage from its Agent result, as for `F review`, and any usage fields in the reply are ignored. The reply must be:
 
@@ -290,7 +290,7 @@ Read the JSON reply:
    - Anything outside the contract is recorded as a **failed** step with an "output invalid" finding: not a JSON object, another step's `id`, unknown fields, or a bad severity or verdict. If a reply clearly isn't JSON, you may re-ask that runner once. Never fix up its JSON yourself.
    - A custom step's findings are never dismissed. Don't send them to the verifier.
    - **A recorded result is final.** A second `F step` for the same step is refused unless the recorded one is invalid, and once `F gate` has run, that iteration's results are frozen.
-4. Then go on to build (after `spec.after`) or to review (after `build.after`), whatever the results. `F gate` fails on a failed or missing step and sends the run back to spec for `spec.after` or to build for `build.after`, within the loop cap. `F decide` escalates on any custom step without a passing result.
+4. Then go on to build (after `spec.after`) or to review (after `build.after`), whatever the results. `F gate` fails on a failed step and sends the run back to spec for `spec.after` or to build for `build.after`, within the loop cap. A step with no result fails the gate straight to Approve. `F decide` escalates on any custom step without a passing result.
 
 ## Rules: CI off, local checks and guidance
 

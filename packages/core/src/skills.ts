@@ -302,7 +302,8 @@ export function setSkill(scope: string, key: string, value: unknown, { reason, p
       throw new Error(`${scope}'s ${key} stays as it is: what you typed did not match`);
   }
   writeSkills(after);
-  if (doing && who) audit(scope, value === undefined ? 'unset' : 'set', { key, ...(value !== undefined && { value }), reason, ...stamp(who) }); // the rules audit trail, as a rule write
+  const named = (v: unknown) => (Array.isArray(v) ? v.map((x) => (isObj(x) && typeof x.path === 'string' ? { ...x, path: x.path.split(/[\\/]/).pop() } : x)) : v); // a brief by its file name: a local path never goes in an event
+  if (doing && who) audit(scope, value === undefined ? 'unset' : 'set', { key, ...(value !== undefined && { value: named(value) }), reason, ...stamp(who) }); // the rules audit trail, as a rule write
   return after[scope] || {};
 }
 // The preset's model, effort and fallback on each step of a scope, keeping who runs the step. Non-Claude runners are skipped.

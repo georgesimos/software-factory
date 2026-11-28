@@ -159,10 +159,11 @@ export function PipelinesSheet({ open, onClose, data, project, onSaved = () => {
   };
   const addAt = (slot: CustomSlot, index: number) => setPick({ title: `a custom step after ${slot === 'spec.after' ? 'spec' : 'build'}`, step: 'steps.custom', current: null,
     done: ({ runner }) => {
-      const shown = pl?.custom?.[slot] ?? [], c = { id: newId(runner, [...Object.values(pl?.custom ?? {}).flat(), ...own].map((x) => x.id)), slot, ...runner } as CustomStep;
+      const shown = pl?.custom?.[slot] ?? [], taken = [at?.pipeline, ...named].flatMap((x) => [...Object.values(x?.custom ?? {}).flat().map((y) => y.id), ...(x?.axes ?? []).map((y) => y.axis)]); // one namespace: the project and all its pipelines (§7.1)
+      const c = { id: newId(runner, [...taken, ...own.map((x) => x.id)]), slot, ...runner } as CustomStep;
       const before = own.findIndex((x) => x.id === shown[index]?.id), after = own.findIndex((x) => x.id === shown[index - 1]?.id); // place it among the scope's own steps
-      const at = before >= 0 ? before : after >= 0 ? after + 1 : own.length;
-      void writeSteps([...own.slice(0, at), c, ...own.slice(at)], '', setAdded);
+      const i = before >= 0 ? before : after >= 0 ? after + 1 : own.length;
+      void writeSteps([...own.slice(0, i), c, ...own.slice(i)], '', setAdded);
     } });
   edit.onRemove = (id, reason) => {
     if (!own.some((x) => x.id === id)) return setStatus({ text: `${id} is set on ${cur ? repo : 'default'}, not here: remove it there.`, bad: true });
