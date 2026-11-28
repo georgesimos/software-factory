@@ -328,7 +328,7 @@ test('a files term matches on every changed file, never a cut-down list: 200 doc
   assert.equal(holds({ files: ['docs/**'] }, { labels: [], files: ['docs/a.md'], diffLines: 1, truncated: true }), false, 'a files term never holds on a list marked truncated');
 });
 
-test('decide re-checks the pick on the reviewed change: a set that no longer holds escalates, and never merges on a stale pick', () => {
+test('decide re-checks the pick on the reviewed change: a pick that changes escalates, and never merges on a stale pick', () => {
   reset();
   setRule('acme/mt@small', 'match', '[{"maxDiffLines":20},{"files":["docs/**"]}]', { reason: 'small', ask: yes('acme/mt@small') });
   setRule('acme/mt@small', 'steps.off', '["review.ux","review.ui"]', { reason: 'small ones', ask: yes('acme/mt@small') });
@@ -339,18 +339,17 @@ test('decide re-checks the pick on the reviewed change: a set that no longer hol
   axes(RUN, 'web/Button.tsx', 'web/Button.test.tsx'); // the stub's PR is 12 lines: set 1 holds
   for (const a of ['code', 'security']) record(RUN, 'review', 'passed', { axis: a, verdict: 'passed', findings: [] });
   const r = { ...getRun(RUN), reviewedSha: 'abc' };
-  assert.deepEqual([r.route.pipeline, r.route.set, r.route.matched], ['small', 0, { maxDiffLines: 20 }]);
+  assert.deepEqual([r.route.pipeline, r.route.set], ['small', 0]);
   const f = { autoMerge: true, association: 'OWNER', checks: 'pass', files: ['web/Button.tsx', 'web/Button.test.tsx'], additions: 10, deletions: 2, rules: rules('acme/mt').policy };
   assert.equal(decide(r, f).action, 'merge', decide(r, f).reasons.join('\n'));
-  const stale = /^the pick no longer holds: pipeline small \(set 1: ≤ 20 lines\) was picked, but the reviewed change doesn't match it/;
-  const big = decide(r, { ...f, additions: 300 }); // pushed after F axes: the PR grew
+  const big = decide(r, { ...f, additions: 30 }); // pushed after F axes: the PR grew
   assert.equal(big.action, 'escalate');
-  assert.ok(big.reasons.some((x) => stale.test(x)), big.reasons.join('\n'));
-  const docs = { ...r, route: { ...r.route, set: 1, text: 'files docs/**', matched: { files: ['docs/**'] } } };
-  assert.equal(decide(docs, { ...f, files: ['docs/a.md'] }).action, 'merge');
-  assert.ok(decide(docs, { ...f, files: ['docs/a.md', 'web/x.tsx'] }).reasons.some((x) => /^the pick no longer holds/.test(x)), 'a file outside it');
-  assert.ok(decide(docs, { ...f, files: Array.from({ length: 100 }, (_, i) => `docs/${i}.md`) }).reasons.some((x) => /^the pick no longer holds/.test(x)), 'GitHub lists at most 100 files: a full page may hide one');
-  assert.ok(decide({ ...r, route: { ...r.route, matched: undefined } }, f).reasons.some((x) => /^the pick no longer holds/.test(x)), 'a pick with no recorded set');
+  assert.ok(big.reasons.includes('the pick no longer holds: pipeline small (set 1: ≤ 20 lines) was picked, but the reviewed change picks pipeline default (2 files, 32 lines): it is never merged on a stale pick'), big.reasons.join('\n'));
+  const docs = { ...r, route: { ...r.route, set: 1, text: 'files docs/**' } };
+  assert.equal(decide(docs, { ...f, files: ['docs/a.md'], additions: 30 }).action, 'merge');
+  assert.ok(decide(docs, { ...f, files: ['docs/a.md'] }).reasons.some((x) => /^the pick no longer holds: .* picks pipeline small \(set 1: ≤ 20 lines\)/.test(x)), 'another set of the same pipeline is another pick');
+  assert.ok(decide(docs, { ...f, files: ['docs/a.md', 'web/x.tsx'], additions: 30 }).reasons.some((x) => /^the pick no longer holds/.test(x)), 'a file outside it');
+  assert.ok(decide(docs, { ...f, files: ['docs/a.md'], additions: 30, filesTruncated: true }).reasons.some((x) => /^the pick no longer holds/.test(x)), 'no files term holds on a cut-down list');
 });
 
 test('labels: only intake\'s needs-info re-reads them, and only before the first pick; after it, no intake changes them', () => {
@@ -393,4 +392,54 @@ test('the caps recorded at the pick still bind after the pipeline\'s cap is rais
   unsetRule('acme/mt@hotfix', 'run.loops', { reason: 'built-in', ask: yes('acme/mt@hotfix') });
   setRule('acme/mt@hotfix', 'run.budgetUsd', '1', { reason: 'a dollar' });
   assert.match(gateOn('acme/mt#19', () => { record('acme/mt#19', 'build', 'passed', { costUsd: 2 }); setRule('acme/mt@hotfix', 'run.budgetUsd', '5', { reason: 'more money', ask: yes('acme/mt@hotfix') }); }), /^budget reached/);
+});
+
+// decide on a run F axes picked from the files it was given, with the reviewed PR's files read through facts() (STUB_PR_FILES).
+const onPr = (files, fn) => { process.env.STUB_PR_FILES = JSON.stringify(files); try { return fn(); } finally { delete process.env.STUB_PR_FILES; } };
+const decided = (RUN, given, prFiles, extra = {}) => {
+  record(RUN, 'intake', 'started', { association: 'OWNER', labels: [] }); record(RUN, 'build', 'started');
+  record(RUN, 'build', 'opened', { pr: `https://github.com/acme/mt/pull/${RUN.split('#')[1]}` });
+  for (const a of axes(RUN, ...given)) record(RUN, 'review', 'passed', { axis: a, verdict: 'passed', findings: [] });
+  const r = { ...getRun(RUN), reviewedSha: 'abc' };
+  return onPr(prFiles, () => { const f = facts(r); return { r, f, d: decide(r, { autoMerge: true, association: 'OWNER', checks: 'pass', files: f.files, filesTruncated: f.filesTruncated, additions: 10, deletions: 2, rules: rules('acme/mt').policy, ...extra }) }; });
+};
+const API = [{ filename: 'src/api/orders.ts' }, { filename: 'src/api/orders.test.ts' }];
+
+test('decide runs the pick again on the reviewed change: F axes picking on other files never merges on a looser pipeline', () => {
+  reset();
+  setRule('acme/mt@api', 'match', '[{"files":["src/api/**"]}]', { reason: 'the api', ask: yes('acme/mt@api') });
+  setRule('acme/mt@small', 'match', '[{"maxDiffLines":50}]', { reason: 'small', ask: yes('acme/mt@small') });
+  setRule('acme/mt@small', 'steps.off', '["review.ux","review.ui"]', { reason: 'small ones', ask: yes('acme/mt@small') });
+  setRule('acme/mt', 'pipelines', '["api","small"]', { reason: 'api first', ask: yes('acme/mt') });
+  const { r, d } = decided('acme/mt#20', ['README.md'], API);
+  assert.deepEqual([r.route.pipeline, r.route.off], ['small', ['review.ui', 'review.ux']], 'F axes picked on README.md');
+  assert.equal(d.action, 'escalate', d.reasons.join('\n'));
+  assert.ok(d.reasons.some((x) => /^the pick no longer holds: pipeline small \(set 1: ≤ 50 lines\) was picked, but the reviewed change picks pipeline api \(set 1: files src\/api\/\*\*\)/.test(x)), d.reasons.join('\n'));
+  assert.equal(decided('acme/mt#21', ['src/api/orders.ts', 'src/api/orders.test.ts'], API).d.action, 'merge', 'the same pick on the same files merges');
+});
+
+test('decide runs the pick again for the default too: a change that matches a stricter pipeline never merges on the default', () => {
+  reset();
+  setRule('acme/mt', 'steps.off', '["review.ux","review.ui"]', { reason: 'no ui here', ask: yes('acme/mt') });
+  setRule('acme/mt@api', 'match', '[{"files":["src/api/**"]}]', { reason: 'the api', ask: yes('acme/mt@api') });
+  setRule('acme/mt', 'pipelines', '["api"]', { reason: 'api first', ask: yes('acme/mt') });
+  const { r, d } = decided('acme/mt#22', ['README.md'], API);
+  assert.equal(r.route.pipeline, 'default');
+  assert.equal(d.action, 'escalate', d.reasons.join('\n'));
+  assert.ok(d.reasons.some((x) => /^the pick no longer holds: pipeline default was picked, but the reviewed change picks pipeline api/.test(x)), d.reasons.join('\n'));
+  const cut = decided('acme/mt#23', ['README.md'], [{ filename: 'README.md' }], { filesTruncated: true }).d;
+  assert.ok(cut.action === 'escalate' && cut.reasons.some((x) => /^the PR's file list is cut down/.test(x)), cut.reasons.join('\n'));
+});
+
+test('on GitHub a renamed file counts under both names: for the pick, its re-check and the sensitive-path check', () => {
+  reset();
+  setRule('acme/mt@docs', 'match', '[{"files":["docs/**"]}]', { reason: 'docs', ask: yes('acme/mt@docs') });
+  setRule('acme/mt', 'pipelines', '["docs"]', { reason: 'docs first', ask: yes('acme/mt') });
+  const into = decided('acme/mt#24', ['docs/x.md'], [{ filename: 'docs/x.md', previous_filename: 'src/x.ts' }]);
+  assert.deepEqual(into.f.files, ['docs/x.md', 'src/x.ts']);
+  assert.ok(into.d.action === 'escalate' && into.d.reasons.some((x) => /^the pick no longer holds: pipeline docs .* picks pipeline default/.test(x)), into.d.reasons.join('\n'));
+  const out = decided('acme/mt#25', ['docs/ci.yml'], [{ filename: 'docs/ci.yml', previous_filename: '.github/workflows/ci.yml' }]).d;
+  assert.ok(out.reasons.includes('touches sensitive paths: .github/workflows/ci.yml'), out.reasons.join('\n'));
+  process.env.STUB_PR_CHANGED = '3';
+  try { assert.equal(decided('acme/mt#26', ['docs/a.md'], [{ filename: 'docs/a.md' }]).f.filesTruncated, true, 'fewer files listed than the PR has'); } finally { delete process.env.STUB_PR_CHANGED; }
 });

@@ -3,7 +3,7 @@ import { CAP, COST_CAP, DOCS, MAX_DIFF, SEO, SOURCE, TEST, TRUSTED, UI, blocking
 import { budget, budgetWhy, thisRun } from './derive.ts';
 import { AXIS_WHEN, BUILTIN_AXES, LOCKED_STEPS, isObj } from './skills.ts';
 import { runCaps } from './rules.ts';
-import { holds, routeText } from './route.ts';
+import { pick, routeText } from './route.ts';
 import type { AxisReview, Deploy, LocalChecks, Metrics, Rule, Run } from './types.ts';
 
 /** An extra review axis from skills.json: added when a changed file matches one of its globs. */
@@ -13,6 +13,8 @@ export interface Facts {
   association?: string; autoMerge?: boolean; checks?: string; additions?: number; deletions?: number; files?: string[];
   /** runCapsOf(): the caps of the pipeline the run is on now, read live (§7.5); the meet with r.route's is decide's. */
   pipelineCaps?: { loops: number; budgetUsd: number };
+  /** The host listed fewer files than the change has: then no files term holds, and decide escalates. */
+  filesTruncated?: boolean;
   rules?: Record<string, Rule>; deploys?: Deploy[];
   /** The CI provider that gave checks (absent: github-actions, as before providers); ciDetail: its one-line why; ciBroken: it
    *  couldn't answer (unknown, wrong host, threw), which escalates under every ci rule; host: the project's (absent: github). */
@@ -139,10 +141,11 @@ export function decide(r: Run, f: Facts) {
   // The pick (§7.4, §7.6): name the pipeline when it isn't the default; a routing rule a local user set never counts toward a merge on GitHub.
   const rt = r.route;
   if (rt && rt.pipeline !== 'default' && !notes.some((n) => n.startsWith(`pipeline ${rt.pipeline}`))) notes.unshift(routeText(rt));
-  if (rt && rt.pipeline !== 'default') { // the pick, re-checked on the reviewed change: F axes may have run before a push grew it
-    const n = f.files?.length ?? 0, lines = f.additions !== undefined && f.deletions !== undefined ? f.additions + f.deletions : null;
-    const now = { labels: rt.facts?.labels ?? [], files: f.files ?? [], diffLines: lines, truncated: !git && n >= 100 }; // gh pr view lists at most 100 files
-    if (!rt.matched || !holds(rt.matched, now, !git)) why.push(`the pick no longer holds: ${routeText(rt)} was picked, but the reviewed change doesn't match it (${n}${now.truncated ? '+' : ''} files, ${lines ?? 'unknown'} lines): it is never merged on a stale pick`);
+  if (f.filesTruncated) why.push(`the PR's file list is cut down (${f.files?.length ?? 0} listed): the pick and the sensitive-path check can't see every file`);
+  if (rt) { // the pick, run again on the reviewed change: F axes may have picked on other files, or before a push changed it
+    const lines = f.additions !== undefined && f.deletions !== undefined ? f.additions + f.deletions : null;
+    const now = pick(r.id.split(/[#:@]/)[0] as string, { labels: rt.facts?.labels ?? [], files: f.files ?? [], diffLines: lines, truncated: !!f.filesTruncated });
+    if (now.pipeline !== rt.pipeline || now.set !== rt.set) why.push(`the pick no longer holds: ${routeText(rt)} was picked, but the reviewed change picks ${routeText(now)} (${f.files?.length ?? 0} files, ${lines ?? 'unknown'} lines): it is never merged on a stale pick`);
   }
   if (rt?.local && !git) why.push('rule match or pipelines was set by a local user (unverified): routing needs a verified login (gh auth login) before the factory merges on its own');
   if (why.length) return { action: 'escalate', reasons: [...why, ...asks, ...notes] };

@@ -6,6 +6,7 @@ const args = process.argv.slice(2);
 const a = args.join(' ');
 const out = (x) => process.stdout.write(typeof x === 'string' ? x : JSON.stringify(x));
 const head = (n) => String(n).padStart(40, '0'); // a PR's head sha
+const prFiles = () => (process.env.STUB_PR_FILES ? JSON.parse(process.env.STUB_PR_FILES) : [{ filename: 'src/a.ts' }, { filename: 'src/a.test.ts' }]); // STUB_PR_FILES: the PR's files as the API lists them
 const pr = (number, headRefName, closes, title = `PR ${number}`) => ({
   number, headRefName, headRefOid: head(number), authorAssociation: 'OWNER', url: `https://github.com/acme/app/pull/${number}`,
   title, author: { login: 'acme' }, closingIssuesReferences: { nodes: closes.map((n) => ({ number: n })) },
@@ -82,7 +83,8 @@ else if (args[0] === 'pr' && args[1] === 'view' && a.includes('--json state,merg
     mergedBy: merged ? { login: 'octo' } : null, mergeCommit: merged ? { oid: 'f'.repeat(40) } : null });
 }
 else if (args[0] === 'pr' && args[1] === 'view' && a.includes('--json state')) out({ state: 'MERGED' });
-else if (args[0] === 'pr' && args[1] === 'view') out({ additions: 10, deletions: 2, files: [{ path: 'src/a.ts' }, { path: 'src/a.test.ts' }] });
+else if (/^api repos\/[\w.-]+\/[\w.-]+\/pulls\/\d+\/files\?per_page=100 --paginate --jq /.test(a)) out(prFiles().map((x) => JSON.stringify([x.filename, x.previous_filename ?? null]) + '\n').join('')); // a PR's files, both names of a rename
+else if (args[0] === 'pr' && args[1] === 'view') out({ additions: 10, deletions: 2, changedFiles: Number(process.env.STUB_PR_CHANGED ?? prFiles().length), files: prFiles().map((x) => ({ path: x.filename })) });
 else if (args[0] === 'pr' && args[1] === 'checks') {
   if (process.env.STUB_CHECKS) out([{ bucket: 'pass' }, { bucket: 'skipping' }]);
   else { process.stderr.write("no checks reported on the 'x' branch"); process.exit(1); }

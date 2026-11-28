@@ -111,12 +111,20 @@ export function facts(r: Run): Facts {
     dep.deploys = derive(read())[r.id]?.deploys || [];
   }
   if (!(onGit ? r.reviewedSha : r.pr)) return { ...who, autoMerge, checks: 'none', additions: 0, deletions: 0, files: [], rules: policy, ...(r.route && { pipelineCaps: runCapsOf(r) }), ...dep, ...on };
-  const diff = onGit ? gitDiff(repo, r.reviewedSha as string) : JSON.parse(gh('pr', 'view', prNumber(repo, r.pr as string), '-R', repo, '--json', 'additions,deletions,files')) as ReturnType<typeof gitDiff>;
+  const diff: { additions: number; deletions: number; files: { path: string }[]; truncated?: boolean } = onGit ? gitDiff(repo, r.reviewedSha as string) : prDiff(repo, r.pr as string);
   // the project's CI provider on the reviewed commit; ci=skip doesn't read it, but a provider that can't answer still escalates
   const local = (sha?: string) => localResult(r.localChecks, policy['checks.commands']?.value, sha);
   const c = policy.ci?.value === 'skip' ? { ci: undefined, state: 'skipped', broken: ciBroken(repo) } : ciChecks(repo, { path: projects()[repo]?.path, sha: r.reviewedSha, changeRequest: r.pr }, local);
   const ci = { ...(c.ci && c.ci !== 'github-actions' && { ci: c.ci }), ...('detail' in c && c.detail && { ciDetail: c.detail }), ...(c.broken && { ciBroken: c.broken }) }; // GitHub's, as before: no extra keys
-  return { ...who, autoMerge, checks: c.state, ...ci, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), rules: policy, ...(r.route && { pipelineCaps: runCapsOf(r) }), ...dep, ...on }; // a routed run: its pipeline's live caps
+  return { ...who, autoMerge, checks: c.state, ...ci, additions: diff.additions, deletions: diff.deletions, files: diff.files.map((f) => f.path), ...(diff.truncated && { filesTruncated: true }), rules: policy, ...(r.route && { pipelineCaps: runCapsOf(r) }), ...dep, ...on }; // a routed run: its pipeline's live caps
+}
+// A GitHub PR's diff. Its files from the files API, which gives a rename's old name too (pr view gives only the new one, and at
+// most 100); the totals and the file count from pr view. Fewer files listed than the PR has (the API stops at 3000) is truncated.
+function prDiff(repo: string, pr: string) {
+  const n = prNumber(repo, pr), v = JSON.parse(gh('pr', 'view', n, '-R', repo, '--json', 'additions,deletions,changedFiles')) as { additions: number; deletions: number; changedFiles?: unknown };
+  const rows = gh('api', `repos/${repo}/pulls/${n}/files?per_page=100`, '--paginate', '--jq', '.[] | [.filename, .previous_filename] | @json').split('\n').filter(Boolean).map((l) => JSON.parse(l) as [string, string | null]);
+  const files = rows.flatMap(([now, was]) => (was ? [now, was] : [now])).map((p) => ({ path: p }));
+  return { additions: v.additions, deletions: v.deletions, files, truncated: !(Number.isInteger(v.changedFiles) && rows.length >= (v.changedFiles as number)) };
 }
 // A git project's diff: the reviewed commit against its fork point from the base (three dots), as GitHub counts a PR's.
 // numstat -z: "added<TAB>deleted<TAB>path<NUL>"; a binary file's "-" counts 0 lines, as on GitHub.

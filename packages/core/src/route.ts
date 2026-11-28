@@ -87,9 +87,9 @@ export function pick(repo: string, f: RouteFacts, cfg: SkillsConfig = readSkills
     if (!p.match) continue; // none, or invalid: pipelinePass warned, and it never matches
     if (p.matchRule && isLocal(p.matchRule)) local = true;
     const set = p.match.findIndex((s) => holds(s, f, trusted));
-    if (set >= 0) return { pipeline: p.id, name: p.name, set, text: setText(p.match[set]!), matched: p.match[set]!, ...runGets(repo, p.id, cfg), local };
+    if (set >= 0) return { pipeline: p.id, name: p.name, set, text: setText(p.match[set]!), ...runGets(repo, p.id, cfg), local };
   }
-  return { pipeline: 'default', name: null, set: null, text: null, matched: null, ...runGets(repo, null, cfg), local };
+  return { pipeline: 'default', name: null, set: null, text: null, ...runGets(repo, null, cfg), local };
 }
 
 /** A run's labels (§7.4): read once, at intake; a resume after needs-info reads them again. events: this run's (thisRun). */
@@ -110,7 +110,7 @@ export function routeOf(events: FactoryEvent[]): RunRoute | null {
   const last = rs.at(-1)!, offs = rs.map((e) => (Array.isArray(e.off) ? e.off as string[] : []));
   const min = (k: 'loops' | 'budgetUsd', built: number) => Math.min(built, ...rs.map((e) => Number((e.caps as Record<string, number> | undefined)?.[k] ?? built)));
   return {
-    pipeline: String(last.pipeline), name: (last.name as string | null) ?? null, set: (last.set as number | null) ?? null, text: (last.text as string | null) ?? null, matched: (last.matched as MatchSet | undefined), facts: last.facts as RouteFacts,
+    pipeline: String(last.pipeline), name: (last.name as string | null) ?? null, set: (last.set as number | null) ?? null, text: (last.text as string | null) ?? null, facts: last.facts as RouteFacts,
     off: offs[0]!.filter((k) => offs.every((o) => o.includes(k))), caps: { loops: min('loops', CAP), budgetUsd: min('budgetUsd', COST_CAP) },
     local: rs.some((e) => e.local === true), picks: rs.map((e) => ({ pipeline: String(e.pipeline), set: (e.set as number | null) ?? null, iteration: e.iteration as number })),
   };

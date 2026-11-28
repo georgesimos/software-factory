@@ -26,7 +26,8 @@ const a = process.argv.slice(2).join(' '), out = (x) => process.stdout.write(typ
 fs.appendFileSync(${JSON.stringify(ghLog)}, a + '\\n');
 if (a === 'api user --jq .login') out('stub-user\\n');
 else if (/^api repos\\/acme\\/ci\\/issues\\/\\d+ --jq \\.author_association$/.test(a)) out('OWNER\\n');
-else if (a.includes('--json additions,deletions,files')) out({ additions: 3, deletions: 1, files: [{ path: 'src/a.ts' }, { path: 'src/a.test.ts' }] });
+else if (a.includes('--json additions,deletions,changedFiles')) out({ additions: 3, deletions: 1, changedFiles: 2 });
+else if (/^api repos\\/acme\\/ci\\/pulls\\/\\d+\\/files/.test(a)) out('["src/a.ts",null]\\n["src/a.test.ts",null]\\n');
 else if (a.includes('--json bucket')) { if (process.env.STUB_CI_FAIL) { process.stderr.write('HTTP 502: Bad Gateway\\n'); process.exit(1); } out([{ bucket: 'pass' }]); }
 else if (a.includes('--json mergeCommit')) out({ mergeCommit: { oid: ${JSON.stringify(MERGED)} } });
 else if (a.includes('--json defaultBranchRef')) out('main\\n');
